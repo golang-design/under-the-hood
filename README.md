@@ -1,2 +1,7 @@
-# goroutine-scheduler
-goroutine scheduler: under the hood
+# Goroutine Runtime Scheduler: Under the Hood
+
+based on go1.11
+
+## License
+
+MIT &copy; [changkun](https://changkun.de)
