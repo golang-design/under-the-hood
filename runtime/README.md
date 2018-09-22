@@ -1,5 +1,6 @@
-本文可能会过时。 它旨在阐明不同于常规 Go 编程的 Go 运行时编程，并侧重于普遍概念
-而非特定接口的详细信息。
+# Go 运行时编程
+
+本文可能会过时。 它旨在阐明不同于常规 Go 编程的 Go 运行时编程，并侧重于一般概念而非特定接口的详细信息。
 
 调度器结构
 =============
@@ -10,27 +11,20 @@
 Gs, Ms, Ps
 ----------
 
-"G" 是 goroutine 的缩写. It's represented by type `g`. When a
-goroutine exits, its `g` object is returned to a pool of free `g`s and
-can later be reused for some other goroutine.
+"G" 是 goroutine 的缩写。由 `g` 类型表示。当 goroutine 退出时，`g` 被归还到有效的 `g` 池，
+能够被后续 goroutine 使用。
 
 "M" 代表一个能够执行用户 Go 代码、运行时代码、系统调用或处于空闲状态的 OS thread。
 由类型 `m` 表示。因为任意多个线程可以同时阻塞在系统调用上，因此同一时刻可以包含任意多个 M。
 
-Finally, a "P" represents the resources required to execute user Go
-code, such as scheduler and memory allocator state. It's represented
-by type `p`. There are exactly `GOMAXPROCS` Ps. A P can be thought of
-like a CPU in the OS scheduler and the contents of the `p` type like
-per-CPU state. This is a good place to put state that needs to be
-sharded for efficiency, but doesn't need to be per-thread or
-per-goroutine.
+"P" 则表示执行 Go 代码所需的资源，例如调度器和内存分配器状态。由 `p` 类型表示,且最多只有 
+`GOMAXPROCS` 个。
+P 可以理解一个 OS 调度器中的 CPU，`p` 类型的内容类似于每个 CPU 的状态。是一个可以为了效率
+而存放不同状态的地方，同时还不需要每个线程或者每个 goroutine 对应一个 P。
 
-The scheduler's job is to match up a G (the code to execute), an M
-(where to execute it), and a P (the rights and resources to execute
-it). When an M stops executing user Go code, for example by entering a
-system call, it returns its P to the idle P pool. In order to resume
-executing user Go code, for example on return from a system call, it
-must acquire a P from the idle pool.
+调度器的任务是匹配一个 G（要执行的代码）一个 M（在哪儿执行）和一个 P（执行代码的资源和权利）。 
+当 M 停止执行用户 Go 代码时，例如进入系统调用，它会将其对应的 P 返回给空闲 P 池。
+而为了恢复执行用户的 Go 代码，例如从一个系统调用返回时，必须从空闲池中获取一个有效的 P。
 
 所有的 `g`, `m` 和 `p` 对象均在堆上分配，且从不释放。因此他们的内存保持 type stable。
 因此，运行时可以在调度器内避免 write barrier。
@@ -38,266 +32,148 @@ must acquire a P from the idle pool.
 用户栈与系统栈
 ------------
 
-Every non-dead G has a *user stack* associated with it, which is what
-user Go code executes on. User stacks start small (e.g., 2K) and grow
-or shrink dynamically.
+每个非 dead 状态的 G 均被关联到**用户栈**上，即用户 Go 代码执行的地方。用户栈初始大小很小（例如 2K），然后动态的增加或减少。
 
-Every M has a *system stack* associated with it (also known as the M's
-"g0" stack because it's implemented as a stub G) and, on Unix
-platforms, a *signal stack* (also known as the M's "gsignal" stack).
-System and signal stacks cannot grow, but are large enough to execute
-runtime and cgo code (8K in a pure Go binary; system-allocated in a
-cgo binary).
+每个 M 均对应一个关联的系统栈（也成为 M 的 `g0` 栈，因为其作为一个 stub G 来实现）。在 Unix 平台上，则称为**信号栈**（也称之为 M 的 `gsignal` 栈）。系统和信号栈无法扩展，但已经大到足够运行运行时和 cgo 代码（一个纯 Go 二进制文件有 8K；而 cgo 二进制文件则有系统分配）。
 
-Runtime code often temporarily switches to the system stack using
-`systemstack`, `mcall`, or `asmcgocall` to perform tasks that must not
-be preempted, that must not grow the user stack, or that switch user
-goroutines. Code running on the system stack is implicitly
-non-preemptible and the garbage collector does not scan system stacks.
-While running on the system stack, the current user stack is not used
-for execution.
+运行时代码经常会临时通过 `systemstack`, `mcall` 或 `asmcgocall` 切换到系统栈以执行那些无法扩展用户栈、或切换用户 goroutine 的不可抢占式任务。运行在系统栈上的代码是隐式不可抢占的、且不会被垃圾回收检测。当运行在系统栈上时，当前用户栈没有被用于执行代码。
 
 `getg()` 与 `getg().m.curg`
 ----------------------------
 
-To get the current user `g`, use `getg().m.curg`.
+为获取当前用户 `g`，可以使用 `getg().m.curg`。
 
-`getg()` alone returns the current `g`, but when executing on the
-system or signal stacks, this will return the current M's "g0" or
-"gsignal", respectively. This is usually not what you want.
+`getg()` 单独返回当前 `g`。但当执行在系统或信号栈时，会返回当前 M 的 `g0` 或 `gsignal`。这通常可能不是你想要的。
 
-To determine if you're running on the user stack or the system stack,
-use `getg() == getg().m.curg`.
+为判断你是运行在用户栈还是系统栈，可以使用：`getg() == getg().m.curg`
 
 错误处理与报告
-============================
+===========
 
-Errors that can reasonably be recovered from in user code should use
-`panic` like usual. However, there are some situations where `panic`
-will cause an immediate fatal error, such as when called on the system
-stack or when called during `mallocgc`.
+通常使用 `panic` 的来自用户代码的错误能够被合理的恢复。然而某些情况下 `panic` 会导致一个立即致命错误，例如在系统栈上的调用或在 `mallocgc` 执行阶段的调用。
 
-Most errors in the runtime are not recoverable. For these, use
-`throw`, which dumps the traceback and immediately terminates the
-process. In general, `throw` should be passed a string constant to
-avoid allocating in perilous situations. By convention, additional
-details are printed before `throw` using `print` or `println` and the
-messages are prefixed with "runtime:".
+大部分运行时错误无法恢复。对于这些错误，请使用 `throw`，它能够将被终止整个过程的中间状态全部回溯出来。一般情况下，`throw` 需要传递一个 string 常量在危险情况下避免内存分配。按照惯例，在 `throw` 前会使用 `print` 或 `println` 输出额外信息，并冠以 "runtime:" 的前缀。
 
-For runtime error debugging, it's useful to run with
-`GOTRACEBACK=system` or `GOTRACEBACK=crash`.
+若需调试运行时错误，可以设置 `GOTRACEBACK=system` 或 `GOTRACEBACK=crash`。
 
 同步
 ===
 
-The runtime has multiple synchronization mechanisms. They differ in
-semantics and, in particular, in whether they interact with the
-goroutine scheduler or the OS scheduler.
+运行时有多种同步机制。它们根据与 goroutine 调度器或者 OS 调度器的交互不同而有着不同的语义。
 
-The simplest is `mutex`, which is manipulated using `lock` and
-`unlock`. This should be used to protect shared structures for short
-periods. Blocking on a `mutex` directly blocks the M, without
-interacting with the Go scheduler. This means it is safe to use from
-the lowest levels of the runtime, but also prevents any associated G
-and P from being rescheduled. `rwmutex` is similar.
+最简单的是 `mutex`，使用 `lock` 和 `unlock` 进行操作。用于在短时间内共享结构体。在 `mutex` 上阻塞会直接阻塞 M，且不会与 Go 调度器进行交互。这也就意味着它能在运行时最底层是安全的，且同时阻止了任何与之关联的 G 和 P 被重新调度。`rwmutex` 也类似。
 
-For one-shot notifications, use `note`, which provides `notesleep` and
-`notewakeup`. Unlike traditional UNIX `sleep`/`wakeup`, `note`s are
-race-free, so `notesleep` returns immediately if the `notewakeup` has
-already happened. A `note` can be reset after use with `noteclear`,
-which must not race with a sleep or wakeup. Like `mutex`, blocking on
-a `note` blocks the M. However, there are different ways to sleep on a
-`note`:`notesleep` also prevents rescheduling of any associated G and
-P, while `notetsleepg` acts like a blocking system call that allows
-the P to be reused to run another G. This is still less efficient than
-blocking the G directly since it consumes an M.
+为进行一次性通知，可以使用 `note`。它提供了 `notesleep` 和 `notewakeup`。与传统的 UNIX `sleep`/`wakeup` 不同，`note` 是无竞争的。因此`notesleep` 会在 `notewakeup` 发生时立即返回。一个 `note` 能够在使用 `noteclear` 后被重置，并且必须不能与 sleep 或 wakeup 产生竞争。类似于 `mutex`，阻塞在 `note` 上会阻塞 M。然而有很多不同的方式可以在 `note` 上进行休眠：`notesleep` 会阻止关联的 G 和 P 被重新调度，而 `notetsleepg`  的行为类似于阻止系统调用、运行 P 被复用从而运行另一个 G。这种方式仍然比直接 阻塞一个 G 效率低，因为它还消耗了一个 M。
 
-To interact directly with the goroutine scheduler, use `gopark` and
-`goready`. `gopark` parks the current goroutine—putting it in the
-"waiting" state and removing it from the scheduler's run queue—and
-schedules another goroutine on the current M/P. `goready` puts a
-parked goroutine back in the "runnable" state and adds it to the run
-queue.
+为直接与 goroutine 调度器进行交互，可以使用 `gopark`、`goready`。`gopark` 停摆了一个当前的 goroutine，并将其放入 waiting 状态，并将其从调度器运行队列中移除，再进一步将其他 goroutine 在当前 M/P 上进行调度。而 `goready` 会将一个停摆的 goroutine 标回 runable 状态，并加入运行队列中。
 
 总结：
 
 <table>
-<tr><th></th><th colspan="3">Blocks</th></tr>
-<tr><th>Interface</th><th>G</th><th>M</th><th>P</th></tr>
-<tr><td>(rw)mutex</td><td>Y</td><td>Y</td><td>Y</td></tr>
-<tr><td>note</td><td>Y</td><td>Y</td><td>Y/N</td></tr>
-<tr><td>park</td><td>Y</td><td>N</td><td>N</td></tr>
+<tr><th></th><th colspan="3">阻塞</th></tr>
+<tr><th>接口</th><th>G</th><th>M</th><th>P</th></tr>
+<tr><td>(rw)mutex</td><td>是</td><td>是</td><td>是</td></tr>
+<tr><td>note</td><td>是</td><td>是</td><td>是/否</td></tr>
+<tr><td>park</td><td>是</td><td>否</td><td>否</td></tr>
 </table>
+
 
 原子操作
 =======
 
-The runtime uses its own atomics package at `runtime/internal/atomic`.
-This corresponds to `sync/atomic`, but functions have different names
-for historical reasons and there are a few additional functions needed
-by the runtime.
+运行时拥有自己的原子操作包，位于 `runtime/internal/atomic`。其对应于 `sync/atomic`，但处于历史原因函数具有不同的名字以及一些额外的运行时所需的函数。
 
-In general, we think hard about the uses of atomics in the runtime and
-try to avoid unnecessary atomic operations. If access to a variable is
-sometimes protected by another synchronization mechanism, the
-already-protected accesses generally don't need to be atomic. There
-are several reasons for this:
+一般来说，我们都仔细考虑了在运行始终使用这些原子操作，并尽可能避免了不必要的原子操作。如果某个时候访问一个某些时候会被其他同步机制保护的变量，那么访问已经受保护的内容通常不需要成为原子操作，原因如下：
 
-1. Using non-atomic or atomic access where appropriate makes the code
-   more self-documenting. Atomic access to a variable implies there's
-   somewhere else that may concurrently access the variable.
+1. 在适当的时候使用非原子或原子操作访问会使代码更明确。对于变量的原子访问意味着其他地方可能同时访问该变量。
+2. 非原子访问能够自动进行竞争检查。运行时目前并没有竞争检查器，但未来可能会有。运行竞争检查器来检查你非原子访问的假设时，原子访问会破坏竞争检查器。
+3. 非原子访问能够提升性能。
 
-2. Non-atomic access allows for automatic race detection. The runtime
-   doesn't currently have a race detector, but it may in the future.
-   Atomic access defeats the race detector, while non-atomic access
-   allows the race detector to check your assumptions.
+当然，对一个共享变量进行任何非原子访问需要解释为什么该访问是受到保护的。
 
-3. Non-atomic access may improve performance.
+混合原子访问和费原子访问的常见模式为：
 
-Of course, any non-atomic access to a shared variable should be
-documented to explain how that access is protected.
+* 读通过写锁进行的变量，在锁区域内，读不需要原子操作，而写是需要的。在锁定区外，读是需要原子操作的。
 
-Some common patterns that mix atomic and non-atomic access are:
+* 读取仅发生在 STW 期间（Stop-The-World）。在 STW 期间不会发生写入 STW，即不需要原子操作。
 
-* Read-mostly variables where updates are protected by a lock. Within
-  the locked region, reads do not need to be atomic, but the write
-  does. Outside the locked region, reads need to be atomic.
+换句话说，Go 内存模型的建议是：『不要太聪明』。运行时的性能很重要，但它的健壮性更重要。
 
-* Reads that only happen during STW, where no writes can happen during
-  STW, do not need to be atomic.
-
-That said, the advice from the Go memory model stands: "Don't be
-[too] clever." The performance of the runtime matters, but its
-robustness matters more.
-
-未管理的内存
+非托管内存
 ================
 
-In general, the runtime tries to use regular heap allocation. However,
-in some cases the runtime must allocate objects outside of the garbage
-collected heap, in *unmanaged memory*. This is necessary if the
-objects are part of the memory manager itself or if they must be
-allocated in situations where the caller may not have a P.
+通常，运行时尝试使用常规堆分配。然而，在某些情况下，运行时必须非托管内存中分配垃圾回收堆之外的对象。如果对象是内存管理器的一部分，或者必须在调用者可能没有 P 的情况下分他们，则这些分配和回收是有必要的。
 
-There are three mechanisms for allocating unmanaged memory:
+分配非托管内存有三种机制：
 
-* sysAlloc obtains memory directly from the OS. This comes in whole
-  multiples of the system page size, but it can be freed with sysFree.
+* `sysAlloc` 直接从 OS 获取内存。这会是系统页大小的整数倍，但也可以使用 `sysFree` 进行释放。
 
-* persistentalloc combines multiple smaller allocations into a single
-  sysAlloc to avoid fragmentation. However, there is no way to free
-  persistentalloced objects (hence the name).
+* `persistentalloc` 将多个较小的分配组合到一个 `sysAlloc` 中避免碎片。但没有办法释放 `persistentalloc` 对象（所以叫这个名字）。
 
-* fixalloc is a SLAB-style allocator that allocates objects of a fixed
-  size. fixalloced objects can be freed, but this memory can only be
-  reused by the same fixalloc pool, so it can only be reused for
-  objects of the same type.
+* `fixalloc` 是一个 SLAB 样式的分配器，用于分配固定大小的对象。`fixalloced` 对象可以被释放，但是这个内存只能由同一个 `fixalloc` 池重用，所以它只能被重用于同一类型的对象。
 
-In general, types that are allocated using any of these should be
-marked `//go:notinheap` (see below).
+一般来说，使用其中任何一个分配的类型应标记为 `//go:notinheap` （见下文）。
 
-Objects that are allocated in unmanaged memory **must not** contain
-heap pointers unless the following rules are also obeyed:
+在非托管内存中分配对象**不得包含**堆指针，除非遵循下列原则：
 
-1. Any pointers from unmanaged memory to the heap must be added as
-   explicit garbage collection roots in `runtime.markroot`.
-
+1. 任何来自非托管内存的堆指针必须在 `runtime.markroot` 中添加为显式垃圾回收的 root。
 2. If the memory is reused, the heap pointers must be zero-initialized
    before they become visible as GC roots. Otherwise, the GC may
    observe stale heap pointers. See "Zero-initialization versus
-   zeroing".
+   zeroing". 如果内存被重用，那么堆指针必须进行在他们作为 GC root 可见前进行零初始化。否则，GC 可能会回收已经过时的堆指针。请参考「零初始化与归零」
 
-Zero-initialization v.s. zeroing
+零初始化 v.s. 归零
 ==================================
 
-There are two types of zeroing in the runtime, depending on whether
-the memory is already initialized to a type-safe state.
+运行时有两种类型的归零方式，具体取决于内存是否已经初始化为类型安全状态。
 
-If memory is not in a type-safe state, meaning it potentially contains
-"garbage" because it was just allocated and it is being initialized
-for first use, then it must be *zero-initialized* using
-`memclrNoHeapPointers` or non-pointer writes. This does not perform
-write barriers.
+如果内存不是类型安全的状态，那么它可能包含「垃圾」，因为它刚刚被分配且被初始化以供第一次使用，因此它必须使用 `memclrNoHeapPointers` 或非指针写进行**零初始化**。这不会执行 write barrier。
 
-If memory is already in a type-safe state and is simply being set to
-the zero value, this must be done using regular writes, `typedmemclr`,
-or `memclrHasPointers`. This performs write barriers.
+如果内存已经处于类型安全状态，并且只设置为零值，则必须使用常规写，通过 `typedmemclr` 或 `memclrHasPointers` 完成。这会执行 write barrier。
 
-Runtime-only 编译器标识
+运行时独占的编译标志
 ================================
 
-In addition to the "//go:" directives documented in "go doc compile",
-the compiler supports additional directives only in the runtime.
+除了 "go doc compile" 文档中说明的 "//go:" 标志外，编译器还未运行时支持了额外的标志。
 
 go:systemstack
 --------------
 
-`go:systemstack` indicates that a function must run on the system
-stack. This is checked dynamically by a special function prologue.
+`go:systemstack` 表示函数必须在系统堆栈上运行。由特殊的函数序言（function prologue，指汇编程序函数开头的几行代码，通常是寄存器准备）进行动态检查。
 
 go:nowritebarrier
 -----------------
 
-`go:nowritebarrier` directs the compiler to emit an error if the
-following function contains any write barriers. (It *does not*
-suppress the generation of write barriers; it is simply an assertion.)
+如果函数包含 write barrier，则 `go:nowritebarrier` 触发一个编译器错误（它不会抑制 write barrier 的产生，只是一个断言）。
 
-Usually you want `go:nowritebarrierrec`. `go:nowritebarrier` is
-primarily useful in situations where it's "nice" not to have write
-barriers, but not required for correctness.
+你通常希望 `go:nowritebarrierrec`。`go:nowritebarrier` 主要适用于没有 write barrier 会更好的情况，但没有要求正确性。
 
-go:nowritebarrierrec and go:yeswritebarrierrec
+go:nowritebarrierrec 和 go:yeswritebarrierrec
 ----------------------------------------------
 
-`go:nowritebarrierrec` directs the compiler to emit an error if the
-following function or any function it calls recursively, up to a
-`go:yeswritebarrierrec`, contains a write barrier.
+.如果声明的函数或任何它递归调用的函数甚至于 `go:yeswritebarrierrec` 包含 write barrier，则 `go:nowritebarrierrec` 触发编译器错误。
 
-Logically, the compiler floods the call graph starting from each
-`go:nowritebarrierrec` function and produces an error if it encounters
-a function containing a write barrier. This flood stops at
-`go:yeswritebarrierrec` functions.
+逻辑上，编译器为每个函数调用补充 `go:nowritebarrierrec` 且当遭遇包含 write barrier 函数的时候产生一个错误。这种补充在 `go:yeswritebarrierrec` 函数上停止。
 
-`go:nowritebarrierrec` is used in the implementation of the write
-barrier to prevent infinite loops.
+`go:nowritebarrierrec` 用于防止 write barrier 实现中的无限循环。
 
-Both directives are used in the scheduler. The write barrier requires
-an active P (`getg().m.p != nil`) and scheduler code often runs
-without an active P. In this case, `go:nowritebarrierrec` is used on
-functions that release the P or may run without a P and
-`go:yeswritebarrierrec` is used when code re-acquires an active P.
-Since these are function-level annotations, code that releases or
-acquires a P may need to be split across two functions.
+两个标志都在调度器中使用。write barrier 需要一个活跃的 P （`getg().m.p != nil`）且调度器代码通常在没有活跃 P 的情况下运行。在这种情况下，`go:nowritebarrierrec` 用于释放 P 的函数上，或者可以在没有 P 的情况下运行。而且`go:nowritebarrierrec` 还被用于当代码重新要求一个活跃的 P 时。由于这些都是函数级标注，因此释放或获取 P 的代码可能需要分为两个函数。
+
+这两个指令都在调度程序中使用。 write barrier 需要一个活跃的P（ `getg().mp != nil`）并且调度程序代码通常在没有活动 P 的情 况下运行。在这种情况下，go：nowritebarrierrec用于释放P的函数或者可以在没有P的情况下运行并且去 ：当代码重新获取活动P时使用yeswritebarrierrec。由于这些是功能级注释，因此释放或获取P的代码可能需要分为两个函数。
 
 go:notinheap
 ------------
 
-`go:notinheap` applies to type declarations. It indicates that a type
-must never be allocated from the GC'd heap. Specifically, pointers to
-this type must always fail the `runtime.inheap` check. The type may be
-used for global variables, for stack variables, or for objects in
-unmanaged memory (e.g., allocated with `sysAlloc`, `persistentalloc`,
-`fixalloc`, or from a manually-managed span). Specifically:
+`go:notinheap` 适用于类型声明。它表明一种不能从 GC 堆中分配的类型。具体来说，指向此类型必须让 `runtime.inheap` 检查失败。类型可能是用于全局变量，堆栈变量或用于对象非托管内存（例如使用 `sysAlloc` 分配、`persistentalloc`、`fixalloc` 或手动管理的范围）。特别的：
 
-1. `new(T)`, `make([]T)`, `append([]T, ...)` and implicit heap
-   allocation of T are disallowed. (Though implicit allocations are
-   disallowed in the runtime anyway.)
+1. `new(T)`, `make([]T)`, `append([]T, ...)` 以及 T 的隐式堆分配是不允许的（尽管运行时中无论如何都是不允许隐式分配的）。
 
-2. A pointer to a regular type (other than `unsafe.Pointer`) cannot be
-   converted to a pointer to a `go:notinheap` type, even if they have
-   the same underlying type.
+2. 指向常规类型（ `unsafe.Pointer` 除外）的指针不能转换为指向 `go:notinheap` 类型，即使他们有相同的基础类型。
 
-3. Any type that contains a `go:notinheap` type is itself
-   `go:notinheap`. Structs and arrays are `go:notinheap` if their
-   elements are. Maps and channels of `go:notinheap` types are
-   disallowed. To keep things explicit, any type declaration where the
-   type is implicitly `go:notinheap` must be explicitly marked
-   `go:notinheap` as well.
+3. 任何包含 `go:notinheap` 类型的类型本身也是
+   `go:notinheap` 的。结构和数组中如果元素是 `go:notinheap` 的则自生也是。`go:notinheap` 类型的 map 和 channel 是不允许的。为使所有事情都变得显式，任何隐式 `go:notinheap` 类型的声明必须显式的声明 `go:notinheap`。
 
-4. Write barriers on pointers to `go:notinheap` types can be omitted.
+4. 指向 `go:notinheap` 类型的指针上的 write barrier 可以省略。
 
-The last point is the real benefit of `go:notinheap`. The runtime uses
-it for low-level internal structures to avoid memory barriers in the
-scheduler and the memory allocator where they are illegal or simply
-inefficient. This mechanism is reasonably safe and does not compromise
-the readability of the runtime.
+最后一点是 `go:notinheap` 真正的好处。运行时会使用它作为低级别内部结构使用来在内存分配器和调度器中避免 非法或简单低效的 memory barrier。这种机制相当安全且没有牺牲运行时代码的可读性。
+
