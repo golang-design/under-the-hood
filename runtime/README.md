@@ -1,26 +1,21 @@
-This is a living document and at times it will be out of date. It is
-intended to articulate how programming in the Go runtime differs from
-writing normal Go. It focuses on pervasive concepts rather than
-details of particular interfaces.
+本文可能会过时。 它旨在阐明不同于常规 Go 编程的 Go 运行时编程，并侧重于普遍概念
+而非特定接口的详细信息。
 
-Scheduler structures
-====================
+调度器结构
+=============
 
-The scheduler manages three types of resources that pervade the
-runtime: Gs, Ms, and Ps. It's important to understand these even if
-you're not working on the scheduler.
+调度器管理了三种不同类型的资源分布在运行时中：G, M, P。
+即便你进行不涉及调度器的相关工作，理解它们仍然很重要。
 
 Gs, Ms, Ps
 ----------
 
-A "G" is simply a goroutine. It's represented by type `g`. When a
+"G" 是 goroutine 的缩写. It's represented by type `g`. When a
 goroutine exits, its `g` object is returned to a pool of free `g`s and
 can later be reused for some other goroutine.
 
-An "M" is an OS thread that can be executing user Go code, runtime
-code, a system call, or be idle. It's represented by type `m`. There
-can be any number of Ms at a time since any number of threads may be
-blocked in system calls.
+"M" 代表一个能够执行用户 Go 代码、运行时代码、系统调用或处于空闲状态的 OS thread。
+由类型 `m` 表示。因为任意多个线程可以同时阻塞在系统调用上，因此同一时刻可以包含任意多个 M。
 
 Finally, a "P" represents the resources required to execute user Go
 code, such as scheduler and memory allocator state. It's represented
@@ -37,12 +32,11 @@ system call, it returns its P to the idle P pool. In order to resume
 executing user Go code, for example on return from a system call, it
 must acquire a P from the idle pool.
 
-All `g`, `m`, and `p` objects are heap allocated, but are never freed,
-so their memory remains type stable. As a result, the runtime can
-avoid write barriers in the depths of the scheduler.
+所有的 `g`, `m` 和 `p` 对象均在堆上分配，且从不释放。因此他们的内存保持 type stable。
+因此，运行时可以在调度器内避免 write barrier。
 
-User stacks and system stacks
------------------------------
+用户栈与系统栈
+------------
 
 Every non-dead G has a *user stack* associated with it, which is what
 user Go code executes on. User stacks start small (e.g., 2K) and grow
@@ -63,7 +57,7 @@ non-preemptible and the garbage collector does not scan system stacks.
 While running on the system stack, the current user stack is not used
 for execution.
 
-`getg()` and `getg().m.curg`
+`getg()` 与 `getg().m.curg`
 ----------------------------
 
 To get the current user `g`, use `getg().m.curg`.
@@ -75,7 +69,7 @@ system or signal stacks, this will return the current M's "g0" or
 To determine if you're running on the user stack or the system stack,
 use `getg() == getg().m.curg`.
 
-Error handling and reporting
+错误处理与报告
 ============================
 
 Errors that can reasonably be recovered from in user code should use
@@ -93,8 +87,8 @@ messages are prefixed with "runtime:".
 For runtime error debugging, it's useful to run with
 `GOTRACEBACK=system` or `GOTRACEBACK=crash`.
 
-Synchronization
-===============
+同步
+===
 
 The runtime has multiple synchronization mechanisms. They differ in
 semantics and, in particular, in whether they interact with the
@@ -125,7 +119,7 @@ schedules another goroutine on the current M/P. `goready` puts a
 parked goroutine back in the "runnable" state and adds it to the run
 queue.
 
-In summary,
+总结：
 
 <table>
 <tr><th></th><th colspan="3">Blocks</th></tr>
@@ -135,7 +129,7 @@ In summary,
 <tr><td>park</td><td>Y</td><td>N</td><td>N</td></tr>
 </table>
 
-Atomics
+原子操作
 =======
 
 The runtime uses its own atomics package at `runtime/internal/atomic`.
@@ -176,7 +170,7 @@ That said, the advice from the Go memory model stands: "Don't be
 [too] clever." The performance of the runtime matters, but its
 robustness matters more.
 
-Unmanaged memory
+未管理的内存
 ================
 
 In general, the runtime tries to use regular heap allocation. However,
@@ -213,7 +207,7 @@ heap pointers unless the following rules are also obeyed:
    observe stale heap pointers. See "Zero-initialization versus
    zeroing".
 
-Zero-initialization versus zeroing
+Zero-initialization v.s. zeroing
 ==================================
 
 There are two types of zeroing in the runtime, depending on whether
@@ -229,7 +223,7 @@ If memory is already in a type-safe state and is simply being set to
 the zero value, this must be done using regular writes, `typedmemclr`,
 or `memclrHasPointers`. This performs write barriers.
 
-Runtime-only compiler directives
+Runtime-only 编译器标识
 ================================
 
 In addition to the "//go:" directives documented in "go doc compile",
