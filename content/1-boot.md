@@ -96,7 +96,7 @@ ok:
 
 重点：
 
-- `runtime·schedinit`
+- `runtime·schedinit`： [2 初始化](2-init.md)
 - `runtime·main`
 - `runtime·newproc`
 - `runtime·mstart`

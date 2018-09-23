@@ -114,6 +114,7 @@ func main() {
 	// It must not be used for anything else.
 	g.m.g0.racectx = 0
 
+	// 执行栈最大限制：1GB（64位系统）或者 250MB（32位系统）
 	// Max stack size is 1 GB on 64-bit, 250 MB on 32-bit.
 	// Using decimal instead of binary GB and MB because
 	// they look nicer in the stack overflow failure message.
@@ -127,6 +128,7 @@ func main() {
 	mainStarted = true
 
 	if GOARCH != "wasm" { // no threads on wasm yet, so no sysmon
+		// 启动系统后台监控（定期垃圾回收、并发任务调度）
 		systemstack(func() {
 			newm(sysmon, nil)
 		})
@@ -144,6 +146,7 @@ func main() {
 		throw("runtime.main not on m0")
 	}
 
+	// 执行 runtime 包所有初始化函数 init
 	runtime_init() // must be before defer
 	if nanotime() == 0 {
 		throw("nanotime returning zero")
@@ -161,6 +164,7 @@ func main() {
 	// because nanotime on some platforms depends on startNano.
 	runtimeInitTime = nanotime()
 
+	// 启动垃圾回收器后台操作
 	gcenable()
 
 	main_init_done = make(chan bool)
@@ -185,6 +189,7 @@ func main() {
 		cgocall(_cgo_notify_runtime_init_done, nil)
 	}
 
+	// 执行用户 main 包中的 init 函数
 	fn := main_init // make an indirect call, as the linker doesn't know the address of the main package when laying down the runtime
 	fn()
 	close(main_init_done)
@@ -192,11 +197,14 @@ func main() {
 	needUnlock = false
 	unlockOSThread()
 
+	// 如果是库则不需要执行 main 函数了
 	if isarchive || islibrary {
 		// A program compiled with -buildmode=c-archive or c-shared
 		// has a main, but it is not executed.
 		return
 	}
+
+	// 执行用户 main 包中的 main 函数
 	fn = main_main // make an indirect call, as the linker doesn't know the address of the main package when laying down the runtime
 	fn()
 	if raceenabled {
@@ -220,7 +228,12 @@ func main() {
 		gopark(nil, nil, waitReasonPanicWait, traceEvGoStop, 1)
 	}
 
+	// 退出执行，返回退出状态码
 	exit(0)
+
+	// 如果 exit 没有被正确实现，则下面的代码能够强制退出程序，因为 *nil (nil deref) 会崩溃。
+	// http://golang.org/ref/spec#Terminating_statements + forced crashed (nil deref) if exit isn't implemented properly.
+	// https://github.com/golang/go/commit/c81a0ed3c50606d1ada0fd9b571611b3687c90e1
 	for {
 		var x *int32
 		*x = 0
@@ -537,13 +550,21 @@ func schedinit() {
 		_g_.racectx, raceprocctx0 = raceinit()
 	}
 
+	// 最大系统线程数量，参考标准库 runtime/debug.SetMaxThreads
 	sched.maxmcount = 10000
 
+	// 不重要，与 trace 有关
 	tracebackinit()
 	moduledataverify()
+
+	// 栈、内存分配器、调度器相关初始化。
+	// 栈初始化
 	stackinit()
+	// 内存分配器初始化
 	mallocinit()
+	// 初始化 M,
 	mcommoninit(_g_.m)
+	// cpu 初始化
 	cpuinit()       // must run before alginit
 	alginit()       // maps must not be used before this call
 	modulesinit()   // provides activeModules
@@ -553,20 +574,30 @@ func schedinit() {
 	msigsave(_g_.m)
 	initSigmask = _g_.m.sigmask
 
+	// 处理命令行参数和环境变量
 	goargs()
 	goenvs()
+
+	// 处理 GODEBUG、GOTRACEBACK 调试相关的环境变量设置
 	parsedebugvars()
+
+	// 垃圾回收器初始化
 	gcinit()
 
 	sched.lastpoll = uint64(nanotime())
+
+	// 通过 CPU 核心数和 GOMAXPROCS 环境变量确定 P 的数量
 	procs := ncpu
 	if n, ok := atoi32(gogetenv("GOMAXPROCS")); ok && n > 0 {
 		procs = n
 	}
+
+	// 调整 P 的数量
 	if procresize(procs) != nil {
 		throw("unknown runnable goroutine during bootstrap")
 	}
 
+	// 不重要，调试相关
 	// For cgocheck > 1, we turn on the write barrier at all times
 	// and check all pointer writes. We can't do this until after
 	// procresize because the write barrier needs a P.
