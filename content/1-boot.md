@@ -22,7 +22,18 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$0
 
 (...)
 
-// runtime/asm_386.s#L210
+
+// runtime/asm_386.s#L200
+	// set up %gs
+	CALL	runtime·ldt0setup(SB)
+
+	// store through it, to make sure it works
+	get_tls(BX)
+	MOVL	$0x123, g(BX)
+	MOVL	runtime·m0+m_tls(SB), AX
+	CMPL	AX, $0x123
+	JEQ	ok
+	MOVL	AX, 0	// abort
 ok:
 	// set up m and g "registers"
 	get_tls(BX)
@@ -81,9 +92,9 @@ ok:
 - runtime·args `runtime/runtime1.go#L60` 保存命令行参数
 - runtime·osinit`runtime/os_darwin.go#L79` 获得 CPU 核心数
 - runtime·schedinit `runtime/proc.go#L532`
-- runtime·mainPC: `runtime·main` --> `runtime/proc.go#L110`
+- runtime·mainPC: `runtime·main` --> `runtime/proc.go#L110` 主 goroutine
 - runtime·newproc: `runtime/proc.go#L3304`
-- runtime·mstart: `runtime/proc.go#L1229`
+- runtime·mstart: `runtime/proc.go#L1229` 执行 m0 （主 OS 线程）。
 - runtime·abort
   
   ```c
@@ -96,7 +107,7 @@ ok:
 
 重点：
 
-- `runtime·schedinit`： [2 初始化](2-init.md)
-- `runtime·main`
-- `runtime·newproc`
-- `runtime·mstart`
+- `runtime·schedinit`： [2 初始化概览](2-init.md)
+- `runtime·main`：[3 主 goroutine 生命周期](3-main.md)
+- `runtime·newproc`：TODO
+- `runtime·mstart`：TODO

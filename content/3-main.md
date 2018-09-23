@@ -1,6 +1,20 @@
 # 3 主 goroutine 生命周期
 
-`runtime·schedinit` 完成初始化工作后会运行 `runtime·main`，即主 goroutine 运行的地方。
+`runtime·schedinit` 完成初始化工作后并不会立即执行 `runtime·main`（即主 goroutine 运行的地方）。
+
+```c
+	// create a new goroutine to start program
+	PUSHL	$runtime·mainPC(SB)	// entry
+	PUSHL	$0	// arg size
+	CALL	runtime·newproc(SB)
+	POPL	AX
+	POPL	AX
+
+	// start this M
+	CALL	runtime·mstart(SB)
+```
+
+这个过程中，只会将 `runtime·main` 的入口地址压入栈中，而后续等待 `runtime·newproc` 将执行地址出栈存放到 AX 寄存器，因此真正执行会等到 `runtime·mstart` 后才会被调度执行（之后再详细讨论）。
 
 `runtime.main` 即为 runtime 包中的 main 函数。
 
@@ -140,9 +154,7 @@ func main() {
 }
 ```
 
-注意，所有的 main_init 均在同一个 goroutine （主）中执行。
-
-在 main_init 之前有这样几个操作：
+整个执行过程分这样几个步骤：
 
 1. `systemstack` 会启动后台监控
 2. `lockOSThread` 初始化阶段将主 goroutine 锁定在主 OS 线程上，原因在于某些特殊的调用（例如？）需要主线程的支持。用户层可以通过 `runtime.LockOSThread` 来绑定当前的线程（由于调度器的影响，不一定会是主线程）
@@ -150,7 +162,7 @@ func main() {
 4. `gcenable` 启动 GC
 5. 如果是 Cgo 则还会额外启动一个模板线程，来处理 Go 代码进入 C 创建的线程这种情况
 6. `cgocall` 从 Go 调用 C
-7. 开始执行用户态 init 函数
+7. 开始执行用户态 init 函数（所有的 main_init 均在同一个 goroutine （主）中执行）
 8. 当用户态的 init 执行完毕后，`unlockOSThread` 来取消主 goroutine 与 OS 线程的绑定，从而让调度器能够灵活调度 goroutine 和 OS 线程（G 与 M）。
 9. 然后可以开始执行用户态 main 函数（如果是库则不需要再执行 main 函数了）。
 10. 当用户态 main 结束执行后，程序会退出。
