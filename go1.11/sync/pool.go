@@ -66,6 +66,7 @@ type poolLocal struct {
 // from runtime
 func fastrand() uint32
 
+// 此结构用于 race 检查器
 var poolRaceHash [128]uint64
 
 // poolRaceAddr returns an address to use as the synchronization point
@@ -105,7 +106,7 @@ func (p *Pool) Put(x interface{}) {
 	}
 	runtime_procUnpin()
 
-	// 如果不能放入 private 则放入 share
+	// 如果不能放入 private 则放入 shared
 	if x != nil {
 		l.Lock()
 		l.shared = append(l.shared, x)
@@ -118,14 +119,9 @@ func (p *Pool) Put(x interface{}) {
 	}
 }
 
-// Get selects an arbitrary item from the Pool, removes it from the
-// Pool, and returns it to the caller.
-// Get may choose to ignore the pool and treat it as empty.
-// Callers should not assume any relation between values passed to Put and
-// the values returned by Get.
-//
-// If Get would otherwise return nil and p.New is non-nil, Get returns
-// the result of calling p.New.
+// Get 从 Pool 中选择一个任意的对象，将其移出 Pool, 并返回给调用方.
+// Get 可能会返回一个非零值对象（被其他人使用过），因此调用方不应假设
+// 返回的对象具有任何形式的状态.
 func (p *Pool) Get() interface{} {
 
 	// 如果启用了 race 检查，则先停用
@@ -203,19 +199,19 @@ func (p *Pool) getSlow() (x interface{}) {
 	return x
 }
 
-// pin pins the current goroutine to P, disables preemption and returns poolLocal pool for the P.
-// Caller must call runtime_procUnpin() when done with the pool.
+// pin 会将当前 goroutine 订到 P 上, 禁止抢占(preemption) 并从 poolLocal 池中返回 P 对应的 poolLocal
+// 调用方必须在完成取值后调用 runtime_procUnpin() 来取消抢占。
 func (p *Pool) pin() *poolLocal {
 	// 返回当前 P.id
 	pid := runtime_procPin()
-	// In pinSlow we store to localSize and then to local, here we load in opposite order.
-	// Since we've disabled preemption, GC cannot happen in between.
-	// Thus here we must observe local at least as large localSize.
-	// We can observe a newer/larger local, it is fine (we must observe its zero-initialized-ness).
+	// 在 pinSlow 中会存储 localSize 后再存储 local，因此这里反过来读取
+	// 因为我们已经禁用了抢占，这时不会发生 GC
+	// 因此，我们必须观察 local 和 localSize 是否对应
+	// 观察到一个全新或很大的的 local 是正常行为
 	s := atomic.LoadUintptr(&p.localSize) // load-acquire
 	l := p.local                          // load-consume
-	// 如果 P.id 没有超出数组索引限制，则直接返回
-	// 考虑 procresize/GOMAXPROCS
+	// 因为可能存在动态的 P（运行时调整 P 的个数）procresize/GOMAXPROCS
+	// 如果 P.id 没有越界，则直接返回
 	if uintptr(pid) < s {
 		return indexLocal(l, pid)
 	}
@@ -225,19 +221,18 @@ func (p *Pool) pin() *poolLocal {
 }
 
 func (p *Pool) pinSlow() *poolLocal {
-	// M.lock--
-	// Retry under the mutex.
-	// Can not lock the mutex while pinned.
+	// 这时取消 P 的禁止抢占，因为使用 mutex 时候 P 必须可抢占
 	runtime_procUnpin()
 
 	// 加锁
 	allPoolsMu.Lock()
 	defer allPoolsMu.Unlock()
 
+	// 当锁住后，再次固定 P 取其 id
 	pid := runtime_procPin()
 
-	// 再次检查是否符合条件，可能中途已被其他线程调用
-	// poolCleanup won't be called while we are pinned.
+	// 并再次检查是否符合条件，因为可能中途已被其他线程调用
+	// 当再次固定 P 时 poolCleanup 不会被调用
 	s := p.localSize
 	l := p.local
 	if uintptr(pid) < s {
@@ -250,8 +245,8 @@ func (p *Pool) pinSlow() *poolLocal {
 		allPools = append(allPools, p)
 	}
 
-	// 根据 P 数量创建 slice
-	// If GOMAXPROCS changes between GCs, we re-allocate the array and lose the old one.
+	// 根据 P 数量创建 slice，如果 GOMAXPROCS 在 GC 间发生变化
+	// 我们重新分配此数组并丢弃旧的
 	size := runtime.GOMAXPROCS(0)
 	local := make([]poolLocal, size)
 
@@ -310,6 +305,7 @@ func init() {
 }
 
 func indexLocal(l unsafe.Pointer, i int) *poolLocal {
+	// 简单的通过 p.local 的头指针与索引来第 i 个 pooLocal
 	lp := unsafe.Pointer(uintptr(l) + uintptr(i)*unsafe.Sizeof(poolLocal{}))
 	return (*poolLocal)(lp)
 }
