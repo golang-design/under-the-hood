@@ -1,19 +1,20 @@
-// Copyright 2009 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+# 11 标准库：sync.Once
 
-package sync
+sync.Once 用来保证绝对一次执行的对象，例如可在单例的初始化中使用。
 
-import (
-	"sync/atomic"
-)
+它内部的结构也相对简单：
 
+```go
 // Once 对象可以保证一个动作的绝对一次执行。
 type Once struct {
 	m    Mutex
 	done uint32
 }
+```
 
+源码也非常简单：
+
+```go
 // Do 当且仅当第一次调用时，f 会被执行。换句话说，给定
 // 	var once Once
 // 如果 once.Do(f) 被多次调用则只有第一次会调用 f，即使每次提供的 f 不同。
@@ -43,3 +44,4 @@ func (o *Once) Do(f func()) {
 	}
 	// 当 o.done 为 0 的 goroutine 解锁后，其他人会继续加锁，这时会发现 o.done 已经为了 1 ，于是 f 已经不用在继续执行了
 }
+```
