@@ -16,7 +16,7 @@ import (
 	"unsafe"
 )
 
-func throw(string) // provided by runtime
+func throw(string) // 运行时实现
 
 // A Mutex is a mutual exclusion lock.
 // The zero value for a Mutex is an unlocked mutex.

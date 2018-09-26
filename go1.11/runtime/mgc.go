@@ -2112,11 +2112,13 @@ func gcResetMarkState() {
 
 var poolcleanup func()
 
+// 利用编译器标志将 sync 包中的清理注册到运行时
 //go:linkname sync_runtime_registerPoolCleanup sync.runtime_registerPoolCleanup
 func sync_runtime_registerPoolCleanup(f func()) {
 	poolcleanup = f
 }
 
+// 实现缓存清理
 func clearpools() {
 	// clear sync.Pools
 	if poolcleanup != nil {

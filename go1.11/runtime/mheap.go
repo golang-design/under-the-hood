@@ -249,13 +249,13 @@ type mSpanList struct {
 }
 
 //go:notinheap
-type mspan struct {
+type mspan struct { // 双向链表
 	next *mspan     // next span in list, or nil if none
 	prev *mspan     // previous span in list, or nil if none
 	list *mSpanList // For debugging. TODO: Remove.
 
 	startAddr uintptr // address of first byte of span aka s.base()
-	npages    uintptr // number of pages in span
+	npages    uintptr // 一个 span 中的 page 数量
 
 	manualFreeList gclinkptr // list of free objects in _MSpanManual spans
 
@@ -443,9 +443,8 @@ func (i arenaIdx) l1() uint {
 		// Let the compiler optimize this away if there's no
 		// L1 map.
 		return 0
-	} else {
-		return uint(i) >> arenaL1Shift
 	}
+	return uint(i) >> arenaL1Shift
 }
 
 func (i arenaIdx) l2() uint {

@@ -1,26 +1,26 @@
-# Go Under the Hood
+# Go: Under the Hood
 
-based on go1.11
+基于 `go1.11`
 
 ## 目录
 
 1. [引导](content/1-boot.md)
 2. [初始化概览](content/2-init.md)
 3. [主 goroutine 生命周期](content/3-main.md)
-4. Memory menagement
+4. [内存管理](content/4-mem.md)
 5. Goroutine scheduler
 6. Garbage collection
 7. `chan`
 8. `defer`
 9.  Cgo
 10. Finalizer
-11. Packages
-    - `sync.Pool`
+11. 标准库
+    - [`sync.Pool`](content/11-pkg/pool.md)
     - `atomic`
     - `net`
     - ...
 
-## References
+## 参考
 
 - [Scalable Go Scheduler Design Doc](https://docs.google.com/document/d/1TTj4T2JO42uD5ID9e89oa0sLKhJYD0Y_kqxDv3I3XMw/edit#heading=h.mmq8lm48qfcw)
 - [Go Preemptive Scheduler Design Doc](https://docs.google.com/document/d/1ETuA2IOmnaQ4j81AtTGT40Y4_Jr6_IDASEKg0t0dBR8/edit#heading=h.3pilqarbrc9h)

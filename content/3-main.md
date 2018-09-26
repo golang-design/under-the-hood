@@ -14,7 +14,7 @@
 	CALL	runtime·mstart(SB)
 ```
 
-这个过程中，只会将 `runtime·main` 的入口地址压入栈中，而后续等待 `runtime·newproc` 将执行地址出栈存放到 AX 寄存器，因此真正执行会等到 `runtime·mstart` 后才会被调度执行（之后再详细讨论）。
+这个过程中，只会将 `runtime·main` 的入口地址压入栈中，将其传递给 `newproc` 进行使用，而后 `runtime·newproc` 将执行地址出栈存放到 AX 寄存器，因此真正执行会等到 `runtime·mstart` 后才会被调度执行（之后再详细讨论）。
 
 `runtime.main` 即为 runtime 包中的 main 函数。
 

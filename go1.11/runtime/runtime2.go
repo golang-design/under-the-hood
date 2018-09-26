@@ -567,18 +567,18 @@ type schedt struct {
 	nmsys        int32    // number of system m's not counted for deadlock
 	nmfreed      int64    // cumulative number of freed m's
 
-	ngsys uint32 // number of system goroutines; updated atomically
+	ngsys uint32 // 系统 goroutine 的数量，动态更新
 
-	pidle      puintptr // idle p's
-	npidle     uint32
-	nmspinning uint32 // See "Worker thread parking/unparking" comment in proc.go.
+	pidle      puintptr // 空闲 p 链表
+	npidle     uint32   // 空闲 p 数量
+	nmspinning uint32   // 见 proc.go 中关于 "Worker thread parking/unparking" 的注释.
 
-	// Global runnable queue.
+	// 全局 runnable 队列
 	runqhead guintptr
 	runqtail guintptr
 	runqsize int32
 
-	// Global cache of dead G's.
+	// dead G 的全局缓存.
 	gflock       mutex
 	gfreeStack   *g
 	gfreeNoStack *g
@@ -824,7 +824,7 @@ func (w waitReason) String() string {
 var (
 	allglen    uintptr
 	allm       *m
-	allp       []*p  // len(allp) == gomaxprocs; may change at safe points, otherwise immutable
+	allp       []*p  // 所有 P 的存储位置，len(allp) == gomaxprocs; 在安全时可变，否则是不可变的
 	allpLock   mutex // Protects P-less reads of allp and all writes
 	gomaxprocs int32
 	ncpu       int32

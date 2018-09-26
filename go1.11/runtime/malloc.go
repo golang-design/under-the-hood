@@ -2,10 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Memory allocator.
+// 内存分配器
 //
 // This was originally based on tcmalloc, but has diverged quite a bit.
 // http://goog-perftools.sourceforge.net/doc/tcmalloc.html
+// 基于 tcmalloc (thread caching malloc)，有些许不同。
 
 // The main allocator works in runs of pages.
 // Small allocation sizes (up to and including 32 kB) are
@@ -15,6 +16,7 @@
 // of one size class, which are then managed using a free bitmap.
 //
 // The allocator's data structures are:
+// 分配器的数据结构为:
 //
 //	fixalloc: a free-list allocator for fixed-size off-heap objects,
 //		used to manage storage used by the allocator.
@@ -78,7 +80,7 @@
 //
 //	3. We don't zero pages that never get reused.
 
-// Virtual memory layout
+// 虚拟内存布局
 //
 // The heap consists of a set of arenas, which are 64MB on 64-bit and
 // 4MB on 32-bit (heapArenaBytes). Each arena's start address is also
@@ -128,13 +130,13 @@ const (
 
 	concurrentSweep = _ConcurrentSweep
 
-	_PageSize = 1 << _PageShift
+	_PageSize = 1 << _PageShift // 8KB
 	_PageMask = _PageSize - 1
 
 	// _64bit = 1 on 64-bit systems, 0 on 32-bit systems
 	_64bit = 1 << (^uintptr(0) >> 63) / 2
 
-	// Tiny allocator parameters, see "Tiny allocator" comment in malloc.go.
+	// Tiny allocator 参数, see "Tiny allocator" comment in malloc.go.
 	_TinySize      = 16
 	_TinySizeClass = int8(2)
 
