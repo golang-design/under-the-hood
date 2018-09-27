@@ -14,4 +14,4 @@ TEXT main(SB),NOSPLIT,$0
 	// Remove the return address from the stack.
 	// rt0_go doesn't expect it to be there.
 	ADDL	$4, SP
-	JMP	runtime·rt0_go(SB)
+	JMP	runtime·rt0_go(SB) // 跳转到 runtime.rt0_go

@@ -1,20 +1,32 @@
-# Go: Under the Hood
+# Go under the hood
 
 基于 `go1.11`
+
+```
+→ go version
+go version go1.11 darwin/amd64
+→ uname -a
+Darwin changkun-pro 18.0.0 Darwin Kernel Version 18.0.0: Wed Aug 22 20:13:40 PDT 2018; root:xnu-4903.201.2~1/RELEASE_X86_64 x86_64
+```
 
 ## 目录
 
 1. [引导](content/1-boot.md)
 2. [初始化概览](content/2-init.md)
 3. [主 goroutine 生命周期](content/3-main.md)
-4. [内存管理](content/4-mem.md)
-5. Goroutine scheduler
-6. Garbage collection
-7. `chan`
-8. `defer`
-9.  Cgo
-10. Finalizer
-11. 标准库
+4. [内存分配器](content/4-mem.md)
+5. [调度器](content/5-scheduler.md)
+6. [垃圾回收器](content/6-gc.md)
+7. 语言特性
+    - [`go`](content/7-lang/go.md)
+    - [`chan`](content/7-lang/chan.md)
+    - [`defer`](content/7-lang/defer.md)
+8.  Runtime 公共方法
+    - [`runtime.Finalizer`](content/8-runtime/finalizer.md)
+    - [`runtime.GOMAXPROCS`](content/8-runtime/gomaxprocs.md)
+9.  [`unsafe`](content/10-unsafe.md)
+10. `cgo`
+11. 依赖运行时的标准库
     - [`sync.Pool`](content/11-pkg/sync/pool.md)
     - [`sync.Once`](content/11-pkg/sync/once.md)
     - [`sync.WaitGroup`](content/11-pkg/sync/waitgroup.md)
@@ -24,6 +36,8 @@
     - `atomic`
     - `net`
     - ...
+12. 编译前端
+13. 编译后端
 
 ## 参考
 
