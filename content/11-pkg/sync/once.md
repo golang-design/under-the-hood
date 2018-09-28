@@ -45,3 +45,7 @@ func (o *Once) Do(f func()) {
 	// 当 o.done 为 0 的 goroutine 解锁后，其他人会继续加锁，这时会发现 o.done 已经为了 1 ，于是 f 已经不用在继续执行了
 }
 ```
+
+## 许可
+
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | MIT &copy; [changkun](https://changkun.de)

@@ -396,3 +396,7 @@ func setGCPercent(in int32) (out int32) {
 	return out
 }
 ```
+
+## 许可
+
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | MIT &copy; [changkun](https://changkun.de)

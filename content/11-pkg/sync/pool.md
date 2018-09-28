@@ -421,3 +421,7 @@ func (*noCopy) Unlock() {}
 
 对于调用方而言，当 Get 到临时对象后，便脱离了池本身不受控制。
 用方有责任将使用完的对象放回池中。
+
+## 许可
+
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | MIT &copy; [changkun](https://changkun.de)

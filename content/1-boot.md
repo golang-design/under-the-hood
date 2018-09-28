@@ -2,35 +2,6 @@
 
 本节讨论程序引导流程。
 
-## 基本概念
-
-> 关于 Go 汇编的一切
-> 
-> - https://golang.org/doc/asm
-> - https://9p.io/sys/doc/asm.html
-> - http://68k.hax.com/
-
-Go 程序是自举而成的，底层代码由（类似） Plan9 汇编写成。
-在阅读程序引导代码前，我们需要了解一些基本的指令。
-
-### LEA 和 MOV
-
-LEA 用于操作地址，MOV 则是操作数据，例如：
-
-```asm
-LEAQ 8(SP), SI // argv 把 8(SP) 地址放入 SI 寄存器
-MOVQ 0(SP), DI // argc 把 0(SP) 内容放入 DI 寄存器
-```
-
-外部数据需要引用到虚拟程序计数器（PC）或者静态基指针（SB）
-
-### 操作堆栈
-
-FP 是 Frame Pointer 帧指针的缩写，0(FP) 表示函数的第一个参数；4(FP) 表示第二个参数等；
-SP 是 Local Stack Pointer 本地栈指针的缩写，用于保存局部变量。0(SP) 表示第一个局部变量，4(SP) 表示第二个局部变量等；
-
-TODO:
-
 ## 入口
 
 寻找初始入口，编写简单程序：
@@ -222,3 +193,29 @@ Go 程序既不是从 `main.main` 直接启动，也不是从 `runtime.main` 直
 在执行 `main.main` 前，Go 程序会完成自身三大核心组件（内存分配器、goroutine 调度器、垃圾回收器）
 的初始化工作。
 
+## 附：plan9 汇编
+
+Go 程序是自举而成的，底层代码由（类似） Plan9 汇编写成。
+在阅读程序引导代码前，我们需要了解一些基本的指令。
+
+### LEA 和 MOV
+
+LEA 用于操作地址，MOV 则是操作数据，例如：
+
+```asm
+LEAQ 8(SP), SI // argv 把 8(SP) 地址放入 SI 寄存器
+MOVQ 0(SP), DI // argc 把 0(SP) 内容放入 DI 寄存器
+```
+
+外部数据需要引用到虚拟程序计数器（PC）或者静态基指针（SB）
+
+### 操作堆栈
+
+FP 是 Frame Pointer 帧指针的缩写，0(FP) 表示函数的第一个参数；4(FP) 表示第二个参数等；
+SP 是 Local Stack Pointer 本地栈指针的缩写，用于保存局部变量。0(SP) 表示第一个局部变量，4(SP) 表示第二个局部变量等；
+
+TODO: 增加更多关于 plan9 汇编的基础概念
+
+## 许可
+
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | MIT &copy; [changkun](https://changkun.de)

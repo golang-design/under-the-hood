@@ -2,12 +2,28 @@
 
 基于 `go1.11`
 
-```
-→ go version
-go version go1.11 darwin/amd64
-→ uname -a
-Darwin changkun-pro 18.0.0 Darwin Kernel Version 18.0.0: Wed Aug 22 20:13:40 PDT 2018; root:xnu-4903.201.2~1/RELEASE_X86_64 x86_64
-```
+## 致潜在读者
+
+此仓库的内容可能勾起你的兴趣，如果你想要关注本仓库的更新情况，可以点击仓库的 Watch。
+此仓库才刚刚开始，笔者因各方面事情都很忙，并仅刚开始尝试阅读 Go 源码，由于各种不可抗力和一时兴起，
+更新可能会很慢（也会很乱，不一定顺序更新内容）。
+
+如果你也希望参与贡献，欢迎提交 issue 或 pr。
+
+## 为什么要研究源码？
+
+研究 Go 源码有几个初衷：
+
+1. 处于对技术的纯粹兴趣；
+2. 工作需要，需要了解更多关于 Go 运行时 GC、cgo 等细节以优化性能。
+
+已经有很多讨论 Go 源码的文章了，为什么不直接看？
+
+1. 那是别人的二手资料，自己做的才是一手的
+2. 比较完整的资料已经存在一定程度上的过时，Go 运行时的开发是相当活跃的，本仓库目前基于 1.11。
+
+当然，站在巨人的肩膀上，至少本仓库有很多内容受到参考文献 12 的影响，但 12 内容已相对陈旧，
+部分内容在 1.11 不再适用。
 
 ## 目录
 
@@ -21,7 +37,7 @@ Darwin changkun-pro 18.0.0 Darwin Kernel Version 18.0.0: Wed Aug 22 20:13:40 PDT
     - [`go`](content/7-lang/go.md)
     - [`chan`](content/7-lang/chan.md)
     - [`defer`](content/7-lang/defer.md)
-8.  Runtime 公共方法
+8. 运行时杂项
     - [`runtime.Finalizer`](content/8-runtime/finalizer.md)
     - [`runtime.GOMAXPROCS`](content/8-runtime/gomaxprocs.md)
 9.  [`unsafe`](content/10-unsafe.md)
@@ -39,26 +55,31 @@ Darwin changkun-pro 18.0.0 Darwin Kernel Version 18.0.0: Wed Aug 22 20:13:40 PDT
 12. 编译前端
 13. 编译后端
 
-## 参考
+## 环境
 
-- [Scalable Go Scheduler Design Doc](https://docs.google.com/document/d/1TTj4T2JO42uD5ID9e89oa0sLKhJYD0Y_kqxDv3I3XMw/edit#heading=h.mmq8lm48qfcw)
-- [Go Preemptive Scheduler Design Doc](https://docs.google.com/document/d/1ETuA2IOmnaQ4j81AtTGT40Y4_Jr6_IDASEKg0t0dBR8/edit#heading=h.3pilqarbrc9h)
-- [NUMA-aware scheduler for Go](https://docs.google.com/document/u/0/d/1d3iI2QWURgDIsSR6G2275vMeQ_X7w-qxM2Vp7iGwwuM/pub)
-- [Scheduling Multithreaded Computations by Work Stealing](papers/steal.pdf)
-- [Golang Internals, Part 1: Main Concepts and Project Structure](https://blog.altoros.com/golang-part-1-main-concepts-and-project-structure.html)
-- [Golang Internals, Part 2: Diving Into the Go Compiler](https://blog.altoros.com/golang-internals-part-2-diving-into-the-go-compiler.html)
-- [Golang Internals, Part 3: The Linker, Object Files, and Relocations](https://blog.altoros.com/golang-internals-part-3-the-linker-and-object-files.html)
-- [Golang Internals, Part 4: Object Files and Function Metadata](https://blog.altoros.com/golang-part-4-object-files-and-function-metadata.html)
-- [Golang Internals, Part 5: the Runtime Bootstrap Process](https://blog.altoros.com/golang-internals-part-5-runtime-bootstrap-process.html)
-- [Golang Internals, Part 6: Bootstrapping and Memory Allocator Initialization](https://blog.altoros.com/golang-internals-part-6-bootstrapping-and-memory-allocator-initialization.html)
-- [LINUX SYSTEM CALL TABLE FOR X86 64](http://blog.rchapman.org/posts/Linux_System_Call_Table_for_x86_64/)
-- [Getting to Go: The Journey of Go's Garbage Collector](https://blog.golang.org/ismmkeynote)
-- [Go 1.5 源码剖析](https://github.com/qyuhen/book/blob/master/Go%201.5%20%E6%BA%90%E7%A0%81%E5%89%96%E6%9E%90%20%EF%BC%88%E4%B9%A6%E7%AD%BE%E7%89%88%EF%BC%89.pdf)
-- [也谈 goroutine 调度器](https://tonybai.com/2017/06/23/an-intro-about-goroutine-scheduler/)
-- http://www.cnblogs.com/diegodu/p/5803202.html
-- https://www.cnblogs.com/zkweb/category/1108329.html
-- http://legendtkl.com/categories/golang/
+```
+→ go version
+go version go1.11 darwin/amd64
+→ uname -a
+Darwin changkun-pro 18.0.0 Darwin Kernel Version 18.0.0: Wed Aug 22 20:13:40 PDT 2018; root:xnu-4903.201.2~1/RELEASE_X86_64 x86_64
+```
 
-## License
+## 参考文献
 
-MIT &copy; [changkun](https://changkun.de)
+1. [A Quick Guide to Go's Assembler](https://golang.org/doc/asm)
+2. [A Manual for the Plan 9 assembler](https://9p.io/sys/doc/asm.html)
+3. [The Go Memory Model](https://golang.org/ref/mem)
+4. [Scalable Go Scheduler Design Doc](https://docs.google.com/document/d/1TTj4T2JO42uD5ID9e89oa0sLKhJYD0Y_kqxDv3I3XMw/edit#heading=h.mmq8lm48qfcw)
+5. [Go Preemptive Scheduler Design Doc](https://docs.google.com/document/d/1ETuA2IOmnaQ4j81AtTGT40Y4_Jr6_IDASEKg0t0dBR8/edit#heading=h.3pilqarbrc9h)
+6. [NUMA-aware scheduler for Go](https://docs.google.com/document/u/0/d/1d3iI2QWURgDIsSR6G2275vMeQ_X7w-qxM2Vp7iGwwuM/pub)
+7. [Scheduling Multithreaded Computations by Work Stealing](papers/steal.pdf)
+8. [Command cgo](https://golang.org/cmd/cgo/)
+9. [Command compile](https://golang.org/cmd/compile/)
+10. [LINUX SYSTEM CALL TABLE FOR X86 64](http://blog.rchapman.org/posts/Linux_System_Call_Table_for_x86_64/)
+11. [Getting to Go: The Journey of Go's Garbage Collector](https://blog.golang.org/ismmkeynote)
+12. [Go 1.5 源码剖析](https://github.com/qyuhen/book/blob/master/Go%201.5%20%E6%BA%90%E7%A0%81%E5%89%96%E6%9E%90%20%EF%BC%88%E4%B9%A6%E7%AD%BE%E7%89%88%EF%BC%89.pdf)
+13. ...
+
+## 许可
+
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | MIT &copy; [changkun](https://changkun.de)

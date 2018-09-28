@@ -1,3 +1,5 @@
 # 4 内存管理
 
-在阅读源码之前，需要先铺垫一些基本概念。
+## 许可
+
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | MIT &copy; [changkun](https://changkun.de)

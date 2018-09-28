@@ -171,3 +171,9 @@ func main() {
 
 1. 编译器做了什么事情？
 2. 包含多个 init 的执行顺序怎样由编译器控制的？
+
+## `objdump`
+
+## 许可
+
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | MIT &copy; [changkun](https://changkun.de)
