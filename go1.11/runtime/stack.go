@@ -11,17 +11,20 @@ import (
 )
 
 /*
-Stack layout parameters.
-Included both by runtime (compiled via 6c) and linkers (compiled via gcc).
+栈布局管理参数
+包括运行时（6c编译）和链接器（gcc编译）
 
-The per-goroutine g->stackguard is set to point StackGuard bytes
-above the bottom of the stack.  Each function compares its stack
-pointer against g->stackguard to check for overflow.  To cut one
+ To cut one
 instruction from the check sequence for functions with tiny frames,
 the stack is allowed to protrude StackSmall bytes below the stack
 guard.  Functions with large frames don't bother with the check and
 always call morestack.  The sequences are (for amd64, others are
 similar):
+每个 goroutine 的 g->stackguard 被设置为从栈底增长的 StackGurard 字节。
+每个函数都会比较栈指针和g->stackguard来检查是否存在溢出。
+为了从具有小帧函数的检查序列中取出一条指令，允许栈在 stackguard 下延展
+StackSmall 字节。具有大帧的函数不会影响检查，总是调用更多的栈。
+序列为(amd64，其他类似)：
 
 	guard = g->stackguard
 	frame = function's stack frame size
@@ -133,21 +136,23 @@ const (
 	stackFork = uintptrMask & -1234
 )
 
-// Global pool of spans that have free stacks.
-// Stacks are assigned an order according to size.
+// 具有可用栈的 span 的全局池
+// 每个栈均根据其大小会被分配一个 order
 //     order = log_2(size/FixedStack)
-// There is a free list for each order.
+// 每个 order 都包含一个可用链表
 // TODO: one lock per order?
 var stackpool [_NumStackOrders]mSpanList
 var stackpoolmu mutex
 
-// Global pool of large stack spans.
+// 大小较大的栈 span 的全局池
 var stackLarge struct {
 	lock mutex
 	free [heapAddrBits - pageShift]mSpanList // free lists by log_2(s.npages)
 }
 
+// 初始化栈空间复用管理链表
 func stackinit() {
+	// 10 0000 0000 0000 & 01 1111 1111 1111 = 00 0000 0000 0000
 	if _StackCacheSize&_PageMask != 0 {
 		throw("cache size must be a multiple of page size")
 	}

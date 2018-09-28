@@ -1,16 +1,76 @@
 # 1 引导
 
-本节讨论程序引导流程。在阅读 Go 汇编代码之前，先铺垫一些概念：
+本节讨论程序引导流程。
 
-FP: 帧指针: 实参与本地
-PC: 程序计数器: 跳转与分支
-SB: 静态基指针: 全局符号.
-SP: 栈指针: 栈顶
+## 基本概念
 
-- 符号 `foo(SB)` 表示 `foo` 在内存中的地址。
+> 关于 Go 汇编的一切
+> 
+> - https://golang.org/doc/asm
+> - https://9p.io/sys/doc/asm.html
+> - http://68k.hax.com/
+
+Go 程序是自举而成的，底层代码由（类似） Plan9 汇编写成。
+在阅读程序引导代码前，我们需要了解一些基本的指令。
+
+### LEA 和 MOV
+
+LEA 用于操作地址，MOV 则是操作数据，例如：
+
+```asm
+LEAQ 8(SP), SI // argv 把 8(SP) 地址放入 SI 寄存器
+MOVQ 0(SP), DI // argc 把 0(SP) 内容放入 DI 寄存器
+```
+
+外部数据需要引用到虚拟程序计数器（PC）或者静态基指针（SB）
+
+### 操作堆栈
+
+FP 是 Frame Pointer 帧指针的缩写，0(FP) 表示函数的第一个参数；4(FP) 表示第二个参数等；
+SP 是 Local Stack Pointer 本地栈指针的缩写，用于保存局部变量。0(SP) 表示第一个局部变量，4(SP) 表示第二个局部变量等；
+
+TODO:
+
+## 入口
+
+寻找初始入口，编写简单程序：
+
+```go
+package main
+
+func main() {
+	println("hello, world!")
+}
+```
+
+编译：
+
+```bash
+go build -gcflags "-N -l" -ldflags=-compressdwarf=false -o main main.go
+```
+
+> `-gcflags "-N -l"` 用于关闭编译器代码优化与函数内联。
+> 
+> 此外还需注意，Go 1.11 开始将调试信息压缩为 DWARF，macOS 下的 gdb 不能解释 DWARF。
+因此需要使用 GDB 调试需要增加 `-ldflags=-compressdwarf=false`。
+
+```gdb
+$ gdb main
+(...)
+(gdb) info files
+Symbols from "/Users/changkun/dev/go-under-the-hood/demo/1-boot/main".
+Local exec file:
+        `/Users/changkun/dev/go-under-the-hood/demo/1-boot/main', file type mach-o-x86-64.
+        Entry point: 0x1049e20
+        0x0000000001001000 - 0x000000000104dfcf is .text
+        (...)
+(gdb) b *0x1049e20
+Breakpoint 1 at 0x1049e20: file /usr/local/Cellar/go/1.11/libexec/src/runtime/rt0_darwin_amd64.s, line 8.
+```
+
+可以看到，程序的入口在 `rt0_darwin_amd64.s` 第八行，即：
 
 ```c
-// 位于 runtime/rt0_darwin_386.s
 TEXT main(SB),NOSPLIT,$0
 	// Remove the return address from the stack.
 	// rt0_go doesn't expect it to be there.
@@ -18,10 +78,9 @@ TEXT main(SB),NOSPLIT,$0
 	JMP	runtime·rt0_go(SB) // 跳转到 runtime.rt0_go
 ```
 
-跳转到 `runtime·rt0_go`：
+从汇编的 `JMP` 指令可以看出，程序会立即跳转到 `runtime·rt0_go`：
 
 ```c
-// 位于 runtime/asm_386.s#92
 TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	// copy arguments forward on an even stack
 	MOVQ	DI, AX		// argc
@@ -29,8 +88,6 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$0
 
 (...)
 
-
-	// 位于 runtime/asm_386.s#L200
 	// set up %gs
 	CALL	runtime·ldt0setup(SB)
 
@@ -70,7 +127,7 @@ ok:
 	CALL	runtime·schedinit(SB)
 
 	// 创建运行程序的 goroutine
-	PUSHL	$runtime·mainPC(SB)	// entry
+	PUSHL	$runtime·mainPC(SB)	// 入口
 	PUSHL	$0	// arg size
 	CALL	runtime·newproc(SB)
 	POPL	AX
@@ -83,38 +140,85 @@ ok:
 	RET
 ```
 
-准备过程：
+## 引导准备
 
-- runtime·g0: `runtime/proc.go#L80` 全局变量
-- runtime·m0: `runtime/proc.go#L81` 全局变量
-- runtime·emptyfunc: 用于堆栈检查
+从上面的汇编代码我们可以看出，整个准备过程按照如下顺序进行：
 
-  ```c
-  // runtime/asm_386.s#L909
-  TEXT runtime·emptyfunc(SB),0,$0-0
+`runtime·g0`、`runtime·m0` 是一组全局变量，在程序运行之初就已经创建完成（编译器完成数据段相关翻译），定义位于`runtime/proc.go`。除了程序参数外，会首先将 m0 与 g0 互相关联（在[调度器](5-scheduler.md)一节中讨论 M 与 G 之间的关系）。
+
+然后会调用一个空函数 `runtime·emptyfunc` 进行堆栈溢出检查，这个函数什么也不做，只是强制进行一次压栈和出栈操作。
+
+```c
+TEXT runtime·emptyfunc(SB),0,$0-0
 	RET
+```
+
+`runtime·check`: `runtime/runtime1.go` 进行类型检查，基本上属于对编译器翻译工作的一个校验，我们不关心这部分的代码：
+
+```go
+func check() {
+	var (
+		a     int8
+		b     uint8
+		(...)
+	)
+	(...)
+
+	if unsafe.Sizeof(a) != 1 {
+		throw("bad a")
+	}
+	if unsafe.Sizeof(b) != 1 {
+		throw("bad b")
+	}
+	(...)
+}
+```
+
+接下来我们看到 `argc, argv` 作为参数传递给 `runtime·args` （`runtime/runtime1.go`）处理程序参数的相关事宜，这不是我们所关心的内容。
+
+`runtime·osinit`（`runtime/os_darwin.go`）在不同平台上实现略有不同，但所有的平台都会做的一件事情是：获得 CPU 核心数，这与调度器有关。macOS 还会额外完成物理页大小的查询，这与内存分配器有关。
+
+  ```go
+	func osinit() {
+		ncpu = getncpu()
+		physPageSize = getPageSize()
+	}
   ```
 
-- runtime·check `runtime/runtime1.go#L136` 进行类型检查
-- runtime·args `runtime/runtime1.go#L60` 保存命令行参数
-- runtime·osinit`runtime/os_darwin.go#L79` 获得 CPU 核心数
-- runtime·schedinit `runtime/proc.go#L532`
-- runtime·mainPC: `runtime·main` --> `runtime/proc.go#L110` 主 goroutine
-- runtime·newproc: `runtime/proc.go#L3304`
-- runtime·mstart: `runtime/proc.go#L1229` 执行 m0 （主 OS 线程）。
-- runtime·abort
+
+`runtime·schedinit`: `runtime/proc.go` 各类初始化
+
+`runtime·mainPC` 在数据段中被定义为 `runtime·main` 创建主 goroutine。：
+
+```c
+DATA	runtime·mainPC+0(SB)/4,$runtime·main(SB)
+```
+
+`runtime·newproc`: `runtime/proc.go` 创建 G 并将主 goroutine 放至 G 队列中
+
+`runtime·mstart`: `runtime/proc.go` 执行 m0 （主 OS 线程）
+
+`runtime·abort` 这个使用 INT 指令执行中断，最终退出程序，loop 后的无限循环永远不会被执行。
   
-  ```c
-  // runtime/asm_386.s#L865
-  TEXT runtime·abort(SB),NOSPLIT,$0-0
-      INT	$3
-  loop:
-      JMP	loop
-  ```
+```c
+TEXT runtime·abort(SB),NOSPLIT,$0-0
+	INT	$3
+loop:
+	JMP	loop
+```
 
-整个过程中的重点：
+在整个准备过程中我们需要着重关注下面四个部分，这四个函数及其后续调用关系完整实现了整个 Go 运行时的所有机制：
 
-- `runtime·schedinit`： 在 [2 初始化概览](2-init.md) 讨论
-- `runtime·main`：在 [3 主 goroutine 生命周期](3-main.md) 讨论
-- `runtime·newproc`：TODO
-- `runtime·mstart`：TODO
+- `runtime·schedinit`： 在[初始化概览](2-init.md)讨论
+- `runtime·main`：在[主 goroutine 生命周期](3-main.md)讨论
+- `runtime·newproc`：创建 G
+- `runtime·mstart`：运行 m0
+
+## 总结
+
+Go 程序既不是从 `main.main` 直接启动，也不是从 `runtime.main` 直接启动。
+相反，我们通过 GDB 调试寻找 Go 程序的入口地址，发现实际的入口地址位于 `runtime.rt0_go`。
+
+在执行 `main.main` 前，Go 程序会完成自身三大核心组件（内存分配器、goroutine 调度器、垃圾回收器）
+的初始化工作。
+

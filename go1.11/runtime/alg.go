@@ -280,7 +280,7 @@ var aeskeysched [hashRandomBytes]byte
 var hashkey [4]uintptr
 
 func alginit() {
-	// Install AES hash algorithms if the instructions needed are present.
+	// 如果需要的指令存在则安装 AES 哈希算法
 	if (GOARCH == "386" || GOARCH == "amd64") &&
 		GOOS != "nacl" &&
 		cpu.X86.HasAES && // AESENC

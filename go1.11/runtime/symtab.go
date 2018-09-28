@@ -453,10 +453,9 @@ var firstmoduledata moduledata  // linker symbol
 var lastmoduledatap *moduledata // linker symbol
 var modulesSlice *[]*moduledata // see activeModules
 
-// activeModules returns a slice of active modules.
+// activeModules 返回 active module 的 slice
 //
-// A module is active once its gcdatamask and gcbssmask have been
-// assembled and it is usable by the GC.
+// 一旦 gcdatamask 和 gcbssmask 被分配且它能被 GC 使用，则一个 module 被称之为 active。
 //
 // This is nosplit/nowritebarrier because it is called by the
 // cgo pointer checking code.
@@ -470,7 +469,7 @@ func activeModules() []*moduledata {
 	return *p
 }
 
-// modulesinit creates the active modules slice out of all loaded modules.
+// modulesinit 为所有加载的 module 创建 active modules.
 //
 // When a module is first loaded by the dynamic linker, an .init_array
 // function (written by cmd/link) is invoked to call addmoduledata,
@@ -487,7 +486,7 @@ func activeModules() []*moduledata {
 // moduledata so it is usable by the GC and creates a new activeModules
 // list.
 //
-// Only one goroutine may call modulesinit at a time.
+// 任何时刻只有一个 goroutine 可以调用 modulesinit
 func modulesinit() {
 	modules := new([]*moduledata)
 	for md := &firstmoduledata; md != nil; md = md.next {

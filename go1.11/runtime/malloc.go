@@ -4,27 +4,22 @@
 
 // 内存分配器
 //
-// This was originally based on tcmalloc, but has diverged quite a bit.
-// http://goog-perftools.sourceforge.net/doc/tcmalloc.html
 // 基于 tcmalloc (thread caching malloc)，有些许不同。
-
-// The main allocator works in runs of pages.
-// Small allocation sizes (up to and including 32 kB) are
-// rounded to one of about 70 size classes, each of which
-// has its own free set of objects of exactly that size.
-// Any free page of memory can be split into a set of objects
-// of one size class, which are then managed using a free bitmap.
+// http://goog-perftools.sourceforge.net/doc/tcmalloc.html
 //
-// The allocator's data structures are:
+// 主分配器工作在 page 上。小规模的分配（小于等于 32KB）被舍入为大约 70
+// 个大小的 class 中，每个 class 都有一组自己完全相同大小的对象。
+// 任何可用的内存 page 可以拆分为一个固定大小 class 的集合，
+// 然后使用 free bitmap 进行管理。
+//
 // 分配器的数据结构为:
 //
-//	fixalloc: a free-list allocator for fixed-size off-heap objects,
-//		used to manage storage used by the allocator.
-//	mheap: the malloc heap, managed at page (8192-byte) granularity.
-//	mspan: a run of pages managed by the mheap.
-//	mcentral: collects all spans of a given size class.
-//	mcache: a per-P cache of mspans with free space.
-//	mstats: allocation statistics.
+//	fixalloc: 固定大小(fixed-size)非堆(off-heap)中对象的分配器空闲列表(free-list)
+//	mheap: 分配的堆，在 page (8192字节=8KB)的粒度上进行管理。
+//	mspan: mheap 管理的一连串 page
+//	mcentral: 搜集给定大小的 class 的所有 span
+//	mcache: 具有空闲空间的 mspan 的 per-P 缓存
+//	mstats: 分配统计
 //
 // Allocating a small object proceeds up a hierarchy of caches:
 //
@@ -82,14 +77,16 @@
 
 // 虚拟内存布局
 //
-// The heap consists of a set of arenas, which are 64MB on 64-bit and
-// 4MB on 32-bit (heapArenaBytes). Each arena's start address is also
-// aligned to the arena size.
+// 堆是 arena 组成的集合，在 64 位机器上为 64MB，在 32 位机器上
+// 为 4MB（heapArenaBytes）。每个 arena 的起始地址与 arena 的大小对齐。
 //
 // Each arena has an associated heapArena object that stores the
 // metadata for that arena: the heap bitmap for all words in the arena
 // and the span map for all pages in the arena. heapArena objects are
 // themselves allocated off-heap.
+// 每个 arena 与一个 heapArena 对象关联，用于保存了 arena 的 metadata：
+// 堆的 bitmap 用于 arena 中所有字，span map 用于 arena 中的所有 page。
+// heapArena 对象是在堆外分配的。
 //
 // Since arenas are aligned, the address space can be viewed as a
 // series of arena frames. The arena map (mheap_.arenas) maps from
@@ -98,6 +95,8 @@
 // two-level array consisting of a "L1" arena map and many "L2" arena
 // maps; however, since arenas are large, on many architectures, the
 // arena map consists of a single, large L2 map.
+// 由于 arena 是对齐的，地址空间可以视为一系列 arena 帧。arena map (mheap_.arenas)
+// 将 arena 帧数映射为 *heapArena 或 nil （对那些不返回 Go 对的地址空间）
 //
 // The arena map covers the entire possible address space, allowing
 // the Go heap to use any part of the address space. The allocator
@@ -143,15 +142,12 @@ const (
 	_FixAllocChunk = 16 << 10               // Chunk size for FixAlloc
 	_MaxMHeapList  = 1 << (20 - _PageShift) // Maximum page length for fixed-size list in MHeap.
 
-	// Per-P, per order stack segment cache size.
+	// Per-P, 每个 order 对应栈所分割的缓存大小
 	_StackCacheSize = 32 * 1024
 
-	// Number of orders that get caching. Order 0 is FixedStack
-	// and each successive order is twice as large.
-	// We want to cache 2KB, 4KB, 8KB, and 16KB stacks. Larger stacks
-	// will be allocated directly.
-	// Since FixedStack is different on different systems, we
-	// must vary NumStackOrders to keep the same maximum cached size.
+	// 获得缓存的 order 数。order 0 为 FixedStack，每个后序都是前一个的两倍
+	// 我们需要缓存 2KB, 4KB, 8KB 和 16KB 的栈，更大的栈则会直接分配.
+	// 由于 FixedStack 与操作系统相关，必须动态的计算 NumStackOrders 来保证相同的最大缓存大小
 	//   OS               | FixedStack | NumStackOrders
 	//   -----------------+------------+---------------
 	//   linux/darwin/bsd | 2KB        | 4
@@ -321,14 +317,11 @@ const (
 // mallocinit.
 var physPageSize uintptr
 
-// OS-defined helpers:
+// OS-defined helpers: 操作系统级别的辅助函数
 //
-// sysAlloc obtains a large chunk of zeroed memory from the
-// operating system, typically on the order of a hundred kilobytes
-// or a megabyte.
-// NOTE: sysAlloc returns OS-aligned memory, but the heap allocator
-// may use larger alignment, so the caller must be careful to realign the
-// memory obtained by sysAlloc.
+// sysAlloc 从操作系统上获得大量清零的内存，通常大小约为 KB 或者 MB 级别.
+// 注意: sysAlloc 返回的是操作系统排布的内存，但堆分配器可能使用更大的布局。
+// 因此调用方必须谨慎的重排从 sysAlloc 获得的内存。
 //
 // SysUnused notifies the operating system that the contents
 // of the memory region are no longer needed and can be reused
@@ -366,62 +359,56 @@ func mallocinit() {
 		throw("heapArenaBitmapBytes not a power of 2")
 	}
 
-	// Copy class sizes out for statistics table.
+	// 将 class size 复制到统计表中
 	for i := range class_to_size {
 		memstats.by_size[i].size = uint32(class_to_size[i])
 	}
 
-	// Check physPageSize.
+	// 检查 physPageSize
 	if physPageSize == 0 {
-		// The OS init code failed to fetch the physical page size.
+		// 获取系统物理 page 大小失败
 		throw("failed to get system page size")
 	}
+	// 如果 page 太小也失败 4KB
 	if physPageSize < minPhysPageSize {
 		print("system page size (", physPageSize, ") is smaller than minimum page size (", minPhysPageSize, ")\n")
 		throw("bad system page size")
 	}
+	// 系统 page 大小必须是 2 的任意指数大小
 	if physPageSize&(physPageSize-1) != 0 {
 		print("system page size (", physPageSize, ") must be a power of 2\n")
 		throw("bad system page size")
 	}
 
-	// Initialize the heap.
+	// 初始化堆
 	mheap_.init()
 	_g_ := getg()
 	_g_.m.mcache = allocmcache()
 
 	// Create initial arena growth hints.
 	if sys.PtrSize == 8 && GOARCH != "wasm" {
-		// On a 64-bit machine, we pick the following hints
-		// because:
+		// 64 位机器上，我们选取下面的 hint，因为：
 		//
-		// 1. Starting from the middle of the address space
-		// makes it easier to grow out a contiguous range
-		// without running in to some other mapping.
+		// 1.从地址空间的中间开始，可以更容易地扩展连续范围，而无需进入其他映射。
 		//
-		// 2. This makes Go heap addresses more easily
-		// recognizable when debugging.
+		// 2. 这使得 Go 堆地址在调试时更容易识别。
 		//
-		// 3. Stack scanning in gccgo is still conservative,
-		// so it's important that addresses be distinguishable
-		// from other data.
+		// 3. gccgo 中的堆栈扫描仍然是保守型（conservative）的，因此地址与其他数据的区别开来非常重要。
 		//
-		// Starting at 0x00c0 means that the valid memory addresses
-		// will begin 0x00c0, 0x00c1, ...
-		// In little-endian, that's c0 00, c1 00, ... None of those are valid
-		// UTF-8 sequences, and they are otherwise as far away from
-		// ff (likely a common byte) as possible. If that fails, we try other 0xXXc0
-		// addresses. An earlier attempt to use 0x11f8 caused out of memory errors
-		// on OS X during thread allocations.  0x00c0 causes conflicts with
-		// AddressSanitizer which reserves all memory up to 0x0100.
-		// These choices reduce the odds of a conservative garbage collector
-		// not collecting memory because some non-pointer block of memory
-		// had a bit pattern that matched a memory address.
+		// 从 0x00c0 开始表示有效内存地址从 0x00c0, 0x00c1, ...
+		// 在小端（little-endian）表示中，即为 c0 00, c1 00, ... 这些都是无效的 UTF-8 序列，
+		// 并且他们尽可能的里 ff （像一个通用的 byte）远。如果失败，我们尝试 0xXXc0 地址。
+		// 早些时候尝试使用 0x11f8 会在 OS X 上当执行线程分配时导致内存不足错误。
+		// 0c00c0 会与 AddressSanitizer 产生冲突，后者保留从起开始到 0x0100 的所有内存。
+		// 这些选择降低了一个保守型垃圾回收器不回收内存的概率，因为某些非指针内存块具有与
+		// 内存地址相匹配的位模式。
 		//
-		// However, on arm64, we ignore all this advice above and slam the
-		// allocation at 0x40 << 32 because when using 4k pages with 3-level
-		// translation buffers, the user address space is limited to 39 bits
-		// On darwin/arm64, the address space is even smaller.
+		// 但是，在 arm64 中，当使用 4K 大小具有三级的转换缓冲区的页（page）时，用户地址空间
+		// 被限制在了 39 bit，因此我们忽略了上面所有的建议并强制分配在 0x40 << 32 上。
+		// 在 darwin/arm64 中，地址空间甚至更小。
+		//
+		// 从 0xc000000000 开始设置保留地址
+		// 如果失败，则尝试 0x1c000000000 ~ 0x7fc000000000
 		for i := 0x7f; i >= 0; i-- {
 			var p uintptr
 			switch {
@@ -827,7 +814,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	noscan := typ == nil || typ.kind&kindNoPointers != 0
 	if size <= maxSmallSize {
 		if noscan && size < maxTinySize {
-			// Tiny allocator.
+			// 小型分配器
 			//
 			// Tiny allocator combines several tiny allocation requests
 			// into a single memory block. The resulting memory block

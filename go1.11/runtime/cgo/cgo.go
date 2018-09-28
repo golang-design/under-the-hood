@@ -3,9 +3,7 @@
 // license that can be found in the LICENSE file.
 
 /*
-Package cgo contains runtime support for code generated
-by the cgo tool.  See the documentation for the cgo command
-for details on using cgo.
+Package cgo 包含了通过 cgo 工具生成代码的运行时支持。更多细节请查看 cgo 命令。
 */
 package cgo
 

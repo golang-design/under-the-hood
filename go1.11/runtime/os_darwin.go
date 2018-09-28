@@ -342,14 +342,14 @@ func sigdelset(mask *sigset, i int) {
 var executablePath string
 
 func sysargs(argc int32, argv **byte) {
-	// skip over argv, envv and the first string will be the path
+	// 跳过 argv, envv 与第一个字符串为路径
 	n := argc + 1
 	for argv_index(argv, n) != nil {
 		n++
 	}
 	executablePath = gostringnocopy(argv_index(argv, n+1))
 
-	// strip "executable_path=" prefix if available, it's added after OS X 10.11.
+	// 移除 "executable_path=" 前缀（OS X 10.11 之后存在）
 	const prefix = "executable_path="
 	if len(executablePath) > len(prefix) && executablePath[:len(prefix)] == prefix {
 		executablePath = executablePath[len(prefix):]

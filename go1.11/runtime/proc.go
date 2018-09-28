@@ -13,117 +13,60 @@ import (
 
 var buildVersion = sys.TheVersion
 
-// Goroutine scheduler
-// The scheduler's job is to distribute ready-to-run goroutines over worker threads.
-// 调度器的任务是给不同的工作线程分发 ready-to-run goroutine。
+// Goroutine 调度器
+// 调度器的任务是给不同的工作线程 (worker thread) 分发 ready-to-run goroutine。
 //
-// The main concepts are:
+// 主要概念:
 // G - goroutine.
-// M - worker thread, or machine.
-// P - processor, a resource that is required to execute Go code.
-//     M must have an associated P to execute Go code, however it can be
-//     blocked or in a syscall w/o an associated P.
-//
-// 主要概念包括：
-// - G: goroutine
-// - M: worker thread，或者 Machine
-// - P: processor，一种被要求执行 Go 代码的资源。M 必须关联一个 P 才能执行 Go 代码，但它可以被阻塞或在一个系统调用中没有关联的 P。
+// M - worker thread, 或 machine.
+// P - processor，一种执行 Go 代码被要求资源。M 必须关联一个 P 才能执行 Go 代码，
+//      但它可以被阻塞或在一个系统调用中没有关联的 P。
 //
 // 设计文档：https://golang.org/s/go11sched
 
-// Worker thread parking/unparking.
-// We need to balance between keeping enough running worker threads to utilize
-// available hardware parallelism and parking excessive running worker threads
-// to conserve CPU resources and power. This is not simple for two reasons:
-// 我们需要在保持足够的运行 worker thread 来利用有效硬件并发资源
-// 和 park 运行过多的 worker thread 来节约 CPU 能耗之间进行权衡。这个权衡并不简单，
-// 有以下两点原因：
-// (1) scheduler state is intentionally distributed (in particular, per-P work
-// queues), so it is not possible to compute global predicates on fast paths;
-// (2) for optimal thread management we would need to know the future (don't park
-// a worker thread when a new goroutine will be readied in near future).
+// 工作线程的 park/unpark
 //
-// 1. 调度器状态是有意分布的（特别地，per-P work queue），因此在快速路径
-// （fast path，指一个程序中比一般路径有更指令路径长的路径）计算出全局断言是不可能的。【这是什么？】
-//
+// 我们需要在保持足够的运行 worker thread 来利用有效硬件并发资源，和 park 运行
+// 过多的 worker thread 来节约 CPU 能耗之间进行权衡。这个权衡并不简单，有以下两点原因：
+// 1. 调度器状态是有意分布的（具体而言，是一个 per-P 的 work 队列），因此在快速路径
+// （fast path）计算出全局断言 (global predicates) 是不可能的。【这是什么？】
 // 2. 为了获得最佳的线程管理，我们必须知道未来的情况（当一个新的 goroutine 会
 // 在不久的将来 ready，不再 park 一个 worker thread）
 //
-// Three rejected approaches that would work badly:
-// 1. Centralize all scheduler state (would inhibit scalability).
-// 2. Direct goroutine handoff. That is, when we ready a new goroutine and there
-//    is a spare P, unpark a thread and handoff it the thread and the goroutine.
-//    This would lead to thread state thrashing, as the thread that readied the
-//    goroutine can be out of work the very next moment, we will need to park it.
-//    Also, it would destroy locality of computation as we want to preserve
-//    dependent goroutines on the same thread; and introduce additional latency.
-// 3. Unpark an additional thread whenever we ready a goroutine and there is an
-//    idle P, but don't do handoff. This would lead to excessive thread parking/
-//    unparking as the additional threads will instantly park without discovering
-//    any work to do.
-//
-// 下面这三种被驳回的方法不太好：
-
-// 1. 集中式管理所有调度器状态（这将限制可扩展性）
-// 2. 直接切换 goroutine。也就是说，当我们准备一个新的 goroutine 时，存在一个剩余的 P，
-//    启动一个线程并切换到这个线程和goroutine上。因为在下一个瞬间就绪的 goroutine 线程
-//    可能会丢失（out of work），从而导致线程 thrashing（当计算机虚拟内存饱和时会发生
-//    Thrashing，最终导致分页调度状态不再变化。这个状态会一直持续，知道用户关闭一些运行的
-//    应用或者活跃进程释放一些虚拟内存资源），因此我们需要 park 这个线程。同样，因为我们
-//    希望在相同的线程内保存维护 goroutine，它还会摧毁计算的局部性原理。
-// 3. 任何时候当准备一个 goroutine 同时也存在一个空闲的 P 时，都 Unpark 一个额外的线程，
-//    但不进行切换。因为额外线程会在没有检查任何 work 的情况下立即 park ，最终导致过多的
+// 这三种被驳回的方法很糟糕:
+// 1. 集中式管理所有调度器状态（会将限制可扩展性）
+// 2. 直接切换 goroutine。也就是说，当我们 ready 一个新的 goroutine 时，让出一个 P，
+//    unpark 一个线程并切换到这个线程运行 goroutine。因为 ready 的 goroutine 线程可能
+//    在下一个瞬间 out of work，从而导致线程 thrashing（当计算机虚拟内存饱和时会发生
+//    thrashing，最终导致分页调度状态不再变化。这个状态会一直持续，知道用户关闭一些运行的
+//    应用或者活跃进程释放一些虚拟内存资源），因此我们需要 park 这个线程。同样，我们
+//    希望在相同的线程内保存维护 goroutine，这种方式还会摧毁计算的局部性原理。
+// 3. 任何时候 ready 一个 goroutine 时也存在一个空闲的 P 时，都 unpark 一个额外的线程，
+//    但不进行切换。因为额外线程会在没有检查任何 work 的情况下立即 park ，最终导致大量线程的
 //    parking/unparking。
 
-// The current approach:
-// We unpark an additional thread when we ready a goroutine if (1) there is an
-// idle P and there are no "spinning" worker threads. A worker thread is considered
-// spinning if it is out of local work and did not find work in global run queue/
-// netpoller; the spinning state is denoted in m.spinning and in sched.nmspinning.
-// Threads unparked this way are also considered spinning; we don't do goroutine
-// handoff so such threads are out of work initially. Spinning threads do some
-// spinning looking for work in per-P run queues before parking. If a spinning
-// thread finds work it takes itself out of the spinning state and proceeds to
-// execution. If it does not find work it takes itself out of the spinning state
-// and then parks.
+// 目前方法:
 //
-// 当一个 goroutine 就绪时，我们 unpark 一个额外的线程，如果存在一个 空闲的 P 并且没有
-// 「空转」工作线程。一个工作线程被称之为空转，如果它在局部 work 之外，并且在全局运行队列和
-// netpoller 之外；「空转」状态由 `sched.nmspinning` 中的  `m.spinning` 表示。
-// 被 unpark 的线程同样会被考虑为「空转」，我们也不对这种线程进行 goroutine 切换，
-// 因此这类线程最初就已经丢失。「空转」线程会在 parking 前在 per-P 中运行队列进行一些空转所来工作。
-// 如果一个空转进程发现工作，就会将奇迹带离空转状态，并且开始执行。如果它没有发现工作则会将自己带离空
-// 转状态然后进行 park。
+// 如果存在一个空闲的 P 并且没有 spinning 状态的工作线程，当 ready 一个 goroutine 时，
+// 就 unpark 一个额外的线程。如果一个工作线程的本地队列里没有 work ，且在全局运行队列或 netpoller
+// 中也没有 work，则称一个工作线程被称之为 spinning；spinning 状态由 sched.nmspinning 中的
+// m.spinning 表示。
+// 这种方式下被 unpark 的线程同样也成为 spinning，我们也不对这种线程进行 goroutine 切换，
+// 因此这类线程最初就是 out of work。spinning 线程会在 park 前，从 per-P 中运行队列中寻找 work。
+// 如果一个 spinning 进程发现 work，就会将自身切换出 spinning 状态，并且开始执行。
+// 如果它没有发现 work 则会将自己带 spinning 转状态然后进行 park。
 //
-// If there is at least one spinning thread (sched.nmspinning>1), we don't unpark
-// new threads when readying goroutines. To compensate for that, if the last spinning
-// thread finds work and stops spinning, it must unpark a new spinning thread.
-// This approach smooths out unjustified spikes of thread unparking,
-// but at the same time guarantees eventual maximal CPU parallelism utilization.
-//
-// 如果至少有一个空转进程（sched.nmspinning>1），则当 goroutine 就绪时，不会 unpark 一个新的线程。
-// 作为补偿，如果最后一个空转线程发现工作并且停止空转，则必须 unpark 一个新的空转线程。这个方法消除了
-// 不合理的线程 unparking 峰值，且同时保证最终的最大 CPU 并行度利用率。
-//
-// The main implementation complication is that we need to be very careful during
-// spinning->non-spinning thread transition. This transition can race with submission
-// of a new goroutine, and either one part or another needs to unpark another worker
-// thread. If they both fail to do that, we can end up with semi-persistent CPU
-// underutilization. The general pattern for goroutine readying is: submit a goroutine
-// to local work queue, #StoreLoad-style memory barrier, check sched.nmspinning.
-// The general pattern for spinning->non-spinning transition is: decrement nmspinning,
-// #StoreLoad-style memory barrier, check all per-P work queues for new work.
-// Note that all this complexity does not apply to global run queue as we are not
-// sloppy about thread unparking when submitting to global queue. Also see comments
-// for nmspinning manipulation.
-//
+// 如果至少有一个 spinning 进程（sched.nmspinning>1），则 ready 一个 goroutine 时，
+// 不会去 unpark 一个新的线程。作为补偿，如果最后一个 spinning 线程发现 work 并且停止 spinning，
+// 则必须 unpark 一个新的 spinning 线程。这个方法消除了不合理的线程 unpark 峰值，
+// 且同时保证最终的最大 CPU 并行度利用率。
 //
 // 主要的实现复杂性表现为当进行 spinning->non-spinning 线程转换时必须非常小心。这种转换在提交一个
 // 新的 goroutine ，并且任何一个部分都需要取消另一个工作线程会发生竞争。如果双方均失败，则会以半静态
-// CPU利用不足而结束。goroutine 就绪的通用模式为：提交一个 goroutine 到局部工作队列，
+// CPU 利用不足而结束。ready 一个 goroutine 的通用范式为：提交一个 goroutine 到 per-P 的局部 work 队列，
 // #StoreLoad-style 内存屏障，检查 sched.nmspinning。从 spinning->non-spinning 转换的一般模式为：
-// 减少 nmspinning, #StoreLoad-style 内存屏障，给新工作检查所有 per-P 工作队列。注意此种复杂性
-// 并不适用于全局工作队列，因为我们不会蠢到当给一个全局队列提交时进行线程 unparking。更多细节参见
+// 减少 nmspinning, #StoreLoad-style 内存屏障，在所有 per-P 工作队列检查新的 work。注意，此种复杂性
+// 并不适用于全局工作队列，因为我们不会蠢到当给一个全局队列提交 work 时进行线程 unpark。更多细节参见
 // nmspinning 操作。
 
 var (
@@ -546,8 +489,7 @@ func internal_cpu_initialize(env string)
 //go:linkname internal_cpu_debugOptions internal/cpu.debugOptions
 var internal_cpu_debugOptions bool
 
-// cpuinit extracts the environment variable GODEBUGCPU from the environment on
-// Linux and Darwin if the GOEXPERIMENT debugcpu was set and calls internal/cpu.initialize.
+// cpuinit 提取环境变量 GODEBUGCPU，如果 GOEXPERIMENT debugcpu 被设置，则还会调用 internal/cpu.initialize
 func cpuinit() {
 	const prefix = "GODEBUGCPU="
 	var env string
@@ -584,18 +526,20 @@ func cpuinit() {
 	arm64_support_atomics = cpu.ARM64.HasATOMICS
 }
 
-// The bootstrap sequence is:
+// 启动顺序
 //
-//	call osinit
-//	call schedinit
+//	调用 osinit
+//	调用 schedinit
 //	make & queue new G
-//	call runtime·mstart
+//	调用 runtime·mstart
 //
-// The new G calls runtime·main.
+// 创建 G 的调用 runtime·main.
 func schedinit() {
+	_g_ := getg()
+
+	// 不重要，race 检查有关
 	// raceinit must be the first call to race detector.
 	// In particular, it must be done before mallocinit below calls racemapshadow.
-	_g_ := getg()
 	if raceenabled {
 		_g_.racectx, raceprocctx0 = raceinit()
 	}
@@ -614,12 +558,15 @@ func schedinit() {
 	mallocinit()
 	// 初始化当前 M
 	mcommoninit(_g_.m)
-	// cpu 初始化
-	cpuinit()       // must run before alginit
-	alginit()       // maps must not be used before this call
-	modulesinit()   // provides activeModules
-	typelinksinit() // uses maps, activeModules
-	itabsinit()     // uses activeModules
+
+	// cpu 相关的初始化
+	cpuinit() // 必须在 alginit 之前运行
+	alginit() // maps 不能在此调用之前使用，从 CPU 指令集初始化哈希算法
+
+	// 模块加载相关的初始化
+	modulesinit()   // 模块链接，提供 activeModules
+	typelinksinit() // 使用 maps, activeModules
+	itabsinit()     // 使用 activeModules
 
 	msigsave(_g_.m)
 	initSigmask = _g_.m.sigmask
@@ -661,8 +608,7 @@ func schedinit() {
 	}
 
 	if buildVersion == "" {
-		// Condition should never trigger. This code just serves
-		// to ensure runtime·buildVersion is kept in the resulting binary.
+		// 该条件永远不会被触发，此处只是为了防止 buildVersion 不会被编译器优化移除掉。
 		buildVersion = "unknown"
 	}
 }
@@ -3376,8 +3322,8 @@ func malg(stacksize int32) *g {
 	return newg
 }
 
-// Create a new g running fn with siz bytes of arguments.
-// Put it on the queue of g's waiting to run.
+// 创建一个 G 运行函数 fn，参数大小为 biz 字节
+// 将其放至 G 队列等待运行
 // The compiler turns a go statement into a call to this.
 // Cannot split the stack because it assumes that the arguments
 // are available sequentially after &fn; they would not be

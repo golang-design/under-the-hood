@@ -489,8 +489,7 @@ func (n name) pkgPath() string {
 	return pkgPathName.name()
 }
 
-// typelinksinit scans the types from extra modules and builds the
-// moduledata typemap used to de-duplicate type pointers.
+// typelinksinit 扫描额外模块的类型并将 moduledata typemap 用于消除类型指针的重新定义。
 func typelinksinit() {
 	if firstmoduledata.next == nil {
 		return
@@ -500,7 +499,7 @@ func typelinksinit() {
 	modules := activeModules()
 	prev := modules[0]
 	for _, md := range modules[1:] {
-		// Collect types from the previous module into typehash.
+		// 从先前的模块将类型搜集进 typehash
 	collect:
 		for _, tl := range prev.typelinks {
 			var t *_type
@@ -509,7 +508,7 @@ func typelinksinit() {
 			} else {
 				t = prev.typemap[typeOff(tl)]
 			}
-			// Add to typehash if not seen before.
+			// 如果 typehash 尚未出现则将其加入
 			tlist := typehash[t.hash]
 			for _, tcur := range tlist {
 				if tcur == t {

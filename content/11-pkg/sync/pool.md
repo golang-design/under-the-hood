@@ -394,7 +394,7 @@ noCopy 是 go1.7 开始引入的一个静态检查机制。它不仅仅工作在
 // 见 https://golang.org/issues/8005#issuecomment-190753527
 type noCopy struct{}
 
-// Lock 是一个空操作用来给 `go ve` 的 -copylocks 静态分析
+// Lock 是一个空操作用来给 `go vet` 的 -copylocks 静态分析
 func (*noCopy) Lock()   {}
 func (*noCopy) Unlock() {}
 ```

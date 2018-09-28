@@ -19,7 +19,7 @@ import (
 // sys.PhysPageSize is an upper-bound on the physical page size.
 const minPhysPageSize = 4096
 
-// Main malloc heap.
+// 主分配堆
 // The heap itself is the "free[]" and "large" arrays,
 // but all the other global data is here too.
 //
@@ -240,7 +240,7 @@ var mSpanStateNames = []string{
 	"_MSpanFree",
 }
 
-// mSpanList heads a linked list of spans.
+// mSpanList 是一个 span 的单向链表
 //
 //go:notinheap
 type mSpanList struct {
@@ -1200,7 +1200,7 @@ func (span *mspan) inList() bool {
 	return span.list != nil
 }
 
-// Initialize an empty doubly-linked list.
+// 初始化空双向链表
 func (list *mSpanList) init() {
 	list.first = nil
 	list.last = nil
