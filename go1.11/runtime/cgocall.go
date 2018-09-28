@@ -85,11 +85,11 @@ import (
 	"unsafe"
 )
 
-// Addresses collected in a cgo backtrace when crashing.
-// Length must match arg.Max in x_cgo_callers in runtime/cgo/gcc_traceback.c.
+// cgo 崩溃回溯时搜集的地址
+// 长度必须等于 x_cgo_callers 中 的 arg.Max，位于 runtime/cgo/gcc_traceback.c
 type cgoCallers [32]uintptr
 
-// Call from Go to C.
+// 从 Go 调用 C
 //go:nosplit
 func cgocall(fn, arg unsafe.Pointer) int32 {
 	if !iscgo && GOOS != "solaris" && GOOS != "windows" {
@@ -108,23 +108,17 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 	mp.ncgocall++
 	mp.ncgo++
 
-	// Reset traceback.
+	// 重置回溯信息
 	mp.cgoCallers[0] = 0
 
-	// Announce we are entering a system call
-	// so that the scheduler knows to create another
-	// M to run goroutines while we are in the
-	// foreign code.
+	// 宣布正在进入系统调用，从而调度器会创建另一个 M 来运行 goroutine
 	//
-	// The call to asmcgocall is guaranteed not to
-	// grow the stack and does not allocate memory,
-	// so it is safe to call while "in a system call", outside
-	// the $GOMAXPROCS accounting.
+	// 对 asmcgocall 的调用保证了不会增加堆栈并且不分配内存，
+	// 因此在 $GOMAXPROCS 计数之外的 “系统调用内” 的调用是安全的。
 	//
-	// fn may call back into Go code, in which case we'll exit the
-	// "system call", run the Go code (which may grow the stack),
-	// and then re-enter the "system call" reusing the PC and SP
-	// saved by entersyscall here.
+	// fn 可能会回调 Go 代码，这种情况下我们将退出系统调用来运行 Go 代码
+	//（可能增长栈），然后再重新进入系统调用来复用 entersyscall 保存的
+	// PC 和 SP 寄存器
 	entersyscall()
 
 	mp.incgo = true
@@ -132,6 +126,8 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 
 	// Call endcgo before exitsyscall because exitsyscall may
 	// reschedule us on to a different M.
+	// 在 exitsyscall 之前调用 endcgo ，因为 exitsyscall 可能会把
+	// 我们重新调度到不同的 M 中
 	endcgo(mp)
 
 	exitsyscall()
@@ -146,6 +142,12 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 	// time moved backwards, GC would see these arguments as dead
 	// and then live. Prevent these undead arguments from crashing
 	// GC by forcing them to stay live across this time warp.
+	// 从垃圾收集器的角度来看，时间可以按照上面的顺序向后移动。
+	// 如果对Go代码进行回调，GC将在调用asmcgocall时看到此函数。
+	// 当Go调用稍后返回到C时，回调系统调用PC / SP并且GC在调用
+	// enteryscall时看到此函数。通常情况下，fn和arg将在enteryscall上运行
+	// 并在asmcgocall处死机，因此如果时间向后移动，GC会将这些参数视为已死，
+	// 然后生效。 通过强制它们在这个时间扭曲中保持活动来防止这些不死参数崩溃。
 	KeepAlive(fn)
 	KeepAlive(arg)
 	KeepAlive(mp)

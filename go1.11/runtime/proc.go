@@ -630,7 +630,7 @@ func checkmcount() {
 func mcommoninit(mp *m) {
 	_g_ := getg()
 
-	// g0 stack won't make sense for user (and is not necessary unwindable).
+	// g0 栈对用户而言是没有意义的（且不是不可避免的）
 	if _g_ != _g_.m.g0 {
 		callers(1, mp.createstack[:])
 	}
@@ -664,6 +664,7 @@ func mcommoninit(mp *m) {
 	unlock(&sched.lock)
 
 	// Allocate memory to hold a cgo traceback if the cgo call crashes.
+	// 分配内存来保存当 cgo 调用崩溃时候的回溯
 	if iscgo || GOOS == "solaris" || GOOS == "windows" {
 		mp.cgoCallers = new(cgoCallers)
 	}

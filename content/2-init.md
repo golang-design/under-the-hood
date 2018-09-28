@@ -281,7 +281,7 @@ func allocmcache() *mcache {
 func mcommoninit(mp *m) {
 	_g_ := getg()
 
-	// g0 stack won't make sense for user (and is not necessary unwindable).
+	// g0 栈对用户而言是没有意义的（且不是不可避免的）
 	if _g_ != _g_.m.g0 {
 		callers(1, mp.createstack[:])
 	}

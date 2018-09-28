@@ -434,8 +434,8 @@ type m struct {
 	fastrand      [2]uint32
 	needextram    bool
 	traceback     uint8
-	ncgocall      uint64      // number of cgo calls in total
-	ncgo          int32       // number of cgo calls currently in progress
+	ncgocall      uint64      // 总共的 cgo 调用数
+	ncgo          int32       // 正在进行的 cgo 调用数
 	cgoCallersUse uint32      // if non-zero, cgoCallers in use temporarily
 	cgoCallers    *cgoCallers // cgo traceback if crashing in cgo call
 	park          note
