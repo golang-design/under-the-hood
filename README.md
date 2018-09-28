@@ -40,8 +40,8 @@
 8. 运行时杂项
     - [`runtime.Finalizer`](content/8-runtime/finalizer.md)
     - [`runtime.GOMAXPROCS`](content/8-runtime/gomaxprocs.md)
-9.  [`unsafe`](content/10-unsafe.md)
-10. `cgo`
+9.  [`unsafe`](content/9-unsafe.md)
+10. [`cgo`](content/10-cgo.md)
 11. 依赖运行时的标准库
     - [`sync.Pool`](content/11-pkg/sync/pool.md)
     - [`sync.Once`](content/11-pkg/sync/once.md)
