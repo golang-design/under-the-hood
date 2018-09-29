@@ -104,9 +104,9 @@ func schedinit() {
 即我们感兴趣的调用包括：
 
 - 栈初始化 `stackinit()`
-- 内存分配 `mallocinit()`
+- 内存分配器初始化 `mallocinit()`
 - M 初始化 `mcommoninit()`
-- 垃圾回收 `gcinit()`
+- 垃圾回收器初始化 `gcinit()`
 - P 初始化 `procresize()`
 
 ## 栈初始化
@@ -166,6 +166,8 @@ func (list *mSpanList) init() {
 ```
 
 ## 内存分配初始化
+
+TODO: 考虑是否单独分隔到其他章节讨论
 
 ```go
 func mallocinit() {
@@ -276,6 +278,8 @@ func allocmcache() *mcache {
 ```
 
 ## 调度器初始化
+
+TODO: 考虑是否单独分隔到其他章节讨论
 
 ```go
 func mcommoninit(mp *m) {

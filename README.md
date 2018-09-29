@@ -1,6 +1,6 @@
 # Go under the hood
 
-基于 `go1.11`
+目前基于 `go1.11`
 
 ## 致潜在读者
 
@@ -25,6 +25,15 @@
 当然，站在巨人的肩膀上，至少本仓库有很多内容受到参考文献 12 的影响，但 12 内容已相对陈旧，
 部分内容在 1.11 不再适用。
 
+## 那关注什么？
+
+本仓库主要关注与运行时相关的代码，例如 `runtime`/`cgo`/`sync`/`net`/`wasm` 等。
+在极少数的情况下，会讨论不同平台下的差异，代码实验以 darwin 为基础，linux 为辅助关注点，其他平台几乎不关注。
+作为 Go 1.11 起引入的 `wasm` 特性，我们特别给 WebAssembly 平台以特别关注。
+
+所以，诸如 `crypto/database/regexp/strings/strconv/sort/container/unicode` 等一些运行时无关的标准库
+可能不在研究范围。
+
 ## 目录
 
 1. [引导](content/1-boot.md)
@@ -40,6 +49,7 @@
 8. 运行时杂项
     - [`runtime.Finalizer`](content/8-runtime/finalizer.md)
     - [`runtime.GOMAXPROCS`](content/8-runtime/gomaxprocs.md)
+    - [`runtime.LockOSThread/UnlockOSThread`](content/8-runtime/lockosthread.md)
 9.  [`unsafe`](content/9-unsafe.md)
 10. [`cgo`](content/10-cgo.md)
 11. 依赖运行时的标准库
@@ -78,7 +88,7 @@ Darwin changkun-pro 18.0.0 Darwin Kernel Version 18.0.0: Wed Aug 22 20:13:40 PDT
 10. [LINUX SYSTEM CALL TABLE FOR X86 64](http://blog.rchapman.org/posts/Linux_System_Call_Table_for_x86_64/)
 11. [Getting to Go: The Journey of Go's Garbage Collector](https://blog.golang.org/ismmkeynote)
 12. [Go 1.5 源码剖析](https://github.com/qyuhen/book/blob/master/Go%201.5%20%E6%BA%90%E7%A0%81%E5%89%96%E6%9E%90%20%EF%BC%88%E4%B9%A6%E7%AD%BE%E7%89%88%EF%BC%89.pdf)
-13. ...
+13. [Go WebAssembly](https://github.com/golang/go/wiki/WebAssembly)
 
 ## 许可
 

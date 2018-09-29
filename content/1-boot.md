@@ -183,7 +183,7 @@ loop:
 - `runtime·schedinit`： 在[初始化概览](2-init.md)讨论
 - `runtime·main`：在[主 goroutine 生命周期](3-main.md)讨论
 - `runtime·newproc`：创建 G
-- `runtime·mstart`：运行 m0
+- `runtime·mstart`：运行 M
 
 ## 总结
 

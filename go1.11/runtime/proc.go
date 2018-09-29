@@ -99,10 +99,11 @@ var runtimeInitTime int64
 // Value to use for signal mask for newly created M's.
 var initSigmask sigset
 
-// The main goroutine.
+// 主 goroutine
 func main() {
 	g := getg()
 
+	// race 检测有关，不关心
 	// Racectx of m0->g0 is used only as the parent of the main goroutine.
 	// It must not be used for anything else.
 	g.m.g0.racectx = 0
@@ -120,19 +121,18 @@ func main() {
 	// Allow newproc to start new Ms.
 	mainStarted = true
 
-	if GOARCH != "wasm" { // no threads on wasm yet, so no sysmon
+	if GOARCH != "wasm" { // wasm 是 1.11 新引入的 web assembly, 目前支持还很少
 		// 启动系统后台监控（定期垃圾回收、并发任务调度）
 		systemstack(func() {
 			newm(sysmon, nil)
 		})
 	}
 
-	// Lock the main goroutine onto this, the main OS thread,
-	// during initialization. Most programs won't care, but a few
-	// do require certain calls to be made by the main thread.
-	// Those can arrange for main.main to run in the main thread
-	// by calling runtime.LockOSThread during initialization
-	// to preserve the lock.
+	// 将主 goroutine 锁在主 OS 线程下进行初始化工作
+	// 大部分程序并不关心这一点，但是有一些图形库（基本上属于 cgo 调用）
+	// 会要求在主线程下进行初始化工作。
+	// 即便是在 main.main 下仍然可以通过公共方法 runtime.LockOSThread
+	// 来强制将一些特殊的需要主 OS 线程的调用锁在主 OS 线程下执行初始化
 	lockOSThread()
 
 	if g.m != &m0 {
@@ -140,7 +140,7 @@ func main() {
 	}
 
 	// 执行 runtime 包所有初始化函数 init
-	runtime_init() // must be before defer
+	runtime_init() // defer 必须在此调用结束后才能使用
 	if nanotime() == 0 {
 		throw("nanotime returning zero")
 	}
@@ -190,7 +190,7 @@ func main() {
 	needUnlock = false
 	unlockOSThread()
 
-	// 如果是库则不需要执行 main 函数了
+	// 如果是基础库则不需要执行 main 函数了
 	if isarchive || islibrary {
 		// A program compiled with -buildmode=c-archive or c-shared
 		// has a main, but it is not executed.
@@ -4338,7 +4338,7 @@ func checkdead() {
 // This is a variable for testing purposes. It normally doesn't change.
 var forcegcperiod int64 = 2 * 60 * 1e9
 
-// Always runs without a P, so write barriers are not allowed.
+// 总是在没有 P 的情况下运行，因此 write barrier 是不允许的
 //
 //go:nowritebarrierrec
 func sysmon() {
