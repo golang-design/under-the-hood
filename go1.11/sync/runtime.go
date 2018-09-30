@@ -21,8 +21,7 @@ func runtime_SemacquireMutex(s *uint32, lifo bool)
 // 如果 handoff 为真，则将计数直接传递给下一个等待的 goroutine
 func runtime_Semrelease(s *uint32, handoff bool)
 
-// Approximation of notifyList in runtime/sema.go. Size and alignment must
-// agree.
+// runtime/sema.go 中的 notifyList 的近似，大小和对齐必须一致。
 type notifyList struct {
 	wait   uint32
 	notify uint32

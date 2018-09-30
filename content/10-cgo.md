@@ -100,6 +100,10 @@ func _cgo_runtime_cgocall(unsafe.Pointer, uintptr) int32
 
 那么剩下的工作就是去分析 `runtime.cgocall` 这个调用如何与 Go 运行时进行交互了。
 
+## `cgocall`
+
+TODO:
+
 ## 许可
 
-[Go under the hood](https://github.com/changkun/go-under-the-hood) | MIT &copy; [changkun](https://changkun.de)
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

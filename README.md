@@ -55,9 +55,9 @@
 11. 依赖运行时的标准库
     - [`sync.Pool`](content/11-pkg/sync/pool.md)
     - [`sync.Once`](content/11-pkg/sync/once.md)
+    - [`sync.Map`](content/11-pkg/sync/map.md)
     - [`sync.WaitGroup`](content/11-pkg/sync/waitgroup.md)
     - [`sync.Mutex`](content/11-pkg/sync/mutex.md)
-    - [`sync.Map`](content/11-pkg/sync/map.md)
     - [`sync.Cond`](content/11-pkg/sync/cond.md)
     - `atomic`
     - `net`

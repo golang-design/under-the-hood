@@ -99,9 +99,9 @@ func AddUint32(addr *uint32, delta uint32) (new uint32)
 // AddInt64 atomically adds delta to *addr and returns the new value.
 func AddInt64(addr *int64, delta int64) (new int64)
 
-// AddUint64 atomically adds delta to *addr and returns the new value.
-// To subtract a signed positive constant value c from x, do AddUint64(&x, ^uint64(c-1)).
-// In particular, to decrement x, do AddUint64(&x, ^uint64(0)).
+// AddUint64 自动将 delta 加到 *addr 并返回一个新值
+// 为了从 x 减去有符号的常量值 c，可以使用 AddUint64(&x, ^uint64(c-1))
+// 特别地，递减 x 可以使用 AddUint64(&x, ^uint64(0))
 func AddUint64(addr *uint64, delta uint64) (new uint64)
 
 // AddUintptr atomically adds delta to *addr and returns the new value.

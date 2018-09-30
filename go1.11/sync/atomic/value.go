@@ -8,11 +8,9 @@ import (
 	"unsafe"
 )
 
-// A Value provides an atomic load and store of a consistently typed value.
-// The zero value for a Value returns nil from Load.
-// Once Store has been called, a Value must not be copied.
-//
-// A Value must not be copied after first use.
+// Value 提供了相同类型值的原子 load 和 store 操作
+// 零值的 Load 会返回 nil
+// 一旦 Store 被调用，Value 不能被复制
 type Value struct {
 	v interface{}
 }
@@ -23,8 +21,8 @@ type ifaceWords struct {
 	data unsafe.Pointer
 }
 
-// Load returns the value set by the most recent Store.
-// It returns nil if there has been no call to Store for this Value.
+// Load 返回最近存储的值集合
+// 如果已经没有 Value 调用 Store 则会返回 nil
 func (v *Value) Load() (x interface{}) {
 	vp := (*ifaceWords)(unsafe.Pointer(v))
 	typ := LoadPointer(&vp.typ)

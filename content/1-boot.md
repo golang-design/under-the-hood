@@ -218,4 +218,4 @@ TODO: 增加更多关于 plan9 汇编的基础概念
 
 ## 许可
 
-[Go under the hood](https://github.com/changkun/go-under-the-hood) | MIT &copy; [changkun](https://changkun.de)
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

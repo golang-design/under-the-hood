@@ -41,6 +41,8 @@ ok      _/Users/changkun/dev/go-under-the-hood/demo/7-lang/defer        3.222s
 
 本文来深入源码探究 `defer` 存在如此之高性能损耗的原因。
 
+TODO:
+
 ## 许可
 
-[Go under the hood](https://github.com/changkun/go-under-the-hood) | MIT &copy; [changkun](https://changkun.de)
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-ND 4.0 & MIT &copy; [changkun](https://changkun.de)
