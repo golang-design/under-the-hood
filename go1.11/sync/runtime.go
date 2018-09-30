@@ -8,20 +8,17 @@ import "unsafe"
 
 // defined in package runtime
 
-// Semacquire waits until *s > 0 and then atomically decrements it.
-// It is intended as a simple sleep primitive for use by the synchronization
-// library and should not be used directly.
+// Semacquire 阻塞到 *s > 0，然后会减 1
+// 它的目的是作为一个简单的睡眠原语，仅用于同步库，不应该直接使用。
 func runtime_Semacquire(s *uint32)
 
 // SemacquireMutex is like Semacquire, but for profiling contended Mutexes.
 // If lifo is true, queue waiter at the head of wait queue.
 func runtime_SemacquireMutex(s *uint32, lifo bool)
 
-// Semrelease atomically increments *s and notifies a waiting goroutine
-// if one is blocked in Semacquire.
-// It is intended as a simple wakeup primitive for use by the synchronization
-// library and should not be used directly.
-// If handoff is true, pass count directly to the first waiter.
+// Semrelease 自动增加 *s 的值，如果一个等待的 goroutine 被 Semacquire 阻塞则会被通知
+// 它的目的是作为一个简单的唤醒原语，用于同步库，不应该被直接使用。
+// 如果 handoff 为真，则将计数直接传递给下一个等待的 goroutine
 func runtime_Semrelease(s *uint32, handoff bool)
 
 // Approximation of notifyList in runtime/sema.go. Size and alignment must

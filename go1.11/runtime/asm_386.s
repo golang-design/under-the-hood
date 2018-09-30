@@ -647,22 +647,19 @@ TEXT gosave<>(SB),NOSPLIT,$0
 	RET
 
 // func asmcgocall(fn, arg unsafe.Pointer) int32
-// Call fn(arg) on the scheduler stack,
-// aligned appropriately for the gcc ABI.
-// See cgocall.go for more details.
+// 在调度器栈上调用 fn(arg), 已为 gcc ABI 对齐，见 cgocall.go
 TEXT ·asmcgocall(SB),NOSPLIT,$0-12
 	MOVL	fn+0(FP), AX
 	MOVL	arg+4(FP), BX
 
 	MOVL	SP, DX
 
-	// Figure out if we need to switch to m->g0 stack.
-	// We get called to create new OS threads too, and those
-	// come in on the m->g0 stack already.
+	// 考虑是否需要切换到 m->g0 栈
+	// 也用来调用创建新的 OS 线程，这些线程已经在 m->g0 栈中了
 	get_tls(CX)
 	MOVL	g(CX), BP
 	CMPL	BP, $0
-	JEQ	nosave	// Don't even have a G yet.
+	JEQ	nosave	// 连 G 都没有
 	MOVL	g_m(BP), BP
 	MOVL	m_g0(BP), SI
 	MOVL	g(CX), DI
@@ -676,17 +673,17 @@ TEXT ·asmcgocall(SB),NOSPLIT,$0-12
 	MOVL	(g_sched+gobuf_sp)(SI), SP
 
 noswitch:
-	// Now on a scheduling stack (a pthread-created stack).
+	// 位于调度栈中（pthread 新创建的栈）
 	SUBL	$32, SP
-	ANDL	$~15, SP	// alignment, perhaps unnecessary
-	MOVL	DI, 8(SP)	// save g
+	ANDL	$~15, SP	// 对齐，可能不必要
+	MOVL	DI, 8(SP)	// 保存 g
 	MOVL	(g_stack+stack_hi)(DI), DI
 	SUBL	DX, DI
 	MOVL	DI, 4(SP)	// save depth in stack (can't just save SP, as stack might be copied during a callback)
-	MOVL	BX, 0(SP)	// first argument in x86-32 ABI
+	MOVL	BX, 0(SP)	// x86-32 ABI 是第一个参数
 	CALL	AX
 
-	// Restore registers, g, stack pointer.
+	// 恢复寄存器、 g、栈指针
 	get_tls(CX)
 	MOVL	8(SP), DI
 	MOVL	(g_stack+stack_hi)(DI), SI
@@ -697,14 +694,14 @@ noswitch:
 	MOVL	AX, ret+8(FP)
 	RET
 nosave:
-	// Now on a scheduling stack (a pthread-created stack).
+	// 位于调度栈中（pthread 新创建的栈）
 	SUBL	$32, SP
-	ANDL	$~15, SP	// alignment, perhaps unnecessary
-	MOVL	DX, 4(SP)	// save original stack pointer
-	MOVL	BX, 0(SP)	// first argument in x86-32 ABI
+	ANDL	$~15, SP	// 对齐，可能不必要
+	MOVL	DX, 4(SP)	// 保存原来的栈指针
+	MOVL	BX, 0(SP)	// x86-32 ABI 是第一个参数
 	CALL	AX
 
-	MOVL	4(SP), CX	// restore original stack pointer
+	MOVL	4(SP), CX	// 恢复原来的栈指针
 	MOVL	CX, SP
 	MOVL	AX, ret+8(FP)
 	RET

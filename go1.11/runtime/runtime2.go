@@ -272,8 +272,7 @@ type gobuf struct {
 	bp   uintptr // for GOEXPERIMENT=framepointer
 }
 
-// sudog represents a g in a wait list, such as for sending/receiving
-// on a channel.
+// sudog 表示了一个等待队列中的 g，例如在一个 channel 中进行发送和接受
 //
 // sudog is necessary because the g ↔ synchronization object relation
 // is many-to-many. A g can be on many wait lists, so there may be

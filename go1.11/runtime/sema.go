@@ -48,7 +48,7 @@ const semTabSize = 251
 
 var semtable [semTabSize]struct {
 	root semaRoot
-	pad  [sys.CacheLineSize - unsafe.Sizeof(semaRoot{})]byte
+	pad  [sys.CacheLineSize - unsafe.Sizeof(semaRoot{})]byte // 防止 false sharing
 }
 
 //go:linkname sync_runtime_Semacquire sync.runtime_Semacquire
@@ -96,22 +96,23 @@ func semacquire(addr *uint32) {
 }
 
 func semacquire1(addr *uint32, lifo bool, profile semaProfileFlags) {
+	// 获取当前 goroutine
 	gp := getg()
 	if gp != gp.m.curg {
 		throw("semacquire not on the G stack")
 	}
 
-	// Easy case.
+	// 简单情况，直接 acquire 成功
 	if cansemacquire(addr) {
 		return
 	}
 
-	// Harder case:
-	//	increment waiter count
-	//	try cansemacquire one more time, return if succeeded
-	//	enqueue itself as a waiter
-	//	sleep
-	//	(waiter descriptor is dequeued by signaler)
+	// 比较难情况
+	//	增加等待计数
+	//	再试一次 cansemacquire 如果成功则直接返回
+	//	将自己作为等待器入队
+	//	休眠
+	//	(等待器描述符由出队信号产生出队行为)
 	s := acquireSudog()
 	root := semroot(addr)
 	t0 := int64(0)
@@ -200,14 +201,21 @@ func semroot(addr *uint32) *semaRoot {
 }
 
 func cansemacquire(addr *uint32) bool {
+	// 死循环
 	for {
+
 		v := atomic.Load(addr)
+		// 如果地址中的值为 0 则不能处理，即保证不为负
 		if v == 0 {
 			return false
 		}
+
+		// 比较并执行减一，如果成功则返回 true
 		if atomic.Cas(addr, v, v-1) {
 			return true
 		}
+
+		// 否则继续 acquire
 	}
 }
 

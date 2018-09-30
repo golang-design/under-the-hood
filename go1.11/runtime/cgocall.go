@@ -96,6 +96,7 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 		throw("cgocall unavailable")
 	}
 
+	// cgo 调用不允许为空
 	if fn == nil {
 		throw("cgocall nil")
 	}
@@ -104,6 +105,7 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 		racereleasemerge(unsafe.Pointer(&racecgosync))
 	}
 
+	// 运行时会记录 cgo 调用的次数
 	mp := getg().m
 	mp.ncgocall++
 	mp.ncgo++
