@@ -98,9 +98,12 @@ func (m *Map) Load(key interface{}) (value interface{}, ok bool) {
 		// Avoid reporting a spurious miss if m.dirty got promoted while we were
 		// blocked on m.mu. (If further loads of the same key will not miss, it's
 		// not worth copying the dirty map for this key.)
+		// 锁住后，再读一次 read map
 		read, _ = m.read.Load().(readOnly)
 		e, ok = read.m[key]
+		// 如果这时 read map 还读不到，且 dirty map 与 read map 不一致
 		if !ok && read.amended {
+			// 则从 dirty map 中读
 			e, ok = m.dirty[key]
 			// Regardless of whether the entry was present, record a miss: this key
 			// will take the slow path until the dirty map is promoted to the read
@@ -118,10 +121,15 @@ func (m *Map) Load(key interface{}) (value interface{}, ok bool) {
 }
 
 func (e *entry) load() (value interface{}, ok bool) {
+	// 读 entry 的值
 	p := atomic.LoadPointer(&e.p)
+
+	// 如果值为 nil 或者已经删除
 	if p == nil || p == expunged {
+		// 则读不到
 		return nil, false
 	}
+	// 否则读值
 	return *(*interface{})(p), true
 }
 
@@ -283,31 +291,50 @@ func (e *entry) tryLoadOrStore(i interface{}) (actual interface{}, loaded, ok bo
 	}
 }
 
-// Delete deletes the value for a key.
+// Delete 删除 key 对应的 value
 func (m *Map) Delete(key interface{}) {
+	// 获得 read map
 	read, _ := m.read.Load().(readOnly)
+
+	// 从 read map 中读取需要删除的 key
 	e, ok := read.m[key]
+
+	// 如果 read map 中没找到，且 read map 与 dirty map 不一致
+	// 说明要删除的值在 dirty map 中
 	if !ok && read.amended {
+		// 在 dirty map 中需要加锁
 		m.mu.Lock()
+		// 再次读 read map
 		read, _ = m.read.Load().(readOnly)
+		// 从 read map 中取值
 		e, ok = read.m[key]
+		// 没取到，read map 和 dirty map 不一致
 		if !ok && read.amended {
+			// 删除 dierty map 的值
 			delete(m.dirty, key)
 		}
 		m.mu.Unlock()
 	}
+	// 如果 read map 中找到了
 	if ok {
+		// 则执行删除
 		e.delete()
 	}
 }
 
 func (e *entry) delete() (hadValue bool) {
 	for {
+		// 读取 entry 的值
 		p := atomic.LoadPointer(&e.p)
+
+		// 如果 p 等于 nil，或者 p 已经标记删除
 		if p == nil || p == expunged {
+			// 则不需要删除
 			return false
 		}
+		// 否则，将 p 的值与 nil 进行原子换
 		if atomic.CompareAndSwapPointer(&e.p, p, nil) {
+			// 删除成功（本质只是接触引用，实际上是留给 GC 清理）
 			return true
 		}
 	}

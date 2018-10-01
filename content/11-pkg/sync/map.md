@@ -159,7 +159,7 @@ func (m *Map) Store(key, value interface{}) {
 这种情况下，本质上还分两种情况：
 
 1. 可能因为是一个已经删除的值（之前的 `tryStore` 失败）
-2. 可能先前仅保存在 dirty map 然后同步到了 read map
+2. 可能先前仅保存在 dirty map 然后同步到了 read map（TODO: 可能吗？）
 
 对于第一种而言，我们需要重新将这个已经删除的值标记为没有删除，然后将这个值同步回 dirty map（删除操作只删除 dirty map，之后再说）
 对于第二种状态，我们直接更新 read map，不需要打扰 dirty map。
@@ -293,7 +293,7 @@ func (e *entry) tryExpungeLocked() (isExpunged bool) {
 
 1. 存储过程遵循互不影响的原则，如果在 read map 中读到，则只更新 read map，如果在 dirty map 中读到，则只更新 dirty map。
 2. 优先从 read map 中读，更新失败才读 dirty map。
-3. 存储新值的时候，如果 dirty map 中没有 read map 中的值，那么直接将整个 read map 同步到 dirty map。这时原来的 dirty map 被彻底覆盖（一些值依赖 GC 进行清理？TODO: 需要确认）。
+3. 存储新值的时候，如果 dirty map 中没有 read map 中的值，那么直接将整个 read map 同步到 dirty map。这时原来的 dirty map 被彻底覆盖（一些值依赖 GC 进行清理）。
 
 ## `Load()`
 
@@ -301,6 +301,65 @@ func (e *entry) tryExpungeLocked() (isExpunged bool) {
 我们来看 `Load` 操作发生了什么。
 
 ## `Delete()`
+
+再来看删除操作。
+
+```go
+// Delete 删除 key 对应的 value
+func (m *Map) Delete(key interface{}) {
+	// 获得 read map
+	read, _ := m.read.Load().(readOnly)
+
+	// 从 read map 中读取需要删除的 key
+	e, ok := read.m[key]
+
+	// 如果 read map 中没找到，且 read map 与 dirty map 不一致
+	// 说明要删除的值在 dirty map 中
+	if !ok && read.amended {
+		// 在 dirty map 中需要加锁
+		m.mu.Lock()
+		// 再次读 read map
+		read, _ = m.read.Load().(readOnly)
+		// 从 read map 中取值
+		e, ok = read.m[key]
+		// 没取到，read map 和 dirty map 不一致
+		if !ok && read.amended {
+			// 删除 dierty map 的值
+			delete(m.dirty, key)
+		}
+		m.mu.Unlock()
+	}
+	// 如果 read map 中找到了
+	if ok {
+		// 则执行删除
+		e.delete()
+	}
+}
+
+func (e *entry) delete() (hadValue bool) {
+	for {
+		// 读取 entry 的值
+		p := atomic.LoadPointer(&e.p)
+
+		// 如果 p 等于 nil，或者 p 已经标记删除
+		if p == nil || p == expunged {
+			// 则不需要删除
+			return false
+		}
+		// 否则，将 p 的值与 nil 进行原子换
+		if atomic.CompareAndSwapPointer(&e.p, p, nil) {
+			// 删除成功（本质只是接触引用，实际上是留给 GC 清理）
+			return true
+		}
+	}
+}
+```
+
+从实现上来看，删除操作相对简单，当需要删除一个值时，移除 read map 中的值，本质上仅仅只是解除对变量的引用。
+实际的回收是由 GC 进行处理。
+如果 read map 中并未找到要删除的值，才会去尝试删除 dirty map 中的值。
+
+## `Range()`
 
 ## `atomic.Value`
 
