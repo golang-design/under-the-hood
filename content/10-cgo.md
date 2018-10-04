@@ -104,6 +104,11 @@ func _cgo_runtime_cgocall(unsafe.Pointer, uintptr) int32
 
 TODO:
 
+## 进一步阅读的参考文献
+
+1. [Command cgo](https://golang.org/cmd/cgo/)
+2. [LINUX SYSTEM CALL TABLE FOR X86 64](http://blog.rchapman.org/posts/Linux_System_Call_Table_for_x86_64/)
+
 ## 许可
 
 [Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

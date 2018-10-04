@@ -1,10 +1,10 @@
-# 4 内存管理
+# 12 WebAssembly
 
 TODO:
 
 ## 进一步阅读的参考文献
 
-1. [The Go Memory Model](https://golang.org/ref/mem)
+1. [Go WebAssembly](https://github.com/golang/go/wiki/WebAssembly)
 
 ## 许可
 

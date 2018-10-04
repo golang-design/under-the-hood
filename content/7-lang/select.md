@@ -1,10 +1,6 @@
-# 4 内存管理
+# 7 select
 
 TODO:
-
-## 进一步阅读的参考文献
-
-1. [The Go Memory Model](https://golang.org/ref/mem)
 
 ## 许可
 

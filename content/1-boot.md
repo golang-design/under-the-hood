@@ -216,6 +216,12 @@ SP 是 Local Stack Pointer 本地栈指针的缩写，用于保存局部变量�
 
 TODO: 增加更多关于 plan9 汇编的基础概念
 
+## 进一步阅读的参考文献
+
+1. [A Quick Guide to Go's Assembler](https://golang.org/doc/asm)
+2. [A Manual for the Plan 9 assembler](https://9p.io/sys/doc/asm.html)
+3. [Debugging Go Code with GDB](https://golang.org/doc/gdb)
+
 ## 许可
 
 [Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

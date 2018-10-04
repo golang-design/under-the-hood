@@ -4,14 +4,12 @@
 
 package runtime
 
-// This file contains the implementation of Go's map type.
+// 本文件包含了 Go map 类型的实现
 //
-// A map is just a hash table. The data is arranged
-// into an array of buckets. Each bucket contains up to
-// 8 key/value pairs. The low-order bits of the hash are
-// used to select a bucket. Each bucket contains a few
-// high-order bits of each hash to distinguish the entries
-// within a single bucket.
+// map 只是 hash 表。数据被排布到了一组 buckets 中。
+// 每个 bucket 最多包含 8 个 key/value 对。
+// 低位 hash 用于选择一个 bucket，每个 bucket 包含每个 hash 的一些高位
+// bit 用来区分每个 bucket 内部的 entry。
 //
 // If more than 8 keys hash to a bucket, we chain on
 // extra buckets.
