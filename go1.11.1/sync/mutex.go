@@ -18,23 +18,24 @@ import (
 
 func throw(string) // 运行时实现
 
-// A Mutex is a mutual exclusion lock.
-// The zero value for a Mutex is an unlocked mutex.
+// Mutex 互斥锁
+// Mutex 的零值是一个未加锁状态的互斥锁
 //
-// A Mutex must not be copied after first use.
+// Mutex 在第一次使用后不能被复制
 type Mutex struct {
+	// 状态用于表示锁的状态，
 	state int32
 	sema  uint32
 }
 
-// A Locker represents an object that can be locked and unlocked.
+// Locker 接口，两个操作 Lock 和 Unlock
 type Locker interface {
 	Lock()
 	Unlock()
 }
 
 const (
-	mutexLocked = 1 << iota // mutex is locked
+	mutexLocked = 1 << iota // 互斥锁已锁住
 	mutexWoken
 	mutexStarving
 	mutexWaiterShift = iota
@@ -66,11 +67,10 @@ const (
 	starvationThresholdNs = 1e6
 )
 
-// Lock locks m.
-// If the lock is already in use, the calling goroutine
-// blocks until the mutex is available.
+// Lock 将 m 锁住
+// 如果 lock 已经在使用，调用的 goroutine 会阻塞到锁被释放为止
 func (m *Mutex) Lock() {
-	// Fast path: grab unlocked mutex.
+	// Fast path: 抓取并锁上未锁住状态的互斥锁
 	if atomic.CompareAndSwapInt32(&m.state, 0, mutexLocked) {
 		if race.Enabled {
 			race.Acquire(unsafe.Pointer(m))
@@ -78,6 +78,7 @@ func (m *Mutex) Lock() {
 		return
 	}
 
+	// Slow path: 处理未锁住状态上锁失败、锁住状态的情况
 	var waitStartTime int64
 	starving := false
 	awoke := false

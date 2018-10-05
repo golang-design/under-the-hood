@@ -201,4 +201,4 @@ Go 程序既不是从 `main.main` 直接启动，也不是从 `runtime.main` 直
 
 ## 许可
 
-[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-ND 4.0 & MIT &copy; [changkun](https://changkun.de)
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

@@ -65,8 +65,11 @@ func main() {
 
 sync.Cond 的内部结构包含一个锁 L、通知列表以及一个复制检查器 copyChecker。
 
-
 ```go
+type Locker interface {
+	Lock()
+	Unlock()
+}
 type Cond struct {
 	noCopy noCopy
 
@@ -88,10 +91,12 @@ type notifyList struct {
 }
 ```
 
+L 的类型为 Locker 因此可以包含任何实现了 Lock 和 Unlock 的锁，这包括 Mutex 和 RWMutex。
+
 当新建 Cond 时，向 Cond 提供互斥锁 l 非常简单。而 notifyList 与非常相似。
 
 TODO:
 
 ## 许可
 
-[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-ND 4.0 & MIT &copy; [changkun](https://changkun.de)
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)
