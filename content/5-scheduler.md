@@ -1,5 +1,55 @@
 # 5 调度器
 
+## 初始化
+
+### 调度器初始化
+
+TODO:
+
+```go
+func mcommoninit(mp *m) {
+	_g_ := getg()
+
+	// g0 栈对用户而言是没有意义的（且不是不可避免的）
+	if _g_ != _g_.m.g0 {
+		callers(1, mp.createstack[:])
+	}
+
+	lock(&sched.lock)
+	if sched.mnext+1 < sched.mnext {
+		throw("runtime: thread ID overflow")
+	}
+	mp.id = sched.mnext
+	sched.mnext++
+	checkmcount()
+
+	mp.fastrand[0] = 1597334677 * uint32(mp.id)
+	mp.fastrand[1] = uint32(cputicks())
+	if mp.fastrand[0]|mp.fastrand[1] == 0 {
+		mp.fastrand[1] = 1
+	}
+
+	mpreinit(mp)
+	if mp.gsignal != nil {
+		mp.gsignal.stackguard1 = mp.gsignal.stack.lo + _StackGuard
+	}
+
+	// Add to allm so garbage collector doesn't free g->m
+	// when it is just in a register or thread-local storage.
+	mp.alllink = allm
+
+	// NumCgoCall() iterates over allm w/o schedlock,
+	// so we need to publish it safely.
+	atomicstorep(unsafe.Pointer(&allm), unsafe.Pointer(mp))
+	unlock(&sched.lock)
+
+	// Allocate memory to hold a cgo traceback if the cgo call crashes.
+	if iscgo || GOOS == "solaris" || GOOS == "windows" {
+		mp.cgoCallers = new(cgoCallers)
+	}
+}
+```
+
 ## 系统监控
 
 本小节分析 `runtime.main` 在运行用户态代码前的 `newm(sysmon, nil)`。

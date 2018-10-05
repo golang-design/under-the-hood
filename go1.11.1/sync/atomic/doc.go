@@ -140,7 +140,7 @@ func StoreUint64(addr *uint64, val uint64)
 // StoreUintptr atomically stores val into *addr.
 func StoreUintptr(addr *uintptr, val uintptr)
 
-// StorePointer atomically stores val into *addr.
+// StorePointer 将 val 原子的存入 *addr 中
 func StorePointer(addr *unsafe.Pointer, val unsafe.Pointer)
 
 // Helper for ARM.  Linker will discard on other systems

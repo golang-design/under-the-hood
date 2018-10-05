@@ -159,7 +159,7 @@ func (m *Map) Store(key, value interface{}) {
 这种情况下，本质上还分两种情况：
 
 1. 可能因为是一个已经删除的值（之前的 `tryStore` 失败）
-2. 可能先前仅保存在 dirty map 然后同步到了 read map（TODO: 可能吗？）
+2. 可能先前仅保存在 dirty map 然后同步到了 read map（这是可能的，我们后面读 Load 时再来分析 dirty map 是如何同步到 read map 的）
 
 对于第一种而言，我们需要重新将这个已经删除的值标记为没有删除，然后将这个值同步回 dirty map（删除操作只删除 dirty map，之后再说）
 对于第二种状态，我们直接更新 read map，不需要打扰 dirty map。
@@ -211,25 +211,19 @@ func (m *Map) Store(key, value interface{}) {
 // 只是简单的创建一个 entry
 // entry 是一个对应于 map 中特殊 key 的 slot
 type entry struct {
-	// TODO: 解释这里
-	// p points to the interface{} value stored for the entry.
+	// p 指向 interface{} 类型的值，用于保存 entry
 	//
-	// If p == nil, the entry has been deleted and m.dirty == nil.
+	// 如果 p == nil，则 entry 已被删除，且 m.dirty == nil
 	//
-	// If p == expunged, the entry has been deleted, m.dirty != nil, and the entry
-	// is missing from m.dirty.
+	// 如果 p == expunged, 则 entry 已经被删除，m.dirty != nil ，则 entry 不在 m.dirty 中
 	//
-	// Otherwise, the entry is valid and recorded in m.read.m[key] and, if m.dirty
-	// != nil, in m.dirty[key].
+	// 否则，entry 仍然有效，且被记录在 m.read.m[key] ，但如果 m.dirty != nil，则在 m.dirty[key] 中
 	//
-	// An entry can be deleted by atomic replacement with nil: when m.dirty is
-	// next created, it will atomically replace nil with expunged and leave
-	// m.dirty[key] unset.
+	// 一个 entry 可以被原子替换为 nil 来删除：当 m.dirty 是下一个创建的，它会自动将 nil 替换为 expunged 且
+	// 让 m.dirty[key] 成为未设置的状态。
 	//
-	// An entry's associated value can be updated by atomic replacement, provided
-	// p != expunged. If p == expunged, an entry's associated value can be updated
-	// only after first setting m.dirty[key] = e so that lookups using the dirty
-	// map find the entry.
+	// 与一个 entry 关联的值可以被原子替换式的更新，提供的 p != expunged。如果 p == expunged，
+	// 则与 entry 关联的值只能在 m.dirty[key] = e 设置后被更新，因此会使用 dirty map 来查找 entry。
 	p unsafe.Pointer // *interface{}
 }
 func newEntry(i interface{}) *entry {
@@ -297,8 +291,88 @@ func (e *entry) tryExpungeLocked() (isExpunged bool) {
 
 ## `Load()`
 
-在平时使用 `Load()` 时，可能就存在疑惑，如果 `map` 中元素找不到，直接返回 `nil` 就可以了，为什么还需要一个 `ok` 的布尔值？
-我们来看 `Load` 操作发生了什么。
+Load 的操作就是从 dirty map 或者 read map 中查找所存储的值。
+
+```go
+// Load 返回了存储在 map 中对应于 key 的值 value，如果不存在则返回 nil
+// ok 表示了值能否在 map 中找到
+func (m *Map) Load(key interface{}) (value interface{}, ok bool) {
+	// 拿到只读 read map
+	read, _ := m.read.Load().(readOnly)
+
+	// 从只读 map 中读 key 对应的 value
+	e, ok := read.m[key]
+
+	// 如果在 read map 中找不到，且 dirty map 包含 read map 中不存在的 key，则进一步查找
+	if !ok && read.amended {
+		m.mu.Lock()
+		// 锁住后，再读一次 read map
+		read, _ = m.read.Load().(readOnly)
+		e, ok = read.m[key]
+		// 如果这时 read map 确实读不到，且 dirty map 与 read map 不一致
+		if !ok && read.amended {
+			// 则从 dirty map 中读
+			e, ok = m.dirty[key]
+			// 无论 entry 是否找到，记录一次 miss：该 key 会采取 slow path 进行读取，直到
+			// dirty map 被提升为 read map。
+			m.missLocked()
+		}
+		m.mu.Unlock()
+	}
+	// 如果 read map 或者 dirty map 中找不到 key，则确实没找到，返回 nil 和 false
+	if !ok {
+		return nil, false
+	}
+	// 如果找到了，则返回读到的值
+	return e.load()
+}
+
+func (e *entry) load() (value interface{}, ok bool) {
+	// 读 entry 的值
+	p := atomic.LoadPointer(&e.p)
+
+	// 如果值为 nil 或者已经删除
+	if p == nil || p == expunged {
+		// 则读不到
+		return nil, false
+	}
+	// 否则读值
+	return *(*interface{})(p), true
+}
+```
+
+可以看到：
+
+1. 如果 read map 中已经找到了该值，则不需要去访问 dirty map（慢）。
+2. 但如果没找到，且 dirty map 与 read map 没有差异，则也不需要去访问 dirty map。
+3. 如果 dirty map 和 read map 有差异，则我们需要锁住整个 Map，然后再读取一次 read map 来防止并发导致的上一次读取失误
+4. 如果锁住后，确实 read map 读取不到且 dirty map 和 read map 一致，则不需要去读 dirty map 了，直接解锁返回。
+5. 如果锁住后，read map 读不到，且 dirty map 与 read map 不一致，则该 key 可能在 dirty map 中，我们需要从 dirty map 中读取，并记录一次 miss（在 read map 中 miss）。
+
+当记录 miss 时，涉及 `missLocked` 操作：
+
+```go
+// 此方法调用时，整个 map 是锁住的
+func (m *Map) missLocked() {
+	// 增加一次 miss
+	m.misses++
+
+	// 如果 miss 的次数小于 dirty map 的 key 数
+	// 则直接返回
+	if m.misses < len(m.dirty) {
+		return
+	}
+
+	// 否则将 dirty map 同步到 read map 去
+	m.read.Store(readOnly{m: m.dirty})
+	// 清空 dirty map
+	m.dirty = nil
+	// miss 计数归零
+	m.misses = 0
+}
+```
+
+可以看出，miss 如果大于了 dirty 所存储的 key 数时，会将 dirty map 同步到 read map，并将自身清空，miss 计数归零。
 
 ## `Delete()`
 
@@ -361,7 +435,219 @@ func (e *entry) delete() (hadValue bool) {
 
 ## `Range()`
 
+有了上面的存取基础，这时候来看 Range 一切都显得很自然：
+
+```go
+// Range 为每个 key 顺序的调用 f。如果 f 返回 false，则 range 会停止迭代。
+//
+// Range 的时间复杂度可能会是 O(N) 即便是 f 返回 false。
+func (m *Map) Range(f func(key, value interface{}) bool) {
+	// 读取 read map
+	read, _ := m.read.Load().(readOnly)
+	// 如果 read map 和 dirty map 不一致，则需要进一步操作
+	if read.amended {
+		m.mu.Lock()
+		// 再读一次，如果还是不一致，则将 dirty map 提升为 read map
+		read, _ = m.read.Load().(readOnly)
+		if read.amended {
+			read = readOnly{m: m.dirty}
+			m.read.Store(read)
+			m.dirty = nil
+			m.misses = 0
+		}
+		m.mu.Unlock()
+	}
+
+	// 在 read 变量中读（可能是 read map ，也可能是 dirty map 同步过来的 map）
+	for k, e := range read.m {
+		// 读 readOnly，load 会检查该值是否被标记为删除
+		v, ok := e.load()
+		// 如果已经删除，则跳过
+		if !ok {
+			continue
+		}
+		// 如果 f 返回 false，则停止迭代
+		if !f(k, v) {
+			break
+		}
+	}
+}
+```
+
+既然要 Range 整个 map，则需要考虑 dirty map 与 read map 不一致的问题，如果不一致，则直接将 dirty map 同步到 read map 中。
+
+## `LoadOrStore`
+
+```go
+// LoadOrStore 在 key 已经存在时，返回存在的值，否则存储当前给定的值
+// loaded 为 true 表示 actual 读取成功，否则为 false 表示 value 存储成功
+func (m *Map) LoadOrStore(key, value interface{}) (actual interface{}, loaded bool) {
+	// 读 read map
+	read, _ := m.read.Load().(readOnly)
+	// 如果 read map 中已经读到
+	if e, ok := read.m[key]; ok {
+		// 尝试存储（可能 key 是一个已删除的 key）
+		actual, loaded, ok := e.tryLoadOrStore(value)
+		// 如果存储成功，则直接返回
+		if ok {
+			return actual, loaded
+		}
+	}
+
+	// 否则，涉及 dirty map，加锁
+	m.mu.Lock()
+	// 再读一次 read map
+	read, _ = m.read.Load().(readOnly)
+	if e, ok := read.m[key]; ok {
+		// 如果 read map 中已经读到，则看该值是否被删除
+		if e.unexpungeLocked() {
+			// 没有被删除，则通过 dirty map 存
+			m.dirty[key] = e
+		}
+		actual, loaded, _ = e.tryLoadOrStore(value)
+	} else if e, ok := m.dirty[key]; ok { // 如果 read map 没找到, dirty map 找到了
+		// 尝试 laod or store，并记录 miss
+		actual, loaded, _ = e.tryLoadOrStore(value)
+		m.missLocked()
+	} else { // 否则就是存一个新的值
+		// 如果 read map 和 dirty map 相同，则开始标记不同
+		if !read.amended {
+			m.dirtyLocked()
+			m.read.Store(readOnly{m: read.m, amended: true})
+		}
+		// 存到 dirty map 中去
+		m.dirty[key] = newEntry(value)
+		actual, loaded = value, false
+	}
+	m.mu.Unlock()
+
+	// 返回存取状态
+	return actual, loaded
+}
+```
+
+我们已经看过 Load 或 Store 的单独过程了，`LoadOrStore` 方法无非是两则的结合，比较简单，这里就不再细说了。
+
 ## `atomic.Value`
+
+我们最后来看一下 `atomic.Value`。`atomic.Value` 位于 atomic 包中，提供了一种具备原子存取的结构。
+其自身的结构非常简单：
+
+```go
+// Value 提供了相同类型值的原子 load 和 store 操作
+// 零值的 Load 会返回 nil
+// 一旦 Store 被调用，Value 不能被复制
+type Value struct {
+	v interface{}
+}
+```
+
+它仅仅只是对要存储的值进行了一层封装。我们来看它的 Load 方法：
+
+```go
+// ifaceWords 定义了 interface{} 的内部表示。
+type ifaceWords struct {
+	typ  unsafe.Pointer
+	data unsafe.Pointer
+}
+
+// Load 返回最近存储的值集合
+// 如果已经没有 Value 调用 Store 则会返回 nil
+func (v *Value) Load() (x interface{}) {
+	// 获得自身结构的指针，因为 v 存储的是任意类型
+	// 在 go 中，interface 的内存布局有类型指针和数据指针两部分表示
+	vp := (*ifaceWords)(unsafe.Pointer(v))
+	// 获得存储值的类型指针
+	typ := LoadPointer(&vp.typ)
+	// 如果存储的类型为 nil 或者呈正在存储的状态（全 1，在 Store 中解释）
+	if typ == nil || uintptr(typ) == ^uintptr(0) {
+		// 则说明 Value 当前没有保存值
+		return nil
+	}
+	// 否则从 data 字段中读取数据
+	data := LoadPointer(&vp.data)
+	xp := (*ifaceWords)(unsafe.Pointer(&x))
+	// 将复制得到的 typ 给到 x
+	xp.typ = typ
+	// 将复制出来的 data 给到 x
+	xp.data = data
+	return
+}
+```
+
+从这个 Load 方法中我们了解到了 Go 中的 `interface{}` 本质上有两段内容组成，一个是 type 区域，另一个是实际的数据区域。
+这个 Load 方法的实现，本质上就是将内部存储的类型和数据都复制一份并返回（避免逃逸）。
+
+再来看 Store。
+
+```go
+// Store 将 Value 的值设置为 x
+// Store 的 Value x 必须为相同的类型
+// Store 不同类型会导致 panic，nil 也是如此
+func (v *Value) Store(x interface{}) {
+	// nil 直接 panic
+	if x == nil {
+		panic("sync/atomic: store of nil value into Value")
+	}
+
+	// Value 存储值的指针
+	vp := (*ifaceWords)(unsafe.Pointer(v))
+	// 要存储的 x 的指针
+	xp := (*ifaceWords)(unsafe.Pointer(&x))
+
+	for {
+		// 读 Value 存储值的类型
+		typ := LoadPointer(&vp.typ)
+		// 如果类型还是 nil
+		if typ == nil {
+			// 说明这是第一次存储
+			// 禁止当前 goroutine 可以被抢占，来保证第一次存储顺利完成
+			// 否则会导致 GC 发现一个假类型
+			runtime_procPin()
+			// 先存一个标志位（全 1）
+			if !CompareAndSwapPointer(&vp.typ, nil, unsafe.Pointer(^uintptr(0))) {
+				// 如果没有成功，则标志为可抢占，下次再试
+				runtime_procUnpin()
+				continue
+			}
+			// 如果标志位设置成功，则将数据存入
+			StorePointer(&vp.data, xp.data)
+			StorePointer(&vp.typ, xp.typ)
+			// 存储成功，再标志位可抢占，直接返回
+			runtime_procUnpin()
+			return
+		}
+		// 如果第一次保存正在进行，则等待 continue
+		if uintptr(typ) == ^uintptr(0) {
+			continue
+		}
+		// 第一次存储完成，检查类型是否正确，不正确直接 panic
+		if typ != xp.typ {
+			panic("sync/atomic: store of inconsistently typed value into Value")
+		}
+		// 不替换类型，直接保存数据
+		StorePointer(&vp.data, xp.data)
+		return
+	}
+}
+```
+
+可以看到 `atomic.Value` 的存取通过 `unsafe.Pointer(^uintptr(0))` 作为第一次存取的标志位，当 `atomic.Value`
+进行第一次存储时，会将当前 goroutine 设置为不可抢占，并将要存储类型进行标记，再存入实际的数据与类型。当存储完毕后，即可解除不可抢占，返回。
+在不可抢占期间，有并发的 goroutine 再此存储时，如果标记没有被类型替换掉，则说明第一次存储还未完成，由 for 循环进行等待。
+
+## 总结
+
+我们来回顾一下 sync.Map 中 read map 和 dirty map 的同步过程：
+
+1. 当 Store 一个新值会发生：read map --> dirty map
+2. dirty map --> read map：当 read map 进行 Load 失败 len(dirty map) 次之后发生
+
+因此，无论是存储还是读取，read map 中的值一定能在 dirty map 中找到。无论两者如何同步，sync.Map 通过 entry 指针操作，
+保证数据永远只有一份，一旦 read map 中的值修改，dirty map 中保存的指针就能直接读到修改后的值。
+
+当存储新值时，一定发生在 dirty map 中。当读取旧值时，如果 read map 读到则直接返回，如果没有读到，则尝试加锁去 dirty map 中取。
+这也就是官方宣称的 sync.Map 适用于一次写入多次读取的情景。
 
 ## 许可
 

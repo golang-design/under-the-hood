@@ -20,11 +20,10 @@ import (
 const minPhysPageSize = 4096
 
 // 主分配堆
-// The heap itself is the "free[]" and "large" arrays,
-// but all the other global data is here too.
+// 堆自身是 free[] 和 large 数组的组合，但其他全局数据也保存在这里。
 //
-// mheap must not be heap-allocated because it contains mSpanLists,
-// which must not be heap-allocated.
+// 因为 mheap 包含不能被 heap-allocated 的 mSpanLists，
+// 因此 mheap 必须不能作为 heap-allocated
 //
 //go:notinheap
 type mheap struct {
@@ -549,7 +548,7 @@ func spanOfHeap(p uintptr) *mspan {
 	return s
 }
 
-// Initialize the heap.
+// 堆初始化.
 func (h *mheap) init() {
 	h.treapalloc.init(unsafe.Sizeof(treapNode{}), nil, nil, &memstats.other_sys)
 	h.spanalloc.init(unsafe.Sizeof(mspan{}), recordspan, unsafe.Pointer(h), &memstats.mspan_sys)

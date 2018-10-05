@@ -160,6 +160,7 @@ func totaldefersize(siz uintptr) uintptr {
 
 // Ensure that defer arg sizes that map to the same defer size class
 // also map to the same malloc size class.
+// 确保 map 到同一 defer 大小 class 的 defer arg 大小也 map 到相同的 malloc 大小 class
 func testdefersizes() {
 	var m [len(p{}.deferpool)]int32
 
