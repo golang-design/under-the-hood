@@ -3,11 +3,11 @@
 sync.Map 宣称内部做了特殊的优化，在两种情况下由于普通的 map+mutex。在研究源码之前我们先来看看测试结果。
 在测试中，我们测试了：n 个 key 中，每个 key 产生 1 次写行为，每个 key 产生 n 次读行为。
 
-下面是随 n (#key) 变化的性能结果
+下面是随 n 变化的性能结果
 
 ![](../../../images/map-syncmap.png)
 
-**图1：`map`+`sync.Mutex` 与 `sync.Map` 之间单次写多次读场景下的性能对比**
+**图1：`map`+`sync.Mutex` 、`map`+`sync.RWMutex` 与 `sync.Map` 之间单次写多次读场景下的性能对比**
 
 下面我们来研究一下 sync.Map 的具体优化细节。
 
