@@ -649,6 +649,20 @@ func (v *Value) Store(x interface{}) {
 当存储新值时，一定发生在 dirty map 中。当读取旧值时，如果 read map 读到则直接返回，如果没有读到，则尝试加锁去 dirty map 中取。
 这也就是官方宣称的 sync.Map 适用于一次写入多次读取的情景。
 
+值得一提的是，sync.Map 中大量运用了 `atomic.CompareAndSwap`，其上下文情景中具有 for 循环，这实质上是 CAS 算法：
+
+```
+for {
+	复制旧数据
+	基于旧数据构造新数据
+	if CompareAndSwap(内存地址，旧数据，新数据) {
+		break
+	}
+}
+```
+
+`CompareAndSwap` 操作假设内存地址中的数据是旧数据，如果确实是旧数据，则替换为新数据，否则下次再试，从而达到无锁情况下原子操作的目的。
+
 ## 许可
 
 [Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-ND 4.0 & MIT &copy; [changkun](https://changkun.de)
