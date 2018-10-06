@@ -131,7 +131,7 @@ for {
 
 ## 运行时实现
 
-我们简单看过了两个属于公共包的方法 `atomic.Value` 和 `atomic.CompareAndSwapPointer`，原子操作的方式比较单一，很容易举一反三，我们直接来看起运行时实现，不再穷举。
+我们简单看过了两个属于公共包的方法 `atomic.Value` 和 `atomic.CompareAndSwapPointer`，我们来看一下运行时实现：
 
 ```go
 //go:linkname sync_atomic_CompareAndSwapUintptr sync/atomic.CompareAndSwapUintptr
@@ -147,9 +147,66 @@ func sync_atomic_CompareAndSwapPointer(ptr *unsafe.Pointer, old, new unsafe.Poin
 }
 ```
 
-可以看到该函数在运行时中是没有方法本体的，说明其实现由编译器完成。
+可以看到该函数在运行时中是没有方法本体的，说明其实现由编译器完成。那么我们来看一下编译器究竟干了什么：
 
-TODO:
+```go
+package main
+
+import (
+	"sync/atomic"
+	"unsafe"
+)
+
+func main() {
+	var p unsafe.Pointer
+	newP := 42
+	atomic.CompareAndSwapPointer(&p, nil, unsafe.Pointer(&newP))
+
+	v := (*int)(p)
+	println(*v)
+}
+```
+
+编译结果：
+
+```asm
+TEXT sync/atomic.CompareAndSwapUintptr(SB) /usr/local/Cellar/go/1.11/libexec/src/sync/atomic/asm.s
+  asm.s:31		0x1001070		e91b0b0000		JMP runtime/internal/atomic.Casuintptr(SB)	
+  :-1			0x1001075		cc			INT $0x3					
+  (...)
+
+TEXT runtime/internal/atomic.Casuintptr(SB) /usr/local/Cellar/go/1.11/libexec/src/runtime/internal/atomic/asm_amd64.s
+  asm_amd64.s:44	0x1001b90		e9dbffffff		JMP runtime/internal/atomic.Cas64(SB)	
+  :-1			0x1001b95		cc			INT $0x3				
+  (...)
+```
+
+可以看到 `atomic.CompareAndSwapUintptr` 本质上转到了 `runtime/internal/atomic.Cas64`，我们来看一下它的实现：
+
+```asm
+// bool	runtime∕internal∕atomic·Cas64(uint64 *val, uint64 old, uint64 new)
+// Atomically:
+//	if(*val == *old){
+//		*val = new;
+//		return 1;
+//	} else {
+//		return 0;
+//	}
+TEXT runtime∕internal∕atomic·Cas64(SB), NOSPLIT, $0-25
+	MOVQ	ptr+0(FP), BX
+	MOVQ	old+8(FP), AX
+	MOVQ	new+16(FP), CX
+	LOCK
+	CMPXCHGQ	CX, 0(BX)
+	SETEQ	ret+24(FP)
+	RET
+```
+
+可以看到，实现的本质是使用 CPU 的 `CMPXCHGQ` 指令：首先将 ptr 的值放入 BX，将假设的旧值放入 AX，
+要比较的新值放入 CX。然后 LOCK CMPXCHGQ 与累加器 AX 比较并交换 CX 和 BX。
+
+因此原子操作本质上均为使用 CPU 指令进行实现（理所当然）。由于原子操作的方式比较单一，很容易举一反三，
+其他操作不再穷举。
 
 ## 许可
 

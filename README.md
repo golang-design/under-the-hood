@@ -48,7 +48,8 @@
     - [`chan`](content/7-lang/chan.md)
     - [`defer`](content/7-lang/defer.md)
     - [`select`](content/7-lang/select.md)
-    - [`panic`]
+    - [`panic`](content/7-lang/panic.md)
+    - [`map`](content/7-lang/map.md)
 8. 运行时杂项
     - [`runtime.Finalizer`](content/8-runtime/finalizer.md)
     - [`runtime.GOMAXPROCS`](content/8-runtime/gomaxprocs.md)
