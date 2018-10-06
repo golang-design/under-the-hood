@@ -2,34 +2,31 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Garbage collector (GC).
+// 垃圾回收器 (GC).
 //
-// The GC runs concurrently with mutator threads, is type accurate (aka precise), allows multiple
-// GC thread to run in parallel. It is a concurrent mark and sweep that uses a write barrier. It is
-// non-generational and non-compacting. Allocation is done using size segregated per P allocation
-// areas to minimize fragmentation while eliminating locks in the common case.
+// GC 与 mutator 线程同时运行，类型准确（也称为精确），允许多个 GC 线程并行运行。
+// 它是一个使用 write barrier 的并发标记和扫描。它是 non-generational 和 non-compacting 的。
+// 使用 per-P 分配区域隔离的大小来完成分配，以最小化碎片，同时消除通常情况下的加锁。
 //
-// The algorithm decomposes into several steps.
-// This is a high level description of the algorithm being used. For an overview of GC a good
-// place to start is Richard Jones' gchandbook.org.
+// 该算法分解为几个步骤。
+// 这里给出的是正在使用的算法的高阶描述。有关 GC 的概述请参考 Richard Jones 的 gchandbook.org。
 //
-// The algorithm's intellectual heritage includes Dijkstra's on-the-fly algorithm, see
+// 该算法的精神遗产包括 Dijkstra 的 on-the-fly 算法，参见：
 // Edsger W. Dijkstra, Leslie Lamport, A. J. Martin, C. S. Scholten, and E. F. M. Steffens. 1978.
 // On-the-fly garbage collection: an exercise in cooperation. Commun. ACM 21, 11 (November 1978),
 // 966-975.
-// For journal quality proofs that these steps are complete, correct, and terminate see
+// 关于算法的完整性、正确性和可终止性证明，请参考期刊文献：
 // Hudson, R., and Moss, J.E.B. Copying Garbage Collection without stopping the world.
 // Concurrency and Computation: Practice and Experience 15(3-5), 2003.
 //
-// 1. GC performs sweep termination.
+// 1. GC 执行终止扫描 (sweep termination)
 //
 //    a. Stop the world. This causes all Ps to reach a GC safe-point.
 //
 //    b. Sweep any unswept spans. There will only be unswept spans if
 //    this GC cycle was forced before the expected time.
 //
-// 2. GC performs the "mark 1" sub-phase. In this sub-phase, Ps are
-// allowed to locally cache parts of the work queue.
+// 2. GC 执行 "mark 1" 子阶段。在该子阶段中，允许 P 本地缓存工作队列的一部分。
 //
 //    a. Prepare for the mark phase by setting gcphase to _GCmark
 //    (from _GCoff), enabling the write barrier, enabling mutator
@@ -54,8 +51,7 @@
 //    object to black and shading all pointers found in the object
 //    (which in turn may add those pointers to the work queue).
 //
-// 3. Once the global work queue is empty (but local work queue caches
-// may still contain work), GC performs the "mark 2" sub-phase.
+// 3. 一旦全局工作队列为空（但本地工作队列高速缓存可能仍包含 work），GC将执行 "mark 2" 子阶段。
 //
 //    a. GC stops all workers, disables local work queue caches,
 //    flushes each P's local work queue cache to the global work queue
@@ -63,7 +59,7 @@
 //
 //    b. GC again drains the work queue, as in 2d above.
 //
-// 4. Once the work queue is empty, GC performs mark termination.
+// 4. 一旦工作队列为空，GC 执行标记终止(mark termination)
 //
 //    a. Stop the world.
 //
@@ -75,7 +71,7 @@
 //
 //    d. Perform other housekeeping like flushing mcaches.
 //
-// 5. GC performs the sweep phase.
+// 5. GC 执行扫描阶段 (sweep phase)
 //
 //    a. Prepare for the sweep phase by setting gcphase to _GCoff,
 //    setting up sweep state and disabling the write barrier.
@@ -86,8 +82,7 @@
 //    c. GC does concurrent sweeping in the background and in response
 //    to allocation. See description below.
 //
-// 6. When sufficient allocation has taken place, replay the sequence
-// starting with 1 above. See discussion of GC rate below.
+// 6. 当用户进行了足够的分配工作后，重新从上面 1 开始。 请参阅下面有关 GC 频率的讨论。
 
 // Concurrent sweep.
 //
@@ -117,13 +112,10 @@
 // The finalizer goroutine is kicked off only when all spans are swept.
 // When the next GC starts, it sweeps all not-yet-swept spans (if any).
 
-// GC rate.
-// Next GC is after we've allocated an extra amount of memory proportional to
-// the amount already in use. The proportion is controlled by GOGC environment variable
-// (100 by default). If GOGC=100 and we're using 4M, we'll GC again when we get to 8M
-// (this mark is tracked in next_gc variable). This keeps the GC cost in linear
-// proportion to the allocation cost. Adjusting GOGC just changes the linear constant
-// (and also the amount of extra memory used).
+// GC 频率
+// 下一次 GC 是在分配了与已经使用的量成比例的额外内存量之后开始。该比例由 GOGC 环境变量控制（默认为 100）。
+// 如果 GOGC = 100 并且我们正在使用 4M，那么当我们达到 8M 时将再次使用 GC（此标记在 next_gc 变量中被跟踪）。
+// 这使 GC 成本与分配成本成线性比例。调整 GOGC 只会改变线性常量（以及使用的额外内存量）。
 
 // Oblets
 //
@@ -244,10 +236,9 @@ func setGCPercent(in int32) (out int32) {
 // Indicates to write barrier and synchronization task to perform.
 var gcphase uint32
 
-// The compiler knows about this variable.
-// If you change it, you must change builtin/runtime.go, too.
-// If you change the first four bytes, you must also change the write
-// barrier insertion code.
+// 编译器了解此变量
+// 如果你修改它，你还需要修改 builtin/runtime.go
+// 如果你修改前四个字节，则还需要修改插入的 write barrier 代码.
 var writeBarrier struct {
 	enabled bool    // compiler emits a check of this before calling write barrier
 	pad     [3]byte // compiler uses 32-bit load for "enabled" field

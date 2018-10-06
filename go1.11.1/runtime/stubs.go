@@ -33,7 +33,7 @@ func getg() *g
 // closure will be invalidated while it is still executing.
 func mcall(fn func(*g))
 
-// systemstack runs fn on a system stack.
+// systemstack 在系统栈上运行 fn.
 // If systemstack is called from the per-OS-thread (g0) stack, or
 // if systemstack is called from the signal handling (gsignal) stack,
 // systemstack calls fn directly and returns.

@@ -609,8 +609,8 @@ type schedt struct {
 
 	profilehz int32 // cpu profiling rate
 
-	procresizetime int64 // nanotime() of last change to gomaxprocs
-	totaltime      int64 // ∫gomaxprocs dt up to procresizetime
+	procresizetime int64 // 上一次修改 gomaxprocs 的时间 nanotime()
+	totaltime      int64 // ∫gomaxprocs dt 在 procresizetime 的积分（总和）
 }
 
 // Values for the flags field of a sigTabT.
@@ -823,7 +823,7 @@ func (w waitReason) String() string {
 var (
 	allglen    uintptr
 	allm       *m
-	allp       []*p  // 所有 P 的存储位置，len(allp) == gomaxprocs; 在安全时可变，否则是不可变的
+	allp       []*p  // 所有 P 的存储位置，P 的个数是可以动态调整的
 	allpLock   mutex // Protects P-less reads of allp and all writes
 	gomaxprocs int32
 	ncpu       int32

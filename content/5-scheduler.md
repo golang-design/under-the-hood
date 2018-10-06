@@ -2,7 +2,9 @@
 
 ## 初始化
 
-### 调度器初始化
+我们已经在 [2 初始化概览](2-init.md) 中粗略看过了 `schedinit` 函数，现在我们来仔细看看里面真正关于调度器的初始化步骤。
+
+### M 初始化
 
 TODO:
 
@@ -49,6 +51,24 @@ func mcommoninit(mp *m) {
 	}
 }
 ```
+
+### P 初始化
+
+我们来看 `runtime.procresize` 函数。
+
+TODO:
+
+### G 初始化
+
+运行完 `runtime.procresize` 之后，我们已经在 [1 引导](1-boot.md) 和 [3 主 goroutine 生命周期](3-main.md) 中已经看到，
+主 goroutine 会以被调度器调度的方式进行运行，这将有 `runtime.newproc` 来完成主 goroutine 的初始化工作。
+我们接下来就来看看 `runtime.newproc` 的过程。
+
+TODO:
+
+## 执行调度
+
+TODO:
 
 ## 系统监控
 

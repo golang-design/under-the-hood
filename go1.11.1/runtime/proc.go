@@ -3325,15 +3325,18 @@ func malg(stacksize int32) *g {
 
 // 创建一个 G 运行函数 fn，参数大小为 biz 字节
 // 将其放至 G 队列等待运行
-// The compiler turns a go statement into a call to this.
-// Cannot split the stack because it assumes that the arguments
-// are available sequentially after &fn; they would not be
-// copied if a stack split occurred.
+// 编译器会将 go 语句转化为该调用。
+// 这时不能将栈进行拆分，因为它假设了参数在 &fn 之后顺序有效；如果 stack 进行了拆分
+// 则他们不无法被拷贝
 //go:nosplit
 func newproc(siz int32, fn *funcval) {
+	// 获取第一参数地址
 	argp := add(unsafe.Pointer(&fn), sys.PtrSize)
 	gp := getg()
+	// 获取调用方 PC/IP 寄存器值
 	pc := getcallerpc()
+
+	// 用 g0 栈创建 goroutine 对象
 	systemstack(func() {
 		newproc1(fn, (*uint8)(argp), siz, gp, pc)
 	})
@@ -3994,26 +3997,28 @@ func setcpuprofilerate(hz int32) {
 }
 
 // 修改 P 的数量，此时所有工作均被停止 STW，sched 被锁定
-// gcworkbufs are not being modified by either the GC or
-// the write barrier code.
-// Returns list of Ps with local work, they need to be scheduled by the caller.
+// gcworkbufs 既不会被 GC 修改，也不会被 write barrier 修改
+// 返回带有 local work 的 P 列表，他们需要被调用方调度
 func procresize(nprocs int32) *p {
+	// 获取先前的 P 个数
 	old := gomaxprocs
+	// 边界检查
 	if old < 0 || nprocs <= 0 {
 		throw("procresize: invalid arg")
 	}
+	// trace 相关
 	if trace.enabled {
 		traceGomaxprocs(nprocs)
 	}
 
-	// update statistics
+	// 更新统计信息，记录此次修改 gomaxprocs 的时间
 	now := nanotime()
 	if sched.procresizetime != 0 {
 		sched.totaltime += int64(old) * (now - sched.procresizetime)
 	}
 	sched.procresizetime = now
 
-	// Grow allp if necessary.
+	// 必要时增加 allp
 	if nprocs > int32(len(allp)) {
 		// Synchronize with retake, which could be running
 		// concurrently since it doesn't run on a P.
@@ -4030,9 +4035,11 @@ func procresize(nprocs int32) *p {
 		unlock(&allpLock)
 	}
 
-	// initialize new P's
+	// 初始化新的 P
 	for i := int32(0); i < nprocs; i++ {
 		pp := allp[i]
+
+		// 申请新的 P 对象
 		if pp == nil {
 			pp = new(p)
 			pp.id = i
@@ -4042,15 +4049,21 @@ func procresize(nprocs int32) *p {
 				pp.deferpool[i] = pp.deferpoolbuf[i][:0]
 			}
 			pp.wbBuf.reset()
+
+			// 保存至 allp
 			atomicstorep(unsafe.Pointer(&allp[i]), unsafe.Pointer(pp))
 		}
+
+		// 为 P 分配 cache 对象
 		if pp.mcache == nil {
 			if old == 0 && i == 0 {
 				if getg().m.mcache == nil {
 					throw("missing mcache?")
 				}
-				pp.mcache = getg().m.mcache // bootstrap
+				// bootstrap
+				pp.mcache = getg().m.mcache
 			} else {
+				// 创建 cache
 				pp.mcache = allocmcache()
 			}
 		}
@@ -4064,7 +4077,7 @@ func procresize(nprocs int32) *p {
 		}
 	}
 
-	// free unused P's
+	// 释放未使用的 P
 	for i := nprocs; i < old; i++ {
 		p := allp[i]
 		if trace.enabled && p == getg().m.p.ptr() {
@@ -4073,12 +4086,12 @@ func procresize(nprocs int32) *p {
 			traceGoSched()
 			traceProcStop(p)
 		}
-		// move all runnable goroutines to the global queue
+		// 将所有 runnable goroutine 移动至全局队列
 		for p.runqhead != p.runqtail {
-			// pop from tail of local queue
+			// 从本地队列中 pop
 			p.runqtail--
 			gp := p.runq[p.runqtail%uint32(len(p.runq))].ptr()
-			// push onto head of global queue
+			// push 到全局队列中
 			globrunqputhead(gp)
 		}
 		if p.runnext != 0 {
@@ -4112,8 +4125,11 @@ func procresize(nprocs int32) *p {
 			}
 			p.deferpool[i] = p.deferpoolbuf[i][:0]
 		}
+		// 释放当前 P 绑定的 cache
 		freemcache(p.mcache)
 		p.mcache = nil
+
+		// 将当前 P 的 G 复链转移到全局
 		gfpurge(p)
 		traceProcFree(p)
 		if raceenabled {
@@ -4122,10 +4138,10 @@ func procresize(nprocs int32) *p {
 		}
 		p.gcAssistTime = 0
 		p.status = _Pdead
-		// can't free P itself because it can be referenced by an M in syscall
+		// 这里不能释放 P，因为它可能被一个正在系统调用中的 M 引用
 	}
 
-	// Trim allp.
+	// 修剪 allp, nprocs 个数之外的所有 P
 	if int32(len(allp)) != nprocs {
 		lock(&allpLock)
 		allp = allp[:nprocs]
@@ -4133,16 +4149,20 @@ func procresize(nprocs int32) *p {
 	}
 
 	_g_ := getg()
+	// 如果当前正在使用的 P 应该被释放，则更换为 allp[0]
+	// 否则是初始化阶段，没有 P 绑定当前 P allp[0]
 	if _g_.m.p != 0 && _g_.m.p.ptr().id < nprocs {
-		// continue to use the current P
+		// 继续使用当前 P
 		_g_.m.p.ptr().status = _Prunning
 	} else {
-		// release the current P and acquire allp[0]
+		// 释放当前 P 因为已失效
 		if _g_.m.p != 0 {
 			_g_.m.p.ptr().m = 0
 		}
 		_g_.m.p = 0
 		_g_.m.mcache = nil
+
+		// 更换到 allp[0]
 		p := allp[0]
 		p.m = 0
 		p.status = _Pidle
@@ -4151,24 +4171,31 @@ func procresize(nprocs int32) *p {
 			traceGoStart()
 		}
 	}
+
+	// 将没有本地任务的 P 放到空闲链表中
 	var runnablePs *p
 	for i := nprocs - 1; i >= 0; i-- {
 		p := allp[i]
+
+		// 确保不是当前正在使用的 P
 		if _g_.m.p.ptr() == p {
 			continue
 		}
 		p.status = _Pidle
 		if runqempty(p) {
+			// 放入空闲链表
 			pidleput(p)
 		} else {
+			// 如果有本地任务，则构建链表
 			p.m.set(mget())
 			p.link.set(runnablePs)
 			runnablePs = p
 		}
 	}
 	stealOrder.reset(uint32(nprocs))
-	var int32p *int32 = &gomaxprocs // make compiler check that gomaxprocs is an int32
+	var int32p *int32 = &gomaxprocs // 让编译器检查 gomaxprocs 是 int32 类型
 	atomic.Store((*uint32)(unsafe.Pointer(int32p)), uint32(nprocs))
+	// 返回所有包含本地任务的 P 链表
 	return runnablePs
 }
 
