@@ -41,15 +41,19 @@
 2. [初始化概览](content/2-init.md)
 3. [主 goroutine 生命周期](content/3-main.md)
 4. [内存分配器](content/4-mem.md)
-5. [调度器](content/5-scheduler.md)
+5. 调度器
+    - [基本知识](content/5-scheduler/basic.md)
+    - [初始化](content/5-scheduler/init.md)
+    - [调度执行](content/5-scheduler/exec.md)
+    - [系统监控](content/5-scheduler/sysmon.md)
 6. [垃圾回收器](content/6-gc.md)
 7. 语言特性
     - [`go`](content/7-lang/go.md)
-    - [`chan`](content/7-lang/chan.md)
     - [`defer`](content/7-lang/defer.md)
-    - [`select`](content/7-lang/select.md)
     - [`panic`](content/7-lang/panic.md)
     - [`map`](content/7-lang/map.md)
+    - [`select`](content/7-lang/select.md)
+    - [`chan`](content/7-lang/chan.md)
 8. 运行时杂项
     - [`runtime.Finalizer`](content/8-runtime/finalizer.md)
     - [`runtime.GOMAXPROCS`](content/8-runtime/gomaxprocs.md)
@@ -63,9 +67,8 @@
     - [`sync.WaitGroup`](content/11-pkg/sync/waitgroup.md)
     - [`sync.Mutex`](content/11-pkg/sync/mutex.md)
     - [`sync.Cond`](content/11-pkg/sync/cond.md)
-    - `atomic`
+    - [`atomic`](content/11-pkg/atomic/atomic.md)
     - `net`
-    - ...
 12. [WebAssembly](content/12-wasm.md)
 13. 编译前端
 14. 编译后端
