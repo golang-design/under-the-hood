@@ -10,59 +10,44 @@ import (
 	"unsafe"
 )
 
-// defined constants
+// 定义的敞亮
 const (
-	// G status
+	// G 的状态
 	//
-	// Beyond indicating the general state of a G, the G status
-	// acts like a lock on the goroutine's stack (and hence its
-	// ability to execute user code).
+	// 除了指示 G 的一般状态之外，G 的状态就类似于 goroutine 的堆栈的一个锁（即它执行用户代码的能力）。
+	// 如果你在给此列表增加内容，还需要添加到 mgcmark.go 中的 “垃圾收集期间的正常” 状态列表中。
 	//
-	// If you add to this list, add to the list
-	// of "okay during garbage collection" status
-	// in mgcmark.go too.
 
-	// _Gidle means this goroutine was just allocated and has not
-	// yet been initialized.
+	// _Gidle 表示 goroutine 刚刚完成分配且还未被初始化
 	_Gidle = iota // 0
 
-	// _Grunnable means this goroutine is on a run queue. It is
-	// not currently executing user code. The stack is not owned.
+	// _Grunnable 表示 goroutine 已经在运行队列中。当前还未运行用户代码。还未拥有运行栈。
 	_Grunnable // 1
 
-	// _Grunning means this goroutine may execute user code. The
-	// stack is owned by this goroutine. It is not on a run queue.
-	// It is assigned an M and a P.
+	// _Grunning 表示 goroutine 可能正在运行用户代码。运行栈被该 goroutine 拥有。
+	// 该 goroutine 不在运行队列中，且被分配了一个 M 和 一个 P。
 	_Grunning // 2
 
-	// _Gsyscall means this goroutine is executing a system call.
-	// It is not executing user code. The stack is owned by this
-	// goroutine. It is not on a run queue. It is assigned an M.
+	// _Gsyscall 表示当前 goroutine 正在执行一个系统调用，没有执行用户代码。
+	// 该 goroutine 拥有一个栈且不在运行队列中，并分配有一个 M
 	_Gsyscall // 3
 
-	// _Gwaiting means this goroutine is blocked in the runtime.
-	// It is not executing user code. It is not on a run queue,
-	// but should be recorded somewhere (e.g., a channel wait
-	// queue) so it can be ready()d when necessary. The stack is
-	// not owned *except* that a channel operation may read or
-	// write parts of the stack under the appropriate channel
-	// lock. Otherwise, it is not safe to access the stack after a
-	// goroutine enters _Gwaiting (e.g., it may get moved).
+	// _Gwaiting 表示当前 goroutine 在运行时中被阻塞。它没有执行用户代码。它不在运行队列中，
+	// 但应该记录在某处（比如一个 channel 等待队列）因此可以在需要时 ready()。
+	// 除了 channel 操作可以在适当的 channel 锁定下读取或写入堆栈的部分之外，它不拥有堆栈。
+	// 否则，在 goroutine 进入 _Gwaiting 后访问堆栈是不安全的（例如，它可能会被移动）。
 	_Gwaiting // 4
 
 	// _Gmoribund_unused is currently unused, but hardcoded in gdb
 	// scripts.
 	_Gmoribund_unused // 5
 
-	// _Gdead means this goroutine is currently unused. It may be
-	// just exited, on a free list, or just being initialized. It
-	// is not executing user code. It may or may not have a stack
-	// allocated. The G and its stack (if any) are owned by the M
-	// that is exiting the G or that obtained the G from the free
-	// list.
+	// _Gdead 表示当前 goroutine 当前未被使用。它可能刚被执行、
+	// 在释放列表中、或刚刚被初始化。它没有执行用户代码。它可能也可能没有分配的栈。
+	// G 及其栈（如果有）由正在退出 G 或从释放列表获得 G 的 M 拥有
 	_Gdead // 6
 
-	// _Genqueue_unused is currently unused.
+	// _Genqueue_unused 表示 G 当前未被使用
 	_Genqueue_unused // 7
 
 	// _Gcopystack means this goroutine's stack is being moved. It
@@ -89,18 +74,16 @@ const (
 )
 
 const (
-	// P status
+	// P 的状态
 	_Pidle    = iota
-	_Prunning // Only this P is allowed to change from _Prunning.
+	_Prunning // 只允许此 P 从 _Prunning 更改
 	_Psyscall
 	_Pgcstop
 	_Pdead
 )
 
-// Mutual exclusion locks.  In the uncontended case,
-// as fast as spin locks (just a few user-level instructions),
-// but on the contention path they sleep in the kernel.
-// A zeroed Mutex is unlocked (no need to initialize each lock).
+// 互斥锁。在无竞争的情况下，与自旋锁 spin lock（只是一些用户级指令）一样快，
+// 但在争用路径 contention path 中，它们在内核中休眠。零值互斥锁为未加锁状态（无需初始化每个锁）。
 type mutex struct {
 	// Futex-based impl treats it as uint32 key,
 	// while sema-based impl as M* waitm.
@@ -311,40 +294,44 @@ type sudog struct {
 
 type libcall struct {
 	fn   uintptr
-	n    uintptr // number of parameters
-	args uintptr // parameters
-	r1   uintptr // return values
+	n    uintptr // 参数的个数
+	args uintptr // 参数
+	r1   uintptr // 返回值
 	r2   uintptr
-	err  uintptr // error number
+	err  uintptr // 错误号
 }
 
-// describes how to handle callback
+// 描述了如何处理回调
 type wincallbackcontext struct {
-	gobody       unsafe.Pointer // go function to call
-	argsize      uintptr        // callback arguments size (in bytes)
+	gobody       unsafe.Pointer // 要调度的 go 函数
+	argsize      uintptr        // 回调参数大小（字节）
 	restorestack uintptr        // adjust stack on return by (in bytes) (386 only)
 	cleanstack   bool
 }
 
-// Stack describes a Go execution stack.
-// The bounds of the stack are exactly [lo, hi),
-// with no implicit data structures on either side.
+// Stack 描述了 Go 的执行栈，栈的区间为 [lo, hi)，在栈两边没有任何隐式数据结构
+// 因此 Go 的执行栈由运行时管理，本质上分配在堆中，比 ulimit -s 大
 type stack struct {
 	lo uintptr
 	hi uintptr
 }
 
 type g struct {
-	// Stack parameters.
-	// stack describes the actual stack memory: [stack.lo, stack.hi).
+	// Stack 参数
+	// stack 描述了实际的栈内存：[stack.lo, stack.hi)
 	// stackguard0 is the stack pointer compared in the Go stack growth prologue.
-	// It is stack.lo+StackGuard normally, but can be StackPreempt to trigger a preemption.
 	// stackguard1 is the stack pointer compared in the C stack growth prologue.
 	// It is stack.lo+StackGuard on g0 and gsignal stacks.
 	// It is ~0 on other goroutine stacks, to trigger a call to morestackc (and crash).
-	stack       stack   // offset known to runtime/cgo
-	stackguard0 uintptr // offset known to liblink
-	stackguard1 uintptr // offset known to liblink
+	stack stack // 偏移量与 runtime/cgo 一致
+	// stackguard0 是对比 Go 栈增长的 prologue 的栈指针
+	// 如果 sp 寄存器比 stackguard0 小（由于栈往低地址方向增长），会触发栈拷贝和调度
+	// 通常情况下：stackguard0 = stack.lo + StackGuard，但被抢占时会变为 StackPreempt
+	stackguard0 uintptr // 偏移量与 liblink 一致
+	// stackguard1 是对比 C 栈增长的 prologue 的栈指针
+	// 当位于 g0 和 gsignal 栈上时，值为 stack.lo + StackGuard
+	// 在其他栈上值为 ~0 用于触发 morestackc (并 crash) 调用
+	stackguard1 uintptr // 偏移量与 liblink 一致
 
 	_panic         *_panic // innermost panic - offset known to liblink
 	_defer         *_defer // innermost defer
@@ -377,17 +364,17 @@ type g struct {
 	sigcode0       uintptr
 	sigcode1       uintptr
 	sigpc          uintptr
-	gopc           uintptr         // pc of go statement that created this goroutine
+	gopc           uintptr         // 当前创建 goroutine go 语句的 pc 寄存器
 	ancestors      *[]ancestorInfo // ancestor information goroutine(s) that created this goroutine (only used if debug.tracebackancestors)
-	startpc        uintptr         // pc of goroutine function
+	startpc        uintptr         // goroutine 函数的 pc 寄存器
 	racectx        uintptr
 	waiting        *sudog         // sudog structures this g is waiting on (that have a valid elem ptr); in lock order
 	cgoCtxt        []uintptr      // cgo traceback context
 	labels         unsafe.Pointer // profiler labels
-	timer          *timer         // cached timer for time.Sleep
+	timer          *timer         // 为 time.Sleep 缓存的计时器
 	selectDone     uint32         // are we participating in a select and did someone win the race?
 
-	// Per-G GC state
+	// Per-G GC 状态
 
 	// gcAssistBytes is this G's GC assist credit in terms of
 	// bytes allocated. If this is positive, then the G has credit
@@ -400,18 +387,18 @@ type g struct {
 }
 
 type m struct {
-	g0      *g     // goroutine with scheduling stack
-	morebuf gobuf  // gobuf arg to morestack
+	g0      *g     // 用于执行调度指令的 goroutine
+	morebuf gobuf  // morestack 的 gobuf 参数
 	divmod  uint32 // div/mod denominator for arm - known to liblink
 
 	// Fields not known to debuggers.
 	procid        uint64       // for debuggers, but offset not hard-coded
-	gsignal       *g           // signal-handling g
+	gsignal       *g           // 处理 signal 的 g
 	goSigStack    gsignalStack // Go-allocated signal handling stack
 	sigmask       sigset       // storage for saved signal mask
 	tls           [6]uintptr   // thread-local storage (for x86 extern register)
 	mstartfn      func()
-	curg          *g       // current running goroutine
+	curg          *g       // 当前运行的用户 goroutine
 	caughtsig     guintptr // goroutine running during fatal signal
 	p             puintptr // attached p for executing go code (nil if not executing go code)
 	nextp         puintptr
@@ -445,7 +432,7 @@ type m struct {
 	createstack   [32]uintptr    // stack that created this thread.
 	lockedExt     uint32         // tracking for external LockOSThread
 	lockedInt     uint32         // tracking for internal lockOSThread
-	nextwaitm     muintptr       // next m waiting for lock
+	nextwaitm     muintptr       // 正在等待锁的下一个 m
 	waitunlockf   unsafe.Pointer // todo go func(*g, unsafe.pointer) bool
 	waitlock      unsafe.Pointer
 	waittraceev   byte
@@ -461,7 +448,7 @@ type m struct {
 	libcallpc uintptr // for cpu profiler
 	libcallsp uintptr
 	libcallg  guintptr
-	syscall   libcall // stores syscall parameters on windows
+	syscall   libcall // 存储 windows 上系统调用的参数
 
 	vdsoSP uintptr // SP for traceback while in VDSO call (0 if not in call)
 	vdsoPC uintptr // PC for traceback while in VDSO call
