@@ -39,12 +39,10 @@ const testSmallBuf = false
 // except that SSBs are usually used for maintaining remembered sets,
 // while this is used for marking.
 type wbBuf struct {
-	// next points to the next slot in buf. It must not be a
-	// pointer type because it can point past the end of buf and
-	// must be updated without write barriers.
+	// next 指向 buf 中的下一个 slot. 它不能是一个指针类型，因为它可以指向 buf 的末端，
+	// 并且必须在没有 write barrier 的情况下进行更新。
 	//
-	// This is a pointer rather than an index to optimize the
-	// write barrier assembly.
+	// 这是一个指针而非索引是用于优化汇编的 write barrier
 	next uintptr
 
 	// end points to just past the end of buf. It must not be a
@@ -76,6 +74,7 @@ const (
 )
 
 // reset empties b by resetting its next and end pointers.
+// 通过重置 b 的 next 与 end 指针来清空 p
 func (b *wbBuf) reset() {
 	start := uintptr(unsafe.Pointer(&b.buf[0]))
 	b.next = start

@@ -228,15 +228,15 @@ func libpreinit() {
 	initsig(true)
 }
 
-// Called to initialize a new m (including the bootstrap m).
-// Called on the parent thread (main thread in case of bootstrap), can allocate memory.
+// 调用此方法来初始化一个新的 m (包含引导 m)
+// 从一个父线程上进行调用（引导时为主线程），可以分配内存
 func mpreinit(mp *m) {
-	mp.gsignal = malg(32 * 1024) // OS X wants >= 8K
-	mp.gsignal.m = mp
+	mp.gsignal = malg(32 * 1024) // OS X 需要 >= 8K，此处创建处理 singnal 的 g
+	mp.gsignal.m = mp            // 指定 gsignal 拥有的 m
 }
 
-// Called to initialize a new m (including the bootstrap m).
-// Called on the new thread, cannot allocate memory.
+// 初始化一个新的 m （包括引导阶段的 m）
+// 在一个新的线程上调用，不分配内存
 func minit() {
 	// The alternate signal stack is buggy on arm and arm64.
 	// The signal handler handles it directly.

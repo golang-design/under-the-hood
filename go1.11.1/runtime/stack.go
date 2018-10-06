@@ -91,8 +91,8 @@ const (
 	// space at zero.
 	_StackBig = 4096
 
-	// The stack guard is a pointer this many bytes above the
-	// bottom of the stack.
+	// stack guard 是一个指针表示了从栈底开始的多少个字节数
+	// 具体的值视操作系统而定
 	_StackGuard = 880*sys.StackGuardMultiplier + _StackSystem
 
 	// After a stack split check the SP is allowed to be this

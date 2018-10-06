@@ -33,22 +33,18 @@ func getg() *g
 // closure will be invalidated while it is still executing.
 func mcall(fn func(*g))
 
-// systemstack 在系统栈上运行 fn.
-// If systemstack is called from the per-OS-thread (g0) stack, or
-// if systemstack is called from the signal handling (gsignal) stack,
-// systemstack calls fn directly and returns.
-// Otherwise, systemstack is being called from the limited stack
-// of an ordinary goroutine. In this case, systemstack switches
-// to the per-OS-thread stack, calls fn, and switches back.
-// It is common to use a func literal as the argument, in order
-// to share inputs and outputs with the code around the call
-// to system stack:
+// systemstack 在系统栈上运行 fn. 如果：
+// - systemstack 从 per-OS 线程 (g0) 栈上调用
+// - systemstack 从信号处理 (gsignal) 栈上调用，且 systemstack 直接调用 fn 并返回
+// 否则 systemstack 会在一个普通的 goroutine 的受限栈上进行调用。
+// 这时，systemstack 会切换到 per-OS-thread 栈上，然后调用 fn ，然后再切换回来。
+// 通常使用 func 字面量作为参数，以便与调用系统堆栈的代码共享输入和输出：
 //
-//	... set up y ...
+//	... 构建 y ...
 //	systemstack(func() {
 //		x = bigcall(y)
 //	})
-//	... use x ...
+//	... 使用 x ...
 //
 //go:noescape
 func systemstack(fn func())
@@ -197,29 +193,24 @@ func cgocallback_gofunc(fv uintptr, frame uintptr, framesize, ctxt uintptr)
 // data dependency ordering.
 func publicationBarrier()
 
-// getcallerpc returns the program counter (PC) of its caller's caller.
-// getcallersp returns the stack pointer (SP) of its caller's caller.
-// The implementation may be a compiler intrinsic; there is not
-// necessarily code implementing this on every platform.
+// getcallerpc 返回它调用方的调用方程序计数器 PC program conter
+// getcallersp 返回它调用方的调用方的栈指针 SP stack pointer
+// 实现由编译器内建，在任何平台上都没有实现它的代码
 //
-// For example:
+// 例如:
 //
 //	func f(arg1, arg2, arg3 int) {
 //		pc := getcallerpc()
 //		sp := getcallersp()
 //	}
 //
-// These two lines find the PC and SP immediately following
-// the call to f (where f will return).
+// 这两行会寻找调用 f 的 PC 和 SP
 //
-// The call to getcallerpc and getcallersp must be done in the
-// frame being asked about.
+// 调用 getcallerpc 和 getcallersp 必须被询问的帧中完成
 //
-// The result of getcallersp is correct at the time of the return,
-// but it may be invalidated by any subsequent call to a function
-// that might relocate the stack in order to grow or shrink it.
-// A general rule is that the result of getcallersp should be used
-// immediately and can only be passed to nosplit functions.
+// getcallersp 的结果在返回时是正确的，但是它可能会被任何随后调用的函数无效，
+// 因为它可能会重新定位堆栈，以使其增长或缩小。一般规则是，getcallersp 的结果
+// 应该立即使用，并且只能传递给 nosplit 函数。
 
 //go:noescape
 func getcallerpc() uintptr

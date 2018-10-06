@@ -425,7 +425,7 @@ type m struct {
 	cgoCallersUse uint32      // if non-zero, cgoCallers in use temporarily
 	cgoCallers    *cgoCallers // cgo traceback if crashing in cgo call
 	park          note
-	alllink       *m // on allm
+	alllink       *m // 在 allm 上
 	schedlink     muintptr
 	mcache        *mcache
 	lockedg       guintptr
@@ -469,7 +469,7 @@ type p struct {
 	mcache      *mcache
 	racectx     uintptr
 
-	deferpool    [5][]*_defer // pool of available defer structs of different sizes (see panic.go)
+	deferpool    [5][]*_defer // 不同大小的可用的 defer 结构池 (见 panic.go)
 	deferpoolbuf [5][32]*_defer
 
 	// Cache of goroutine ids, amortizes accesses to runtime·sched.goidgen.
@@ -491,7 +491,7 @@ type p struct {
 	// goroutines to the end of the run queue.
 	runnext guintptr
 
-	// Available G's (status == Gdead)
+	// 有效的 G (状态 == Gdead)
 	gfree    *g
 	gfreecnt int32
 
@@ -548,8 +548,8 @@ type schedt struct {
 	midle        muintptr // idle m's waiting for work
 	nmidle       int32    // number of idle m's waiting for work
 	nmidlelocked int32    // number of locked m's waiting for work
-	mnext        int64    // number of m's that have been created and next M ID
-	maxmcount    int32    // maximum number of m's allowed (or die)
+	mnext        int64    // 已经创建的 m 的个数，同时还表示下一个 m 的 id
+	maxmcount    int32    // 允许（或死亡）的 m 的最大值
 	nmsys        int32    // number of system m's not counted for deadlock
 	nmfreed      int64    // cumulative number of freed m's
 
@@ -564,7 +564,7 @@ type schedt struct {
 	runqtail guintptr
 	runqsize int32
 
-	// dead G 的全局缓存.
+	// 有效 dead G 的全局缓存.
 	gflock       mutex
 	gfreeStack   *g
 	gfreeNoStack *g

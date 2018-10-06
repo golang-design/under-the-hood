@@ -177,3 +177,6 @@ go:notinheap
 
 最后一点是 `go:notinheap` 真正的好处。运行时会使用它作为低级别内部结构使用来在内存分配器和调度器中避免 非法或简单低效的 memory barrier。这种机制相当安全且没有牺牲运行时代码的可读性。
 
+## 许可
+
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

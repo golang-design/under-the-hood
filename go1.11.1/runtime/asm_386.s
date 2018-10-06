@@ -208,6 +208,10 @@ needtls:
 	JEQ	ok
 	MOVL	AX, 0	// abort
 ok:
+	// 程序刚刚启动，此时位于主线程
+	// 当前栈与资源保存在 g0
+	// 该线程保存在 m0
+	// tls: thread local storage
 	// set up m and g "registers"
 	get_tls(BX)
 	LEAL	runtime·g0(SB), DX
