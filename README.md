@@ -40,12 +40,16 @@
 1. [引导](content/1-boot.md)
 2. [初始化概览](content/2-init.md)
 3. [主 goroutine 生命周期](content/3-main.md)
-4. [内存分配器](content/4-mem.md)
+4. 内存分配器
+    - [基本知识](content/4-mem/basic.md)
+    - [TCMalloc](content/4-mem/tcmalloc.md)
+    - [初始化](content/4-mem/init.md)
+    - [分配过程](content/4-mem/alloc.md)
 5. 调度器
-    - [基本知识](content/5-scheduler/basic.md)
-    - [初始化](content/5-scheduler/init.md)
-    - [调度执行](content/5-scheduler/exec.md)
-    - [系统监控](content/5-scheduler/sysmon.md)
+    - [基本知识](content/5-sched/basic.md)
+    - [初始化](content/5-sched/init.md)
+    - [调度执行](content/5-sched/exec.md)
+    - [系统监控](content/5-sched/sysmon.md)
 6. [垃圾回收器](content/6-gc.md)
 7. 语言特性
     - [`go`](content/7-lang/go.md)

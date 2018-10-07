@@ -2620,6 +2620,8 @@ top:
 
 	var gp *g
 	var inheritTime bool
+
+	// trace 相关
 	if trace.enabled || trace.shutdown {
 		gp = traceReader()
 		if gp != nil {
