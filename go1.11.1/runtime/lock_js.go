@@ -10,9 +10,7 @@ import (
 	_ "unsafe"
 )
 
-// js/wasm has no support for threads yet. There is no preemption.
-// Waiting for a mutex is implemented by allowing other goroutines
-// to run until the mutex gets unlocked.
+// js/wasm 还不支持线程。因此不存在抢占一说。目前等待 mutex 是通过在 mutex 解锁前运行其他 goroutine 实现的。
 
 const (
 	mutex_unlocked = 0
@@ -41,7 +39,7 @@ func unlock(l *mutex) {
 	l.key = mutex_unlocked
 }
 
-// One-time notifications.
+// 一次性通知
 
 type noteWithTimeout struct {
 	gp       *g

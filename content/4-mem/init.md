@@ -114,7 +114,7 @@ func mallocinit() {
 		//
 		// 从 0x00c0 开始表示有效内存地址从 0x00c0, 0x00c1, ...
 		// 在小端（little-endian）表示中，即为 c0 00, c1 00, ... 这些都是无效的 UTF-8 序列，
-		// 并且他们尽可能的里 ff （像一个通用的 byte）远。如果失败，我们尝试 0xXXc0 地址。
+		// 并且他们尽可能的离 ff （像一个通用的 byte）远。如果失败，我们尝试 0xXXc0 地址。
 		// 早些时候尝试使用 0x11f8 会在 OS X 上当执行线程分配时导致内存不足错误。
 		// 0c00c0 会与 AddressSanitizer 产生冲突，后者保留从起开始到 0x0100 的所有内存。
 		// 这些选择降低了一个保守型垃圾回收器不回收内存的概率，因为某些非指针内存块具有与
@@ -134,9 +134,7 @@ func mallocinit() {
 			case GOARCH == "arm64":
 				p = uintptr(i)<<40 | uintptrMask&(0x0040<<32)
 			case raceenabled:
-				// The TSAN runtime requires the heap
-				// to be in the range [0x00c000000000,
-				// 0x00e000000000).
+				// TSAN 运行时需要堆地址在 [0x00c000000000, 0x00e000000000) 范围内
 				p = uintptr(i)<<32 | uintptrMask&(0x00c0<<32)
 				if p >= uintptrMask&0x00e000000000 {
 					continue

@@ -102,15 +102,17 @@ const (
 	noCheck = 1<<(8*sys.PtrSize) - 1
 )
 
-// A header for a Go map.
+// Go map 的头部
 type hmap struct {
 	// Note: the format of the hmap is also encoded in cmd/compile/internal/gc/reflect.go.
 	// Make sure this stays in sync with the compiler's definition.
+	// hmap 的格式在 cmd/compile/internal/gc/reflect.go 中编码
+	// 请确保此格式与编译器的定义同步
 	count     int // # live cells == size of map.  Must be first (used by len() builtin)
 	flags     uint8
 	B         uint8  // log_2 of # of buckets (can hold up to loadFactor * 2^B items)
 	noverflow uint16 // approximate number of overflow buckets; see incrnoverflow for details
-	hash0     uint32 // hash seed
+	hash0     uint32 // hash 种子
 
 	buckets    unsafe.Pointer // array of 2^B Buckets. may be nil if count==0.
 	oldbuckets unsafe.Pointer // previous bucket array of half the size, non-nil only when growing

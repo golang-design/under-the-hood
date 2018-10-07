@@ -2,16 +2,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Garbage collector: type and heap bitmaps.
+// 垃圾回收: 类型与堆 bitmap
 //
-// Stack, data, and bss bitmaps
+// 栈、数据和 bss bitmap
 //
-// Stack frames and global variables in the data and bss sections are described
-// by 1-bit bitmaps in which 0 means uninteresting and 1 means live pointer
-// to be visited during GC. The bits in each byte are consumed starting with
-// the low bit: 1<<0, 1<<1, and so on.
+// 数据和 bss 部分中的栈帧和全局变量是由 1 位 bitmap 描述的，其中 0 表示不感兴趣(uninteresting)，
+// 1 表示 GC 期间要访问的活指针 (live pointer)。每个字节中的比特都是从低位开始的：1<<0、1<<1，等等。
 //
-// Heap bitmap
+// 堆 bitmap
 //
 // The heap bitmap comprises 2 bits for each pointer-sized word in the heap,
 // stored in the heapArena metadata backing each heap arena.
@@ -49,7 +47,7 @@
 // checking either the noscan bit in the span or by consulting its
 // type's information.
 //
-// Checkmarks
+// 检查标记 (checkmark)
 //
 // In a concurrent garbage collector, one worries about failing to mark
 // a live object due to mutations without write barriers or bugs in the

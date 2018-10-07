@@ -90,16 +90,22 @@ func mapaccess2_fast64(t *maptype, h *hmap, key uint64) (unsafe.Pointer, bool) {
 }
 
 func mapassign_fast64(t *maptype, h *hmap, key uint64) unsafe.Pointer {
+	// 检查 map 是否空
 	if h == nil {
 		panic(plainError("assignment to entry in nil map"))
 	}
+	// race 检查相关
 	if raceenabled {
 		callerpc := getcallerpc()
 		racewritepc(unsafe.Pointer(h), callerpc, funcPC(mapassign_fast64))
 	}
+
+	// 并发读写检查
 	if h.flags&hashWriting != 0 {
 		throw("concurrent map writes")
 	}
+
+	// 计算 hash
 	hash := t.key.alg.hash(noescape(unsafe.Pointer(&key)), uintptr(h.hash0))
 
 	// Set hashWriting after calling alg.hash for consistency with mapassign.

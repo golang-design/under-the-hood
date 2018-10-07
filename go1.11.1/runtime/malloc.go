@@ -417,9 +417,7 @@ func mallocinit() {
 			case GOARCH == "arm64":
 				p = uintptr(i)<<40 | uintptrMask&(0x0040<<32)
 			case raceenabled:
-				// The TSAN runtime requires the heap
-				// to be in the range [0x00c000000000,
-				// 0x00e000000000).
+				// TSAN 运行时需要堆地址在 [0x00c000000000, 0x00e000000000) 范围内
 				p = uintptr(i)<<32 | uintptrMask&(0x00c0<<32)
 				if p >= uintptrMask&0x00e000000000 {
 					continue

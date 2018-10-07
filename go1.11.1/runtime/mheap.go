@@ -14,9 +14,8 @@ import (
 	"unsafe"
 )
 
-// minPhysPageSize is a lower-bound on the physical page size. The
-// true physical page size may be larger than this. In contrast,
-// sys.PhysPageSize is an upper-bound on the physical page size.
+// minPhysPageSize 是物理页大小的一个下界。真正的物理页大小可能比这个大。
+// 相比之下，sys.PhysPageSize 则是物理页大小的一个上界。
 const minPhysPageSize = 4096
 
 // 主分配堆
@@ -28,26 +27,21 @@ const minPhysPageSize = 4096
 //go:notinheap
 type mheap struct {
 	lock      mutex
-	free      [_MaxMHeapList]mSpanList // free lists of given length up to _MaxMHeapList
-	freelarge mTreap                   // free treap of length >= _MaxMHeapList
+	free      [_MaxMHeapList]mSpanList // 给定 _MaxMHeapList 长度的空闲列表
+	freelarge mTreap                   // 长度大于 _MaxMHeapList 的空闲树堆(treap)
 	busy      [_MaxMHeapList]mSpanList // busy lists of large spans of given length
 	busylarge mSpanList                // busy lists of large spans length >= _MaxMHeapList
 	sweepgen  uint32                   // sweep generation, see comment in mspan
 	sweepdone uint32                   // all spans are swept
 	sweepers  uint32                   // number of active sweepone calls
 
-	// allspans is a slice of all mspans ever created. Each mspan
-	// appears exactly once.
+	// allspans 是所有创建过的 mspans 的 slice。每个 mspan 只出现一次.
 	//
-	// The memory for allspans is manually managed and can be
-	// reallocated and move as the heap grows.
+	// allspans 的内存是手动管理的，且随着堆的增长被移动或被重新分配。
 	//
-	// In general, allspans is protected by mheap_.lock, which
-	// prevents concurrent access as well as freeing the backing
-	// store. Accesses during STW might not hold the lock, but
-	// must ensure that allocation cannot happen around the
-	// access (since that may free the backing store).
-	allspans []*mspan // all spans out there
+	// 一般情况下，allspans 由 mheap_.lock 保护，用以避免并发访问及释放 backing store.
+	// 在 STW 期间可能不会被锁住，但必须确保在其访问时不能发生分配（因为可能释放 backing store）
+	allspans []*mspan // 所有 spans 从这里分配出去
 
 	// sweepSpans contains two mspan stacks: one of swept in-use
 	// spans, and one of unswept in-use spans. These two trade
@@ -157,36 +151,28 @@ type mheap struct {
 
 var mheap_ mheap
 
-// A heapArena stores metadata for a heap arena. heapArenas are stored
-// outside of the Go heap and accessed via the mheap_.arenas index.
+// heapArena 保存了 heap arena 的 metadata. heapArena 存储在 Go 堆之外，且通过 mheap_.arenas 访问
 //
-// This gets allocated directly from the OS, so ideally it should be a
-// multiple of the system page size. For example, avoid adding small
-// fields.
+// 他们直接从 OS 进行分配，所以理论上他们应该是多个系统页的大小。例如，避免小字段
 //
 //go:notinheap
 type heapArena struct {
-	// bitmap stores the pointer/scalar bitmap for the words in
-	// this arena. See mbitmap.go for a description. Use the
-	// heapBits type to access this.
+	// bitmap 存储了这个 arena 中字的指针或标量的 bitmap。见 mbitmap.go 的描述
+	// 使用 heapBits 类型来进行访问。
 	bitmap [heapArenaBitmapBytes]byte
 
-	// spans maps from virtual address page ID within this arena to *mspan.
-	// For allocated spans, their pages map to the span itself.
-	// For free spans, only the lowest and highest pages map to the span itself.
-	// Internal pages map to an arbitrary span.
-	// For pages that have never been allocated, spans entries are nil.
+	// spans 将此 arena 中的虚拟地址页 ID 映射到 *mspan.
+	// 对于已分配的 span, 它们的页映射到 span 自己
+	// 对于空闲的 span，只有最低和最高的页会被映射到 span 自身，内部的页则会映射到任意的 span。
+	// 对于从未被分配过的页，span 入口为 nil
 	//
-	// Modifications are protected by mheap.lock. Reads can be
-	// performed without locking, but ONLY from indexes that are
-	// known to contain in-use or stack spans. This means there
-	// must not be a safe-point between establishing that an
-	// address is live and looking it up in the spans array.
+	// 修改由 mheap.lock 进行保护。读取可以在没有锁的情况下进行，
+	// 但仅限于那些已知包含正在使用的 span 或栈 span。
+	// 也就是说在确定地址是活跃的 和 在 span 数组中查找地址之间是不安全的。
 	spans [pagesPerArena]*mspan
 }
 
-// arenaHint is a hint for where to grow the heap arenas. See
-// mheap_.arenaHints.
+// arenaHint 是一个用于增长 heap arena 的 hint，见 mheap_.arenaHints
 //
 //go:notinheap
 type arenaHint struct {
