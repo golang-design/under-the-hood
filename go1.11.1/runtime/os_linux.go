@@ -305,10 +305,10 @@ func libpreinit() {
 	initsig(true)
 }
 
-// Called to initialize a new m (including the bootstrap m).
-// Called on the parent thread (main thread in case of bootstrap), can allocate memory.
+// 调用此方法来初始化一个新的 m (包含引导 m)
+// 从一个父线程上进行调用（引导时为主线程），可以分配内存
 func mpreinit(mp *m) {
-	mp.gsignal = malg(32 * 1024) // Linux wants >= 2K
+	mp.gsignal = malg(32 * 1024) // Linux 需要 >= 2K
 	mp.gsignal.m = mp
 }
 

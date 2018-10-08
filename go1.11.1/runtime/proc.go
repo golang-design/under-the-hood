@@ -659,16 +659,22 @@ func mcommoninit(mp *m) {
 
 	// 初始化 gsignal
 	mpreinit(mp)
+
+	// 初始化 gsignal 的运行栈
 	if mp.gsignal != nil {
 		mp.gsignal.stackguard1 = mp.gsignal.stack.lo + _StackGuard
 	}
 
 	// 添加到 allm 中，从而当它刚保存到寄存器或本地线程存储时候 GC 不会释放 g->m
+	// 每一次调用都会讲 allm 给 alllink，给完之后自身被 mp 替换，在下一次的时候由给 alllink
+	// 从而形成链表
 	mp.alllink = allm
 
 	// NumCgoCall() 会在没有使用 schedlock 时遍历 allm
 	// 等价于 allm = mp
 	atomicstorep(unsafe.Pointer(&allm), unsafe.Pointer(mp))
+
+	// m 的通用初始化完成，解锁调度器
 	unlock(&sched.lock)
 
 	// 分配内存来保存当 cgo 调用崩溃时候的回溯
@@ -1043,23 +1049,22 @@ func restartg(gp *g) {
 	}
 }
 
-// stopTheWorld stops all P's from executing goroutines, interrupting
-// all goroutines at GC safe points and records reason as the reason
-// for the stop. On return, only the current goroutine's P is running.
-// stopTheWorld must not be called from a system stack and the caller
-// must not hold worldsema. The caller must call startTheWorld when
-// other P's should resume execution.
+// stopTheWorld 从正在执行的 goroutine 中停止所有的 P，在 GC 安全点 safe point
+// 打断所有 goroutine 并记录打断的原因。作为结果，只有当前 goroutine 的 P 正在运行。
+// stopTheWorld 不能再系统栈上调用，调用方也不能持有 worldsema。调用放必须在其他 P
+// 应该恢复执行的时候调用 startTheWorld。
 //
-// stopTheWorld is safe for multiple goroutines to call at the
-// same time. Each will execute its own stop, and the stops will
-// be serialized.
+// stopTheWorld 在多个 goroutine 间同时调用时安全的。每个 goroutine 都会执行自己
+// 的 stop，所有的 stop 都会被有序的执行。
 //
-// This is also used by routines that do stack dumps. If the system is
-// in panic or being exited, this may not reliably stop all
-// goroutines.
+// 这个函数也会被 stack dump 的 routine 使用。如果系统处于 panic 或 exit 状态，
+// 这可能无法可靠地停止所有的 goroutine。
 func stopTheWorld(reason string) {
+	// 抢占 worldsema
 	semacquire(&worldsema)
+	// 在当前 g 的 m 上保存禁止抢占的原因
 	getg().m.preemptoff = reason
+	// 在系统栈上执行 stop the world
 	systemstack(stopTheWorldWithSema)
 }
 
@@ -1072,32 +1077,25 @@ func startTheWorld() {
 	getg().m.preemptoff = ""
 }
 
-// Holding worldsema grants an M the right to try to stop the world
-// and prevents gomaxprocs from changing concurrently.
+// 持有 worldsema 会授权 M stop the world 的权利，并阻止 gomaxprocs 的并发修改。
 var worldsema uint32 = 1
 
-// stopTheWorldWithSema is the core implementation of stopTheWorld.
-// The caller is responsible for acquiring worldsema and disabling
-// preemption first and then should stopTheWorldWithSema on the system
-// stack:
+// stopTheWorldWithSema 是 stopTheWorld 的核心实现。调用方负责抢占 worldsema
+// 并经用其可抢占的属性，然后再系统栈上调用 stopTheWorldWithSema：
 //
 //	semacquire(&worldsema, 0)
 //	m.preemptoff = "reason"
 //	systemstack(stopTheWorldWithSema)
 //
-// When finished, the caller must either call startTheWorld or undo
-// these three operations separately:
+// 当完成时，调用方必须调用 startTheWorld ，或者分别撤销刚才的三个操作：
 //
 //	m.preemptoff = ""
 //	systemstack(startTheWorldWithSema)
 //	semrelease(&worldsema)
 //
-// It is allowed to acquire worldsema once and then execute multiple
-// startTheWorldWithSema/stopTheWorldWithSema pairs.
-// Other P's are able to execute between successive calls to
-// startTheWorldWithSema and stopTheWorldWithSema.
-// Holding worldsema causes any other goroutines invoking
-// stopTheWorld to block.
+// 占有 worldsema 后可以多次执行 startTheWorldWithSema/stopTheWorldWithSema 对；
+// 其他的 P 可以在连续调用 startTheWorldWithSema 和 stopTheWorldWithSema 间进行执行。
+// 持有 worldsema 会导致其他 goroutine 调用的 stopTheWorld 阻塞。
 func stopTheWorldWithSema() {
 	_g_ := getg()
 
@@ -1384,7 +1382,7 @@ func mexit(osStack bool) {
 	sigblock()
 	unminit()
 
-	// Free the gsignal stack.
+	// 释放 gsignal 栈
 	if m.gsignal != nil {
 		stackfree(m.gsignal.stack)
 	}
@@ -3320,7 +3318,7 @@ func syscall_runtime_AfterExec() {
 	execLock.unlock()
 }
 
-// 分配一个新的 g, 包含一个 stacksize 字节的的栈
+// 分配一个新的 g 结构, 包含一个 stacksize 字节的的栈
 func malg(stacksize int32) *g {
 	newg := new(g)
 	if stacksize >= 0 {
@@ -3341,13 +3339,14 @@ func malg(stacksize int32) *g {
 // 则他们不无法被拷贝
 //go:nosplit
 func newproc(siz int32, fn *funcval) {
-	// 获取第一参数地址
+	// 从 fn 的地址增加一个指针的长度，从而获取第一参数地址
 	argp := add(unsafe.Pointer(&fn), sys.PtrSize)
 	gp := getg()
 	// 获取调用方 PC/IP 寄存器值
 	pc := getcallerpc()
 
-	// 用 g0 栈创建 goroutine 对象
+	// 用 g0 系统栈创建 goroutine 对象
+	// 传递的参数包括 fn 函数入口地址, argp 参数起始地址, siz 参数长度, gp（g0），调用方 pc（goroutine）
 	systemstack(func() {
 		newproc1(fn, (*uint8)(argp), siz, gp, pc)
 	})

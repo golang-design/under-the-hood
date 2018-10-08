@@ -1,4 +1,4 @@
-<img src="images/cover.png" alt="logo" height="450" align="right" />
+<img src="images/cover.png" alt="logo" height="550" align="right" />
 
 # Go under the hood
 

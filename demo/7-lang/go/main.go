@@ -1,5 +1,9 @@
 package main
 
+func hello(msg string) {
+	println(msg)
+}
+
 func main() {
-	go println("hello world")
+	go hello("hello world")
 }

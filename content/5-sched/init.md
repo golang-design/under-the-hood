@@ -1,11 +1,13 @@
 # 5 调度器: 初始化
 
-我们已经在 [2 初始化概览](2-init.md) 中粗略看过了 `schedinit` 函数，现在我们来仔细看看里面真正关于调度器的初始化步骤。
+我们已经在 [2 初始化概览](../2-init.md) 中粗略看过了 `schedinit` 函数，现在我们来仔细看看里面真正关于调度器的初始化步骤。
 M/P/G 彼此的初始化顺序遵循：`mcommoninit` --> `procresize` --> `newproc`。
 
 ## M 初始化
 
-TODO:
+M 其实就是 OS 线程，它只有两个状态：spinning 或 unspinning。
+在调度器初始化阶段，只有一个 M，那就是主 OS 线程，因此这里的 common init 仅仅只是将所有
+M 的链表进行一个初始化。
 
 ```go
 func mcommoninit(mp *m) {
@@ -350,8 +352,9 @@ func procresize(nprocs int32) *p {
 ## G 初始化
 
 运行完 `runtime.procresize` 之后，我们已经在 [1 引导](1-boot.md) 和 [3 主 goroutine 生命周期](3-main.md) 中已经看到，
-主 goroutine 会以被调度器调度的方式进行运行，这将有 `runtime.newproc` 来完成主 goroutine 的初始化工作。
-我们接下来就来看看 `runtime.newproc` 的过程。
+主 goroutine 会以被调度器调度的方式进行运行，这将由 `runtime.newproc` 来完成主 goroutine 的初始化工作。
+
+在看 `runtime.newproc` 之前，我们先大致浏览一下 G 的各个状态。
 
 ```
 _Gidle
@@ -394,6 +397,27 @@ _Gscanwaiting
        |                                runtime.newproc / runtime.oneNewExtraM                             |
        +---------------------------------------------------------------------------------------------------+
 ```
+
+我们接下来就来看看 `runtime.newproc`：
+
+```go
+//go:nosplit
+func newproc(siz int32, fn *funcval) {
+	argp := add(unsafe.Pointer(&fn), sys.PtrSize)
+	gp := getg()
+	pc := getcallerpc()
+
+	// 用 g0 系统栈创建 goroutine 对象
+	// 传递的参数包括 fn 函数入口地址, argp 参数起始地址, siz 参数长度, gp（g0），调用方 pc（goroutine）
+	systemstack(func() {
+		newproc1(fn, (*uint8)(argp), siz, gp, pc)
+	})
+}
+```
+
+详细的参数获取过程需要编译器的配合，我们在 [7 go](../7-lang/go.md) 中讨论，我们只需要
+知道 `newproc` 会获取需要执行的 goroutine 要执行的函数体的地址、参数起始地址、参数长度、以及 goroutine 的调用地址。
+然后在 g0 系统栈上通过 `newproc1` 创建并初始化新的 goroutine ，下面我们来看 `newproc1`。
 
 TODO:
 

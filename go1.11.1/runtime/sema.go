@@ -90,13 +90,14 @@ const (
 	semaMutexProfile
 )
 
-// Called from runtime.
+// 从运行时调用
 func semacquire(addr *uint32) {
 	semacquire1(addr, false, 0)
 }
 
 func semacquire1(addr *uint32, lifo bool, profile semaProfileFlags) {
 	// 获取当前 goroutine
+	// 该调用发生在 goroutine 运行时，所以有绑定的 P
 	gp := getg()
 	if gp != gp.m.curg {
 		throw("semacquire not on the G stack")
@@ -201,7 +202,7 @@ func semroot(addr *uint32) *semaRoot {
 }
 
 func cansemacquire(addr *uint32) bool {
-	// 死循环
+	// cas 算法
 	for {
 
 		v := atomic.Load(addr)

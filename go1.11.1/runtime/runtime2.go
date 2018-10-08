@@ -120,7 +120,7 @@ type note struct {
 
 type funcval struct {
 	fn uintptr
-	// variable-size, fn-specific data here
+	// 变长大小，fn 的数据在应在 fn 之后
 }
 
 type iface struct {
@@ -325,7 +325,7 @@ type g struct {
 
 	_panic         *_panic // innermost panic - offset known to liblink
 	_defer         *_defer // innermost defer
-	m              *m      // current m; offset known to arm liblink
+	m              *m      // 当前的 m; 偏移量对 arm liblink 透明
 	sched          gobuf
 	syscallsp      uintptr        // if status==Gsyscall, syscallsp = sched.sp to use during gc
 	syscallpc      uintptr        // if status==Gsyscall, syscallpc = sched.pc to use during gc
