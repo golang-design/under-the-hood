@@ -89,6 +89,10 @@ go version go1.11.1 darwin/amd64
 Darwin changkun-pro 18.0.0 Darwin Kernel Version 18.0.0: Wed Aug 22 20:13:40 PDT 2018; root:xnu-4903.201.2~1/RELEASE_X86_64 x86_64
 ```
 
+## Acknowledgement
+
+The author would like to thank [@egonelbre](https://github.com/egonelbre/gophers) for his charming gopher design.
+
 ## 许可
 
 [Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)
