@@ -4,18 +4,16 @@
 
 package runtime
 
-// This file contains the implementation of Go channels.
+// 此文件实现了 Go 的 channel
 
-// Invariants:
-//  At least one of c.sendq and c.recvq is empty,
-//  except for the case of an unbuffered channel with a single goroutine
-//  blocked on it for both sending and receiving using a select statement,
-//  in which case the length of c.sendq and c.recvq is limited only by the
-//  size of the select statement.
+// 变种:
+//  c.sendq 和 c.recvq 中至少一个为空，除非是 unbuffered channle 和单个 goroutine
+//  阻塞在 select 语句中同时使用发送和接受的这种情况。这时 c.sendq 和 c.recvq 的长度由
+//  select 语句的大小限制。
 //
-// For buffered channels, also:
-//  c.qcount > 0 implies that c.recvq is empty.
-//  c.qcount < c.dataqsiz implies that c.sendq is empty.
+// 对于 buffered channel，同样：
+//  c.qcount > 0 隐含 c.recvq 为空
+//  c.qcount < c.dataqsiz 隐含 c.sendq 为空
 
 import (
 	"runtime/internal/atomic"
@@ -590,7 +588,7 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 	goready(gp, skip+1)
 }
 
-// compiler implements
+// 编译器会将这段语法：
 //
 //	select {
 //	case c <- v:
@@ -599,7 +597,7 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 //		... bar
 //	}
 //
-// as
+// 转换为：
 //
 //	if selectnbsend(c, v) {
 //		... foo
@@ -611,7 +609,7 @@ func selectnbsend(c *hchan, elem unsafe.Pointer) (selected bool) {
 	return chansend(c, elem, false, getcallerpc())
 }
 
-// compiler implements
+// 编译器会将这段语法：
 //
 //	select {
 //	case v = <-c:
@@ -620,7 +618,7 @@ func selectnbsend(c *hchan, elem unsafe.Pointer) (selected bool) {
 //		... bar
 //	}
 //
-// as
+// 转换为：
 //
 //	if selectnbrecv(&v, c) {
 //		... foo
@@ -633,7 +631,7 @@ func selectnbrecv(elem unsafe.Pointer, c *hchan) (selected bool) {
 	return
 }
 
-// compiler implements
+// 编译器会将这段语法：
 //
 //	select {
 //	case v, ok = <-c:
@@ -642,7 +640,7 @@ func selectnbrecv(elem unsafe.Pointer, c *hchan) (selected bool) {
 //		... bar
 //	}
 //
-// as
+// 转换为
 //
 //	if c != nil && selectnbrecv2(&v, &ok, c) {
 //		... foo
@@ -663,7 +661,7 @@ func reflect_chansend(c *hchan, elem unsafe.Pointer, nb bool) (selected bool) {
 
 //go:linkname reflect_chanrecv reflect.chanrecv
 func reflect_chanrecv(c *hchan, nb bool, elem unsafe.Pointer) (selected bool, received bool) {
-	return chanrecv(c, elem, !nb)
+	return false, chanrecv(c, elem, !nb)
 }
 
 //go:linkname reflect_chanlen reflect.chanlen

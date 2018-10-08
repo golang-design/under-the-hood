@@ -40,7 +40,7 @@
 m.spinning 表示。
 
 这种方式下被 unpark 的线程同样也成为 spinning，我们也不对这种线程进行 goroutine 切换，
-因此这类线程最初就是 out of work。spinning 线程会在 park 前，从 per-P 中运行队列中寻找 work。
+因此这类线程最初就是没有 work 的状态。spinning 线程会在 park 前，从 per-P 中运行队列中寻找 work。
 如果一个 spinning 进程发现 work，就会将自身切换出 spinning 状态，并且开始执行。
 
 如果它没有发现 work 则会将自己带 spinning 转状态然后进行 park。
@@ -52,11 +52,21 @@ m.spinning 表示。
 
 主要的实现复杂性表现为当进行 spinning->non-spinning 线程转换时必须非常小心。这种转换在提交一个
 新的 goroutine ，并且任何一个部分都需要取消另一个工作线程会发生竞争。如果双方均失败，则会以半静态
-CPU 利用不足而结束。ready 一个 goroutine 的通用范式为：提交一个 goroutine 到 per-P 的局部 work 队列，
-`#StoreLoad-style` 内存屏障，检查 sched.nmspinning。从 spinning->non-spinning 转换的一般模式为：
-减少 nmspinning, `#StoreLoad-style` 内存屏障，在所有 per-P 工作队列检查新的 work。注意，此种复杂性
-并不适用于全局工作队列，因为我们不会蠢到当给一个全局队列提交 work 时进行线程 unpark。更多细节参见
-nmspinning 操作。
+CPU 利用不足而结束。
+
+ready 一个 goroutine 的通用范式为：
+
+- 提交一个 goroutine 到 per-P 的局部 work 队列
+- `#StoreLoad-style` write barrier
+- 检查 sched.nmspinning
+
+从 spinning->non-spinning 转换的一般模式为：
+
+- 减少 nmspinning
+- `#StoreLoad-style` write barrier
+- 在所有 per-P 任务队列检查新的 work
+
+注意，此种复杂性并不适用于全局任务队列，因为我们不会蠢到当给一个全局队列提交 work 时进行线程 unpark。
 
 ## 进一步阅读的参考文献
 

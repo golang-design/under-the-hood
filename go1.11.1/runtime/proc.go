@@ -666,7 +666,8 @@ func mcommoninit(mp *m) {
 	// 添加到 allm 中，从而当它刚保存到寄存器或本地线程存储时候 GC 不会释放 g->m
 	mp.alllink = allm
 
-	// NumCgoCall() 会在没有使用 schedlock 时遍历 allm，等价于 allm = mp
+	// NumCgoCall() 会在没有使用 schedlock 时遍历 allm
+	// 等价于 allm = mp
 	atomicstorep(unsafe.Pointer(&allm), unsafe.Pointer(mp))
 	unlock(&sched.lock)
 

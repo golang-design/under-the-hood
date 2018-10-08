@@ -61,6 +61,8 @@ func mcommoninit(mp *m) {
 
 我们来看 `runtime.procresize` 函数。
 
+TODO:
+
 ```
              
              
@@ -306,23 +308,32 @@ func procresize(nprocs int32) *p {
 我们接下来就来看看 `runtime.newproc` 的过程。
 
 ```
-                                          runtime.ready   +-----------+
-                                      +------------------ | _Gwaiting |
-                                      |                   +-----------+
-                                      |                        ^
-                                      v                        |
-  +--------+                    +------------+   execute  +-----------+                  +--------+
-  |        |  runtime.newproc   |            | ---------> |           |  runtime.goexit  |        |
-  | _Gidle | -----------------> | _Grunnable |            | _Grunning | ---------------> | _Gdead | 
-  |        |                    |            | <--------- |           |                  |        |
-  +--------+                    +------------+    yield   +-----------+                  +--------+
-                                  ^   ^                      ^     |                          |
-                                  |   |  runtime.exitsyscall |     | runtime.entersyscall     |
-                                  |   |                      |     v                          |
-                                  |   |                   +-----------+                       |
-                                  |   +------------------ | _Gsyscall |                       |
-                                  |                       +-----------+                       |
-                                  +-----------------------------------------------------------+
+
+
+
+
+                                                                                                    +-------------+
+               runtime.gcMarkTermination / runtime.ready      +-----------+  runtime.casgcopystack  |             |
+                                      +---------------------- | _Gwaiting | ----------------------> | _Gcopystack |
+                                      |   runtime.schedule    +-----------+  +--------------------> |             |
+                                      |                             ^        |   runtime.morestack  +-------------+
+                                      |      runtime.gcBgMarkWorker |        |   runtime.casgcopystack
+                                      |   runtime.gcMarkTermination |        |
+                                      v               runtime.dropg |        v
+  +--------+                    +------------+   runtime.execute  +-----------+                     +--------+
+  |        |                    |            | -----------------> |           |  runtime.goexit0    |        |
+  | _Gidle |                    | _Grunnable |                    | _Grunning | ------------------> | _Gdead | 
+  |        |                    |            | <----------------- |           |                     |        |
+  +--------+                    +------------+    runtime.Gosched +-----------+                     +--------+
+       |                          ^   ^                              ^     | runtime.entersyscallblock ^ | ^
+       |                          |   |                              |     | runtime.entersyscall      | | |
+       |                          |   |         runtime.exitsyscall0 |     v runtime.reentersyscall    | | |
+       |                          |   |                           +-----------+          runtime.dropm | | |
+       |                          |   +-------------------------- | _Gsyscall | -----------------------+ | |
+       |                          |                               +-----------+                          | |
+       |                          +----------------------------------------------------------------------+ |
+       |                                runtime.newproc / runtime.oneNewExtraM                             |
+       +---------------------------------------------------------------------------------------------------+
 ```
 
 TODO:

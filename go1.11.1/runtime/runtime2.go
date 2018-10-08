@@ -257,37 +257,31 @@ type gobuf struct {
 
 // sudog 表示了一个等待队列中的 g，例如在一个 channel 中进行发送和接受
 //
-// sudog is necessary because the g ↔ synchronization object relation
-// is many-to-many. A g can be on many wait lists, so there may be
-// many sudogs for one g; and many gs may be waiting on the same
-// synchronization object, so there may be many sudogs for one object.
+// sudog 是必要的，因为 g <-> 同步对象之间的关系是多对多。一个 g 可以在多个等待列表上，
+// 因此可以有很多的 sudog 为一个 g 服务；并且很多 g 可能在等待同一个同步对象，
+// 因此也会有很多 sudog 为一个同步对象服务。
 //
-// sudogs are allocated from a special pool. Use acquireSudog and
-// releaseSudog to allocate and free them.
+// 所有的 sudog 分配在一个特殊的池中。使用 acquireSudog 和 releaseSudog 来分配并释放它们。
 type sudog struct {
-	// The following fields are protected by the hchan.lock of the
-	// channel this sudog is blocking on. shrinkstack depends on
-	// this for sudogs involved in channel ops.
+	// 下面的字段由这个 sudog 阻塞的通道的 hchan.lock 进行保护。
+	// shrinkstack 依赖于它服务于 sudog 相关的 channel 操作。
 
 	g *g
 
-	// isSelect indicates g is participating in a select, so
-	// g.selectDone must be CAS'd to win the wake-up race.
+	// isSelect 表示 g 正在参与一个 select，因此 g.selectDone 必须以 CAS 的方式来避免唤醒时候的 data race。
 	isSelect bool
 	next     *sudog
 	prev     *sudog
-	elem     unsafe.Pointer // data element (may point to stack)
+	elem     unsafe.Pointer // 数据元素（可能指向栈）
 
-	// The following fields are never accessed concurrently.
-	// For channels, waitlink is only accessed by g.
-	// For semaphores, all fields (including the ones above)
-	// are only accessed when holding a semaRoot lock.
+	// 下面的字段永远不会并发的被访问。对于 channel waitlink 只会被 g 访问
+	// 对于 semaphores，所有的字段（包括上面的）只会在持有 semaRoot 锁时被访问
 
 	acquiretime int64
 	releasetime int64
 	ticket      uint32
-	parent      *sudog // semaRoot binary tree
-	waitlink    *sudog // g.waiting list or semaRoot
+	parent      *sudog // semaRoot 二叉树
+	waitlink    *sudog // g.waiting 列表或 semaRoot
 	waittail    *sudog // semaRoot
 	c           *hchan // channel
 }
@@ -319,10 +313,6 @@ type stack struct {
 type g struct {
 	// Stack 参数
 	// stack 描述了实际的栈内存：[stack.lo, stack.hi)
-	// stackguard0 is the stack pointer compared in the Go stack growth prologue.
-	// stackguard1 is the stack pointer compared in the C stack growth prologue.
-	// It is stack.lo+StackGuard on g0 and gsignal stacks.
-	// It is ~0 on other goroutine stacks, to trigger a call to morestackc (and crash).
 	stack stack // 偏移量与 runtime/cgo 一致
 	// stackguard0 是对比 Go 栈增长的 prologue 的栈指针
 	// 如果 sp 寄存器比 stackguard0 小（由于栈往低地址方向增长），会触发栈拷贝和调度
@@ -391,47 +381,47 @@ type m struct {
 	morebuf gobuf  // morestack 的 gobuf 参数
 	divmod  uint32 // div/mod denominator for arm - known to liblink
 
-	// Fields not known to debuggers.
-	procid        uint64       // for debuggers, but offset not hard-coded
+	// debugger 不知道的字段
+	procid        uint64       // 用于 debugger，偏移量不是写死的
 	gsignal       *g           // 处理 signal 的 g
-	goSigStack    gsignalStack // Go-allocated signal handling stack
-	sigmask       sigset       // storage for saved signal mask
-	tls           [6]uintptr   // thread-local storage (for x86 extern register)
+	goSigStack    gsignalStack // Go 分配的 signal handling 栈
+	sigmask       sigset       // 用于保存 saved signal mask
+	tls           [6]uintptr   // thread-local storage (对 x86 而言为额外的寄存器)
 	mstartfn      func()
 	curg          *g       // 当前运行的用户 goroutine
-	caughtsig     guintptr // goroutine running during fatal signal
+	caughtsig     guintptr // goroutine 在 fatal signal 中运行
 	p             puintptr // attached p for executing go code (nil if not executing go code)
 	nextp         puintptr
 	id            int64
 	mallocing     int32
 	throwing      int32
-	preemptoff    string // if != "", keep curg running on this m
+	preemptoff    string // 如果不为空串 ""，继续让当前 g 运行在该 M 上
 	locks         int32
 	dying         int32
 	profilehz     int32
 	helpgc        int32
-	spinning      bool // m is out of work and is actively looking for work
-	blocked       bool // m is blocked on a note
-	inwb          bool // m is executing a write barrier
-	newSigstack   bool // minit on C thread called sigaltstack
+	spinning      bool // m 当前没有运行 work 且正处于寻找 work 的活跃状态
+	blocked       bool // m 阻塞在一个 note 上
+	inwb          bool // m 正在执行 write barrier
+	newSigstack   bool // C 线程上的 minit 调用了 signalstack（C 调用 Go?）
 	printlock     int8
-	incgo         bool   // m is executing a cgo call
+	incgo         bool   // m 正在执行 cgo 调用
 	freeWait      uint32 // if == 0, safe to free g0 and delete m (atomic)
 	fastrand      [2]uint32
 	needextram    bool
 	traceback     uint8
 	ncgocall      uint64      // 总共的 cgo 调用数
 	ncgo          int32       // 正在进行的 cgo 调用数
-	cgoCallersUse uint32      // if non-zero, cgoCallers in use temporarily
-	cgoCallers    *cgoCallers // cgo traceback if crashing in cgo call
+	cgoCallersUse uint32      // 如果非零，则表示 cgoCaller 正在临时使用
+	cgoCallers    *cgoCallers // cgo 调用崩溃的 cgo 回溯
 	park          note
 	alllink       *m // 在 allm 上
 	schedlink     muintptr
 	mcache        *mcache
 	lockedg       guintptr
-	createstack   [32]uintptr    // stack that created this thread.
-	lockedExt     uint32         // tracking for external LockOSThread
-	lockedInt     uint32         // tracking for internal lockOSThread
+	createstack   [32]uintptr    // 当前线程创建的栈
+	lockedExt     uint32         // 外部 LockOSThread 追踪
+	lockedInt     uint32         // 内部 lockOSThread 追踪
 	nextwaitm     muintptr       // 正在等待锁的下一个 m
 	waitunlockf   unsafe.Pointer // todo go func(*g, unsafe.pointer) bool
 	waitlock      unsafe.Pointer
@@ -439,19 +429,18 @@ type m struct {
 	waittraceskip int
 	startingtrace bool
 	syscalltick   uint32
-	thread        uintptr // thread handle
-	freelink      *m      // on sched.freem
+	thread        uintptr // 线程处理
+	freelink      *m      // 在 sched.freem 上
 
-	// these are here because they are too large to be on the stack
-	// of low-level NOSPLIT functions.
+	// 下面这些字段因为它们太大而不能放在低级的 NOSPLIT 函数的堆栈上。
 	libcall   libcall
-	libcallpc uintptr // for cpu profiler
+	libcallpc uintptr // 用于 cpu profiler
 	libcallsp uintptr
 	libcallg  guintptr
 	syscall   libcall // 存储 windows 上系统调用的参数
 
-	vdsoSP uintptr // SP for traceback while in VDSO call (0 if not in call)
-	vdsoPC uintptr // PC for traceback while in VDSO call
+	vdsoSP uintptr // SP 用于 VDSO 调用的回溯 (如果没有产生调用则为 0)
+	vdsoPC uintptr // PC 用于 VDSO 调用的回溯
 
 	mOS
 }
@@ -460,12 +449,12 @@ type p struct {
 	lock mutex
 
 	id          int32
-	status      uint32 // one of pidle/prunning/...
+	status      uint32 // p 的状态 pidle/prunning/...
 	link        puintptr
-	schedtick   uint32     // incremented on every scheduler call
-	syscalltick uint32     // incremented on every system call
-	sysmontick  sysmontick // last tick observed by sysmon
-	m           muintptr   // back-link to associated m (nil if idle)
+	schedtick   uint32     // 每次调度器调用都会增加
+	syscalltick uint32     // 每次进行系统调用都会增加
+	sysmontick  sysmontick // 系统监控观察到的最后一次记录
+	m           muintptr   // 反向链接到关联的 m （nil 则表示 idle）
 	mcache      *mcache
 	racectx     uintptr
 
@@ -525,12 +514,12 @@ type p struct {
 	// disposed on certain GC state transitions.
 	gcw gcWork
 
-	// wbBuf is this P's GC write barrier buffer.
+	// wbBuf 是当前 P 的 GC 的 write barrier 缓存
 	//
 	// TODO: Consider caching this in the running G.
 	wbBuf wbBuf
 
-	runSafePointFn uint32 // if 1, run sched.safePointFn at next safe point
+	runSafePointFn uint32 // 如果为 1, 则在下一个 safe-point 运行 sched.safePointFn
 
 	pad [sys.CacheLineSize]byte
 }
