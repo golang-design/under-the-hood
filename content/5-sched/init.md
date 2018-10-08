@@ -59,11 +59,10 @@ func mcommoninit(mp *m) {
 
 ## P 初始化
 
-我们来看 `runtime.procresize` 函数。
-
-TODO:
+在看 `runtime.procresize` 函数之前，我们先概览一遍 P 的状态机。
 
 ```
+所有的 P 状态：
 _Pidle
 _Prunning
 _Psyscall
@@ -75,9 +74,9 @@ _Pdead
 +------------------------------------------------------------------------------------------+
 |                         sysmon retake                                                    |
 |          +-------------------+---------------------+-------------------------+           |
-|          |                   |                     |                         |           |
-| New P    |                   v                     |                         |           |
-|  +----------+            +--------+  acquire +-----------+  entersyscall +-----------+   |
+|          +-------------------+-----------------+   |                         |           |
+| New P    |   startTheWorld   v                 v   |                         |           |
+|  +----------+            +--------+ acquirep +-----------+  entersyscall +-----------+   |
 |  |          | ---------> |        | -------> |           | ------------> |           |   |
 |  | _Pgcstop | procresize | _Pidle |          | _Prunning |               | _Psyscall |   |
 |  |          |            |        | <------- |           | <-----------  |           |   |
@@ -88,15 +87,26 @@ _Pdead
 |          if GC                                                                           |
 +------------------------------------------------------------------------------------------+
        |                               ^
-       |            +--------+         | _Prunning or _Pidle
+       |            +--------+         | _Prunning 或 _Pidle
        |            |        |         | 
        +----------> | _Pdead | --------+
                     |        |
                     +--------+
-               GOMAXPROCS -> procresize
+               GOMAXPROCS -> startTheWorld -> procresize
                当要求动态调整 P 时，会调整为 _Pdead 作为中间态
                要么被调整为 _Prunning 或 _Pidle，要么被释放掉
 ```
+
+通常情况下（在程序运行时不调整 P 的个数），P 只会在四种状态下进行切换。
+当程序刚开始运行进行初始化时，所有的 P 都处于 `_Pgcstop` 状态，
+随着 P 的初始化（`runtime.procresize`），会被置于 `_Pidle`（马上讨论）。
+
+当 M 需要运行时，会 `runtime.acquirep`，并通过 `runtime.releasep` 来释放。
+当 G 执行时需要进入系统调用时，P 会被设置为 `_Psyscall`，如果这个时候被系统监控抢夺（`runtime.retake`），则 P 会被重新修改为 `_Pidle`。
+如果在程序运行中发生 GC，则 P 会被设置为 `_Pgcstop`，并在 `runtime.startTheWorld` 时重新调整为 `_Pidle` 或者 `_Prunning`。
+
+这里我们还在讨论初始化过程，我们先只关注 `runtime.procresize` 这个函数：
+
 
 ```go
 // 修改 P 的数量，此时所有工作均被停止 STW，sched 被锁定
@@ -270,7 +280,7 @@ func procresize(nprocs int32) *p {
 		// 继续使用当前 P
 		_g_.m.p.ptr().status = _Prunning
 	} else {
-		// 释放当前 P 因为已失效
+		// 释放当前 P，因为已失效
 		if _g_.m.p != 0 {
 			_g_.m.p.ptr().m = 0
 		}
@@ -281,7 +291,7 @@ func procresize(nprocs int32) *p {
 		p := allp[0]
 		p.m = 0
 		p.status = _Pidle
-		acquirep(p)
+		acquirep(p) // 直接将 allp[0] 绑定到当前的 M
 
 		// trace 相关
 		if trace.enabled {
@@ -292,19 +302,24 @@ func procresize(nprocs int32) *p {
 	// 将没有本地任务的 P 放到空闲链表中
 	var runnablePs *p
 	for i := nprocs - 1; i >= 0; i-- {
+		// 挨个检查 p
 		p := allp[i]
 
 		// 确保不是当前正在使用的 P
 		if _g_.m.p.ptr() == p {
 			continue
 		}
+
+		// 将 p 设为 idel
 		p.status = _Pidle
 		if runqempty(p) {
-			// 放入空闲链表
+			// 放入 idle 链表
 			pidleput(p)
 		} else {
-			// 如果有本地任务，则构建链表
+			// 如果有本地任务，则为其绑定一个 M
 			p.m.set(mget())
+			// 第一个循环为 nil，后续则为上一个 p
+			// 此处即为构建可运行的 p 链表
 			p.link.set(runnablePs)
 			runnablePs = p
 		}
@@ -316,6 +331,21 @@ func procresize(nprocs int32) *p {
 	return runnablePs
 }
 ```
+
+`procresize` 这个函数相对较长，我们来总结一下它主要干了什么事情：
+
+1. 调用时已经 STW；
+2. 记录调整 P 的时间；
+3. 按需调整 `allp` 的大小；
+4. 按需初始化 `allp` 中的 P；
+5. 从 `allp` 移除不需要的 P，将释放的 P 队列中的任务扔进全局队列；
+6. 如果当前的 P 还可以继续使用（没有被移除），则将 P 设置为 _Prunning；
+7. 否则将第一个 P 抢过来给当前 G 的 M 进行绑定
+8. 最后挨个检查 P，将没有任务的 P 放入 idle 队列
+9. 出去当前 P 之外，将有任务的 P 彼此串联成链表，将没有任务的 P 放回到 idle 链表中
+
+显然，在运行 P 初始化之前，我们刚刚初始化完 M，因此第 7 步中的绑定 M 会将当前的 P 绑定到初始 M 上。
+而后由于程序刚刚开始，P 队列是空的，所以他们都会被链接到可运行的 P 链表上处于 `_Pidle` 状态。
 
 ## G 初始化
 

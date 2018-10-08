@@ -4186,7 +4186,7 @@ func procresize(nprocs int32) *p {
 		// 继续使用当前 P
 		_g_.m.p.ptr().status = _Prunning
 	} else {
-		// 释放当前 P 因为已失效
+		// 释放当前 P，因为已失效
 		if _g_.m.p != 0 {
 			_g_.m.p.ptr().m = 0
 		}
@@ -4197,7 +4197,7 @@ func procresize(nprocs int32) *p {
 		p := allp[0]
 		p.m = 0
 		p.status = _Pidle
-		acquirep(p)
+		acquirep(p) // 直接将 allp[0] 绑定到当前的 M
 
 		// trace 相关
 		if trace.enabled {
@@ -4208,19 +4208,24 @@ func procresize(nprocs int32) *p {
 	// 将没有本地任务的 P 放到空闲链表中
 	var runnablePs *p
 	for i := nprocs - 1; i >= 0; i-- {
+		// 挨个检查 p
 		p := allp[i]
 
 		// 确保不是当前正在使用的 P
 		if _g_.m.p.ptr() == p {
 			continue
 		}
+
+		// 将 p 设为 idel
 		p.status = _Pidle
 		if runqempty(p) {
-			// 放入空闲链表
+			// 放入 idle 链表
 			pidleput(p)
 		} else {
-			// 如果有本地任务，则构建链表
+			// 如果有本地任务，则为其绑定一个 M
 			p.m.set(mget())
+			// 第一个循环为 nil，后续则为上一个 p
+			// 此处即为构建可运行的 p 链表
 			p.link.set(runnablePs)
 			runnablePs = p
 		}
@@ -4738,9 +4743,9 @@ func mput(mp *m) {
 	checkdead()
 }
 
-// Try to get an m from midle list.
-// Sched must be locked.
-// May run during STW, so write barriers are not allowed.
+// 尝试从 midel 列表中获取一个 M
+// 调度器必须锁住
+// 可能在 STW 期间运行，故不允许 write barrier
 //go:nowritebarrierrec
 func mget() *m {
 	mp := sched.midle.ptr()
@@ -4826,9 +4831,9 @@ func globrunqget(_p_ *p, max int32) *g {
 	return gp
 }
 
-// Put p to on _Pidle list.
-// Sched must be locked.
-// May run during STW, so write barriers are not allowed.
+// 将 p 放入 _Pidle 列表
+// 此时调度器必须被锁住
+// 可能在 STW 期间运行，所以不允许 write barrier
 //go:nowritebarrierrec
 func pidleput(_p_ *p) {
 	if !runqempty(_p_) {
@@ -4852,8 +4857,8 @@ func pidleget() *p {
 	return _p_
 }
 
-// runqempty returns true if _p_ has no Gs on its local run queue.
-// It never returns true spuriously.
+// runqempty 返回 true，如果 _p_ 的本地队列没有 G
+// 它永远不会错误的返回 true
 func runqempty(_p_ *p) bool {
 	// Defend against a race where 1) _p_ has G1 in runqnext but runqhead == runqtail,
 	// 2) runqput on _p_ kicks G1 to the runq, 3) runqget on _p_ empties runqnext.
