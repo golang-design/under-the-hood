@@ -64,22 +64,38 @@ func mcommoninit(mp *m) {
 TODO:
 
 ```
-             
-             
-             
-             
-             
-  +----------+ 
-  |          | 
-  | _Pgcstop | 
-  |          | 
-  +----------+ 
-             
-             
-             
-             
-             
-             
+_Pidle
+_Prunning
+_Psyscall
+_Pgcstop
+_Pdead
+
+
+   普通情况下，P 仅在这四种状态下切换
++------------------------------------------------------------------------------------------+
+|                         sysmon retake                                                    |
+|          +-------------------+---------------------+-------------------------+           |
+|          |                   |                     |                         |           |
+| New P    |                   v                     |                         |           |
+|  +----------+            +--------+  acquire +-----------+  entersyscall +-----------+   |
+|  |          | ---------> |        | -------> |           | ------------> |           |   |
+|  | _Pgcstop | procresize | _Pidle |          | _Prunning |               | _Psyscall |   |
+|  |          |            |        | <------- |           | <-----------  |           |   |
+|  +----------+            +--------+ releasep +-----------+  exitsyscall  +-----------+   |
+|       ^                       |                    |                        |            |
+|       |                       |                    |                        |            |
+|       +-----------------------+--------------------+------------------------+            |
+|          if GC                                                                           |
++------------------------------------------------------------------------------------------+
+       |                               ^
+       |            +--------+         | _Prunning or _Pidle
+       |            |        |         | 
+       +----------> | _Pdead | --------+
+                    |        |
+                    +--------+
+               GOMAXPROCS -> procresize
+               当要求动态调整 P 时，会调整为 _Pdead 作为中间态
+               要么被调整为 _Prunning 或 _Pidle，要么被释放掉
 ```
 
 ```go
@@ -308,26 +324,39 @@ func procresize(nprocs int32) *p {
 我们接下来就来看看 `runtime.newproc` 的过程。
 
 ```
-
-
-
-
-                                                                                                    +-------------+
+_Gidle
+_Grunnable
+_Grunning
+_Gsyscall
+_Gwaiting
+_Gdead
+_Gcopystack
+_Gscan
+_Gscanrunnable
+_Gscanrunning
+_Gscansyscall
+_Gscanwaiting
+                                                           +---------------+
+                                                           | _Gscanwaiting |
+                                                           +---------------+
+                                                                 ^  |
+                                              runtime.newstack   |  | runtime.newstack
+                                                                 |  v                               +-------------+
                runtime.gcMarkTermination / runtime.ready      +-----------+  runtime.casgcopystack  |             |
                                       +---------------------- | _Gwaiting | ----------------------> | _Gcopystack |
                                       |   runtime.schedule    +-----------+  +--------------------> |             |
                                       |                             ^        |   runtime.morestack  +-------------+
                                       |      runtime.gcBgMarkWorker |        |   runtime.casgcopystack
                                       |   runtime.gcMarkTermination |        |
-                                      v               runtime.dropg |        v
+     New G                            v               runtime.dropg |        v
   +--------+                    +------------+   runtime.execute  +-----------+                     +--------+
-  |        |                    |            | -----------------> |           |  runtime.goexit0    |        |
+  |        |                    |            | -----------------> |           |  runtime.Goexit     |        |
   | _Gidle |                    | _Grunnable |                    | _Grunning | ------------------> | _Gdead | 
   |        |                    |            | <----------------- |           |                     |        |
   +--------+                    +------------+    runtime.Gosched +-----------+                     +--------+
        |                          ^   ^                              ^     | runtime.entersyscallblock ^ | ^
        |                          |   |                              |     | runtime.entersyscall      | | |
-       |                          |   |         runtime.exitsyscall0 |     v runtime.reentersyscall    | | |
+       |                          |   |         runtime.exitsyscall  |     v                           | | |
        |                          |   |                           +-----------+          runtime.dropm | | |
        |                          |   +-------------------------- | _Gsyscall | -----------------------+ | |
        |                          |                               +-----------+                          | |
