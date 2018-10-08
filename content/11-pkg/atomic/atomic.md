@@ -202,7 +202,7 @@ TEXT runtime∕internal∕atomic·Cas64(SB), NOSPLIT, $0-25
 	RET
 ```
 
-可以看到，实现的本质是使用 CPU 的 `CMPXCHGQ` 指令：首先将 ptr 的值放入 BX，将假设的旧值放入 AX，
+可以看到，实现的本质是使用 CPU 的 `LOCK`+`CMPXCHGQ` 指令：首先将 ptr 的值放入 BX，将假设的旧值放入 AX，
 要比较的新值放入 CX。然后 LOCK CMPXCHGQ 与累加器 AX 比较并交换 CX 和 BX。
 
 因此原子操作本质上均为使用 CPU 指令进行实现（理所当然）。由于原子操作的方式比较单一，很容易举一反三，

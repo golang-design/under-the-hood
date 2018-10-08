@@ -115,7 +115,7 @@ ok:
 
 从上面的汇编代码我们可以看出，整个准备过程按照如下顺序进行：
 
-`runtime·g0`、`runtime·m0` 是一组全局变量，在程序运行之初就已经创建完成（编译器完成数据段相关翻译），定义位于`runtime/proc.go`。除了程序参数外，会首先将 m0 与 g0 互相关联（在[调度器](5-scheduler.md)一节中讨论 M 与 G 之间的关系）。
+`runtime·g0`、`runtime·m0` 是一组全局变量，在程序运行之初就已经创建完成（编译器完成数据段相关翻译），定义位于`runtime/proc.go`。除了程序参数外，会首先将 m0 与 g0 互相关联（在[调度器](5-sched/basic.md)中讨论 M 与 G 之间的关系）。
 
 然后会调用一个空函数 `runtime·emptyfunc` 进行堆栈溢出检查，这个函数什么也不做，只是强制进行一次压栈和出栈操作。
 
@@ -157,9 +157,9 @@ func check() {
   ```
 
 
-`runtime·schedinit`: `runtime/proc.go` 各类初始化
+`runtime·schedinit`: `runtime/proc.go` 各种初始化
 
-`runtime·mainPC` 在数据段中被定义为 `runtime·main` 创建主 goroutine。：
+`runtime·mainPC` 在数据段中被定义为 `runtime·main` 创建主 goroutine：
 
 ```c
 DATA	runtime·mainPC+0(SB)/4,$runtime·main(SB)
@@ -167,7 +167,7 @@ DATA	runtime·mainPC+0(SB)/4,$runtime·main(SB)
 
 `runtime·newproc`: `runtime/proc.go` 创建 G 并将主 goroutine 放至 G 队列中
 
-`runtime·mstart`: `runtime/proc.go` 执行 m0 （主 OS 线程）
+`runtime·mstart`: `runtime/proc.go` 执行 M
 
 `runtime·abort` 这个使用 INT 指令执行中断，最终退出程序，loop 后的无限循环永远不会被执行。
   
@@ -180,10 +180,10 @@ loop:
 
 在整个准备过程中我们需要着重关注下面四个部分，这四个函数及其后续调用关系完整实现了整个 Go 运行时的所有机制：
 
-- `runtime·schedinit`： 在[初始化概览](2-init.md)讨论
-- `runtime·main`：在[主 goroutine 生命周期](3-main.md)讨论
-- `runtime·newproc`：创建 G
-- `runtime·mstart`：运行 M
+- `runtime·schedinit`： 在[2 初始化概览](2-init.md)讨论
+- `runtime·main`：在[3 主 goroutine 生命周期](3-main.md)讨论
+- `runtime·newproc`：创建 G，在[5 调度器：初始化](5-sched/init.md)讨论
+- `runtime·mstart`：运行 M，在[5 调度器：执行调度](5-sched/exec.md)讨论
 
 ## 总结
 

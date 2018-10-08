@@ -232,19 +232,18 @@ func setGCPercent(in int32) (out int32) {
 	return out
 }
 
-// Garbage collector phase.
-// Indicates to write barrier and synchronization task to perform.
+// 垃圾回收期阶段，表示要执行 write barrier 和同步任务
 var gcphase uint32
 
 // 编译器了解此变量
 // 如果你修改它，你还需要修改 builtin/runtime.go
 // 如果你修改前四个字节，则还需要修改插入的 write barrier 代码.
 var writeBarrier struct {
-	enabled bool    // compiler emits a check of this before calling write barrier
-	pad     [3]byte // compiler uses 32-bit load for "enabled" field
-	needed  bool    // whether we need a write barrier for current GC phase
-	cgo     bool    // whether we need a write barrier for a cgo check
-	alignme uint64  // guarantee alignment so that compiler can use a 32 or 64-bit load
+	enabled bool    // 编译器在调用 write barrier 之前会发出这样的检查
+	pad     [3]byte // 编译器在 enabled 字段中使用32位 load
+	needed  bool    // 在当前 GC 阶段中是否需要 write barrier
+	cgo     bool    // 在一个 cgo 检查中是否需要 write barrier
+	alignme uint64  // 对齐保证，从而编译器可以使用 32 或 64 位 load
 }
 
 // gcBlackenEnabled is 1 if mutator assists and background mark

@@ -50,7 +50,10 @@
     - [初始化](content/5-sched/init.md)
     - [调度执行](content/5-sched/exec.md)
     - [系统监控](content/5-sched/sysmon.md)
-6. [垃圾回收器](content/6-gc.md)
+6. 垃圾回收器
+    - [基本知识](content/6-gc/basic.md)
+    - [初始化](content/6-gc/init.md)
+    - [三色标记法](content/6-gc/mark.md)
 7. 语言特性
     - [`go`](content/7-lang/go.md)
     - [`defer`](content/7-lang/defer.md)

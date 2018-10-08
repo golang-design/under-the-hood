@@ -151,7 +151,7 @@ go:nowritebarrier
 go:nowritebarrierrec 和 go:yeswritebarrierrec
 ----------------------------------------------
 
-.如果声明的函数或任何它递归调用的函数甚至于 `go:yeswritebarrierrec` 包含 write barrier，则 `go:nowritebarrierrec` 触发编译器错误。
+如果声明的函数或任何它递归调用的函数甚至于 `go:yeswritebarrierrec` 包含 write barrier，则 `go:nowritebarrierrec` 触发编译器错误。
 
 逻辑上，编译器为每个函数调用补充 `go:nowritebarrierrec` 且当遭遇包含 write barrier 函数的时候产生一个错误。这种补充在 `go:yeswritebarrierrec` 函数上停止。
 
@@ -159,7 +159,7 @@ go:nowritebarrierrec 和 go:yeswritebarrierrec
 
 两个标志都在调度器中使用。write barrier 需要一个活跃的 P （`getg().m.p != nil`）且调度器代码通常在没有活跃 P 的情况下运行。在这种情况下，`go:nowritebarrierrec` 用于释放 P 的函数上，或者可以在没有 P 的情况下运行。而且`go:nowritebarrierrec` 还被用于当代码重新要求一个活跃的 P 时。由于这些都是函数级标注，因此释放或获取 P 的代码可能需要分为两个函数。
 
-这两个指令都在调度程序中使用。 write barrier 需要一个活跃的P（ `getg().mp != nil`）并且调度程序代码通常在没有活动 P 的情 况下运行。在这种情况下，go：nowritebarrierrec用于释放P的函数或者可以在没有P的情况下运行并且去 ：当代码重新获取活动P时使用yeswritebarrierrec。由于这些是功能级注释，因此释放或获取P的代码可能需要分为两个函数。
+这两个指令都在调度程序中使用。 write barrier 需要一个活跃的P（ `getg().mp != nil`）并且调度程序代码通常在没有活动 P 的情况下运行。在这种情况下，`go:nowritebarrierrec` 用于释放P的函数或者可以在没有P的情况下运行并且去 ：当代码重新获取活动P时使用 `go:yeswritebarrierrec`。由于这些是功能级注释，因此释放或获取P的代码可能需要分为两个函数。
 
 go:notinheap
 ------------

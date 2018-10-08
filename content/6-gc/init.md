@@ -1,10 +1,6 @@
-# 6 垃圾回收
+# 6 垃圾回收器：初始化
 
 TODO:
-
-## 初始化
-
-### 垃圾回收初始化
 
 ```go
 const (
@@ -79,10 +75,6 @@ func setGCPercent(in int32) (out int32) {
 	return out
 }
 ```
-
-## 进一步阅读的参考文献
-
-1. [Getting to Go: The Journey of Go's Garbage Collector](https://blog.golang.org/ismmkeynote)
 
 ## 许可
 
