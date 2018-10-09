@@ -2,6 +2,8 @@
 
 # Go under the hood
 
+[![](https://img.shields.io/badge/chat-telegram-%232CA5E0.svg?logo=telegram&logoColor=white)](https://t.me/joinchat/FEeulA4zgj2DsBbudBqMcQ)
+
 目前基于 `go1.11.1`
 
 ## 致潜在读者
@@ -77,8 +79,6 @@
     - [`atomic`](content/11-pkg/atomic/atomic.md)
     - `net`
 12. [WebAssembly](content/12-wasm.md)
-13. 编译前端
-14. 编译后端
 
 ## 环境
 
