@@ -1032,8 +1032,7 @@ func nilfunc() {
 	*(*uint8)(nil) = 0
 }
 
-// adjust Gobuf as if it executed a call to fn
-// and then did an immediate gosave.
+// 调整 Gobuf，就好像它执行了对 fn 的调用，然后立即进行了 gosave
 func gostartcallfn(gobuf *gobuf, fv *funcval) {
 	var fn unsafe.Pointer
 	if fv != nil {

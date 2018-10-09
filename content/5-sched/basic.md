@@ -36,8 +36,8 @@
 
 如果存在一个空闲的 P 并且没有 spinning 状态的工作线程，当 ready 一个 goroutine 时，
 就 unpark 一个额外的线程。如果一个工作线程的本地队列里没有 work ，且在全局运行队列或 netpoller
-中也没有 work，则称一个工作线程被称之为 spinning；spinning 状态由 sched.nmspinning 中的
-m.spinning 表示。
+中也没有 work，则称一个工作线程被称之为 **spinning** ；spinning 状态由 `sched.nmspinning` 和
+`m.spinning` 表示。
 
 这种方式下被 unpark 的线程同样也成为 spinning，我们也不对这种线程进行 goroutine 切换，
 因此这类线程最初就是没有 work 的状态。spinning 线程会在 park 前，从 per-P 中运行队列中寻找 work。
@@ -45,7 +45,7 @@ m.spinning 表示。
 
 如果它没有发现 work 则会将自己带 spinning 转状态然后进行 park。
 
-如果至少有一个 spinning 进程（sched.nmspinning>1），则 ready 一个 goroutine 时，
+如果至少有一个 spinning 进程（`sched.nmspinning>1`），则 ready 一个 goroutine 时，
 不会去 unpark 一个新的线程。作为补偿，如果最后一个 spinning 线程发现 work 并且停止 spinning，
 则必须 unpark 一个新的 spinning 线程。这个方法消除了不合理的线程 unpark 峰值，
 且同时保证最终的最大 CPU 并行度利用率。
@@ -58,11 +58,11 @@ ready 一个 goroutine 的通用范式为：
 
 - 提交一个 goroutine 到 per-P 的局部 work 队列
 - `#StoreLoad-style` write barrier
-- 检查 sched.nmspinning
+- 检查 `sched.nmspinning`
 
 从 spinning->non-spinning 转换的一般模式为：
 
-- 减少 nmspinning
+- 减少 `nmspinning`
 - `#StoreLoad-style` write barrier
 - 在所有 per-P 任务队列检查新的 work
 

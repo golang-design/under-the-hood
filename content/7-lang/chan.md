@@ -1,4 +1,4 @@
-# 7 chan
+# 7 关键字: chan
 
 TODO:
 

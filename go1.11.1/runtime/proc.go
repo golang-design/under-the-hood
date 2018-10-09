@@ -2174,7 +2174,8 @@ func handoffp(_p_ *p) {
 // 尝试将一个或多个 P 唤醒来执行 G
 // 当 G 可能运行时（newproc, ready）时调用该函数
 func wakep() {
-	// be conservative about spinning threads
+	// 对 spinning 线程保守一些，必要时只增加一个
+	// 如果失败，则立即返回
 	if !atomic.Cas(&sched.nmspinning, 0, 1) {
 		return
 	}
@@ -3415,12 +3416,10 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	if narg > 0 {
 		// 从 argp 参数开始的位置，复制 narg 个字节到 spArg（参数拷贝）
 		memmove(unsafe.Pointer(spArg), unsafe.Pointer(argp), uintptr(narg))
-		// This is a stack-to-stack copy. If write barriers
-		// are enabled and the source stack is grey (the
-		// destination is always black), then perform a
-		// barrier copy. We do this *after* the memmove
-		// because the destination stack may have garbage on
-		// it.
+		// 栈到栈的拷贝。
+		// 如果启用了 write barrier 并且 源栈为灰色（目标始终为黑色），
+		// 则执行 barrier 拷贝。
+		// 因为目标栈上可能有垃圾，我们在 memmove 之后执行此操作。
 		if writeBarrier.needed && !_g_.m.curg.gcscandone {
 			f := findfunc(fn.fn)
 			stkmap := (*stackmap)(funcdata(f, _FUNCDATA_ArgsPointerMaps))
@@ -3434,14 +3433,14 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	memclrNoHeapPointers(unsafe.Pointer(&newg.sched), unsafe.Sizeof(newg.sched))
 	newg.sched.sp = sp
 	newg.stktopsp = sp
-	newg.sched.pc = funcPC(goexit) + sys.PCQuantum // +PCQuantum so that previous instruction is in same function
+	newg.sched.pc = funcPC(goexit) + sys.PCQuantum // +PCQuantum 从而前一个指令还在相同的函数内
 	newg.sched.g = guintptr(unsafe.Pointer(newg))
 	gostartcallfn(&newg.sched, fn)
 
 	// 初始化 g 的基本状态
 	newg.gopc = callerpc
-	newg.ancestors = saveAncestors(callergp)
-	newg.startpc = fn.fn // 入口 pc
+	newg.ancestors = saveAncestors(callergp) // 调试相关，追踪调用方
+	newg.startpc = fn.fn                     // 入口 pc
 	if _g_.m.curg != nil {
 		newg.labels = _g_.m.curg.labels // 增加 profiler 标签
 	}
@@ -3479,9 +3478,8 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	// true 表示放入执行队列的下一个，false 表示放入队尾
 	runqput(_p_, newg, true)
 
-	// 如果有其他空闲的 P，则唤醒某个 M
-	// 如果 M 处于 spinning 状态下等待 P 或 G 的状态，则不唤醒
-	// 如果当前创建的是 runtime.main，则还没有其他任务需要执行，则不唤醒
+	// 如果有空闲的 P、且 spinning 的 M 数量为 0，且主 goroutine 已经开始运行，则进行唤醒 p
+	// 初始化阶段 mainStarted 为 false，所以 p 不会被唤醒
 	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 && mainStarted {
 		wakep()
 	}
@@ -3491,9 +3489,8 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	}
 }
 
-// saveAncestors copies previous ancestors of the given caller g and
-// includes infor for the current caller into a new set of tracebacks for
-// a g being created.
+// saveAncestors 复制给定调用者 g 的先前 ancestors
+// 并将当前调用者的信息包含到正在创建的g的一组新追溯中
 func saveAncestors(callergp *g) *[]ancestorInfo {
 	// Copy all prior info, except for the root goroutine (goid 0).
 	if debug.tracebackancestors <= 0 || callergp.goid == 0 {
@@ -4939,22 +4936,22 @@ func runqput(_p_ *p, gp *g, next bool) {
 		if oldnext == 0 {
 			return
 		}
-		// Kick the old runnext out to the regular run queue.
+		// 将原先的 runnext 踢出普通运行队列
 		gp = oldnext.ptr()
 	}
 
 retry:
-	h := atomic.Load(&_p_.runqhead) // load-acquire, synchronize with consumers
+	h := atomic.Load(&_p_.runqhead) // load-acquire, 与 consumer 进行同步
 	t := _p_.runqtail
 	if t-h < uint32(len(_p_.runq)) {
 		_p_.runq[t%uint32(len(_p_.runq))].set(gp)
-		atomic.Store(&_p_.runqtail, t+1) // store-release, makes the item available for consumption
+		atomic.Store(&_p_.runqtail, t+1) // store-release, 使 consumer 可以开始消费这个 item
 		return
 	}
 	if runqputslow(_p_, gp, h, t) {
 		return
 	}
-	// the queue is not full, now the put above must succeed
+	// 如果队列不空则上面已经返回
 	goto retry
 }
 

@@ -420,7 +420,346 @@ func newproc(siz int32, fn *funcval) {
 知道 `newproc` 会获取需要执行的 goroutine 要执行的函数体的地址、参数起始地址、参数长度、以及 goroutine 的调用地址。
 然后在 g0 系统栈上通过 `newproc1` 创建并初始化新的 goroutine ，下面我们来看 `newproc1`。
 
+```go
+// 创建一个运行 fn 的新 g，具有 narg 字节大小的参数，从 argp 开始。
+// callerps 是 go 语句的起始地址。新创建的 g 会被放入 g 的队列中等待运行。
+func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintptr) {
+	_g_ := getg() // 因为是在系统栈运行所以此时的 g 为 g0
+
+	if fn == nil {
+		_g_.m.throwing = -1 // do not dump full stacks
+		throw("go of nil func value")
+	}
+
+	_g_.m.locks++ // 禁止这时 g 的 m 被抢占因为它可以在一个局部变量中保存 p
+	siz := narg
+	siz = (siz + 7) &^ 7
+
+	// 必要时，可以分配并初始化一个更大的栈
+	// 不值得：这几乎总是一个错误
+	// 4*sizeof(uintreg): 在下方增加的额外空间
+	// sizeof(uintreg): 调用者 LR (非 x86) 返回的地址 (x86 在 gostartcall 中)
+	if siz >= _StackMin-4*sys.RegSize-sys.RegSize {
+		throw("newproc: function arguments too large for new goroutine")
+	}
+
+	// 获得 p
+	_p_ := _g_.m.p.ptr()
+	// 根据 p 获得一个新的 g
+	newg := gfget(_p_)
+
+	// 初始化阶段，gfget 是不可能找到 g 的
+	// 也可能运行中本来就已经耗尽了
+	if newg == nil {
+		// 创建一个拥有 _StackMin 大小的栈的 g
+		newg = malg(_StackMin)
+		// 将新创建的 g 从 _Gidle 更新为 _Gdead 状态
+		casgstatus(newg, _Gidle, _Gdead)
+		allgadd(newg) // 将 Gdead 状态的 g 添加到 allg，这样 GC 不会扫描未初始化的栈
+	}
+	// 检查新 g 的执行栈
+	if newg.stack.hi == 0 {
+		throw("newproc1: newg missing stack")
+	}
+
+	// 无论是取到的 g 还是新创建的 g，都应该是 _Gdead 状态
+	if readgstatus(newg) != _Gdead {
+		throw("newproc1: new g is not Gdead")
+	}
+
+	// 计算运行空间大小，对齐
+	totalSize := 4*sys.RegSize + uintptr(siz) + sys.MinFrameSize // extra space in case of reads slightly beyond frame
+	totalSize += -totalSize & (sys.SpAlign - 1)                  // align to spAlign
+
+	// 确定 sp 和参数入栈位置
+	sp := newg.stack.hi - totalSize
+	spArg := sp
+
+	// 非 x86 架构，不关心（见 traceback.go）
+	if usesLR {
+		// 调用方的 LR 寄存器
+		*(*uintptr)(unsafe.Pointer(sp)) = 0
+		prepGoExitFrame(sp)
+		spArg += sys.MinFrameSize
+	}
+
+	// 处理参数，当有参数时，将参数拷贝到 goroutine 的执行栈中
+	if narg > 0 {
+		// 从 argp 参数开始的位置，复制 narg 个字节到 spArg（参数拷贝）
+		memmove(unsafe.Pointer(spArg), unsafe.Pointer(argp), uintptr(narg))
+		// 栈到栈的拷贝。
+		// 如果启用了 write barrier 并且 源栈为灰色（目标始终为黑色），
+		// 则执行 barrier 拷贝。
+		// 因为目标栈上可能有垃圾，我们在 memmove 之后执行此操作。
+		if writeBarrier.needed && !_g_.m.curg.gcscandone {
+			f := findfunc(fn.fn)
+			stkmap := (*stackmap)(funcdata(f, _FUNCDATA_ArgsPointerMaps))
+			// We're in the prologue, so it's always stack map index 0.
+			bv := stackmapdata(stkmap, 0)
+			bulkBarrierBitmap(spArg, spArg, uintptr(narg), 0, bv.bytedata)
+		}
+	}
+
+	// 清理、创建并初始化的 g 的运行现场
+	memclrNoHeapPointers(unsafe.Pointer(&newg.sched), unsafe.Sizeof(newg.sched))
+	newg.sched.sp = sp
+	newg.stktopsp = sp
+	newg.sched.pc = funcPC(goexit) + sys.PCQuantum // +PCQuantum 从而前一个指令还在相同的函数内
+	newg.sched.g = guintptr(unsafe.Pointer(newg))
+	gostartcallfn(&newg.sched, fn)
+
+	// 初始化 g 的基本状态
+	newg.gopc = callerpc
+	newg.ancestors = saveAncestors(callergp) // 调试相关，追踪调用方
+	newg.startpc = fn.fn                     // 入口 pc
+	if _g_.m.curg != nil {
+		newg.labels = _g_.m.curg.labels // 增加 profiler 标签
+	}
+
+	// 调试相关
+	if isSystemGoroutine(newg) {
+		atomic.Xadd(&sched.ngsys, +1)
+	}
+
+	newg.gcscanvalid = false
+	// 现在将 g 更换为 _Grunnable 状态
+	casgstatus(newg, _Gdead, _Grunnable)
+
+	// 分配 goid
+	if _p_.goidcache == _p_.goidcacheend {
+		// Sched.goidgen 为最后一个分配的 id，相当于一个全局计数器
+		// 这一批必须为 [sched.goidgen+1, sched.goidgen+GoidCacheBatch].
+		// 启动时 sched.goidgen=0, 因此主 goroutine 的 goid 为 1
+		_p_.goidcache = atomic.Xadd64(&sched.goidgen, _GoidCacheBatch)
+		_p_.goidcache -= _GoidCacheBatch - 1
+		_p_.goidcacheend = _p_.goidcache + _GoidCacheBatch
+	}
+	newg.goid = int64(_p_.goidcache)
+	_p_.goidcache++
+
+	// race / trace 相关
+	if raceenabled {
+		newg.racectx = racegostart(callerpc)
+	}
+	if trace.enabled {
+		traceGoCreate(newg, newg.startpc)
+	}
+
+	// 将这里新创建的 g 放入 p 的本地队列或直接放入全局队列
+	// true 表示放入执行队列的下一个，false 表示放入队尾
+	runqput(_p_, newg, true)
+
+	// 如果有空闲的 P、且 spinning 的 M 数量为 0，且主 goroutine 已经开始运行，则进行唤醒 p
+	// 初始化阶段 mainStarted 为 false，所以 p 不会被唤醒
+	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 && mainStarted {
+		wakep()
+	}
+	_g_.m.locks--
+	if _g_.m.locks == 0 && _g_.preempt { // 恢复可抢占的请求，注意我们已经在 newstack 的时候已经被清理掉了
+		_g_.stackguard0 = stackPreempt
+	}
+}
+```
+
+创建 G 的过程也是相对比较复杂的，我们来总结一下这个过程：
+
+1. 首先尝试从 P 本地队列或全局队列获取 g
+2. 初始化过程中程序无论是本地队列还是全局队列都不可能获取到 g，因此创建一个新的 g，并为其分配运行线程（执行栈），这时 g 处于 `_Gidle` 状态
+3. 创建完成后，g 被更改为 `_Gdead` 状态，并根据要执行函数的入口地址和参数，初始化执行栈的 SP 和参数的入栈位置，并将需要的参数拷贝一份存入执行栈中
+4. 根据 SP、参数，在 `g.sched` 中保存 SP 和 PC 指针来初始化 g 的运行现场
+5. 将调用方、要执行的函数的入口 PC 进行保存，并将 g 的状态更改为 `_Grunnable`
+6. 给 goroutine 分配 id，并将其放入 P 本地队列的队头或全局队列（初始化阶段队列肯定不是满的，因此不可能放入全局队列）
+7. 检查空闲的 P，将其唤醒，准备执行 G，但我们目前处于初始化阶段，主 goroutine 尚未开始执行，因此这里不会唤醒 P。
+
+我们在额外看几个调用的函数：
+
+```go
+// 从 gfree list 中获取 g
+// 如果本地队列为空，从全局队列中取
+func gfget(_p_ *p) *g {
+retry:
+	// p 本地 gfree 队列
+	gp := _p_.gfree
+	if gp == nil && (sched.gfreeStack != nil || sched.gfreeNoStack != nil) {
+		lock(&sched.gflock)
+
+		// 创建 P 的空闲 G 链表
+		// 一个 P 的本地队列中最多 32 个空闲 G
+		for _p_.gfreecnt < 32 {
+			if sched.gfreeStack != nil {
+				// 倾向于有栈的 G
+				gp = sched.gfreeStack
+				sched.gfreeStack = gp.schedlink.ptr()
+			} else if sched.gfreeNoStack != nil {
+				gp = sched.gfreeNoStack
+				sched.gfreeNoStack = gp.schedlink.ptr()
+			} else {
+				break
+			}
+			_p_.gfreecnt++
+			sched.ngfree--
+			gp.schedlink.set(_p_.gfree)
+			_p_.gfree = gp
+		}
+		unlock(&sched.gflock)
+		// 反复创建直到空闲 G 创建满为止
+		goto retry
+	}
+	if gp != nil {
+
+		// 拿到一个 g
+		_p_.gfree = gp.schedlink.ptr()
+		_p_.gfreecnt--
+
+		// 查看是否需要分配运行栈
+		if gp.stack.lo == 0 {
+			// 栈会被 gfput 给释放，所以需要分配一个新的
+			// 栈分配发生在系统栈上
+			systemstack(func() {
+				gp.stack = stackalloc(_FixedStack)
+			})
+			// 计算栈边界
+			gp.stackguard0 = gp.stack.lo + _StackGuard
+		} else {
+			// race 相关
+			if raceenabled {
+				racemalloc(unsafe.Pointer(gp.stack.lo), gp.stack.hi-gp.stack.lo)
+			}
+			// 当存在编译标志 msan
+			if msanenabled {
+				msanmalloc(unsafe.Pointer(gp.stack.lo), gp.stack.hi-gp.stack.lo)
+			}
+		}
+	}
+	// 本地队列和全局队列都找过了
+	return gp
+}
+```
+
+整个过程：
+
 TODO:
+
+为 g 创建执行栈：
+
+```go
+// 分配一个新的 g 结构, 包含一个 stacksize 字节的的栈
+func malg(stacksize int32) *g {
+	newg := new(g)
+	if stacksize >= 0 {
+		stacksize = round2(_StackSystem + stacksize)
+		systemstack(func() {
+			newg.stack = stackalloc(uint32(stacksize))
+		})
+		newg.stackguard0 = newg.stack.lo + _StackGuard
+		newg.stackguard1 = ^uintptr(0)
+	}
+	return newg
+}
+```
+
+过程为：
+
+TODO
+
+将 g 添加到 allg 队列中：
+
+```go
+func allgadd(gp *g) {
+	if readgstatus(gp) == _Gidle {
+		throw("allgadd: bad status Gidle")
+	}
+
+	lock(&allglock)
+	allgs = append(allgs, gp)
+	allglen = uintptr(len(allgs))
+	unlock(&allglock)
+}
+```
+
+funcPC 的作用：
+
+```go
+// funcPC 返回函数 f 的入口 PC。
+// 它假设 f 是一个 func 值。否则行为是未定义的。
+// 小心：在包含插件的程序中，funcPC 可以对相同的函数返回不同的值（因为在地址空间中相同的函数可能有多个副本）
+// 为安全起见，不要在任何 == 表达式中使用此函数。它只在作为地址用于执行代码时是安全的。
+//go:nosplit
+func funcPC(f interface{}) uintptr {
+	return **(**uintptr)(add(unsafe.Pointer(&f), sys.PtrSize))
+}
+```
+
+初始化 g 的运行现场：
+
+```go
+// 调整 Gobuf，就好像它执行了对 fn 的调用，然后立即进行了 gosave
+func gostartcallfn(gobuf *gobuf, fv *funcval) {
+	var fn unsafe.Pointer
+	if fv != nil {
+		fn = unsafe.Pointer(fv.fn)
+	} else {
+		fn = unsafe.Pointer(funcPC(nilfunc))
+	}
+	gostartcall(gobuf, fn, unsafe.Pointer(fv))
+}
+// 调整 Gobuf，就好像它用上下文 ctxt 对 fn 执行了一个调用，然后立即进行了 gosave
+func gostartcall(buf *gobuf, fn, ctxt unsafe.Pointer) {
+	sp := buf.sp
+	if sys.RegSize > sys.PtrSize {
+		sp -= sys.PtrSize
+		*(*uintptr)(unsafe.Pointer(sp)) = 0
+	}
+	sp -= sys.PtrSize
+	*(*uintptr)(unsafe.Pointer(sp)) = buf.pc
+	buf.sp = sp
+	buf.pc = uintptr(fn)
+	buf.ctxt = ctxt
+}
+```
+
+最后，将 g 放入运行队列之中：
+
+```go
+// runqput 尝试将 g 放入本地可运行队列中
+// 如果 next 为 false，则 runqput 会将 g 放到可运行队列的尾部
+// 如果 next 为 true，则 runqput 会将 g 放入 _p_.runnext 槽内
+// 如果运行队列已满，则runnext 会放到全局队列中去
+// 仅在所有 P 下执行。
+func runqput(_p_ *p, gp *g, next bool) {
+	if randomizeScheduler && next && fastrand()%2 == 0 {
+		next = false
+	}
+
+	if next {
+	retryNext:
+		oldnext := _p_.runnext
+		if !_p_.runnext.cas(oldnext, guintptr(unsafe.Pointer(gp))) {
+			goto retryNext
+		}
+		if oldnext == 0 {
+			return
+		}
+		// 将原先的 runnext 踢出普通运行队列
+		gp = oldnext.ptr()
+	}
+
+retry:
+	h := atomic.Load(&_p_.runqhead) // load-acquire, 与 consumer 进行同步
+	t := _p_.runqtail
+	if t-h < uint32(len(_p_.runq)) {
+		_p_.runq[t%uint32(len(_p_.runq))].set(gp)
+		atomic.Store(&_p_.runqtail, t+1) // store-release, 使 consumer 可以开始消费这个 item
+		return
+	}
+	if runqputslow(_p_, gp, h, t) {
+		return
+	}
+	// 如果队列不空则上面已经返回
+	goto retry
+}
+```
+
 
 ## 许可
 

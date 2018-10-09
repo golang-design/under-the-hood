@@ -1,4 +1,4 @@
-# 7 panic
+# 7 关键字: panic
 
 ```go
 package main

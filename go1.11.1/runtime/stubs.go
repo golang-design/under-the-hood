@@ -154,16 +154,13 @@ func procyield(cycles uint32)
 
 type neverCallThisFunction struct{}
 
-// goexit is the return stub at the top of every goroutine call stack.
-// Each goroutine stack is constructed as if goexit called the
-// goroutine's entry point function, so that when the entry point
-// function returns, it will return to goexit, which will call goexit1
-// to perform the actual exit.
+// goexit 是每个 goroutine 调用栈顶部的返回 stub
+// 如果 goexit 是 goroutine 的入口函数，则对应的 goroutine 栈当入口函数返回时，将返回 goexit
+// 进而调用 goexit1 来完成实际的退出过程。
 //
-// This function must never be called directly. Call goexit1 instead.
-// gentraceback assumes that goexit terminates the stack. A direct
-// call on the stack will cause gentraceback to stop walking the stack
-// prematurely and if there is leftover state it may panic.
+// 该函数不能直接调用，而应调用 goexit1。
+// gentraceback 假设 goexit 终止该栈。直接调用堆栈将导致 gentraceback 提前终止堆栈，
+// 如果有剩余状态可能会导致 panic
 func goexit(neverCallThisFunction)
 
 // Not all cgocallback_gofunc frames are actually cgocallback_gofunc,
