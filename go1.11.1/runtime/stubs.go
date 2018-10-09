@@ -58,18 +58,17 @@ func badsystemstack() {
 	write(2, sp.str, int32(sp.len))
 }
 
-// memclrNoHeapPointers clears n bytes starting at ptr.
+// memclrNoHeapPointers 清除从 ptr 开始的 n 个字节
 //
-// Usually you should use typedmemclr. memclrNoHeapPointers should be
-// used only when the caller knows that *ptr contains no heap pointers
-// because either:
+// 通常情况下你应该使用 typedmemclr。memclrNoHeapPointers 应该仅在调用方知道 *ptr
+// 不包含堆指针的情况下使用，因为 *ptr 只能是下面两种情况：
 //
-// 1. *ptr is initialized memory and its type is pointer-free.
+// 1. *ptr 是初始化过的内存，且其类型不是指针。
 //
-// 2. *ptr is uninitialized memory (e.g., memory that's being reused
-//    for a new allocation) and hence contains only "junk".
+// 2. *ptr 是未初始化的内存（例如刚被新分配时使用的内存），则指包含 "junk" 垃圾内存
 //
-// in memclr_*.s
+// 见 memclr_*.s
+//
 //go:noescape
 func memclrNoHeapPointers(ptr unsafe.Pointer, n uintptr)
 
@@ -78,8 +77,7 @@ func reflect_memclrNoHeapPointers(ptr unsafe.Pointer, n uintptr) {
 	memclrNoHeapPointers(ptr, n)
 }
 
-// memmove copies n bytes from "from" to "to".
-// in memmove_*.s
+// memmove 从 "from" 复制 n 字节到 "to", 见 memmove_*.s
 //go:noescape
 func memmove(to, from unsafe.Pointer, n uintptr)
 

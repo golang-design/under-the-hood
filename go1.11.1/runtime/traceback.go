@@ -10,28 +10,22 @@ import (
 	"unsafe"
 )
 
-// The code in this file implements stack trace walking for all architectures.
-// The most important fact about a given architecture is whether it uses a link register.
-// On systems with link registers, the prologue for a non-leaf function stores the
-// incoming value of LR at the bottom of the newly allocated stack frame.
-// On systems without link registers, the architecture pushes a return PC during
-// the call instruction, so the return PC ends up above the stack frame.
-// In this file, the return PC is always called LR, no matter how it was found.
+// 该文件中的代码实现了所有体系结构的 stack trace walking
+// 关于给定体系结构最重要的事实就是它是否使用链接寄存器 LR
+// 在具有链接寄存器的系统上，non-leaf 函数的 prologue 保存了 LR 的传入值在新分配的堆栈帧的底部。
+// 在没有链接寄存器的系统上，改体系结构在压栈期间压栈并返回 PC 调用指令，因此返回的 PC 最终在栈帧上。
+// 在此文件中，返回的 PC 总是称为 LR，无论它是如何被找到的。
 //
-// To date, the opposite of a link register architecture is an x86 architecture.
-// This code may need to change if some other kind of non-link-register
-// architecture comes along.
+// 迄今为止，与链接寄存器相反的架构是 x86 架构。如果某些其他的类型的非链接寄存器架构出现，则需要修改代码。
 //
-// The other important fact is the size of a pointer: on 32-bit systems the LR
-// takes up only 4 bytes on the stack, while on 64-bit systems it takes up 8 bytes.
-// Typically this is ptrSize.
+// 另一个重要的事实是指针的大小：在 32 位系统上的 LR 在堆栈上只占用 4 个字节，而在 64 位系统上
+// 占用 8 个字节。通常由 ptrSize 表示。
 //
-// As an exception, amd64p32 has ptrSize == 4 but the CALL instruction still
-// stores an 8-byte return PC onto the stack. To accommodate this, we use regSize
-// as the size of the architecture-pushed return PC.
+// 作为例外，amd64p32 具有 ptrSize == 4 的大小但 CALL 指令仍然在栈中存储了 8 字节的 PC。
+// 为了适应这种情况，我们使用 regSize 作为体系结构推送返回 PC 的大小。
 //
-// usesLR is defined below in terms of minFrameSize, which is defined in
-// arch_$GOARCH.go. ptrSize and regSize are defined in stubs.go.
+// usesLR 使用下面的 minFrameSize 进行定义，它则在 arch_$GOARCH.go 定义。
+// ptrSize 和 regSize 在 stubs.go 中定义。
 
 const usesLR = sys.MinFrameSize > 0
 
@@ -1013,10 +1007,8 @@ func topofstack(f funcInfo, g0 bool) bool {
 		(g0 && f.funcID == funcID_asmcgocall)
 }
 
-// isSystemGoroutine reports whether the goroutine g must be omitted
-// in stack dumps and deadlock detector. This is any goroutine that
-// starts at a runtime.* entry point, except for runtime.main and
-// sometimes runtime.runfinq.
+// isSystemGoroutine 报告 goroutine g 是否在 stack dump 和 deadlock 检测器中忽略
+// 这可以是除了 runtime.main 和某些时刻的 runtime.runfinq 的任何 runtime.* 的入口的 goroutine
 func isSystemGoroutine(gp *g) bool {
 	// Keep this in sync with cmd/trace/trace.go:isSystemGoroutine.
 	f := findfunc(gp.startpc)

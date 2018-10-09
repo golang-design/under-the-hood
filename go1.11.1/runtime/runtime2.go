@@ -341,7 +341,7 @@ type g struct {
 	paniconfault   bool       // panic (instead of crash) on unexpected fault address
 	preemptscan    bool       // preempted g does scan for gc
 	gcscandone     bool       // g has scanned stack; protected by _Gscan bit in status
-	gcscanvalid    bool       // false at start of gc cycle, true if G has not run since last scan; TODO: remove?
+	gcscanvalid    bool       // 在 gc 周期开始时为 false；当 G 从上次 scan 后就没有运行时为 true TODO: remove?
 	throwsplit     bool       // must not split stack
 	raceignore     int8       // ignore race detection events
 	sysblocktraced bool       // StartTrace has emitted EvGoInSyscall about this goroutine
@@ -360,7 +360,7 @@ type g struct {
 	racectx        uintptr
 	waiting        *sudog         // sudog structures this g is waiting on (that have a valid elem ptr); in lock order
 	cgoCtxt        []uintptr      // cgo traceback context
-	labels         unsafe.Pointer // profiler labels
+	labels         unsafe.Pointer // profiler 的标签
 	timer          *timer         // 为 time.Sleep 缓存的计时器
 	selectDone     uint32         // are we participating in a select and did someone win the race?
 
@@ -461,7 +461,7 @@ type p struct {
 	deferpool    [5][]*_defer // 不同大小的可用的 defer 结构池 (见 panic.go)
 	deferpoolbuf [5][32]*_defer
 
-	// Cache of goroutine ids, amortizes accesses to runtime·sched.goidgen.
+	// goroutine id 的缓存，用于均摊 runtime·sched.goidgen 的访问
 	goidcache    uint64
 	goidcacheend uint64
 
@@ -526,6 +526,7 @@ type p struct {
 
 type schedt struct {
 	// accessed atomically. keep at top to ensure alignment on 32-bit systems.
+	// 应该被原子访问。保持在第一个字段来确保 32 位系统上的对齐
 	goidgen  uint64
 	lastpoll uint64
 

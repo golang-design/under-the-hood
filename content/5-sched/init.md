@@ -357,6 +357,7 @@ func procresize(nprocs int32) *p {
 在看 `runtime.newproc` 之前，我们先大致浏览一下 G 的各个状态。
 
 ```
+所有的 G 状态：
 _Gidle
 _Grunnable
 _Grunning
@@ -398,7 +399,7 @@ _Gscanwaiting
        +---------------------------------------------------------------------------------------------------+
 ```
 
-我们接下来就来看看 `runtime.newproc`：
+我们接下来就来粗略看一看 `runtime.newproc`：
 
 ```go
 //go:nosplit
@@ -415,7 +416,7 @@ func newproc(siz int32, fn *funcval) {
 }
 ```
 
-详细的参数获取过程需要编译器的配合，我们在 [7 go](../7-lang/go.md) 中讨论，我们只需要
+详细的参数获取过程需要编译器的配合，我们在 [7 关键字: go](../7-lang/go.md) 中讨论，现在我们只需要
 知道 `newproc` 会获取需要执行的 goroutine 要执行的函数体的地址、参数起始地址、参数长度、以及 goroutine 的调用地址。
 然后在 g0 系统栈上通过 `newproc1` 创建并初始化新的 goroutine ，下面我们来看 `newproc1`。
 
