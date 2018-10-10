@@ -72,13 +72,13 @@ func init() {
 
 var signalsOK bool
 
-// Initialize signals.
-// Called by libpreinit so runtime may not be initialized.
+// 初始化 signal 信号
+// 由 libpreinit 调用，因此运行时可能没有被初始化
 //go:nosplit
 //go:nowritebarrierrec
 func initsig(preinit bool) {
 	if !preinit {
-		// It's now OK for signal handlers to run.
+		// 已经提前初始化过了，所以 signal handler 可以直接运行
 		signalsOK = true
 	}
 

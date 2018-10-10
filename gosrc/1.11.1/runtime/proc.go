@@ -1300,13 +1300,12 @@ func mstart1() {
 	// for terminating the thread.
 	// We're never coming back to mstart1 after we call schedule,
 	// so other calls can reuse the current frame.
-	// 将调用者记录为 mcall 中的栈顶部并终止线程。在我们调用进度之后，我们再也不会回到mstart1，所以其他调用可以重用当前帧。
+	// 将调用者记录为 mcall 中的栈顶部并终止线程。在我们调用进度之后，我们再也不会回到 mstart1，所以其他调用可以重用当前帧。
 	save(getcallerpc(), getcallersp())
 	asminit()
 	minit()
 
-	// Install signal handlers; after minit so that minit can
-	// prepare the thread to be able to handle the signals.
+	// 安顿信号 handler；在 minit 之后，因为 minit 可以准备处理信号的的线程
 	if _g_.m == &m0 {
 		mstartm0()
 	}
@@ -1325,16 +1324,14 @@ func mstart1() {
 	schedule()
 }
 
-// mstartm0 implements part of mstart1 that only runs on the m0.
+// mstartm0 实现了一部分 mstart1，只运行在 m0 上
 //
-// Write barriers are allowed here because we know the GC can't be
-// running yet, so they'll be no-ops.
+// 允许 write barrier，因为我们知道 GC 此时还不能运行，因此他们没有 op。
 //
 //go:yeswritebarrierrec
 func mstartm0() {
-	// Create an extra M for callbacks on threads not created by Go.
-	// An extra M is also needed on Windows for callbacks created by
-	// syscall.NewCallback. See issue #6751 for details.
+	// 创建一个额外的 M 服务 non-Go 线程（cgo 调用中产生的线程）的回调
+	// windows 上也需要额外 M 来服务 syscall.NewCallback 产生的回调，见 issue #6751
 	if (iscgo || GOOS == "windows") && !cgoHasExtraM {
 		cgoHasExtraM = true
 		newextram()
@@ -1718,9 +1715,8 @@ func needm(x byte) {
 
 var earlycgocallback = []byte("fatal error: cgo callback before cgo call\n")
 
-// newextram allocates m's and puts them on the extra list.
-// It is called with a working local m, so that it can do things
-// like call schedlock and allocate.
+// newextram 分配一个 m 并将其放入 extra 列表中
+// 它会被工作中的本地 m 调用，因此它能够做一些调用 schedlock 和 allocate 类似的事情。
 func newextram() {
 	c := atomic.Xchg(&extraMWaiters, 0)
 	if c > 0 {
@@ -1728,7 +1724,7 @@ func newextram() {
 			oneNewExtraM()
 		}
 	} else {
-		// Make sure there is at least one extra M.
+		// 确保至少有一个额外的 M
 		mp := lockextra(true)
 		unlockextra(mp)
 		if mp == nil {
@@ -1737,7 +1733,7 @@ func newextram() {
 	}
 }
 
-// oneNewExtraM allocates an m and puts it on the extra list.
+// onNewExtraM 分配一个 m 并将其放入 extra list 中
 func oneNewExtraM() {
 	// Create extra goroutine locked to extra m.
 	// The goroutine is the context in which the cgo callback will run.
