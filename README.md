@@ -2,7 +2,7 @@
 
 # Go under the hood
 
-[![](https://img.shields.io/badge/chat-telegram-%232CA5E0.svg?logo=telegram&logoColor=white)](https://t.me/joinchat/FEeulA4zgj2DsBbudBqMcQ)
+[![](https://img.shields.io/badge/chat-telegram-%232CA5E0.svg?logo=telegram&logoColor=white&style=flat-square)](https://t.me/joinchat/FEeulA4zgj2DsBbudBqMcQ)
 
 目前基于 `go1.11.1`
 

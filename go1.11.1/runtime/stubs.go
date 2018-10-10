@@ -60,7 +60,7 @@ func badsystemstack() {
 
 // memclrNoHeapPointers 清除从 ptr 开始的 n 个字节
 //
-// 通常情况下你应该使用 typedmemclr。memclrNoHeapPointers 应该仅在调用方知道 *ptr
+// 通常情况下你应该使用 typedmemclr，而 memclrNoHeapPointers 应该仅在调用方知道 *ptr
 // 不包含堆指针的情况下使用，因为 *ptr 只能是下面两种情况：
 //
 // 1. *ptr 是初始化过的内存，且其类型不是指针。

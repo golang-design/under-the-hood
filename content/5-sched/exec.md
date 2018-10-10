@@ -716,6 +716,10 @@ func startlockedm(gp *g) {
 }
 ```
 
+## 进一步阅读的参考文献
+
+- [scheduler is slow when goroutines are frequently woken](https://github.com/golang/go/issues/18237)
+
 ## 许可
 
 [Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

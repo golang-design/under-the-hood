@@ -59,7 +59,7 @@ func mcommoninit(mp *m) {
 }
 ```
 
-其中，`mpreinit` 会初始化分配一个用于信号处理的 `gsignal`（因此，除了 g0 外，其实第一个创建的 g 应该是它）。
+其中，`mpreinit` 会初始化分配一个用于信号处理的 `gsignal`（因此，除了 g0 外，其实第一个创建的 g 应该是它，但是它并没有设置 goid）。
 
 ```go
 // 调用此方法来初始化一个新的 m (包含引导 m)
@@ -69,7 +69,6 @@ func mpreinit(mp *m) {
 	mp.gsignal.m = mp            // 指定 gsignal 拥有的 m
 }
 
-// 分配一个新的 g 结构, 包含一个 stacksize 字节的的栈
 // 分配一个新的 g 结构, 包含一个 stacksize 字节的的栈
 func malg(stacksize int32) *g {
 	newg := new(g)
@@ -403,33 +402,33 @@ _Gscanrunnable
 _Gscanrunning
 _Gscansyscall
 _Gscanwaiting
-                                                           +---------------+
-                                                           | _Gscanwaiting |
-                                                           +---------------+
-                                                                 ^  |
-                                              runtime.newstack   |  | runtime.newstack
-                                                                 |  v                               +-------------+
-               runtime.gcMarkTermination / runtime.ready      +-----------+  runtime.casgcopystack  |             |
-                                      +---------------------- | _Gwaiting | ----------------------> | _Gcopystack |
-                                      |   runtime.schedule    +-----------+  +--------------------> |             |
-                                      |                             ^        |   runtime.morestack  +-------------+
-                                      |      runtime.gcBgMarkWorker |        |   runtime.casgcopystack
-                                      |   runtime.gcMarkTermination |        |
-     New G                            v               runtime.dropg |        v
-  +--------+                    +------------+   runtime.execute  +-----------+                     +--------+
-  |        |                    |            | -----------------> |           |  runtime.Goexit     |        |
-  | _Gidle |                    | _Grunnable |                    | _Grunning | ------------------> | _Gdead | 
-  |        |                    |            | <----------------- |           |                     |        |
-  +--------+                    +------------+    runtime.Gosched +-----------+                     +--------+
-       |                          ^   ^                              ^     | runtime.entersyscallblock ^ | ^
-       |                          |   |                              |     | runtime.entersyscall      | | |
-       |                          |   |         runtime.exitsyscall  |     v                           | | |
-       |                          |   |                           +-----------+          runtime.dropm | | |
-       |                          |   +-------------------------- | _Gsyscall | -----------------------+ | |
-       |                          |                               +-----------+                          | |
-       |                          +----------------------------------------------------------------------+ |
-       |                                runtime.newproc / runtime.oneNewExtraM                             |
-       +---------------------------------------------------------------------------------------------------+
+                                               +---------------+
+                                               | _Gscanwaiting |
+                                               +---------------+
+                                                     ^  |
+                                  runtime.newstack   |  | runtime.newstack
+                                                     |  v                               +-------------+
+   runtime.gcMarkTermination / runtime.ready      +-----------+  runtime.casgcopystack  |             |
+                          +---------------------- | _Gwaiting | ----------------------> | _Gcopystack |
+                          |   runtime.schedule    +-----------+  +--------------------> |             |
+                          |                             ^        |   runtime.morestack  +-------------+
+                          |      runtime.gcBgMarkWorker |        |   runtime.casgcopystack
+                          |   runtime.gcMarkTermination |        |
+     New G                v               runtime.dropg |        v
+  +--------+        +------------+   runtime.execute  +-----------+                     +--------+
+  |        |        |            | -----------------> |           |  runtime.Goexit     |        |
+  | _Gidle |        | _Grunnable |                    | _Grunning | ------------------> | _Gdead | 
+  |        |        |            | <----------------- |           |                     |        |
+  +--------+        +------------+    runtime.Gosched +-----------+                     +--------+
+       |              ^   ^                              ^     | runtime.entersyscallblock ^ | ^
+       |              |   |                              |     | runtime.entersyscall      | | |
+       |              |   |         runtime.exitsyscall  |     v                           | | |
+       |              |   |                           +-----------+          runtime.dropm | | |
+       |              |   +-------------------------- | _Gsyscall | -----------------------+ | |
+       |              |                               +-----------+                          | |
+       |              +----------------------------------------------------------------------+ |
+       |                    runtime.newproc / runtime.oneNewExtraM                             |
+       +---------------------------------------------------------------------------------------+
 ```
 
 我们接下来就来粗略看一看 `runtime.newproc`：
@@ -596,7 +595,7 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 
 创建 G 的过程也是相对比较复杂的，我们来总结一下这个过程：
 
-1. 首先尝试从 P 本地队列或全局队列获取 g
+1. 首先尝试从 P 本地 gfree 链表或全局 gfree 队列获取已经执行过的、已经执行过的 g
 2. 初始化过程中程序无论是本地队列还是全局队列都不可能获取到 g，因此创建一个新的 g，并为其分配运行线程（执行栈），这时 g 处于 `_Gidle` 状态
 3. 创建完成后，g 被更改为 `_Gdead` 状态，并根据要执行函数的入口地址和参数，初始化执行栈的 SP 和参数的入栈位置，并将需要的参数拷贝一份存入执行栈中
 4. 根据 SP、参数，在 `g.sched` 中保存 SP 和 PC 指针来初始化 g 的运行现场
@@ -604,20 +603,21 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 6. 给 goroutine 分配 id，并将其放入 P 本地队列的队头或全局队列（初始化阶段队列肯定不是满的，因此不可能放入全局队列）
 7. 检查空闲的 P，将其唤醒，准备执行 G，但我们目前处于初始化阶段，主 goroutine 尚未开始执行，因此这里不会唤醒 P。
 
+### 细节
+
 我们在额外看几个调用的函数：
 
 ```go
-// 从 gfree list 中获取 g
-// 如果本地队列为空，从全局队列中取
+// 从 gfree 链表中获取 g
+// 如果 P 本地 gfree 链表为空，从调度器的全局 gfree 链表中取
 func gfget(_p_ *p) *g {
 retry:
-	// p 本地 gfree 队列
+	// p 本地 gfree 链表
 	gp := _p_.gfree
 	if gp == nil && (sched.gfreeStack != nil || sched.gfreeNoStack != nil) {
 		lock(&sched.gflock)
 
-		// 创建 P 的空闲 G 链表
-		// 一个 P 的本地队列中最多 32 个空闲 G
+		// 从调度器的 gfree 链表中取
 		for _p_.gfreecnt < 32 {
 			if sched.gfreeStack != nil {
 				// 倾向于有栈的 G
@@ -635,7 +635,7 @@ retry:
 			_p_.gfree = gp
 		}
 		unlock(&sched.gflock)
-		// 反复创建直到空闲 G 创建满为止
+		// 反复找
 		goto retry
 	}
 	if gp != nil {
@@ -646,7 +646,7 @@ retry:
 
 		// 查看是否需要分配运行栈
 		if gp.stack.lo == 0 {
-			// 栈会被 gfput 给释放，所以需要分配一个新的
+			// 栈可能从全局 gfree 链表中取得，栈已被 gfput 给释放，所以需要分配一个新的栈。
 			// 栈分配发生在系统栈上
 			systemstack(func() {
 				gp.stack = stackalloc(_FixedStack)
@@ -664,38 +664,23 @@ retry:
 			}
 		}
 	}
-	// 本地队列和全局队列都找过了
+	// 本地和全局都找过了，只能返回了
 	return gp
 }
 ```
 
-整个过程：
+总结一下整个过程，gfree 用来表示已经执行完毕那些 g 对象，在 P 和调度器中均有保存，目的很明显是复用：
 
-TODO:
+1. 首先从 P 的 gfree 链表中取；
+2. 如果从 P 的 gfree 链表中取不到，再看从调度器的 gfree 链表；
+    - 首先倾向于获取已经有执行栈的 g
+    - 否则才去取没有执行栈的队列
+    - 如果都找不到则确实找不到可以复用的 g 了；
+3. 无论如何，如果找到了，则从 gfree 链表中取一个 g，这时 g 可能是从调度器的 gfree 中取出的没有执行栈的 g，因此按需创建
 
-为 g 创建执行栈：
+在初始化阶段，什么都没有，这个函数直接返回 `nil`。
 
-```go
-// 分配一个新的 g 结构, 包含一个 stacksize 字节的的栈
-func malg(stacksize int32) *g {
-	newg := new(g)
-	if stacksize >= 0 {
-		stacksize = round2(_StackSystem + stacksize)
-		systemstack(func() {
-			newg.stack = stackalloc(uint32(stacksize))
-		})
-		newg.stackguard0 = newg.stack.lo + _StackGuard
-		newg.stackguard1 = ^uintptr(0)
-	}
-	return newg
-}
-```
-
-过程为：
-
-TODO
-
-将 g 添加到 allg 队列中：
+将 g 添加到 allg 队列中，用于避免 GC 扫描这些没有初始化过的栈（GC 的优化）：
 
 ```go
 func allgadd(gp *g) {
@@ -710,7 +695,48 @@ func allgadd(gp *g) {
 }
 ```
 
-funcPC 的作用：
+清理 g 的运行现场：
+
+```go
+// memclrNoHeapPointers 清除从 ptr 开始的 n 个字节
+//
+// 通常情况下你应该使用 typedmemclr，而 memclrNoHeapPointers 应该仅在调用方知道 *ptr
+// 不包含堆指针的情况下使用，因为 *ptr 只能是下面两种情况：
+//
+// 1. *ptr 是初始化过的内存，且其类型不是指针。
+//
+// 2. *ptr 是未初始化的内存（例如刚被新分配时使用的内存），则指包含 "junk" 垃圾内存
+//
+// 见 memclr_*.s
+//
+//go:noescape
+func memclrNoHeapPointers(ptr unsafe.Pointer, n uintptr)
+```
+
+清理过程是汇编实现的，就是一些内存的归零工作，简单浏览一下：
+
+```asm
+TEXT runtime·memclrNoHeapPointers(SB), NOSPLIT, $0-8
+	MOVL	ptr+0(FP), DI
+	MOVL	n+4(FP), BX
+	XORL	AX, AX
+
+	// MOVOU 好像总是比 REP STOSL 快
+tail:
+	(...)
+
+loop:
+	MOVOU	X0, 0(DI)
+	MOVOU	X0, 16(DI)
+	MOVOU	X0, 32(DI)
+	MOVOU	X0, 48(DI)
+	MOVOU	X0, 64(DI)
+	MOVOU	X0, 80(DI)
+	MOVOU	X0, 96(DI)
+	(...)
+```
+
+然后就是保存 g 的运行入口 `gostartcallfn`：
 
 ```go
 // funcPC 返回函数 f 的入口 PC。
@@ -721,11 +747,7 @@ funcPC 的作用：
 func funcPC(f interface{}) uintptr {
 	return **(**uintptr)(add(unsafe.Pointer(&f), sys.PtrSize))
 }
-```
 
-初始化 g 的运行现场：
-
-```go
 // 调整 Gobuf，就好像它执行了对 fn 的调用，然后立即进行了 gosave
 func gostartcallfn(gobuf *gobuf, fv *funcval) {
 	var fn unsafe.Pointer
@@ -751,7 +773,9 @@ func gostartcall(buf *gobuf, fn, ctxt unsafe.Pointer) {
 }
 ```
 
-最后，将 g 放入运行队列之中：
+整个过程就只是将要执行的函数 `fv` 或者称 `fn` 保存到了 `newg.sched` 这个 buf 中。
+
+最后，将 g 放入运行队列之中的 `runqput`：
 
 ```go
 // runqput 尝试将 g 放入本地可运行队列中
@@ -780,11 +804,13 @@ func runqput(_p_ *p, gp *g, next bool) {
 retry:
 	h := atomic.Load(&_p_.runqhead) // load-acquire, 与 consumer 进行同步
 	t := _p_.runqtail
+	// 如果 P 的本地队列没有满，入队
 	if t-h < uint32(len(_p_.runq)) {
 		_p_.runq[t%uint32(len(_p_.runq))].set(gp)
 		atomic.Store(&_p_.runqtail, t+1) // store-release, 使 consumer 可以开始消费这个 item
 		return
 	}
+	// 可运行队列已经满了，只能扔给全局队列了
 	if runqputslow(_p_, gp, h, t) {
 		return
 	}
@@ -793,6 +819,74 @@ retry:
 }
 ```
 
+扔给全局队列有什么意想不到的操作？
+
+```go
+// 将 g 和一批 work 从本地 runnable 队列放入全局队列
+// 由拥有 P 的 M 执行
+func runqputslow(_p_ *p, gp *g, h, t uint32) bool {
+	var batch [len(_p_.runq)/2 + 1]*g
+
+	// 首先，从本地队列中抓取一半 work
+	n := t - h
+	n = n / 2
+	if n != uint32(len(_p_.runq)/2) {
+		throw("runqputslow: queue is not full")
+	}
+	for i := uint32(0); i < n; i++ {
+		batch[i] = _p_.runq[(h+i)%uint32(len(_p_.runq))].ptr()
+	}
+	if !atomic.Cas(&_p_.runqhead, h, h+n) { // cas-release, commits consume
+		return false
+	}
+	batch[n] = gp
+
+	// 打乱顺序
+	if randomizeScheduler {
+		for i := uint32(1); i <= n; i++ {
+			j := fastrandn(i + 1)
+			batch[i], batch[j] = batch[j], batch[i]
+		}
+	}
+
+	// 将 goroutine 彼此连接
+	for i := uint32(0); i < n; i++ {
+		batch[i].schedlink.set(batch[i+1])
+	}
+
+	// 将这批 work 放到全局队列中去
+	lock(&sched.lock)
+	globrunqputbatch(batch[0], batch[n], int32(n+1))
+	unlock(&sched.lock)
+	return true
+}
+// 将一批 runnable goroutine 放入全局 runnable 队列中
+// 调度器必须锁住才可调用
+func globrunqputbatch(ghead *g, gtail *g, n int32) {
+	gtail.schedlink = 0
+	if sched.runqtail != 0 {
+		sched.runqtail.ptr().schedlink.set(ghead)
+	} else {
+		sched.runqhead.set(ghead)
+	}
+	sched.runqtail.set(gtail)
+	sched.runqsize += n
+}
+```
+
+可见，当要将一个 g 放入全局队列时，不仅仅只影响它自己，
+还会将本地队列中一半的 work 给拿走，然后将他们的执行顺序重新打乱。
+再放入全局队列。
+
+## 总结
+
+我们已经分析完了整个运行链条：`mcommoninit` --> `procresize` --> `newproc`。
+
+在调度器的初始化过程中，首先通过 `mcommoninit` 对 M 的信号 G 进行初始化。
+而后通过 `procresize` 创建与 CPU 核心数 (或与用户指定的 GOMAXPROCS) 相同的 P。
+最后通过 `newproc` 创建包含可以运行要执行函数的执行栈、运行现场的 G，并将创建的 G
+放入刚创建好的 P 的本地可运行队列（第一个入队的 G，也就是主 goroutine 要执行的函数体），
+完成 G 的创建。
 
 ## 许可
 

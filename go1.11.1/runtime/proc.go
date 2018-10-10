@@ -3568,17 +3568,16 @@ func gfput(_p_ *p, gp *g) {
 	}
 }
 
-// 从 gfree list 中获取 g
-// 如果本地队列为空，从全局队列中取
+// 从 gfree 链表中获取 g
+// 如果 P 本地 gfree 链表为空，从调度器的全局 gfree 链表中取
 func gfget(_p_ *p) *g {
 retry:
-	// p 本地 gfree 队列
+	// p 本地 gfree 链表
 	gp := _p_.gfree
 	if gp == nil && (sched.gfreeStack != nil || sched.gfreeNoStack != nil) {
 		lock(&sched.gflock)
 
-		// 创建 P 的空闲 G 链表
-		// 一个 P 的本地队列中最多 32 个空闲 G
+		// 从调度器的 gfree 链表中取
 		for _p_.gfreecnt < 32 {
 			if sched.gfreeStack != nil {
 				// 倾向于有栈的 G
@@ -3596,7 +3595,7 @@ retry:
 			_p_.gfree = gp
 		}
 		unlock(&sched.gflock)
-		// 反复创建直到空闲 G 创建满为止
+		// 反复找
 		goto retry
 	}
 	if gp != nil {
@@ -3607,7 +3606,7 @@ retry:
 
 		// 查看是否需要分配运行栈
 		if gp.stack.lo == 0 {
-			// 栈会被 gfput 给释放，所以需要分配一个新的
+			// 栈可能从全局 gfree 链表中取得，栈已被 gfput 给释放，所以需要分配一个新的栈。
 			// 栈分配发生在系统栈上
 			systemstack(func() {
 				gp.stack = stackalloc(_FixedStack)
@@ -3625,7 +3624,7 @@ retry:
 			}
 		}
 	}
-	// 本地队列和全局队列都找过了
+	// 本地和全局都找过了，只能返回了
 	return gp
 }
 
@@ -4823,8 +4822,8 @@ func globrunqputhead(gp *g) {
 	sched.runqsize++
 }
 
-// Put a batch of runnable goroutines on the global runnable queue.
-// Sched must be locked.
+// 将一批 runnable goroutine 放入全局 runnable 队列中
+// 调度器必须锁住才可调用
 func globrunqputbatch(ghead *g, gtail *g, n int32) {
 	gtail.schedlink = 0
 	if sched.runqtail != 0 {
@@ -4950,11 +4949,13 @@ func runqput(_p_ *p, gp *g, next bool) {
 retry:
 	h := atomic.Load(&_p_.runqhead) // load-acquire, 与 consumer 进行同步
 	t := _p_.runqtail
+	// 如果 P 的本地队列没有满，入队
 	if t-h < uint32(len(_p_.runq)) {
 		_p_.runq[t%uint32(len(_p_.runq))].set(gp)
 		atomic.Store(&_p_.runqtail, t+1) // store-release, 使 consumer 可以开始消费这个 item
 		return
 	}
+	// 可运行队列已经满了，只能扔给全局队列了
 	if runqputslow(_p_, gp, h, t) {
 		return
 	}
@@ -4962,12 +4963,12 @@ retry:
 	goto retry
 }
 
-// Put g and a batch of work from local runnable queue on global queue.
-// Executed only by the owner P.
+// 将 g 和一批 work 从本地 runnable 队列放入全局队列
+// 由拥有 P 的 M 执行
 func runqputslow(_p_ *p, gp *g, h, t uint32) bool {
 	var batch [len(_p_.runq)/2 + 1]*g
 
-	// First, grab a batch from local queue.
+	// 首先，从本地队列中抓取一半 work
 	n := t - h
 	n = n / 2
 	if n != uint32(len(_p_.runq)/2) {
@@ -4981,6 +4982,7 @@ func runqputslow(_p_ *p, gp *g, h, t uint32) bool {
 	}
 	batch[n] = gp
 
+	// 打乱顺序
 	if randomizeScheduler {
 		for i := uint32(1); i <= n; i++ {
 			j := fastrandn(i + 1)
@@ -4988,12 +4990,12 @@ func runqputslow(_p_ *p, gp *g, h, t uint32) bool {
 		}
 	}
 
-	// Link the goroutines.
+	// 将 goroutine 彼此连接
 	for i := uint32(0); i < n; i++ {
 		batch[i].schedlink.set(batch[i+1])
 	}
 
-	// Now put the batch on global queue.
+	// 将这批 work 放到全局队列中去
 	lock(&sched.lock)
 	globrunqputbatch(batch[0], batch[n], int32(n+1))
 	unlock(&sched.lock)

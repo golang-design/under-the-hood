@@ -14,7 +14,7 @@ TEXT runtime·memclrNoHeapPointers(SB), NOSPLIT, $0-8
 	MOVL	n+4(FP), BX
 	XORL	AX, AX
 
-	// MOVOU seems always faster than REP STOSL.
+	// MOVOU 好像总是比 REP STOSL 快
 tail:
 	// BSR+branch table make almost all memmove/memclr benchmarks worse. Not worth doing.
 	TESTL	BX, BX
