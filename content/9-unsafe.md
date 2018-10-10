@@ -1,6 +1,6 @@
 # 9 unsafe 范式
 
-`unsafe` 包该包会绕过所有的 Go 类型安全检查，几乎是 Cgo 的灵魂，也是支撑 Go 运行时、`reflect`、系统调用等机制的核心。
+`unsafe` 包会绕过所有的 Go 类型安全检查，几乎是 Cgo 的灵魂，也是支撑 Go 运行时、`reflect`、系统调用等机制的核心。
 本文内容几乎直接翻译自官方文档。
 
 ## 任意类型 `ArbitraryType`

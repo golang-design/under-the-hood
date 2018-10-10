@@ -6,8 +6,8 @@ M/P/G 彼此的初始化顺序遵循：`mcommoninit` --> `procresize` --> `newpr
 ## M 初始化
 
 M 其实就是 OS 线程，它只有两个状态：spinning 或 unspinning。
-在调度器初始化阶段，只有一个 M，那就是主 OS 线程，因此这里的 common init 仅仅只是将所有
-M 的链表进行一个初始化。
+在调度器初始化阶段，只有一个 M，那就是主 OS 线程，因此这里的 common init 仅仅只是将对 M 进行一个初步的初始化，
+该初始化进包含对 M 及用于处理 M 信号的 G 的相关运算操作，未涉及工作线程的 park/unpark。
 
 ```go
 func mcommoninit(mp *m) {
@@ -56,6 +56,39 @@ func mcommoninit(mp *m) {
 	if iscgo || GOOS == "solaris" || GOOS == "windows" {
 		mp.cgoCallers = new(cgoCallers)
 	}
+}
+```
+
+其中，`mpreinit` 会初始化分配一个用于信号处理的 `gsignal`（因此，除了 g0 外，其实第一个创建的 g 应该是它）。
+
+```go
+// 调用此方法来初始化一个新的 m (包含引导 m)
+// 从一个父线程上进行调用（引导时为主线程），可以分配内存
+func mpreinit(mp *m) {
+	mp.gsignal = malg(32 * 1024) // OS X 需要 >= 8K，此处创建处理 singnal 的 g
+	mp.gsignal.m = mp            // 指定 gsignal 拥有的 m
+}
+
+// 分配一个新的 g 结构, 包含一个 stacksize 字节的的栈
+// 分配一个新的 g 结构, 包含一个 stacksize 字节的的栈
+func malg(stacksize int32) *g {
+	newg := new(g)
+	if stacksize >= 0 {
+		// 将 stacksize 舍入为 2 的指数
+		stacksize = round2(_StackSystem + stacksize)
+
+		// 从内存分配器中分配栈
+		systemstack(func() {
+			newg.stack = stackalloc(uint32(stacksize))
+		})
+
+		// 计算栈的低位边界
+		newg.stackguard0 = newg.stack.lo + _StackGuard
+
+		// 不指定高位边界
+		newg.stackguard1 = ^uintptr(0)
+	}
+	return newg
 }
 ```
 

@@ -3320,11 +3320,18 @@ func syscall_runtime_AfterExec() {
 func malg(stacksize int32) *g {
 	newg := new(g)
 	if stacksize >= 0 {
+		// 将 stacksize 舍入为 2 的指数
 		stacksize = round2(_StackSystem + stacksize)
+
+		// 从内存分配器中分配栈
 		systemstack(func() {
 			newg.stack = stackalloc(uint32(stacksize))
 		})
+
+		// 计算栈的低位边界
 		newg.stackguard0 = newg.stack.lo + _StackGuard
+
+		// 不指定高位边界
 		newg.stackguard1 = ^uintptr(0)
 	}
 	return newg
