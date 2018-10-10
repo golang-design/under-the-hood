@@ -1,6 +1,6 @@
 # 2 初始化概览
 
-本节简单讨论程序初始化工作，即 `runtime·schedinit`。
+本节简单讨论程序初始化工作，即 `runtime.schedinit`。
 
 ```go
 // 启动顺序

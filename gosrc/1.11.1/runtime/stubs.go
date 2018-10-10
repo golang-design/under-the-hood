@@ -118,11 +118,10 @@ func sync_fastrand() uint32 { return fastrand() }
 //go:noescape
 func memequal(a, b unsafe.Pointer, size uintptr) bool
 
-// noescape hides a pointer from escape analysis.  noescape is
-// the identity function but escape analysis doesn't think the
-// output depends on the input.  noescape is inlined and currently
-// compiles down to zero instructions.
-// USE CAREFULLY!
+// noescape 从逃逸分析中隐藏了一个指针。noescape 是一个恒等变换（数学上的）。
+// 但会让逃逸分析认为输出结果不依赖于输入。
+// noescape 为内嵌且当前编译器会将其优化为零指令（无开销）
+// 小心使用！
 //go:nosplit
 func noescape(p unsafe.Pointer) unsafe.Pointer {
 	x := uintptr(p)

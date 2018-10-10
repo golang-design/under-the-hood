@@ -1258,11 +1258,13 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 func mstart() {
 	_g_ := getg()
 
+	// 终于开始确定执行栈的边界了
+	// 通过检查 g 执行占的边界来确定是否为系统栈
 	osStack := _g_.stack.lo == 0
 	if osStack {
-		// Initialize stack bounds from system stack.
-		// Cgo may have left stack size in stack.hi.
-		// minit may update the stack bounds.
+		// 根据系统栈初始化执行栈的边界
+		// cgo 可能会离开 stack.hi
+		// minit 可能会更新栈的边界
 		size := _g_.stack.hi
 		if size == 0 {
 			size = 8192 * sys.StackGuardMultiplier
@@ -1270,18 +1272,17 @@ func mstart() {
 		_g_.stack.hi = uintptr(noescape(unsafe.Pointer(&size)))
 		_g_.stack.lo = _g_.stack.hi - size + 1024
 	}
-	// Initialize stack guards so that we can start calling
-	// both Go and C functions with stack growth prologues.
+	// 初始化栈 guard，进而可以同时调用 Go 或 C 函数。
 	_g_.stackguard0 = _g_.stack.lo + _StackGuard
 	_g_.stackguard1 = _g_.stackguard0
+
+	// 启动！
 	mstart1()
 
 	// 退出线程
 	if GOOS == "windows" || GOOS == "solaris" || GOOS == "plan9" || GOOS == "darwin" {
-		// Window, Solaris, Darwin and Plan 9 always system-allocate
-		// the stack, but put it in _g_.stack before mstart,
-		// so the logic above hasn't set osStack yet.
-
+		// 由于 windows, solaris, darwin 和 plan9 总是系统分配的栈，在在 mstart 之前放进 _g_.stack 的
+		// 因此上面的逻辑还没有设置 osStack。
 		osStack = true
 	}
 	mexit(osStack)
@@ -1341,14 +1342,13 @@ func mstartm0() {
 	initsig(false)
 }
 
-// mexit tears down and exits the current thread.
+// mexit 销毁并退出当前线程
 //
-// Don't call this directly to exit the thread, since it must run at
-// the top of the thread stack. Instead, use gogo(&_g_.m.g0.sched) to
-// unwind the stack to the point that exits the thread.
+// 请不要直接调用来退出线程，因为它必须在线程栈顶上运行。
+// 相反，请使用 gogo(&_g_.m.g0.sched) 来解除栈并退出线程。
 //
-// It is entered with m.p != nil, so write barriers are allowed. It
-// will release the P before exiting.
+// 当调用时，m.p != nil。因此可以使用 write barrier。
+// 在退出前它会释放当前绑定的 P。
 //
 //go:yeswritebarrierrec
 func mexit(osStack bool) {
