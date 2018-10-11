@@ -605,7 +605,7 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 
 ### 细节
 
-我们在额外看几个调用的函数：
+我们再额外看几个调用的函数：
 
 ```go
 // 从 gfree 链表中获取 g

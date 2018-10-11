@@ -451,7 +451,7 @@ type schedt struct {
 - 管理了 defer 调用池
 - 管理了 GC 和系统监控的信号
 - 管理了需要在 safe point 时执行的函数
-- 统计了(极少发生的)动态调整 P 所花的
+- 统计了(极少发生的)动态调整 P 所花的时间
 
 其中 `muintptr` 本质上就是 `uintptr`，在 [9 unsafe 范式](../9-unsafe) 中我们知道，因为栈会发生移动，uintptr 在 safe point 之外是不能被局部持有的，所以 `muintptr` 的使用必须非常小心：
 

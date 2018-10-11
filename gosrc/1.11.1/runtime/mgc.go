@@ -246,9 +246,8 @@ var writeBarrier struct {
 	alignme uint64  // 对齐保证，从而编译器可以使用 32 或 64 位 load
 }
 
-// gcBlackenEnabled is 1 if mutator assists and background mark
-// workers are allowed to blacken objects. This must only be set when
-// gcphase == _GCmark.
+// gcBlackenEnabled 如果 mutator assists 和 background mark worker 被允许 blacken 对象。
+// 它只有在 gcphase == _GCmark 时才被设置
 var gcBlackenEnabled uint32
 
 // gcBlackenPromptly indicates that optimizations that may

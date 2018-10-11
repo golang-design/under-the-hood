@@ -1285,6 +1285,8 @@ func mstart() {
 		// 因此上面的逻辑还没有设置 osStack。
 		osStack = true
 	}
+
+	// 退出线程
 	mexit(osStack)
 }
 
@@ -1296,31 +1298,34 @@ func mstart1() {
 		throw("bad runtime·mstart")
 	}
 
-	// Record the caller for use as the top of stack in mcall and
-	// for terminating the thread.
-	// We're never coming back to mstart1 after we call schedule,
-	// so other calls can reuse the current frame.
-	// 将调用者记录为 mcall 中的栈顶部并终止线程。在我们调用进度之后，我们再也不会回到 mstart1，所以其他调用可以重用当前帧。
+	// 为了在 mcall 的栈顶使用调用方来结束当前线程，做记录
+	// 当进入 schedule 之后，我们再也不会回到 mstart1，所以其他调用可以复用当前帧。
 	save(getcallerpc(), getcallersp())
 	asminit()
 	minit()
 
-	// 安顿信号 handler；在 minit 之后，因为 minit 可以准备处理信号的的线程
+	// 设置信号 handler；在 minit 之后，因为 minit 可以准备处理信号的的线程
 	if _g_.m == &m0 {
 		mstartm0()
 	}
 
+	// 执行启动函数
 	if fn := _g_.m.mstartfn; fn != nil {
 		fn()
 	}
 
+	// GC startTheWorld 会检查 spinning M 是否少于并发标记需求
+	// 新建 m，设置 m.helpgc = -1，加入闲置队列等待唤醒
 	if _g_.m.helpgc != 0 {
 		_g_.m.helpgc = 0
 		stopm()
 	} else if _g_.m != &m0 {
+		// 绑定 p
 		acquirep(_g_.m.nextp.ptr())
 		_g_.m.nextp = 0
 	}
+
+	// 彻底准备好，开始调度，永不返回
 	schedule()
 }
 
@@ -1354,6 +1359,7 @@ func mexit(osStack bool) {
 
 	if m == &m0 {
 		// This is the main thread. Just wedge it.
+		// 这是主线程，
 		//
 		// On Linux, exiting the main thread puts the process
 		// into a non-waitable zombie state. On Plan 9,
@@ -1911,23 +1917,27 @@ var newmHandoff struct {
 	haveTemplateThread uint32
 }
 
-// Create a new m. It will start off with a call to fn, or else the scheduler.
-// fn needs to be static and not a heap allocated closure.
-// May run with m.p==nil, so write barriers are not allowed.
+// 创建一个新的 m. 它会启动并调用 fn 或调度器
+// fn 必须是静态、非堆上分配的闭包
+// 它可能在 m.p==nil 时运行，因此不允许 write barrier
 //go:nowritebarrierrec
 func newm(fn func(), _p_ *p) {
+
+	// 分配一个 m
 	mp := allocm(_p_, fn)
+
+	// 设置 p 用于后续绑定
 	mp.nextp.set(_p_)
+
+	// 设置 signal mask
 	mp.sigmask = initSigmask
+
 	if gp := getg(); gp != nil && gp.m != nil && (gp.m.lockedExt != 0 || gp.m.incgo) && GOOS != "plan9" {
-		// We're on a locked M or a thread that may have been
-		// started by C. The kernel state of this thread may
-		// be strange (the user may have locked it for that
-		// purpose). We don't want to clone that into another
-		// thread. Instead, ask a known-good thread to create
-		// the thread for us.
+		// 我们处于一个锁定的 M 或可能由 C 启动的线程。这个线程的内核状态可能
+		// 很奇怪（用户可能已将其锁定）。我们不想将其克隆到另一个线程。
+		// 相反，请求一个已知状态良好的线程来创建给我们的线程。
 		//
-		// This is disabled on Plan 9. See golang.org/issue/22227.
+		// 在 plan9 上禁用，见 golang.org/issue/22227
 		//
 		// TODO: This may be unnecessary on Windows, which
 		// doesn't model thread creation off fork.
@@ -1939,6 +1949,7 @@ func newm(fn func(), _p_ *p) {
 		newmHandoff.newm.set(mp)
 		if newmHandoff.waiting {
 			newmHandoff.waiting = false
+			// 唤醒 m, spinning -> non-spinning
 			notewakeup(&newmHandoff.wake)
 		}
 		unlock(&newmHandoff.lock)
@@ -2022,10 +2033,8 @@ func templateThread() {
 	}
 }
 
-// Stops execution of the current m until new work is available.
-// Returns with acquired P.
 // 停止当前 m 的执行，直到新的 work 有效
-// 返回要求绑定的 p
+// 在包含要求的 P 下返回
 func stopm() {
 	_g_ := getg()
 
@@ -2111,8 +2120,8 @@ func startm(_p_ *p, spinning bool) {
 	notewakeup(&mp.park)
 }
 
-// Hands off P from syscall or locked M.
-// Always runs without a P, so write barriers are not allowed.
+// 从 syscall 或 locked M 传递 P
+// 总是在没有 P 下运行，所以不允许 write barrier
 //go:nowritebarrierrec
 func handoffp(_p_ *p) {
 	// handoffp must start an M in any situation where
@@ -2178,8 +2187,8 @@ func wakep() {
 	startm(nil, true)
 }
 
-// Stops execution of the current m that is locked to a g until the g is runnable again.
-// Returns with acquired P.
+// 停止当前正在执行做主的 g 的 m 的执行，直到 g 重新变为 runnable。
+// 返回获得的 P
 func stoplockedm() {
 	_g_ := getg()
 
@@ -2187,12 +2196,12 @@ func stoplockedm() {
 		throw("stoplockedm: inconsistent locking")
 	}
 	if _g_.m.p != 0 {
-		// Schedule another M to run this p.
+		// 调度其他 M 来运行此 P
 		_p_ := releasep()
 		handoffp(_p_)
 	}
 	incidlelocked(1)
-	// Wait until another thread schedules lockedg again.
+	// 等待直到其他线程可以再次调度 lockedg
 	notesleep(&_g_.m.park)
 	noteclear(&_g_.m.park)
 	status := readgstatus(_g_.m.lockedg.ptr())
@@ -2226,8 +2235,8 @@ func startlockedm(gp *g) {
 	stopm()
 }
 
-// Stops the current m for stopTheWorld.
-// Returns when the world is restarted.
+// 为 stopTheWorld 停止当前的 m
+// 当 world 重启完成后返回
 func gcstopm() {
 	_g_ := getg()
 
@@ -2265,6 +2274,7 @@ func gcstopm() {
 func execute(gp *g, inheritTime bool) {
 	_g_ := getg()
 
+	// 将 g 正式切换为 _Grunning 状态
 	casgstatus(gp, _Grunnable, _Grunning)
 	gp.waitsince = 0
 	gp.preempt = false
@@ -2275,12 +2285,13 @@ func execute(gp *g, inheritTime bool) {
 	_g_.m.curg = gp
 	gp.m = _g_.m
 
-	// Check whether the profiler needs to be turned on or off.
+	// profiling 相关
 	hz := sched.profilehz
 	if _g_.m.profilehz != hz {
 		setThreadCPUProfiler(hz)
 	}
 
+	// trace 相关
 	if trace.enabled {
 		// GoSysExit has to happen when we have a P, but before GoStart.
 		// So we emit it here.
@@ -2558,8 +2569,8 @@ func resetspinning() {
 	}
 }
 
-// Injects the list of runnable G's into the scheduler.
-// Can run concurrently with GC.
+// 将 runnable g 列表插入到调度器中
+// 可以与 gc 并发运行
 func injectglist(glist *g) {
 	if glist == nil {
 		return
@@ -2591,6 +2602,7 @@ func schedule() {
 		throw("schedule: holding locks")
 	}
 
+	// m.lockedg 会在 lockosthread 下变为非零
 	if _g_.m.lockedg != 0 {
 		stoplockedm()
 		execute(_g_.m.lockedg.ptr(), false) // 永不返回
@@ -2604,6 +2616,7 @@ func schedule() {
 
 top:
 	if sched.gcwaiting != 0 {
+		// 如果还在等待 gc，则
 		gcstopm()
 		goto top
 	}
@@ -2622,53 +2635,66 @@ top:
 			traceGoUnpark(gp, 0)
 		}
 	}
+
+	// 正在 gc，去找 gc 的 g
 	if gp == nil && gcBlackenEnabled != 0 {
 		gp = gcController.findRunnableGCWorker(_g_.m.p.ptr())
 	}
+
 	if gp == nil {
-		// Check the global runnable queue once in a while to ensure fairness.
-		// Otherwise two goroutines can completely occupy the local runqueue
-		// by constantly respawning each other.
+		// 说明不在 gc
+		//
+		// 每调度 61 次，就检查一次全局队列，保证公平性
+		// 否则两个 goroutine 可以通过互相 respawn 一直占领本地的 runqueue
 		if _g_.m.p.ptr().schedtick%61 == 0 && sched.runqsize > 0 {
 			lock(&sched.lock)
+			// 从全局队列中偷 g
 			gp = globrunqget(_g_.m.p.ptr(), 1)
 			unlock(&sched.lock)
 		}
 	}
 	if gp == nil {
+		// 说明不在 gc
+		// 两种情况：
+		//  1. 普通取
+		//  2. 全局队列中偷不到的取
+		// 从本地队列中取
 		gp, inheritTime = runqget(_g_.m.p.ptr())
 		if gp != nil && _g_.m.spinning {
 			throw("schedule: spinning with local work")
 		}
 	}
 	if gp == nil {
-		gp, inheritTime = findrunnable() // blocks until work is available
+		// 如果偷都偷不到，则休眠，在此阻塞
+		gp, inheritTime = findrunnable()
 	}
 
-	// This thread is going to run a goroutine and is not spinning anymore,
-	// so if it was marked as spinning we need to reset it now and potentially
-	// start a new spinning M.
+	// 这个时候一定取到 g 了
+
 	if _g_.m.spinning {
+		// 如果 m 是 spinning 状态，则
+		//   1. 从 spinning -> non-spinning
+		//   2. 在没有 spinning 的 m 的情况下，再多创建一个新的 spinning m
 		resetspinning()
 	}
 
 	if gp.lockedm != 0 {
-		// Hands off own p to the locked m,
-		// then blocks waiting for a new p.
+		// 如果 g 需要 lock 到 m 上，则会将当前的 p
+		// 给这个要 lock 的 g
+		// 然后阻塞等待一个新的 p
 		startlockedm(gp)
 		goto top
 	}
 
+	// 开始执行
 	execute(gp, inheritTime)
 }
 
-// dropg removes the association between m and the current goroutine m->curg (gp for short).
-// Typically a caller sets gp's status away from Grunning and then
-// immediately calls dropg to finish the job. The caller is also responsible
-// for arranging that gp will be restarted using ready at an
-// appropriate time. After calling dropg and arranging for gp to be
-// readied later, the caller can do other work but eventually should
-// call schedule to restart the scheduling of goroutines on this m.
+// dropg 移除 m 与当前 goroutine m->curg（简称 gp ）之间的关联。
+// 通常，调用方将 gp 的状态设置为非 _Grunning 后立即调用 dropg 完成工作。
+// 调用方也有责任在 gp 将使用 ready 时重新启动时进行相关安排。
+// 在调用 dropg 并安排 gp ready 好后，调用者可以做其他工作，但最终应该
+// 调用 schedule 来重新启动此 m 上的 goroutine 的调度。
 func dropg() {
 	_g_ := getg()
 
@@ -2751,32 +2777,39 @@ func gopreempt_m(gp *g) {
 	goschedImpl(gp)
 }
 
-// Finishes execution of the current goroutine.
+// 完成当前 goroutine 的执行
 func goexit1() {
+
+	// race 和 trace 相关
 	if raceenabled {
 		racegoend()
 	}
 	if trace.enabled {
 		traceGoEnd()
 	}
+
+	// 开始收尾工作
 	mcall(goexit0)
 }
 
-// goexit continuation on g0.
+// goexit 继续在 g0 上执行
 func goexit0(gp *g) {
 	_g_ := getg()
 
+	// 切换当前的 g 为 _Gdead
 	casgstatus(gp, _Grunning, _Gdead)
 	if isSystemGoroutine(gp) {
 		atomic.Xadd(&sched.ngsys, -1)
 	}
+
+	// 清理
 	gp.m = nil
 	locked := gp.lockedm != 0
 	gp.lockedm = 0
 	_g_.m.lockedg = 0
 	gp.paniconfault = false
-	gp._defer = nil // should be true already but just in case.
-	gp._panic = nil // non-nil for Goexit during panic. points at stack-allocated data.
+	gp._defer = nil // 应该已经为 true，但以防万一
+	gp._panic = nil // Goexit 中 panic 则不为 nil， 指向栈分配的数据
 	gp.writebuf = nil
 	gp.waitreason = 0
 	gp.param = nil
@@ -2784,22 +2817,24 @@ func goexit0(gp *g) {
 	gp.timer = nil
 
 	if gcBlackenEnabled != 0 && gp.gcAssistBytes > 0 {
-		// Flush assist credit to the global pool. This gives
-		// better information to pacing if the application is
-		// rapidly creating an exiting goroutines.
+		// 刷新 assist credit 到全局池。
+		// 如果应用在快速创建 goroutine，这可以为 pacing 提供更好的信息。
 		scanCredit := int64(gcController.assistWorkPerByte * float64(gp.gcAssistBytes))
 		atomic.Xaddint64(&gcController.bgScanCredit, scanCredit)
 		gp.gcAssistBytes = 0
 	}
 
-	// Note that gp's stack scan is now "valid" because it has no
-	// stack.
+	// 注意 gp 的栈 scan 目前开始变为 valid，因为它没有栈了
 	gp.gcscanvalid = true
+
+	// 解绑 m 和 g
 	dropg()
 
-	if GOARCH == "wasm" { // no threads yet on wasm
+	if GOARCH == "wasm" { // wasm 目前还没有线程支持
+		// 将 g 扔进 gfree 链表中等待复用
 		gfput(_g_.m.p.ptr(), gp)
-		schedule() // never returns
+		// 再次进行调度
+		schedule() // 永不返回
 	}
 
 	if _g_.m.lockedInt != 0 {
@@ -2807,7 +2842,10 @@ func goexit0(gp *g) {
 		throw("internal lockOSThread error")
 	}
 	_g_.m.lockedExt = 0
+
+	// 将 g 扔进 gfree 链表中等待复用
 	gfput(_g_.m.p.ptr(), gp)
+
 	if locked {
 		// The goroutine may have locked this thread because
 		// it put it in an unusual kernel state. Kill it
@@ -2819,6 +2857,8 @@ func goexit0(gp *g) {
 			gogo(&_g_.m.g0.sched)
 		}
 	}
+
+	// 再次进行调度
 	schedule()
 }
 
@@ -4345,9 +4385,9 @@ func incidlelocked(v int32) {
 	unlock(&sched.lock)
 }
 
-// Check for deadlock situation.
-// The check is based on number of running M's, if 0 -> deadlock.
-// sched.lock must be held.
+// 检查死锁情况
+// 检查基于当前运行的 M 的数量，如果 0 则表示死锁
+// 必须持有 sched.lock 情况下才能执行此调用
 func checkdead() {
 	// For -buildmode=c-shared or -buildmode=c-archive it's OK if
 	// there are no running goroutines. The calling program is
@@ -4437,19 +4477,23 @@ func checkdead() {
 // This is a variable for testing purposes. It normally doesn't change.
 var forcegcperiod int64 = 2 * 60 * 1e9
 
-// 总是在没有 P 的情况下运行，因此 write barrier 是不允许的
+// 系统监控在一个独立的 m 上运行
 //
+// 总是在没有 P 的情况下运行，因此 write barrier 是不允许的
 //go:nowritebarrierrec
 func sysmon() {
 	lock(&sched.lock)
+	// 不计入死锁的系统 m 的数量
 	sched.nmsys++
+	// 死锁检查
 	checkdead()
 	unlock(&sched.lock)
 
-	// If a heap span goes unused for 5 minutes after a garbage collection,
-	// we hand it back to the operating system.
+	// 如果一个堆 span 在 GC 超过五分钟没有被使用
+	// 则回收交于操作系统
 	scavengelimit := int64(5 * 60 * 1e9)
 
+	// 调试相关
 	if debug.scavenge > 0 {
 		// Scavenge-a-lot for testing.
 		forcegcperiod = 10 * 1e6
@@ -4460,25 +4504,28 @@ func sysmon() {
 	nscavenge := 0
 
 	lasttrace := int64(0)
-	idle := 0 // how many cycles in succession we had not wokeup somebody
+	idle := 0 // 没有 wokeup 的周期数
 	delay := uint32(0)
 	for {
-		if idle == 0 { // start with 20us sleep...
+		if idle == 0 { // 每次启动先休眠 20us
 			delay = 20
-		} else if idle > 50 { // start doubling the sleep after 1ms...
+		} else if idle > 50 { // 1ms 后就翻倍休眠时间
 			delay *= 2
 		}
-		if delay > 10*1000 { // up to 10ms
+		if delay > 10*1000 { // 增加到 10ms
 			delay = 10 * 1000
 		}
+		// 休眠
 		usleep(delay)
+
+		// 如果在 STW，则暂时休眠
 		if debug.schedtrace <= 0 && (sched.gcwaiting != 0 || atomic.Load(&sched.npidle) == uint32(gomaxprocs)) {
 			lock(&sched.lock)
 			if atomic.Load(&sched.gcwaiting) != 0 || atomic.Load(&sched.npidle) == uint32(gomaxprocs) {
+				// 标识休眠状态
 				atomic.Store(&sched.sysmonwait, 1)
 				unlock(&sched.lock)
-				// Make wake-up period small enough
-				// for the sampling to be correct.
+				// 确保 wake-up 周期足够小从而进行正确的采样
 				maxsleep := forcegcperiod / 2
 				if scavengelimit < forcegcperiod {
 					maxsleep = scavengelimit / 2
@@ -4494,49 +4541,49 @@ func sysmon() {
 				if shouldRelax {
 					osRelax(true)
 				}
+				// 设置休眠超时，在此阻塞
 				notetsleep(&sched.sysmonnote, maxsleep)
 				if shouldRelax {
 					osRelax(false)
 				}
+
+				// 休眠结束
 				lock(&sched.lock)
 				atomic.Store(&sched.sysmonwait, 0)
+				// 清除休眠超时通知
 				noteclear(&sched.sysmonnote)
 				idle = 0
 				delay = 20
 			}
 			unlock(&sched.lock)
 		}
-		// trigger libc interceptors if needed
+		// 需要时触发 libc interceptor
 		if *cgo_yield != nil {
 			asmcgocall(*cgo_yield, nil)
 		}
-		// poll network if not polled for more than 10ms
+		// 如果超过 10ms 没有 poll，则 poll 一下网络
 		lastpoll := int64(atomic.Load64(&sched.lastpoll))
 		now := nanotime()
 		if netpollinited() && lastpoll != 0 && lastpoll+10*1000*1000 < now {
 			atomic.Cas64(&sched.lastpoll, uint64(lastpoll), uint64(now))
-			gp := netpoll(false) // non-blocking - returns list of goroutines
+			gp := netpoll(false) // 非阻塞，返回 goroutine 列表
 			if gp != nil {
-				// Need to decrement number of idle locked M's
-				// (pretending that one more is running) before injectglist.
-				// Otherwise it can lead to the following situation:
-				// injectglist grabs all P's but before it starts M's to run the P's,
-				// another M returns from syscall, finishes running its G,
-				// observes that there is no work to do and no other running M's
-				// and reports deadlock.
+				// 需要在插入 g 列表前减少空闲锁住的 m 的数量（假装有一个正在运行）
+				// 否则会导致这些情况：
+				// injectglist 会绑定所有的 p，但是在它开始 M 运行 P 之前，另一个 M 从 syscall 返回，
+				// 完成运行它的 G ，注意这时候没有 work 要做，且没有其他正在运行 M 的死锁报告。
 				incidlelocked(-1)
 				injectglist(gp)
 				incidlelocked(1)
 			}
 		}
-		// retake P's blocked in syscalls
-		// and preempt long running G's
+		// 抢夺在 syscall 中阻塞的 P、运行时间过长的 G
 		if retake(now) != 0 {
 			idle = 0
 		} else {
 			idle++
 		}
-		// check if we need to force a GC
+		// 检查是否需要强制触发 GC
 		if t := (gcTrigger{kind: gcTriggerTime, now: now}); t.test() && atomic.Load(&forcegc.idle) != 0 {
 			lock(&forcegc.lock)
 			forcegc.idle = 0
@@ -4544,12 +4591,14 @@ func sysmon() {
 			injectglist(forcegc.g)
 			unlock(&forcegc.lock)
 		}
-		// scavenge heap once in a while
+		// 一段时间内清理堆
 		if lastscavenge+scavengelimit/2 < now {
 			mheap_.scavenge(int32(nscavenge), uint64(now), uint64(scavengelimit))
 			lastscavenge = now
 			nscavenge++
 		}
+
+		// trace 相关
 		if debug.schedtrace > 0 && lasttrace+int64(debug.schedtrace)*1000000 <= now {
 			lasttrace = now
 			schedtrace(debug.scheddetail > 0)
@@ -4831,8 +4880,7 @@ func globrunqputbatch(ghead *g, gtail *g, n int32) {
 	sched.runqsize += n
 }
 
-// Try get a batch of G's from the global runnable queue.
-// Sched must be locked.
+// 从全局队列中偷取，调用时必须锁住调度器
 func globrunqget(_p_ *p, max int32) *g {
 	if sched.runqsize == 0 {
 		return nil

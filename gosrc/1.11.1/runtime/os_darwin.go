@@ -128,7 +128,7 @@ func goenvs() {
 	goenvs_unix()
 }
 
-// May run with m.p==nil, so write barriers are not allowed.
+// 可能在 m.p==nil 情况下运行，因此不允许 write barrier
 //go:nowritebarrierrec
 func newosproc(mp *m) {
 	stk := unsafe.Pointer(mp.g0.stack.hi)
@@ -136,7 +136,7 @@ func newosproc(mp *m) {
 		print("newosproc stk=", stk, " m=", mp, " g=", mp.g0, " id=", mp.id, " ostk=", &mp, "\n")
 	}
 
-	// Initialize an attribute object.
+	// 初始化 attribute 对象
 	var attr pthreadattr
 	var err int32
 	err = pthread_attr_init(&attr)
@@ -145,7 +145,7 @@ func newosproc(mp *m) {
 		exit(1)
 	}
 
-	// Set the stack size we want to use.  64KB for now.
+	// 设置想要使用的栈大小。目前为 64KB
 	// TODO: just use OS default size?
 	const stackSize = 1 << 16
 	if pthread_attr_setstacksize(&attr, stackSize) != 0 {
@@ -154,7 +154,7 @@ func newosproc(mp *m) {
 	}
 	//mSysStatInc(&memstats.stacks_sys, stackSize) //TODO: do this?
 
-	// Tell the pthread library we won't join with this thread.
+	// 通知 pthread 库不会 join 这个线程。
 	if pthread_attr_setdetachstate(&attr, _PTHREAD_CREATE_DETACHED) != 0 {
 		write(2, unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
 		exit(1)

@@ -302,42 +302,41 @@ TEXT runtime·gosave(SB), NOSPLIT, $0-4
 	RET
 
 // void gogo(Gobuf*)
-// restore state from Gobuf; longjmp
+// 从 Gobuf 恢复状态; longjmp
 TEXT runtime·gogo(SB), NOSPLIT, $8-4
-	MOVL	buf+0(FP), BX		// gobuf
+	MOVL	buf+0(FP), BX		// 运行现场
 	MOVL	gobuf_g(BX), DX
-	MOVL	0(DX), CX		// make sure g != nil
+	MOVL	0(DX), CX		// 确认 g != nil
 	get_tls(CX)
 	MOVL	DX, g(CX)
-	MOVL	gobuf_sp(BX), SP	// restore SP
+	MOVL	gobuf_sp(BX), SP	// 恢复 SP
 	MOVL	gobuf_ret(BX), AX
 	MOVL	gobuf_ctxt(BX), DX
-	MOVL	$0, gobuf_sp(BX)	// clear to help garbage collector
+	MOVL	$0, gobuf_sp(BX)	// 清理，辅助 GC
 	MOVL	$0, gobuf_ret(BX)
 	MOVL	$0, gobuf_ctxt(BX)
-	MOVL	gobuf_pc(BX), BX
-	JMP	BX
+	MOVL	gobuf_pc(BX), BX	// 获取 g 要执行的函数的入口地址
+	JMP	BX						// 开始执行
 
 // func mcall(fn func(*g))
-// Switch to m->g0's stack, call fn(g).
-// Fn must never return. It should gogo(&g->sched)
-// to keep running g.
+// 切换到 m->g0 栈, 并调用 fn(g).
+// Fn 必须永不返回. 它应该使用 gogo(&g->sched) 来持续运行 g
 TEXT runtime·mcall(SB), NOSPLIT, $0-4
 	MOVL	fn+0(FP), DI
 
 	get_tls(DX)
-	MOVL	g(DX), AX	// save state in g->sched
-	MOVL	0(SP), BX	// caller's PC
+	MOVL	g(DX), AX	// 在 g->sched 中保存状态
+	MOVL	0(SP), BX	// 调用方 PC
 	MOVL	BX, (g_sched+gobuf_pc)(AX)
-	LEAL	fn+0(FP), BX	// caller's SP
+	LEAL	fn+0(FP), BX	// 调用方 SP
 	MOVL	BX, (g_sched+gobuf_sp)(AX)
 	MOVL	AX, (g_sched+gobuf_g)(AX)
 
-	// switch to m->g0 & its stack, call fn
+	// 切换到 m->g0 及其栈，调用 fn
 	MOVL	g(DX), BX
 	MOVL	g_m(BX), BX
 	MOVL	m_g0(BX), SI
-	CMPL	SI, AX	// if g == m->g0 call badmcall
+	CMPL	SI, AX	// 如果 g == m->g0 要调用 badmcall
 	JNE	3(PC)
 	MOVL	$runtime·badmcall(SB), AX
 	JMP	AX
@@ -346,7 +345,7 @@ TEXT runtime·mcall(SB), NOSPLIT, $0-4
 	PUSHL	AX
 	MOVL	DI, DX
 	MOVL	0(DI), DI
-	CALL	DI
+	CALL	DI	// 好了，开始调用 fn
 	POPL	AX
 	MOVL	$runtime·badmcall2(SB), AX
 	JMP	AX
@@ -1319,11 +1318,10 @@ TEXT _cgo_topofstack(SB),NOSPLIT,$0
 	MOVL	(g_stack+stack_hi)(AX), AX
 	RET
 
-// The top-most function running on a goroutine
-// returns to goexit+PCQuantum.
+// 在 goroutine 返回 goexit + PCQuantum 时运行的最顶层函数。
 TEXT runtime·goexit(SB),NOSPLIT,$0-0
 	BYTE	$0x90	// NOP
-	CALL	runtime·goexit1(SB)	// does not return
+	CALL	runtime·goexit1(SB)	// 不会返回
 	// traceback from goexit1 must hit code range of goexit
 	BYTE	$0x90	// NOP
 
