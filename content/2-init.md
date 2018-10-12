@@ -85,7 +85,7 @@ func schedinit() {
 	}
 
 	if buildVersion == "" {
-		// 该条件永远不会被触发，此处只是为了防止 buildVersion 不会被编译器优化移除掉。
+		// 该条件永远不会被触发，此处只是为了防止 buildVersion 被编译器优化移除掉。
 		buildVersion = "unknown"
 	}
 }

@@ -70,13 +70,13 @@
 7. 关键字
     - [`go`](content/7-lang/go.md)
     - [`defer`](content/7-lang/defer.md)
-    - [`panic`](content/7-lang/panic.md)
+    - [`panic` 与 `recover`](content/7-lang/panic.md)
     - [`map`](content/7-lang/map.md)
     - [`select`](content/7-lang/select.md)
     - [`chan`](content/7-lang/chan.md)
 8. 运行时杂项
-    - [`runtime.Finalizer`](content/8-runtime/finalizer.md)
     - [`runtime.GOMAXPROCS`](content/8-runtime/gomaxprocs.md)
+    - [`runtime.Finalizer`](content/8-runtime/finalizer.md)
     - [`runtime.LockOSThread/UnlockOSThread`](content/8-runtime/lockosthread.md)
 9.  [`unsafe`](content/9-unsafe.md)
 10. [`cgo`](content/10-cgo.md)

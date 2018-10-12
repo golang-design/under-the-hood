@@ -1,4 +1,4 @@
-# 8 runtime.Finalizer
+# 8 runtime.SetFinalizer
 
 TODO:
 

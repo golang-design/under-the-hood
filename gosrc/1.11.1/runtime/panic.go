@@ -442,22 +442,30 @@ func printpanics(p *_panic) {
 	print("\n")
 }
 
-// The implementation of the predeclared function panic.
+// 预先声明的函数 panic 的实现
 func gopanic(e interface{}) {
 	gp := getg()
+
+	// 判断在系统栈上还是在用户栈上
+	// 如果执行在系统或信号栈时，getg() 会返回当前 m 的 g0 或 gsignal
+	// 因此可以通过 gp.m.curg == gp 来判断所在栈
+	// 系统栈上的 panic 无法恢复
 	if gp.m.curg != gp {
-		print("panic: ")
-		printany(e)
-		print("\n")
+		print("panic: ") // 打印
+		printany(e)      // 打印
+		print("\n")      // 继续打印，下同
 		throw("panic on system stack")
 	}
 
+	// 如果正在进行 malloc 时发生 panic 也无法恢复
 	if gp.m.mallocing != 0 {
 		print("panic: ")
 		printany(e)
 		print("\n")
 		throw("panic during malloc")
 	}
+
+	// 在禁止抢占时发生 panic 也无法恢复
 	if gp.m.preemptoff != "" {
 		print("panic: ")
 		printany(e)
@@ -467,12 +475,16 @@ func gopanic(e interface{}) {
 		print("\n")
 		throw("panic during preemptoff")
 	}
+
+	// 在 g 所在 m 上时发生 panic 也无法恢复
 	if gp.m.locks != 0 {
 		print("panic: ")
 		printany(e)
 		print("\n")
 		throw("panic holding locks")
 	}
+
+	// 其他情况，panic 可以从运行时恢复
 
 	var p _panic
 	p.arg = e
@@ -597,11 +609,14 @@ func sync_throw(s string) {
 
 //go:nosplit
 func throw(s string) {
-	// Everything throw does should be recursively nosplit so it
-	// can be called even when it's unsafe to grow the stack.
+	// throw 的所有东西都应该 recursively nosplit，
+	// 这样即使在不安全的情况下增长栈时，也可以调用它。
 	systemstack(func() {
+		// 只是在系统栈上打印错误信息，运行时并没有让程序结束运行
 		print("fatal error: ", s, "\n")
 	})
+
+	// 为当前 m 标记正在 throw panic
 	gp := getg()
 	if gp.m.throwing == 0 {
 		gp.m.throwing = 1
@@ -647,17 +662,15 @@ func recovery(gp *g) {
 	gogo(&gp.sched)
 }
 
-// fatalthrow implements an unrecoverable runtime throw. It freezes the
-// system, prints stack traces starting from its caller, and terminates the
-// process.
+// fatalthrow 实现了一个无法恢复的运行时异常。它冻结系统，并打印调用方栈的 trace
+// 同时终止当前进程
 //
 //go:nosplit
 func fatalthrow() {
 	pc := getcallerpc()
 	sp := getcallersp()
 	gp := getg()
-	// Switch to the system stack to avoid any stack growth, which
-	// may make things worse if the runtime is in a bad state.
+	// 切换到系统栈上，防止栈的增长，否则如果运行时在一个 bad 状态时，会使事情变得更糟
 	systemstack(func() {
 		startpanic_m()
 
@@ -716,7 +729,7 @@ func fatalpanic(msgs *_panic) {
 	*(*int)(nil) = 0 // not reached
 }
 
-// startpanic_m prepares for an unrecoverable panic.
+// startpanic_m 准备了无法恢复的 panic
 //
 // It returns true if panic messages should be printed, or false if
 // the runtime is in bad shape and should just print stacks.
