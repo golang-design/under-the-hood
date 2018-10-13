@@ -102,7 +102,7 @@ func mstart1() {
 
 几个需要注意的细节：
 
-1. `mstart` 除了在程序引导阶段会被运行之外，也可能在每个 m 被创建时运行（本节稍后讨论）；
+1. `mstart` 除了在程序引导阶段会被运行之外，也可能在每个 m 被创建时运行（本节稍后讨论）；
 2. `mstart` 进入 `mstart1` 之后，会初始化自身用于信号处理的 g，在 `mstartfn` 指定时将其执行；
 3. `mstart` 可能在 GC STW 阶段被运行，如果此时需要 `helpgc` （`helpgc` 将在 Go 1.12 中被移除），则会在进入调度前被 park，进入 spinning 状态；
 4. 调度循环 `schedule` 无法返回，因此最后一个 `mexit` 目前还不会被执行，因此当下所有的 Go 程序会创建的线程都无法被释放（只有一个特例，当使用 LockOSThread 锁住的 G 退出时会使用 `gogo` 退出 M，在本节稍后讨论）。
@@ -1169,7 +1169,13 @@ func newm1(mp *m) {
 }
 ```
 
-newosproc 就是操作系统特定的了，我们在这里暂时讨论 darwin 和 linux，wasm 留到 [12 WebAssembly](../12-wasm.md) 中专门讨论。
+当 m 被创建时，会转去运行 `mstart`：
+
+- 如果当前程序为 cgo 程序，则会通过 `asmcgocall` 来创建线程并调用 `mstart`（我们在 [10 cgo](../10-cgo.md)）
+- 否则会调用 `newosproc` 来创建线程，从而调用 `mstart`。
+
+既然是 `newosproc` ，我们此刻仍在 Go 的空间中，那么实现就是操作系统特定的了，
+因为 WebAssembly 平台目前尚无线程支持，我们就只讨论 darwin 和 linux 了。
 
 ##### `runtime/os_darwin.go`
 
@@ -1252,7 +1258,7 @@ TEXT runtime·pthread_create_trampoline(SB),NOSPLIT,$0
 
 ##### `runtime/os_linux.go`
 
-再来看看 linux 上的情况。
+而 linux 上的情况就乐观的多了：
 
 ```go
 // May run with m.p==nil, so write barriers are not allowed.
@@ -1674,12 +1680,13 @@ TEXT runtime·exitThread(SB),NOSPLIT,$0-4
 1. `findRunnableGCWorker` 在干什么？
 2. 调度循环看似合理，但如果 G 执行时间过长，难道要等到 G 执行完后再调度其他的 G？显然不符合实际情况，那么到底会发生什么事情？
 
-我们留到[5 调度器: 系统监控](sysmon.md)和[6 垃圾回收器: 三色标记法](../6-gc/mark.md)中来讨论。
+本节篇幅已经相当长了，让我们留到[5 调度器: 系统监控](sysmon.md)和[6 垃圾回收器: 三色标记法](../6-gc/mark.md)中进行讨论。
 
 ## 进一步阅读的参考文献
 
-- [let idle OS threads exit](https://github.com/golang/go/issues/14592)
-- [scheduler is slow when goroutines are frequently woken](https://github.com/golang/go/issues/18237)
+- [Terminate locked OS thread if its goroutine exits](https://github.com/golang/go/issues/20395)
+- [Let idle OS threads exit](https://github.com/golang/go/issues/14592)
+- [Scheduler is slow when goroutines are frequently woken](https://github.com/golang/go/issues/18237)
 
 ## 许可
 
