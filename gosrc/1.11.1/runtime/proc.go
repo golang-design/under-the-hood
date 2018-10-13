@@ -1293,7 +1293,7 @@ func mstart() {
 func mstart1() {
 	_g_ := getg()
 
-	// 检查当前执行的 g 不是 g0
+	// 检查当前执行的 g 是不是 g0
 	if _g_ != _g_.m.g0 {
 		throw("bad runtime·mstart")
 	}
@@ -1358,24 +1358,20 @@ func mexit(osStack bool) {
 	m := g.m
 
 	if m == &m0 {
-		// This is the main thread. Just wedge it.
-		// 这是主线程，
+		// 主线程
 		//
-		// On Linux, exiting the main thread puts the process
-		// into a non-waitable zombie state. On Plan 9,
-		// exiting the main thread unblocks wait even though
-		// other threads are still running. On Solaris we can
-		// neither exitThread nor return from mstart. Other
-		// bad things probably happen on other platforms.
+		// 在 linux 中，退出主线程会导致进程变为僵尸进程。
+		// 在 plan 9 中，退出主线程将取消阻塞等待，及时其他线程仍在运行。
+		// 在 Solaris 中我们既不能 exitThread 也不能返回到 mstart 中。
+		// 其他系统上可能发生别的糟糕的事情。
 		//
-		// We could try to clean up this M more before wedging
-		// it, but that complicates signal handling.
-		handoffp(releasep())
-		lock(&sched.lock)
+		// 我们可以尝试退出之前清理当前 M ，但信号处理非常复杂
+		handoffp(releasep()) // 让出 P
+		lock(&sched.lock)    // 锁住调度器
 		sched.nmfreed++
 		checkdead()
 		unlock(&sched.lock)
-		notesleep(&m.park)
+		notesleep(&m.park) // park 主线程，在此阻塞
 		throw("locked m0 woke up")
 	}
 
@@ -1387,7 +1383,7 @@ func mexit(osStack bool) {
 		stackfree(m.gsignal.stack)
 	}
 
-	// Remove m from allm.
+	// 将 m 从 allm 中移除
 	lock(&sched.lock)
 	for pprev := &allm; *pprev != nil; pprev = &(*pprev).alllink {
 		if *pprev == m {
@@ -1395,8 +1391,11 @@ func mexit(osStack bool) {
 			goto found
 		}
 	}
+	// 如果没找到则是异常状态，说明 allm 管理出错
 	throw("m not found in allm")
 found:
+
+	//
 	if !osStack {
 		// Delay reaping m until it's done with the stack.
 		//
@@ -1412,13 +1411,12 @@ found:
 	}
 	unlock(&sched.lock)
 
-	// Release the P.
+	// 让出当前的 P
 	handoffp(releasep())
-	// After this point we must not have write barriers.
+	// 从此刻开始我们必须没有 write barrier
 
-	// Invoke the deadlock detector. This must happen after
-	// handoffp because it may have started a new M to take our
-	// P's work.
+	// 检查 deadlock。必须在让出 P 之后执行，因为它可能启动一个新的 M 并
+	// 拿走 P 的 work
 	lock(&sched.lock)
 	sched.nmfreed++
 	checkdead()
@@ -2049,20 +2047,30 @@ func stopm() {
 	}
 
 retry:
+	// 将 m 放回到 空闲列表中，因为我们马上就要 park 了
 	lock(&sched.lock)
 	mput(_g_.m)
 	unlock(&sched.lock)
+
+	// park 当前的 M，在此阻塞，直到被 unpark
 	notesleep(&_g_.m.park)
+
+	// 清除 unpark 的 note
 	noteclear(&_g_.m.park)
+
+	// 如果需要 helpgc
 	if _g_.m.helpgc != 0 {
-		// helpgc() set _g_.m.p and _g_.m.mcache, so we have a P.
+		// helpgc() 会设置 _g_.m.p 与 _g_.m.mcache，因此我们会 acquire 一个 P 进行
 		gchelper()
-		// Undo the effects of helpgc().
+		// 撤销 helpgc() 的影响
 		_g_.m.helpgc = 0
 		_g_.m.mcache = nil
 		_g_.m.p = 0
 		goto retry
 	}
+
+	// 此时已经被 unpark，说明有任务要执行
+	// 立即 acquire P
 	acquirep(_g_.m.nextp.ptr())
 	_g_.m.nextp = 0
 }
@@ -2262,13 +2270,11 @@ func gcstopm() {
 	stopm()
 }
 
-// Schedules gp to run on the current M.
-// If inheritTime is true, gp inherits the remaining time in the
-// current time slice. Otherwise, it starts a new time slice.
-// Never returns.
+// 在当前 M 上调度 gp。
+// 如果 inheritTime 为 true，则 gp 继承剩余的时间片。否则从一个新的时间片开始
+// 永不返回。
 //
-// Write barriers are allowed because this is called immediately after
-// acquiring a P in several places.
+// 该函数允许 write barrier 因为它是在 acquire P 之后的调用的。
 //
 //go:yeswritebarrierrec
 func execute(gp *g, inheritTime bool) {
@@ -2301,6 +2307,7 @@ func execute(gp *g, inheritTime bool) {
 		traceGoStart()
 	}
 
+	// 终于开始执行了
 	gogo(&gp.sched)
 }
 
@@ -2847,12 +2854,10 @@ func goexit0(gp *g) {
 	gfput(_g_.m.p.ptr(), gp)
 
 	if locked {
-		// The goroutine may have locked this thread because
-		// it put it in an unusual kernel state. Kill it
-		// rather than returning it to the thread pool.
+		// 该 goroutine 可能在当前线程上锁住，因为它可能导致了不正常的内核状态
+		// 这时候 kill 该线程，而非将 m 放回到线程池。
 
-		// Return to mstart, which will release the P and exit
-		// the thread.
+		// 此举会返回到 mstart，从而释放当前的 P 并退出该线程
 		if GOOS != "plan9" { // See golang.org/issue/22227.
 			gogo(&_g_.m.g0.sched)
 		}
@@ -2862,25 +2867,26 @@ func goexit0(gp *g) {
 	schedule()
 }
 
-// save updates getg().sched to refer to pc and sp so that a following
-// gogo will restore pc and sp.
+// save 更新了 getg().sched 的 pc 和 sp 的指向，并允许 gogo 能够恢复到 pc 和 sp
 //
-// save must not have write barriers because invoking a write barrier
-// can clobber getg().sched.
+// save 不允许 write barrier 因为 write barrier 会破坏 getg().sched
 //
 //go:nosplit
 //go:nowritebarrierrec
 func save(pc, sp uintptr) {
 	_g_ := getg()
 
+	// 保存当前运行现场
 	_g_.sched.pc = pc
 	_g_.sched.sp = sp
 	_g_.sched.lr = 0
 	_g_.sched.ret = 0
+
+	// 保存 g
 	_g_.sched.g = guintptr(unsafe.Pointer(_g_))
-	// We need to ensure ctxt is zero, but can't have a write
-	// barrier here. However, it should always already be zero.
-	// Assert that.
+
+	// 我们必须确保 ctxt 为零，但这里不允许 write barrier。
+	// 所以这里只是做一个断言
 	if _g_.sched.ctxt != nil {
 		badctxt()
 	}
@@ -4311,17 +4317,17 @@ func procresize(nprocs int32) *p {
 	return runnablePs
 }
 
-// Associate p and the current m.
+// 将 p 关联到当前的 m
 //
-// This function is allowed to have write barriers even if the caller
-// isn't because it immediately acquires _p_.
+// 因为该函数会立即 acquire P，因此即使调用方不允许 write barrier，
+// 此函数仍然允许 write barrier。
 //
 //go:yeswritebarrierrec
 func acquirep(_p_ *p) {
-	// Do the part that isn't allowed to have write barriers.
+	// 此处不允许 write barrier
 	acquirep1(_p_)
 
-	// have p; write barriers now allowed
+	// 已经获取了 p，因此之后允许 write barrier
 	_g_ := getg()
 	_g_.m.mcache = _p_.mcache
 
@@ -4330,17 +4336,18 @@ func acquirep(_p_ *p) {
 	}
 }
 
-// acquirep1 is the first step of acquirep, which actually acquires
-// _p_. This is broken out so we can disallow write barriers for this
-// part, since we don't yet have a P.
-//
+// acquirep1 为 acquirep 的实际获取 p 的第一步。
+// 之所以进行拆分是因为我们可以为这个部分驳回 write barrier
 //go:nowritebarrierrec
 func acquirep1(_p_ *p) {
 	_g_ := getg()
 
+	// 检查 确实没有 p
 	if _g_.m.p != 0 || _g_.m.mcache != nil {
 		throw("acquirep: already in go")
 	}
+
+	// 检查 m 是否正常，并检查要获取的 p 的状态
 	if _p_.m != 0 || _p_.status != _Pidle {
 		id := int64(0)
 		if _p_.m != 0 {
@@ -4349,12 +4356,18 @@ func acquirep1(_p_ *p) {
 		print("acquirep: p->m=", _p_.m, "(", id, ") p->status=", _p_.status, "\n")
 		throw("acquirep: invalid p state")
 	}
+
+	// 正式获取 p
 	_g_.m.p.set(_p_)
+
+	// 将 p 绑定到 m
 	_p_.m.set(_g_.m)
+
+	// 修改 p 的状态
 	_p_.status = _Prunning
 }
 
-// Disassociate p and the current m.
+// p 与当前 m 解绑
 func releasep() *p {
 	_g_ := getg()
 
@@ -4815,9 +4828,9 @@ func schedtrace(detailed bool) {
 	unlock(&sched.lock)
 }
 
-// Put mp on midle list.
-// Sched must be locked.
-// May run during STW, so write barriers are not allowed.
+// 将 mp 放至空闲列表
+// 调用此调用必须将调度器锁住
+// 可能在 STW 期间运行，因此不允许 write barrier
 //go:nowritebarrierrec
 func mput(mp *m) {
 	mp.schedlink = sched.midle

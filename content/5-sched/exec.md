@@ -52,13 +52,18 @@ func mstart() {
 }
 ```
 
-TODO:
+在启动前，我们在 [5 调度器: 初始化](init.md) 中已经了解到 g 的栈边界是还没有初始化的。
+因此我们得在开始前计算栈边界，因此在 `mstart1` 之前，就是一些确定执行栈边界的工作。
+
+当 `mstart1` 结束后，会执行 `mexit` 退出 m。
+
+再来看 `mstart1`。
 
 ```go
 func mstart1() {
 	_g_ := getg()
 
-	// 检查当前执行的 g 不是 g0
+	// 检查当前执行的 g 是不是 g0
 	if _g_ != _g_.m.g0 {
 		throw("bad runtime·mstart")
 	}
@@ -95,61 +100,17 @@ func mstart1() {
 }
 ```
 
-### 细节
+几个需要注意的细节：
 
-TODO: 解释 pc/sp
+1. `mstart` 除了在程序引导阶段会被运行之外，也可能在每个 m 被创建时运行（本节稍后讨论）；
+2. `mstart` 进入 `mstart1` 之后，会初始化自身用于信号处理的 g，在 `mstartfn` 指定时将其执行；
+3. `mstart` 可能在 GC STW 阶段被运行，如果此时需要 `helpgc` （`helpgc` 将在 Go 1.12 中被移除），则会在进入调度前被 park，进入 spinning 状态；
+4. 调度循环 `schedule` 无法返回，因此最后一个 `mexit` 目前还不会被执行，因此当下所有的 Go 程序会创建的线程都无法被释放（只有一个特例，当使用 LockOSThread 锁住的 G 退出时会使用 `gogo` 退出 M，在本节稍后讨论）。
 
-```go
-// getcallerpc 返回它调用方的调用方程序计数器 PC program conter
-// getcallersp 返回它调用方的调用方的栈指针 SP stack pointer
-// 实现由编译器内建，在任何平台上都没有实现它的代码
-//
-// 例如:
-//
-//	func f(arg1, arg2, arg3 int) {
-//		pc := getcallerpc()
-//		sp := getcallersp()
-//	}
-//
-// 这两行会寻找调用 f 的 PC 和 SP
-//
-// 调用 getcallerpc 和 getcallersp 必须被询问的帧中完成
-//
-// getcallersp 的结果在返回时是正确的，但是它可能会被任何随后调用的函数无效，
-// 因为它可能会重新定位堆栈，以使其增长或缩小。一般规则是，getcallersp 的结果
-// 应该立即使用，并且只能传递给 nosplit 函数。
+除此之外，我们可能会问一个问题：为什么不在创建 G 的时候就完成执行栈边界的计算？
+原因在于 `mstart1` 会在每一个进程被创建时被执行，只有当线程被创建后，才能计算 g 执行栈的边界。
 
-//go:noescape
-func getcallerpc() uintptr
-
-//go:noescape
-func getcallersp() uintptr // implemented as an intrinsic on all platforms
-
-
-// save updates getg().sched to refer to pc and sp so that a following
-// gogo will restore pc and sp.
-//
-// save must not have write barriers because invoking a write barrier
-// can clobber getg().sched.
-//
-//go:nosplit
-//go:nowritebarrierrec
-func save(pc, sp uintptr) {
-	_g_ := getg()
-
-	_g_.sched.pc = pc
-	_g_.sched.sp = sp
-	_g_.sched.lr = 0
-	_g_.sched.ret = 0
-	_g_.sched.g = guintptr(unsafe.Pointer(_g_))
-	// We need to ensure ctxt is zero, but can't have a write
-	// barrier here. However, it should always already be zero.
-	// Assert that.
-	if _g_.sched.ctxt != nil {
-		badctxt()
-	}
-}
-```
+### `asminit`
 
 TODO: 解释 control word
 
@@ -162,6 +123,8 @@ TEXT runtime·asminit(SB),NOSPLIT,$0-0
 	FLDCW	runtime·controlWord64(SB)
 	RET
 ```
+
+### Signal G
 
 TODO: 解释 signal mask
 
@@ -177,6 +140,8 @@ func minit() {
 	minitSignalMask()
 }
 ```
+
+### Extra M
 
 TODO: 解释 extra m
 
@@ -197,20 +162,22 @@ func mstartm0() {
 }
 ```
 
-TODO: 解释 P 的绑定过程
+### M/P 绑定
+
+TODO: 解释 P 的绑定过程和 mcache
 
 ```go
-// Associate p and the current m.
+// 将 p 关联到当前的 m
 //
-// This function is allowed to have write barriers even if the caller
-// isn't because it immediately acquires _p_.
+// 因为该函数会立即 acquire P，因此即使调用方不允许 write barrier，
+// 此函数仍然允许 write barrier。
 //
 //go:yeswritebarrierrec
 func acquirep(_p_ *p) {
-	// Do the part that isn't allowed to have write barriers.
+	// 此处不允许 write barrier
 	acquirep1(_p_)
 
-	// have p; write barriers now allowed
+	// 已经获取了 p，因此之后允许 write barrier
 	_g_ := getg()
 	_g_.m.mcache = _p_.mcache
 
@@ -218,20 +185,18 @@ func acquirep(_p_ *p) {
 		traceProcStart()
 	}
 }
-```
-
-```go
-// acquirep1 is the first step of acquirep, which actually acquires
-// _p_. This is broken out so we can disallow write barriers for this
-// part, since we don't yet have a P.
-//
+// acquirep1 为 acquirep 的实际获取 p 的第一步。
+// 之所以进行拆分是因为我们可以为这个部分驳回 write barrier
 //go:nowritebarrierrec
 func acquirep1(_p_ *p) {
 	_g_ := getg()
 
+	// 检查 确实没有 p
 	if _g_.m.p != 0 || _g_.m.mcache != nil {
 		throw("acquirep: already in go")
 	}
+
+	// 检查 m 是否正常，并检查要获取的 p 的状态
 	if _p_.m != 0 || _p_.status != _Pidle {
 		id := int64(0)
 		if _p_.m != 0 {
@@ -240,19 +205,27 @@ func acquirep1(_p_ *p) {
 		print("acquirep: p->m=", _p_.m, "(", id, ") p->status=", _p_.status, "\n")
 		throw("acquirep: invalid p state")
 	}
+
+	// 正式获取 p
 	_g_.m.p.set(_p_)
+
+	// 将 p 绑定到 m
 	_p_.m.set(_g_.m)
+
+	// 修改 p 的状态
 	_p_.status = _Prunning
 }
 ```
 
-TODO: 解释 M 停用，讨论最近即将在下一个版本中移除的 helpgc
+### M 的 park/unpark
+
+无论出于什么原因，当 m 需要被 park 时，可能（因为还有其他 park M 的方法）会执行该调用。
+此调用会将 m 进行 park，并阻塞到它被 unpark 时。
+这一过程就是工作线程的 park/unpark。
 
 ```go
-// Stops execution of the current m until new work is available.
-// Returns with acquired P.
 // 停止当前 m 的执行，直到新的 work 有效
-// 返回要求绑定的 p
+// 在包含要求的 P 下返回
 func stopm() {
 	_g_ := getg()
 
@@ -267,24 +240,40 @@ func stopm() {
 	}
 
 retry:
+	// 将 m 放回到 空闲列表中，因为我们马上就要 park 了
 	lock(&sched.lock)
 	mput(_g_.m)
 	unlock(&sched.lock)
+
+	// park 当前的 M，在此阻塞，直到被唤醒 unpark
 	notesleep(&_g_.m.park)
+
+	// 清除 unpark 的 note
 	noteclear(&_g_.m.park)
+
+	// 如果需要 helpgc
 	if _g_.m.helpgc != 0 {
-		// helpgc() set _g_.m.p and _g_.m.mcache, so we have a P.
+		// helpgc() 会设置 _g_.m.p 与 _g_.m.mcache，因此我们会 acquire 一个 P 进行
 		gchelper()
-		// Undo the effects of helpgc().
+		// 撤销 helpgc() 的影响
 		_g_.m.helpgc = 0
 		_g_.m.mcache = nil
 		_g_.m.p = 0
 		goto retry
 	}
+
+	// 此时已经被 unpark，说明有任务要执行
+	// 立即 acquire P
 	acquirep(_g_.m.nextp.ptr())
 	_g_.m.nextp = 0
 }
 ```
+
+它的流程也非常简单，将 m 放回至空闲列表中，而后使用 note 注册一个 park 通知，
+阻塞到它重新被 unpark；如果在阻塞结束后，恰好需要 helpgc，则会重新被阻塞。
+
+至此，可以看出 helpgc 已经对 m 的 park/unpark 以及 mstart 产生影响，好在下一个版本中
+helpgc 的机制会被移除，我们留到后面的垃圾回收器中再详细讨论。
 
 ## 核心调度
 
@@ -388,14 +377,14 @@ top:
 }
 ```
 
+先不管上面究竟做了什么，我们直接看最后一句的 `execute`。
+
 ```go
-// Schedules gp to run on the current M.
-// If inheritTime is true, gp inherits the remaining time in the
-// current time slice. Otherwise, it starts a new time slice.
-// Never returns.
+// 在当前 M 上调度 gp。
+// 如果 inheritTime 为 true，则 gp 继承剩余的时间片。否则从一个新的时间片开始
+// 永不返回。
 //
-// Write barriers are allowed because this is called immediately after
-// acquiring a P in several places.
+// 该函数允许 write barrier 因为它是在 acquire P 之后的调用的。
 //
 //go:yeswritebarrierrec
 func execute(gp *g, inheritTime bool) {
@@ -404,6 +393,7 @@ func execute(gp *g, inheritTime bool) {
 	// 将 g 正式切换为 _Grunning 状态
 	casgstatus(gp, _Grunnable, _Grunning)
 	gp.waitsince = 0
+	// 抢占信号
 	gp.preempt = false
 	gp.stackguard0 = gp.stack.lo + _StackGuard
 	if !inheritTime {
@@ -428,9 +418,14 @@ func execute(gp *g, inheritTime bool) {
 		traceGoStart()
 	}
 
+	// 终于开始执行了
 	gogo(&gp.sched)
 }
 ```
+
+当开始执行 `execute` 后，g 会被切换到 `_Grunning` 状态。
+设置自身的抢占信号，将 m 和 g 进行绑定。
+最终调用 `gogo` 开始执行。
 
 我们看一下 386 平台下的实现：
 
@@ -600,12 +595,10 @@ func goexit0(gp *g) {
 	gfput(_g_.m.p.ptr(), gp)
 
 	if locked {
-		// The goroutine may have locked this thread because
-		// it put it in an unusual kernel state. Kill it
-		// rather than returning it to the thread pool.
+		// 该 goroutine 可能在当前线程上锁住，因为它可能导致了不正常的内核状态
+		// 这时候应该 kill 该线程，而非将 m 放回到线程池。
 
-		// Return to mstart, which will release the P and exit
-		// the thread.
+		// 此举会返回到 mstart，从而释放当前的 P 并退出该线程
 		if GOOS != "plan9" { // See golang.org/issue/22227.
 			gogo(&_g_.m.g0.sched)
 		}
@@ -616,7 +609,11 @@ func goexit0(gp *g) {
 }
 ```
 
-TODO: 小结一下调度逻辑
+退出的善后工作也相对简单，无非就是复位 g 的状态、解绑 m 和 g，将其
+放入 gfree 链表中等待其他的 go 语句创建新的 g。
+
+如果 goroutine 将自身所在同一个 OS 线程中且没有自行解绑则 m 会退出，而不会被放回到线程池中。
+相反，会再次调用 gogo 切换到 g0 执行现场中，这也是目前唯一的退出 m 的机会，在本节最后解释。
 
 ### 细节
 
@@ -924,6 +921,8 @@ stop:
 
 #### `startlockedm`
 
+TODO:
+
 ```go
 // Schedules the locked m to run the locked gp.
 // May run during STW, so write barriers are not allowed.
@@ -947,7 +946,9 @@ func startlockedm(gp *g) {
 }
 ```
 
-#### M 唤醒
+#### M 的唤醒
+
+我们已经看到了 M 的 park/unpark 过程，那么 M 的 spinning 转换 non-spinning 的过程如何发生？
 
 ```go
 func resetspinning() {
@@ -1038,7 +1039,312 @@ func mget() *m {
 }
 ```
 
-TODO: 我们在 [5 调度器: 系统监控](sysmon.md) 中讨论 `newm`。
+#### M 的创生
+
+```go
+// 创建一个新的 m. 它会启动并调用 fn 或调度器
+// fn 必须是静态、非堆上分配的闭包
+// 它可能在 m.p==nil 时运行，因此不允许 write barrier
+//go:nowritebarrierrec
+func newm(fn func(), _p_ *p) {
+
+	// 分配一个 m
+	mp := allocm(_p_, fn)
+
+	// 设置 p 用于后续绑定
+	mp.nextp.set(_p_)
+
+	// 设置 signal mask
+	mp.sigmask = initSigmask
+
+	if gp := getg(); gp != nil && gp.m != nil && (gp.m.lockedExt != 0 || gp.m.incgo) && GOOS != "plan9" {
+		// 我们处于一个锁定的 M 或可能由 C 启动的线程。这个线程的内核状态可能
+		// 很奇怪（用户可能已将其锁定）。我们不想将其克隆到另一个线程。
+		// 相反，请求一个已知状态良好的线程来创建给我们的线程。
+		//
+		// 在 plan9 上禁用，见 golang.org/issue/22227
+		//
+		// TODO: This may be unnecessary on Windows, which
+		// doesn't model thread creation off fork.
+		lock(&newmHandoff.lock)
+		if newmHandoff.haveTemplateThread == 0 {
+			throw("on a locked thread with no template thread")
+		}
+		mp.schedlink = newmHandoff.newm
+		newmHandoff.newm.set(mp)
+		if newmHandoff.waiting {
+			newmHandoff.waiting = false
+			// 唤醒 m, spinning -> non-spinning
+			notewakeup(&newmHandoff.wake)
+		}
+		unlock(&newmHandoff.lock)
+		return
+	}
+	newm1(mp)
+}
+```
+
+```go
+// Allocate a new m unassociated with any thread.
+// Can use p for allocation context if needed.
+// fn is recorded as the new m's m.mstartfn.
+//
+// This function is allowed to have write barriers even if the caller
+// isn't because it borrows _p_.
+//
+//go:yeswritebarrierrec
+func allocm(_p_ *p, fn func()) *m {
+	_g_ := getg()
+	_g_.m.locks++ // disable GC because it can be called from sysmon
+	if _g_.m.p == 0 {
+		acquirep(_p_) // temporarily borrow p for mallocs in this function
+	}
+
+	// Release the free M list. We need to do this somewhere and
+	// this may free up a stack we can use.
+	if sched.freem != nil {
+		lock(&sched.lock)
+		var newList *m
+		for freem := sched.freem; freem != nil; {
+			if freem.freeWait != 0 {
+				next := freem.freelink
+				freem.freelink = newList
+				newList = freem
+				freem = next
+				continue
+			}
+			stackfree(freem.g0.stack)
+			freem = freem.freelink
+		}
+		sched.freem = newList
+		unlock(&sched.lock)
+	}
+
+	mp := new(m)
+	mp.mstartfn = fn
+	mcommoninit(mp)
+
+	// In case of cgo or Solaris or Darwin, pthread_create will make us a stack.
+	// Windows and Plan 9 will layout sched stack on OS stack.
+	if iscgo || GOOS == "solaris" || GOOS == "windows" || GOOS == "plan9" || GOOS == "darwin" {
+		mp.g0 = malg(-1)
+	} else {
+		mp.g0 = malg(8192 * sys.StackGuardMultiplier)
+	}
+	mp.g0.m = mp
+
+	if _p_ == _g_.m.p.ptr() {
+		releasep()
+	}
+	_g_.m.locks--
+	if _g_.m.locks == 0 && _g_.preempt { // restore the preemption request in case we've cleared it in newstack
+		_g_.stackguard0 = stackPreempt
+	}
+
+	return mp
+}
+```
+
+```go
+func newm1(mp *m) {
+	if iscgo {
+		var ts cgothreadstart
+		if _cgo_thread_start == nil {
+			throw("_cgo_thread_start missing")
+		}
+		ts.g.set(mp.g0)
+		ts.tls = (*uint64)(unsafe.Pointer(&mp.tls[0]))
+		ts.fn = unsafe.Pointer(funcPC(mstart))
+		if msanenabled {
+			msanwrite(unsafe.Pointer(&ts), unsafe.Sizeof(ts))
+		}
+		execLock.rlock() // Prevent process clone.
+		asmcgocall(_cgo_thread_start, unsafe.Pointer(&ts))
+		execLock.runlock()
+		return
+	}
+	execLock.rlock() // Prevent process clone.
+	newosproc(mp)
+	execLock.runlock()
+}
+```
+
+newosproc 就是操作系统特定的了，我们在这里暂时讨论 darwin 和 linux，wasm 留到 [12 WebAssembly](../12-wasm.md) 中专门讨论。
+
+##### `runtime/os_darwin.go`
+
+```go
+// 可能在 m.p==nil 情况下运行，因此不允许 write barrier
+//go:nowritebarrierrec
+func newosproc(mp *m) {
+	stk := unsafe.Pointer(mp.g0.stack.hi)
+	if false {
+		print("newosproc stk=", stk, " m=", mp, " g=", mp.g0, " id=", mp.id, " ostk=", &mp, "\n")
+	}
+
+	// 初始化 attribute 对象
+	var attr pthreadattr
+	var err int32
+	err = pthread_attr_init(&attr)
+	if err != 0 {
+		write(2, unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
+		exit(1)
+	}
+
+	// 设置想要使用的栈大小。目前为 64KB
+	// TODO: just use OS default size?
+	const stackSize = 1 << 16
+	if pthread_attr_setstacksize(&attr, stackSize) != 0 {
+		write(2, unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
+		exit(1)
+	}
+	//mSysStatInc(&memstats.stacks_sys, stackSize) //TODO: do this?
+
+	// 通知 pthread 库不会 join 这个线程。
+	if pthread_attr_setdetachstate(&attr, _PTHREAD_CREATE_DETACHED) != 0 {
+		write(2, unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
+		exit(1)
+	}
+
+	// Finally, create the thread. It starts at mstart_stub, which does some low-level
+	// setup and then calls mstart.
+	var oset sigset
+	sigprocmask(_SIG_SETMASK, &sigset_all, &oset)
+	err = pthread_create(&attr, funcPC(mstart_stub), unsafe.Pointer(mp))
+	sigprocmask(_SIG_SETMASK, &oset, nil)
+	if err != 0 {
+		write(2, unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
+		exit(1)
+	}
+}
+```
+
+我们终于看到进程的创建了，原来还是走的 C 调用：
+
+```go
+//go:nosplit
+//go:cgo_unsafe_args
+func pthread_create(attr *pthreadattr, start uintptr, arg unsafe.Pointer) int32 {
+	return libcCall(unsafe.Pointer(funcPC(pthread_create_trampoline)), unsafe.Pointer(&attr))
+}
+func pthread_create_trampoline()
+```
+
+```asm
+TEXT runtime·pthread_create_trampoline(SB),NOSPLIT,$0
+	PUSHL	BP
+	MOVL	SP, BP
+	SUBL	$24, SP
+	MOVL	32(SP), CX
+	LEAL	16(SP), AX	// arg "0" &threadid (which we throw away)
+	MOVL	AX, 0(SP)
+	MOVL	0(CX), AX	// arg 1 attr
+	MOVL	AX, 4(SP)
+	MOVL	4(CX), AX	// arg 2 start
+	MOVL	AX, 8(SP)
+	MOVL	8(CX), AX	// arg 3 arg
+	MOVL	AX, 12(SP)
+	CALL	libc_pthread_create(SB)
+	MOVL	BP, SP
+	POPL	BP
+	RET
+```
+
+##### `runtime/os_linux.go`
+
+再来看看 linux 上的情况。
+
+```go
+// May run with m.p==nil, so write barriers are not allowed.
+//go:nowritebarrier
+func newosproc(mp *m) {
+	stk := unsafe.Pointer(mp.g0.stack.hi)
+	/*
+	 * note: strace gets confused if we use CLONE_PTRACE here.
+	 */
+	if false {
+		print("newosproc stk=", stk, " m=", mp, " g=", mp.g0, " clone=", funcPC(clone), " id=", mp.id, " ostk=", &mp, "\n")
+	}
+
+	// Disable signals during clone, so that the new thread starts
+	// with signals disabled. It will enable them in minit.
+	var oset sigset
+	sigprocmask(_SIG_SETMASK, &sigset_all, &oset)
+	ret := clone(cloneFlags, stk, unsafe.Pointer(mp), unsafe.Pointer(mp.g0), unsafe.Pointer(funcPC(mstart)))
+	sigprocmask(_SIG_SETMASK, &oset, nil)
+
+	if ret < 0 {
+		print("runtime: failed to create new OS thread (have ", mcount(), " already; errno=", -ret, ")\n")
+		if ret == -_EAGAIN {
+			println("runtime: may need to increase max user processes (ulimit -u)")
+		}
+		throw("newosproc")
+	}
+}
+
+//go:noescape
+func clone(flags int32, stk, mp, gp, fn unsafe.Pointer) int32
+```
+
+```asm
+// int32 clone(int32 flags, void *stk, M *mp, G *gp, void (*fn)(void));
+TEXT runtime·clone(SB),NOSPLIT,$0
+	MOVL	flags+0(FP), DI
+	MOVQ	stk+8(FP), SI
+	MOVQ	$0, DX
+	MOVQ	$0, R10
+
+	// Copy mp, gp, fn off parent stack for use by child.
+	// Careful: Linux system call clobbers CX and R11.
+	MOVQ	mp+16(FP), R8
+	MOVQ	gp+24(FP), R9
+	MOVQ	fn+32(FP), R12
+
+	MOVL	$SYS_clone, AX
+	SYSCALL
+
+	// In parent, return.
+	CMPQ	AX, $0
+	JEQ	3(PC)
+	MOVL	AX, ret+40(FP)
+	RET
+
+	// In child, on new stack.
+	MOVQ	SI, SP
+
+	// If g or m are nil, skip Go-related setup.
+	CMPQ	R8, $0    // m
+	JEQ	nog
+	CMPQ	R9, $0    // g
+	JEQ	nog
+
+	// Initialize m->procid to Linux tid
+	MOVL	$SYS_gettid, AX
+	SYSCALL
+	MOVQ	AX, m_procid(R8)
+
+	// Set FS to point at m->tls.
+	LEAQ	m_tls(R8), DI
+	CALL	runtime·settls(SB)
+
+	// In child, set up new stack
+	get_tls(CX)
+	MOVQ	R8, g_m(R9)
+	MOVQ	R9, g(CX)
+	CALL	runtime·stackcheck(SB)
+
+nog:
+	// Call fn
+	CALL	R12
+
+	// It shouldn't return. If it does, exit that thread.
+	MOVL	$111, DI
+	MOVL	$SYS_exit, AX
+	SYSCALL
+	JMP	-3(PC)	// keep exiting
+```
+
+linux 下为原生系统调用，似乎感受到了不平等待遇 :)
 
 #### M/G 解绑
 
@@ -1070,9 +1376,305 @@ func setGNoWB(gp **g, new *g) {
 }
 ```
 
+#### M 的死亡
+
+我们已经多次提到过 m 当且仅当它所运行的 goroutine 本锁定在该 m 且 goroutine 退出后，
+m 才会退出。我们来看一看它的原因。
+
+首先，我们已经知道调度循环会一直进行下去永远不会返回了：
+
+```go
+func mstart() {
+	(...)
+	mstart1() // 永不返回
+	(...)
+	mexit(osStack)
+}
+```
+那 `mexit` 究竟什么时候会被执行？
+事实上，在 `mstart1` 中：
+
+```go
+func mstart1() {
+	(...)
+	// 为了在 mcall 的栈顶使用调用方来结束当前线程，做记录
+	// 当进入 schedule 之后，我们再也不会回到 mstart1，所以其他调用可以复用当前帧。
+	save(getcallerpc(), getcallersp())
+	(...)
+}
+```
+
+`save` 记录了调用方的 pc 和 sp，而对于 `save`：
+
+```go
+// getcallerpc 返回它调用方的调用方程序计数器 PC program conter
+// getcallersp 返回它调用方的调用方的栈指针 SP stack pointer
+// 实现由编译器内建，在任何平台上都没有实现它的代码
+//
+// 例如:
+//
+//	func f(arg1, arg2, arg3 int) {
+//		pc := getcallerpc()
+//		sp := getcallersp()
+//	}
+//
+// 这两行会寻找调用 f 的 PC 和 SP
+//
+// 调用 getcallerpc 和 getcallersp 必须被询问的帧中完成
+//
+// getcallersp 的结果在返回时是正确的，但是它可能会被任何随后调用的函数无效，
+// 因为它可能会重新定位堆栈，以使其增长或缩小。一般规则是，getcallersp 的结果
+// 应该立即使用，并且只能传递给 nosplit 函数。
+
+//go:noescape
+func getcallerpc() uintptr
+
+//go:noescape
+func getcallersp() uintptr // implemented as an intrinsic on all platforms
+
+
+// save 更新了 getg().sched 的 pc 和 sp 的指向，并允许 gogo 能够恢复到 pc 和 sp
+//
+// save 不允许 write barrier 因为 write barrier 会破坏 getg().sched
+//
+//go:nosplit
+//go:nowritebarrierrec
+func save(pc, sp uintptr) {
+	_g_ := getg()
+
+	// 保存当前运行现场
+	_g_.sched.pc = pc
+	_g_.sched.sp = sp
+	_g_.sched.lr = 0
+	_g_.sched.ret = 0
+
+	// 保存 g
+	_g_.sched.g = guintptr(unsafe.Pointer(_g_))
+
+	// 我们必须确保 ctxt 为零，但这里不允许 write barrier。
+	// 所以这里只是做一个断言
+	if _g_.sched.ctxt != nil {
+		badctxt()
+	}
+}
+```
+
+由于 `mstart/mstart1` 是运行在 g0 上的，因此 `save` 将保存 `mstart` 的运行现场保存到 `g0.sched` 中。
+当调度循环执行到 `goexit0` 时，会检查 m 与 g 之间是否被锁住：
+
+```go
+func goexit0(gp *g) {
+	(...)
+	gfput(_g_.m.p.ptr(), gp)
+
+	if locked {
+		if GOOS != "plan9" {
+			gogo(&_g_.m.g0.sched)
+		}
+	}
+	schedule()
+}
+```
+
+如果 g 锁在当前 m 上，则调用 `gogo` 恢复到 `g0.sched` 的执行现场，从而恢复到 `mexit` 调用。
+
+最后来看 `mexit`：
+
+```go
+// mexit 销毁并退出当前线程
+//
+// 请不要直接调用来退出线程，因为它必须在线程栈顶上运行。
+// 相反，请使用 gogo(&_g_.m.g0.sched) 来解除栈并退出线程。
+//
+// 当调用时，m.p != nil。因此可以使用 write barrier。
+// 在退出前它会释放当前绑定的 P。
+//
+//go:yeswritebarrierrec
+func mexit(osStack bool) {
+	g := getg()
+	m := g.m
+
+	if m == &m0 {
+		// 主线程
+		//
+		// 在 linux 中，退出主线程会导致进程变为僵尸进程。
+		// 在 plan 9 中，退出主线程将取消阻塞等待，及时其他线程仍在运行。
+		// 在 Solaris 中我们既不能 exitThread 也不能返回到 mstart 中。
+		// 其他系统上可能发生别的糟糕的事情。
+		//
+		// 我们可以尝试退出之前清理当前 M ，但信号处理非常复杂
+		handoffp(releasep()) // 让出 P
+		lock(&sched.lock)    // 锁住调度器
+		sched.nmfreed++
+		checkdead()
+		unlock(&sched.lock)
+		notesleep(&m.park) // park 主线程，在此阻塞
+		throw("locked m0 woke up")
+	}
+
+	sigblock()
+	unminit()
+
+	// 释放 gsignal 栈
+	if m.gsignal != nil {
+		stackfree(m.gsignal.stack)
+	}
+
+	// 将 m 从 allm 中移除
+	lock(&sched.lock)
+	for pprev := &allm; *pprev != nil; pprev = &(*pprev).alllink {
+		if *pprev == m {
+			*pprev = m.alllink
+			goto found
+		}
+	}
+	// 如果没找到则是异常状态，说明 allm 管理出错
+	throw("m not found in allm")
+found:
+
+	// 
+	if !osStack {
+		// Delay reaping m until it's done with the stack.
+		//
+		// If this is using an OS stack, the OS will free it
+		// so there's no need for reaping.
+		atomic.Store(&m.freeWait, 1)
+		// Put m on the free list, though it will not be reaped until
+		// freeWait is 0. Note that the free list must not be linked
+		// through alllink because some functions walk allm without
+		// locking, so may be using alllink.
+		m.freelink = sched.freem
+		sched.freem = m
+	}
+	unlock(&sched.lock)
+
+	// Release the P.
+	handoffp(releasep())
+	// After this point we must not have write barriers.
+
+	// Invoke the deadlock detector. This must happen after
+	// handoffp because it may have started a new M to take our
+	// P's work.
+	lock(&sched.lock)
+	sched.nmfreed++
+	checkdead()
+	unlock(&sched.lock)
+
+	if osStack {
+		// Return from mstart and let the system thread
+		// library free the g0 stack and terminate the thread.
+		return
+	}
+
+	// mstart is the thread's entry point, so there's nothing to
+	// return to. Exit the thread directly. exitThread will clear
+	// m.freeWait when it's done with the stack and the m can be
+	// reaped.
+	exitThread(&m.freeWait)
+}
+```
+
+可惜 `exitThread` 在 darwin 上还是没有定义：
+
+```go
+// 未在 darwin 上使用，但必须定义
+func exitThread(wait *uint32) {
+}
+```
+
+在 linux 386 上：
+
+```asm
+// func exitThread(wait *uint32)
+TEXT runtime·exitThread(SB),NOSPLIT,$0-4
+	MOVL	wait+0(FP), AX
+	// 栈使用完毕
+	MOVL	$0, (AX)
+	MOVL	$1, AX	// 退出当前线程
+	MOVL	$0, BX	// exit code
+	INT	$0x80	// 没有栈; 不能使用 CALL 调用
+	// 甚至可能连一个栈都没有
+	INT	$3
+	JMP	0(PC)
+```
+
+从实现上可以看出，只有 linux 中才可能正常的退出一个栈，而 darwin 只能保持 park 了。
+而如果是主线程，则会始终保持 park。
+
 ## 总结
 
-TODO: 总结整个调度逻辑，遗留的问题（GC worker, ）
+我们已经看过了整个调度器的设计，下图纵观了整个过程：
+
+```
+          mstart --> mstart1  - - - - - - - - - - - - - - - - - - - - --> mexit
+                        |                                                  ^
+                        v  yes                                             |
+                       m0? ---> mstartm0 --> newextram --> initsig         |
+                     no |                                     |            |
+                        v                                     |            |
+在这里保存 mstart 运行现场  save <-------------------------------+            | 从而在这里可以跳转到 mexit
+                        |           服务 cgo 或 windows                     |
+                        v                                                  |
+                     asminit                                               |
+                        |                                                  |
+                      minit ----> minitSignalStack --> minitSignalMask     |
+                        |                                                  |
+                        v      yes                                         |
+                     mstartfn? ---> mstartfn                               |
+                     no |              |                                   |
+                        | <------------+                                   |
+                        |                                                  |
+                        |       yes                                        |
+                      helpgc? --------------> stopm                        |
+                     no |                       |                          |
+                        |                       | park m                   |
+                        |                       | until new g              |
+                        v                       |                          |
+                     acquirep                   |                          |
+                        | <---------------------+                          |
+                        v                                     no           |
+                     schedule <----------------------------------- lock on os thread?
+                        |                                                  |
+                        +-----> stoplockedm -----------------+             |
+      +----+----------> |                                    |             |
+      |    |            |                                    |             |
+      |    |      yes   |                                    |             |
+      | gcstopm <---- in gc?                                 |             |
+      |              no |                                    |             |
+      |                 v                                    |             |
+      |           runSafePointerFn                           |             |
+      |                 |                                    |             |
+      |                 v        yes                         |             |
+      |             gc blacken? ----> findRunnableGCWorker   |             |
+      |                 |                     |              |             |
+      |                 v                     |              |             |
+      |         runqget / globrunqget         |              |             |
+      |                 |                     |              |             |
+      |                 v                     |              |             |
+      |            findrunnable               |              |             |
+      |                 |                     |              |             |
+      |                 v                     |              |             |
+      |            resetspinning <------------+              |             |
+      |                 |                                    |             |
+      |           yes   v                                    |             |
+   startlockedm <---- locked m?                              |             |
+                     no |                                    |             |
+                        v                                    |             |
+                      execute <------------------------------+             |
+                        |                                                  |
+                        v                                                  |
+                       gogo                                              gfput                               
+                        |                                                  ^                               
+                        v                                                  |                               
+                        G --> goexit --> mcall --> goexit1 ------------> dropg
+```
+
+那么，很自然的能够想到这个流程中存在两个问题：
+
+1. `findRunnableGCWorker` 在干什么？
+2. 调度循环看似合理，但如果 G 执行时间过长，难道要等到 G 执行完后再调度其他的 G？显然不符合实际情况，那么到底会发生什么事情？
+
+我们留到[5 调度器: 系统监控](sysmon.md)和[6 垃圾回收器: 三色标记法](../6-gc/mark.md)中来讨论。
 
 ## 进一步阅读的参考文献
 

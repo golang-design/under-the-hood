@@ -76,12 +76,12 @@ TEXT exit1<>(SB),NOSPLIT,$0
 // func exitThread(wait *uint32)
 TEXT runtime·exitThread(SB),NOSPLIT,$0-4
 	MOVL	wait+0(FP), AX
-	// We're done using the stack.
+	// 栈使用完毕
 	MOVL	$0, (AX)
-	MOVL	$1, AX	// exit (just this thread)
+	MOVL	$1, AX	// 退出当前线程
 	MOVL	$0, BX	// exit code
-	INT	$0x80	// no stack; must not use CALL
-	// We may not even have a stack any more.
+	INT	$0x80	// 没有栈; 不能使用 CALL 调用
+	// 甚至可能连一个栈都没有
 	INT	$3
 	JMP	0(PC)
 

@@ -22,8 +22,9 @@ const (
 	tflagNamed     tflag = 1 << 2
 )
 
-// Needs to be in sync with ../cmd/link/internal/ld/decodesym.go:/^func.commonsize,
-// ../cmd/compile/internal/gc/reflect.go:/^func.dcommontype and
+// 需要与这些文件同步：
+// ../cmd/link/internal/ld/decodesym.go:/^func.commonsize,
+// ../cmd/compile/internal/gc/reflect.go:/^func.dcommontype,
 // ../reflect/type.go:/^type.rtype.
 type _type struct {
 	size       uintptr

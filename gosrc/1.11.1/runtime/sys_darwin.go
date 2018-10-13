@@ -317,7 +317,7 @@ func pthread_cond_signal(c *pthreadcond) int32 {
 }
 func pthread_cond_signal_trampoline()
 
-// Not used on Darwin, but must be defined.
+// 未在 darwin 上使用，但必须定义
 func exitThread(wait *uint32) {
 }
 
