@@ -777,6 +777,12 @@ func gostartcall(buf *gobuf, fn, ctxt unsafe.Pointer) {
 
 最后，将 g 放入运行队列之中的 `runqput`：
 
+这个过程中，在 next 为 false 时，会将 要放入的 g 
+插入到队列尾部，如果队列已满，则放入全局队列。
+
+而当 next 为 true 时，则 g 放入计划运行的 next 任务中，而原有的
+next 任务会放到队列尾部，若队列已满，则会被放入全局队列（好惨）。
+
 ```go
 // runqput 尝试将 g 放入本地可运行队列中
 // 如果 next 为 false，则 runqput 会将 g 放到可运行队列的尾部
@@ -819,7 +825,7 @@ retry:
 }
 ```
 
-扔给全局队列有什么意想不到的操作？
+扔给全局队列还有什么意想不到的操作？
 
 ```go
 // 将 g 和一批 work 从本地 runnable 队列放入全局队列

@@ -90,6 +90,9 @@
     - [`atomic`](content/11-pkg/atomic/atomic.md)
     - `net`
 12. [WebAssembly](content/12-wasm.md)
+13. 附录
+    - [基于工作窃取的多线程计算调度](papers/sched/work-steal-sched.md)
+    - [Go 运行时编程](gosrc/1.11.1/runtime/README.md)
 
 [结束语](content/finalwords.md)
 

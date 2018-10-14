@@ -6,11 +6,10 @@ package runtime
 
 import "unsafe"
 
-// Per-thread (in Go, per-P) cache for small objects.
-// No locking needed because it is per-thread (per-P).
+// 小对象的 Per-thread (在 Go 里为 per-P) 缓存
+// 无需加锁，因为是 per-thread (per-P) 的
 //
-// mcaches are allocated from non-GC'd memory, so any heap pointers
-// must be specially handled.
+// mcache 从 非 GC 内存上分配，因此任何堆指针必须进行特殊处理
 //
 //go:notinheap
 type mcache struct {

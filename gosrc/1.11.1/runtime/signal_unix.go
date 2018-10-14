@@ -723,6 +723,11 @@ func minitSignals() {
 // signal stack and then calls a Go function) then set the gsignal
 // stack to the alternate signal stack. Record which choice was made
 // in newSigstack, so that it can be undone in unminit.
+// 初始化新 m 以设置备用信号堆栈时调用 minitSignalStack。
+// 如果没有为线程设置备用信号堆栈（正常情况），则将备用信号堆栈设置为 gsignal 堆栈。
+// 如果为线程设置了备用信号堆栈（非 Go 线程设置备用信号堆栈然后调用 Go 函数的情况），
+// 则将 gsignal 堆栈设置为备用信号堆栈。记录在 newSigstack 中做出的选择，
+// 以便可以在 unminit 中撤消。
 func minitSignalStack() {
 	_g_ := getg()
 	var st stackt

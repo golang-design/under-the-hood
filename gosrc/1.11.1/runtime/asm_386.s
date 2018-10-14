@@ -271,10 +271,10 @@ TEXT runtime·breakpoint(SB),NOSPLIT,$0-0
 	RET
 
 TEXT runtime·asminit(SB),NOSPLIT,$0-0
-	// Linux and MinGW start the FPU in extended double precision.
-	// Other operating systems use double precision.
-	// Change to double precision to match them,
-	// and to match other hardware that only has double.
+	// Linux 和 MinGW 在 extended double precision 中启动 FPU。
+	// 其他操作系统使用 double precision。
+	// 更改为 double precision 以匹配它们，
+	// 并匹配其他只有 double 的硬件。
 	FLDCW	runtime·controlWord64(SB)
 	RET
 
