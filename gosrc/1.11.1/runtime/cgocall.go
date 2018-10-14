@@ -2,80 +2,60 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Cgo call and callback support.
+// Cgo 调用与回调支持
 //
-// To call into the C function f from Go, the cgo-generated code calls
-// runtime.cgocall(_cgo_Cfunc_f, frame), where _cgo_Cfunc_f is a
-// gcc-compiled function written by cgo.
+// 为从 Go 调用 C 函数 f，cgo 生成的代码调用 runtime.cgocall(_cgo_Cfunc_f, frame),
+// 其中 _cgo_Cfunc_f 为由 cgo 编写的并由 gcc 编译的函数。
 //
-// runtime.cgocall (below) calls entersyscall so as not to block
-// other goroutines or the garbage collector, and then calls
-// runtime.asmcgocall(_cgo_Cfunc_f, frame).
+// runtime.cgocall (见下) 调用 entersyscall，从而不会阻塞其他 goroutine 或垃圾回收器
+// 而后调用 runtime.asmcgocall(_cgo_Cfunc_f, frame)。
 //
-// runtime.asmcgocall (in asm_$GOARCH.s) switches to the m->g0 stack
-// (assumed to be an operating system-allocated stack, so safe to run
-// gcc-compiled code on) and calls _cgo_Cfunc_f(frame).
+// runtime.asmcgocall (见 asm_$GOARCH.s) 会切换到 m->g0 栈
+// (假设为操作系统分配的栈，因此能安全的在运行 gcc 编译的代码) 并调用 _cgo_Cfunc_f(frame)。
 //
-// _cgo_Cfunc_f invokes the actual C function f with arguments
-// taken from the frame structure, records the results in the frame,
-// and returns to runtime.asmcgocall.
+// _cgo_Cfunc_f 获取了帧结构中的参数，调用了实际的 C 函数 f，在帧中记录其结果，
+// 并返回到 runtime.asmcgocall。
 //
-// After it regains control, runtime.asmcgocall switches back to the
-// original g (m->curg)'s stack and returns to runtime.cgocall.
+// 在重新获得控制权后，runtime.asmcgocall 会切换回原来的 g (m->curg) 的执行栈
+// 并返回 runtime.cgocall。
 //
-// After it regains control, runtime.cgocall calls exitsyscall, which blocks
-// until this m can run Go code without violating the $GOMAXPROCS limit,
-// and then unlocks g from m.
+// 在重新获得控制权后，runtime.cgocall 会调用 exitsyscall，并阻塞，直到该 m 运行能够在不与
+// $GOMAXPROCS 限制冲突的情况下运行 Go 代码。
 //
-// The above description skipped over the possibility of the gcc-compiled
-// function f calling back into Go. If that happens, we continue down
-// the rabbit hole during the execution of f.
+// 上面的描述跳过了当 gcc 编译的函数 f 调用回 Go 的情况。如果此类情况发生，则下面描述了 f 执行期间的调用过程。
 //
-// To make it possible for gcc-compiled C code to call a Go function p.GoF,
-// cgo writes a gcc-compiled function named GoF (not p.GoF, since gcc doesn't
-// know about packages).  The gcc-compiled C function f calls GoF.
+// 为了 gcc 编译的 C 代码调用 Go 函数 p.GoF 成为可能，cgo 编写了以 GoF 命名的 gcc 编译的函数
+// （不是 p.GoF，因为 gcc 没有包的概念）。然后 gcc 编译的 C 函数 f 调用 GoF。
 //
-// GoF calls crosscall2(_cgoexp_GoF, frame, framesize).  Crosscall2
-// (in cgo/gcc_$GOARCH.S, a gcc-compiled assembly file) is a two-argument
-// adapter from the gcc function call ABI to the 6c function call ABI.
-// It is called from gcc to call 6c functions. In this case it calls
-// _cgoexp_GoF(frame, framesize), still running on m->g0's stack
-// and outside the $GOMAXPROCS limit. Thus, this code cannot yet
-// call arbitrary Go code directly and must be careful not to allocate
-// memory or use up m->g0's stack.
+// GoF 调用了 crosscall2(_cgoexp_GoF, frame, framesize)。
+// Crosscall2（见 cgo/gcc_$GOARCH.S，gcc 编译的汇编文件）为一个具有两个参数的从 gcc 函数调用 ABI
+// 到 6c 函数调用 API 的适配器.
+// gcc 通过调用它来调用 6c 函数。这种情况下，它会调用 _cgoexp_GoF(frame, framesize)，
+// 仍然会在 m->g0 栈上运行，且不受 $GOMAXPROCS 的限制。因此该代码不能直接调用任意的 Go 代码，
+// 并且必须非常小心的分配内存以及小心的使用 m->g0 栈。
 //
-// _cgoexp_GoF calls runtime.cgocallback(p.GoF, frame, framesize, ctxt).
-// (The reason for having _cgoexp_GoF instead of writing a crosscall3
-// to make this call directly is that _cgoexp_GoF, because it is compiled
-// with 6c instead of gcc, can refer to dotted names like
-// runtime.cgocallback and p.GoF.)
+// _cgoexp_GoF 调用了 runtime.cgocallback(p.GoF, frame, framesize, ctxt).
+// （使用 _cgoexp_GoF 而不是编写 crosscall3 直接进行此调用的原因是 _cgoexp_GoF
+// 是用 6c 而不是 gcc 编译的，可以引用像 runs.cgocallback 和 p.GoF 这样的带点的名称。）
 //
-// runtime.cgocallback (in asm_$GOARCH.s) switches from m->g0's
-// stack to the original g (m->curg)'s stack, on which it calls
-// runtime.cgocallbackg(p.GoF, frame, framesize).
-// As part of the stack switch, runtime.cgocallback saves the current
-// SP as m->g0->sched.sp, so that any use of m->g0's stack during the
-// execution of the callback will be done below the existing stack frames.
-// Before overwriting m->g0->sched.sp, it pushes the old value on the
-// m->g0 stack, so that it can be restored later.
+// runtime.cgocallback（在 asm_$GOARCH.s中）从 m->g0 的堆切换到原始 g（m->curg）的栈，
+// 并在在栈上调用 runtime.cgocallbackg(p.GoF，frame，framesize)。
+// 作为栈切换的一部分，runtime.cgocallback 将当前 SP 保存为 m->g0->sched.sp，
+// 因此在执行回调期间任何使用 m->g0 的栈都将在现有栈帧之下完成。
+// 在覆盖 m->g0->sched.sp 之前，它会在 m->g0 栈上将旧值压栈，以便以后可以恢复。
 //
-// runtime.cgocallbackg (below) is now running on a real goroutine
-// stack (not an m->g0 stack).  First it calls runtime.exitsyscall, which will
-// block until the $GOMAXPROCS limit allows running this goroutine.
-// Once exitsyscall has returned, it is safe to do things like call the memory
-// allocator or invoke the Go callback function p.GoF.  runtime.cgocallbackg
-// first defers a function to unwind m->g0.sched.sp, so that if p.GoF
-// panics, m->g0.sched.sp will be restored to its old value: the m->g0 stack
-// and the m->curg stack will be unwound in lock step.
-// Then it calls p.GoF.  Finally it pops but does not execute the deferred
-// function, calls runtime.entersyscall, and returns to runtime.cgocallback.
+// runtime.cgocallbackg（见下）现在在一个真正的 goroutine 栈上运行（不是 m->g0 栈）。
+// 首先它调用 runtime.exitsyscall，它将阻塞到不与 $GOMAXPROCS 限制冲突的情况下运行此 goroutine。
+// 一旦 exitsyscall 返回，就可以安全地执行调用内存分配器或调用 Go 的 p.GoF 回调函数等操作。
+// runtime.cgocallbackg 首先推迟一个函数来 unwind m->g0.sched.sp，这样如果 p.GoF 发生 panic
+// m->g0.sched.sp 将恢复到其旧值：m->g0 栈和 m->curg 栈将在 unwind 步骤中展开。
+// 接下来它调用 p.GoF。最后它弹出但不执行 defer 函数，而是调用 runtime.entersyscall，
+// 并返回到 runtime.cgocallback。
 //
-// After it regains control, runtime.cgocallback switches back to
-// m->g0's stack (the pointer is still in m->g0.sched.sp), restores the old
-// m->g0.sched.sp value from the stack, and returns to _cgoexp_GoF.
+// 在重新获得控制权后，runtime.cgocallback 切换回 m->g0 栈（指针仍然为 m->g0.sched.sp），
+// 从栈中恢复原来的 m->g0.sched.sp 的值，并返回到 _cgoexp_GoF。
 //
-// _cgoexp_GoF immediately returns to crosscall2, which restores the
-// callee-save registers for gcc and returns to GoF, which returns to f.
+// _cgoexp_GoF 直接返回 crosscall2，从而为 gcc 恢复调用方寄存器，并返回到 GoF，从而返回到 f 中。
 
 package runtime
 
@@ -145,10 +125,10 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 	// and then live. Prevent these undead arguments from crashing
 	// GC by forcing them to stay live across this time warp.
 	// 从垃圾收集器的角度来看，时间可以按照上面的顺序向后移动。
-	// 如果对Go代码进行回调，GC将在调用asmcgocall时看到此函数。
+	// 如果对 Go 代码进行回调，GC 将在调用 asmcgocall 时能看到此函数。
 	// 当Go调用稍后返回到C时，回调系统调用PC / SP并且GC在调用
 	// enteryscall时看到此函数。通常情况下，fn和arg将在enteryscall上运行
-	// 并在asmcgocall处死机，因此如果时间向后移动，GC会将这些参数视为已死，
+	// 并在 asmcgocal l处死机，因此如果时间向后移动，GC会将这些参数视为已死，
 	// 然后生效。 通过强制它们在这个时间扭曲中保持活动来防止这些不死参数崩溃。
 	KeepAlive(fn)
 	KeepAlive(arg)
