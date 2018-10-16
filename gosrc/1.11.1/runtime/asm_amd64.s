@@ -7,10 +7,9 @@
 #include "funcdata.h"
 #include "textflag.h"
 
-// _rt0_amd64 is common startup code for most amd64 systems when using
-// internal linking. This is the entry point for the program from the
-// kernel for an ordinary -buildmode=exe program. The stack holds the
-// number of arguments and the C-style argv.
+// _rt0_amd64 是 amd64 系统上使用内部链接时候常见的引导代码。
+// 这是该程序从内核到普通 -buildmode=exe 程序的入口。
+// 栈保存了参数的数量以及 C 风格的 argv
 TEXT _rt0_amd64(SB),NOSPLIT,$-8
 	MOVQ	0(SP), DI	// argc
 	LEAQ	8(SP), SI	// argv
@@ -85,16 +84,16 @@ DATA _rt0_amd64_lib_argv<>(SB)/8, $0
 GLOBL _rt0_amd64_lib_argv<>(SB),NOPTR, $8
 
 TEXT runtime·rt0_go(SB),NOSPLIT,$0
-	// copy arguments forward on an even stack
+	// 将参数向前复制到一个偶数栈上
 	MOVQ	DI, AX		// argc
 	MOVQ	SI, BX		// argv
 	SUBQ	$(4*8+7), SP		// 2args 2auto
 	ANDQ	$~15, SP
 	MOVQ	AX, 16(SP)
 	MOVQ	BX, 24(SP)
-	
-	// create istack out of the given (operating system) stack.
-	// _cgo_init may update stackguard.
+
+	// 从给定（操作系统）栈中创建 istack。
+	// _cgo_init 可能更新 stackguard
 	MOVQ	$runtime·g0(SB), DI
 	LEAQ	(-64*1024+104)(SP), BX
 	MOVQ	BX, g_stackguard0(DI)
@@ -102,16 +101,16 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	MOVQ	BX, (g_stack+stack_lo)(DI)
 	MOVQ	SP, (g_stack+stack_hi)(DI)
 
-	// find out information about the processor we're on
+	// 寻找正在运行的处理器信息
 	MOVL	$0, AX
 	CPUID
 	MOVL	AX, SI
 	CMPL	AX, $0
 	JE	nocpuinfo
 
-	// Figure out how to serialize RDTSC.
-	// On Intel processors LFENCE is enough. AMD requires MFENCE.
-	// Don't know about the rest, so let's do MFENCE.
+	// 处理如何序列化 RDTSC。
+	// 在 intel 处理器上，LFENCE 足够了。 AMD 则需要 MFENCE。
+	// 其他处理器的情况不清楚，所以让用 MFENCE。
 	CMPL	BX, $0x756E6547  // "Genu"
 	JNE	notintel
 	CMPL	DX, $0x49656E69  // "ineI"
@@ -122,22 +121,22 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	MOVB	$1, runtime·lfenceBeforeRdtsc(SB)
 notintel:
 
-	// Load EAX=1 cpuid flags
+	// 加载 EAX=1 cpuid 标记
 	MOVL	$1, AX
 	CPUID
 	MOVL	AX, runtime·processorVersionInfo(SB)
 
 nocpuinfo:
-	// if there is an _cgo_init, call it.
+	// 如果存在 _cgo_init, 调用
 	MOVQ	_cgo_init(SB), AX
 	TESTQ	AX, AX
 	JZ	needtls
-	// g0 already in DI
-	MOVQ	DI, CX	// Win64 uses CX for first parameter
+	// g0 已经存在 DI 中
+	MOVQ	DI, CX	// Win64 使用 CX 来表示第一个参数
 	MOVQ	$setg_gcc<>(SB), SI
 	CALL	AX
 
-	// update stackguard after _cgo_init
+	// _cgo_init 后更新 stackguard
 	MOVQ	$runtime·g0(SB), CX
 	MOVQ	(g_stack+stack_lo)(CX), AX
 	ADDQ	$const__StackGuard, AX
@@ -149,22 +148,22 @@ nocpuinfo:
 #endif
 needtls:
 #ifdef GOOS_plan9
-	// skip TLS setup on Plan 9
+	// 跳过 TLS 设置 on Plan 9
 	JMP ok
 #endif
 #ifdef GOOS_solaris
-	// skip TLS setup on Solaris
+	// 跳过 TLS 设置 on Solaris
 	JMP ok
 #endif
 #ifdef GOOS_darwin
-	// skip TLS setup on Darwin
+	// 跳过 TLS 设置 on Darwin
 	JMP ok
 #endif
 
 	LEAQ	runtime·m0+m_tls(SB), DI
 	CALL	runtime·settls(SB)
 
-	// store through it, to make sure it works
+	// 使用它进行存储，确保能正常运行
 	get_tls(BX)
 	MOVQ	$0x123, g(BX)
 	MOVQ	runtime·m0+m_tls(SB), AX
@@ -175,44 +174,43 @@ ok:
 	// 程序刚刚启动，此时位于主线程
 	// 当前栈与资源保存在 g0
 	// 该线程保存在 m0
-	// set the per-goroutine and per-mach "registers"
+	// 设置 per-goroutine 和 per-mach 寄存器
 	get_tls(BX)
 	LEAQ	runtime·g0(SB), CX
 	MOVQ	CX, g(BX)
 	LEAQ	runtime·m0(SB), AX
 
-	// save m->g0 = g0
+	// 保存 m->g0 = g0
 	MOVQ	CX, m_g0(AX)
-	// save m0 to g0->m
+	// 保存 m0 to g0->m
 	MOVQ	AX, g_m(CX)
 
-	CLD				// convention is D is always left cleared
+	CLD				// 约定 D 总是被清除
 	CALL	runtime·check(SB)
 
-	MOVL	16(SP), AX		// copy argc
+	MOVL	16(SP), AX		// 复制 argc
 	MOVL	AX, 0(SP)
-	MOVQ	24(SP), AX		// copy argv
+	MOVQ	24(SP), AX		// 复制 argv
 	MOVQ	AX, 8(SP)
 	CALL	runtime·args(SB)
 	CALL	runtime·osinit(SB)
 	CALL	runtime·schedinit(SB)
 
-	// create a new goroutine to start program
-	MOVQ	$runtime·mainPC(SB), AX		// entry
+	// 创建一个新的 goroutine 来启动程序
+	MOVQ	$runtime·mainPC(SB), AX		// 入口
 	PUSHQ	AX
-	PUSHQ	$0			// arg size
+	PUSHQ	$0			// 参数大小
 	CALL	runtime·newproc(SB)
 	POPQ	AX
 	POPQ	AX
 
-	// start this M
+	// 启动这个 M
 	CALL	runtime·mstart(SB)
 
-	CALL	runtime·abort(SB)	// mstart should never return
+	CALL	runtime·abort(SB)	// mstart 应该永不返回
 	RET
 
-	// Prevent dead-code elimination of debugCallV1, which is
-	// intended to be called by debuggers.
+	// 防止 debugger 调用 debugCallV1 的 dead-code elimination
 	MOVQ	$runtime·debugCallV1(SB), AX
 	RET
 
