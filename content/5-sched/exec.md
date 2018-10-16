@@ -112,32 +112,13 @@ func mstart1() {
 我们可能会问一个问题：为什么不在创建 G 的时候就完成执行栈边界的计算？
 原因在于 `mstart1` 会在每一个进程被创建时被执行，只有当线程被创建后，才能计算 g 执行栈的边界。
 
-除以上过程之外，在这个过程中有一个 `asminit`，它用于初始化 386 平台上的浮点数精度类型为扩展式浮点精度，在其他平台上不做任何处理
-不过这不是我们关注的重点：
+除以上过程之外，在这个过程中有一个 `asminit`，不过这不是我们关注的重点。它用于初始化 386 平台上的浮点数精度类型为扩展式浮点精度，
+在其他平台（amd64）上不做任何处理：
 
 ```asm
 TEXT runtime·asminit(SB),NOSPLIT,$0-0
-	// Linux 和 MinGW 在 extended double precision 中启动 FPU。
-	// 其他操作系统使用 double precision。
-	// 更改为 double precision 以匹配它们，
-	// 并匹配其他只有 double 的硬件。
-	FLDCW	runtime·controlWord64(SB)
+	// No per-thread init.
 	RET
-```
-
-```go
-// GOARCH=386 GO386=387 的浮点控制字的值
-// 0-5 个比特用于禁用浮点异常错误
-// 8-9 个比特用于精度控制：
-//   0 = 单精度, 即 float32
-//   2 = 双精度, 即 float64
-// 10-11 个比特用于舍入模式:
-//   0 = 就近舍入 (即使相等)
-//   3 = 舍入到零
-var (
-	// 10 00 111111
-	controlWord64      uint16 = 0x3f + 2<<8 + 0<<10
-)
 ```
 
 TODO: 至于其他关于 Signal G 和 Note 的内容放到 8-runtime 中解释。
@@ -414,24 +395,26 @@ func execute(gp *g, inheritTime bool) {
 设置自身的抢占信号，将 m 和 g 进行绑定。
 最终调用 `gogo` 开始执行。
 
-我们看一下 386 平台下的实现：
+我们看一下 amd64 平台下的实现：
 
 ```asm
 // void gogo(Gobuf*)
 // 从 Gobuf 恢复状态; longjmp
-TEXT runtime·gogo(SB), NOSPLIT, $8-4
-	MOVL	buf+0(FP), BX		// 运行现场
-	MOVL	gobuf_g(BX), DX
-	MOVL	0(DX), CX		// 确认 g != nil
+TEXT runtime·gogo(SB), NOSPLIT, $16-8
+	MOVQ	buf+0(FP), BX		// 运行现场
+	MOVQ	gobuf_g(BX), DX
+	MOVQ	0(DX), CX		// 确认 g != nil
 	get_tls(CX)
-	MOVL	DX, g(CX)
-	MOVL	gobuf_sp(BX), SP	// 恢复 SP
-	MOVL	gobuf_ret(BX), AX
-	MOVL	gobuf_ctxt(BX), DX
-	MOVL	$0, gobuf_sp(BX)	// 清理，辅助 GC
-	MOVL	$0, gobuf_ret(BX)
-	MOVL	$0, gobuf_ctxt(BX)
-	MOVL	gobuf_pc(BX), BX	// 获取 g 要执行的函数的入口地址
+	MOVQ	DX, g(CX)
+	MOVQ	gobuf_sp(BX), SP	// 恢复 SP
+	MOVQ	gobuf_ret(BX), AX
+	MOVQ	gobuf_ctxt(BX), DX
+	MOVQ	gobuf_bp(BX), BP
+	MOVQ	$0, gobuf_sp(BX)	// 清理，辅助 GC
+	MOVQ	$0, gobuf_ret(BX)
+	MOVQ	$0, gobuf_ctxt(BX)
+	MOVQ	$0, gobuf_bp(BX)
+	MOVQ	gobuf_pc(BX), BX	// 获取 g 要执行的函数的入口地址
 	JMP	BX						// 开始执行
 ```
 
@@ -1727,18 +1710,18 @@ func exitThread(wait *uint32) {
 }
 ```
 
-在 linux 386 上：
+在 Linux amd64 上：
 
 ```asm
 // func exitThread(wait *uint32)
-TEXT runtime·exitThread(SB),NOSPLIT,$0-4
-	MOVL	wait+0(FP), AX
+TEXT runtime·exitThread(SB),NOSPLIT,$0-8
+	MOVQ	wait+0(FP), AX
 	// 栈使用完毕
 	MOVL	$0, (AX)
-	MOVL	$1, AX	// 退出当前线程
-	MOVL	$0, BX	// exit code
-	INT	$0x80	// 没有栈; 不能使用 CALL 调用
-	// 甚至可能连一个栈都没有
+	MOVL	$0, DI	// exit code
+	MOVL	$SYS_exit, AX
+	SYSCALL
+	// 甚至连栈都没有了
 	INT	$3
 	JMP	0(PC)
 ```

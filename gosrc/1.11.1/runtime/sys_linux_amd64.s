@@ -56,12 +56,12 @@ TEXT runtime·exit(SB),NOSPLIT,$0-4
 // func exitThread(wait *uint32)
 TEXT runtime·exitThread(SB),NOSPLIT,$0-8
 	MOVQ	wait+0(FP), AX
-	// We're done using the stack.
+	// 栈使用完毕
 	MOVL	$0, (AX)
 	MOVL	$0, DI	// exit code
 	MOVL	$SYS_exit, AX
 	SYSCALL
-	// We may not even have a stack any more.
+	// 甚至连栈都没有了
 	INT	$3
 	JMP	0(PC)
 

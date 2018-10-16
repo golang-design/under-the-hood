@@ -21,66 +21,52 @@
 //
 // 1. GC 执行终止扫描 (sweep termination)
 //
-//    a. Stop the world. This causes all Ps to reach a GC safe-point.
+//    a. 停止世界（STW, Stop the World），此操作会导致所有 P 进入 GC safe-point
 //
-//    b. Sweep any unswept spans. There will only be unswept spans if
-//    this GC cycle was forced before the expected time.
+//    b. 扫描所有未被扫描过的 span。如果在预期的时间之前强制执行 GC 周期，那么只会有未清扫的span。
 //
 // 2. GC 执行 "mark 1" 子阶段。在该子阶段中，允许 P 本地缓存工作队列的一部分。
 //
-//    a. Prepare for the mark phase by setting gcphase to _GCmark
-//    (from _GCoff), enabling the write barrier, enabling mutator
-//    assists, and enqueueing root mark jobs. No objects may be
-//    scanned until all Ps have enabled the write barrier, which is
-//    accomplished using STW.
+//    a. 通过将 gcphase 设置为 _GCmark（来自_GCoff），来启用 write barrier
+//    启用 mutator assists 以及 root mark 任务入队以准备标记阶段。
+//    在所有 P 启用 write barrier 之前，没有任何对象会被扫描，这是由 STW 完成的。
 //
-//    b. Start the world. From this point, GC work is done by mark
-//    workers started by the scheduler and by assists performed as
-//    part of allocation. The write barrier shades both the
-//    overwritten pointer and the new pointer value for any pointer
-//    writes (see mbarrier.go for details). Newly allocated objects
-//    are immediately marked black.
+//    b. 启动世界（start the world）。从这时开始，GC work 由调度器启动的
+//    mark worker 和作为分配的一部分执行的 assist 完成。write barrier 着色
+//    被复用的指针以及任何指针写行为的指针新值。（见 mbarrier.go）。新分配的对象
+//    会立即标记为黑色。
 //
-//    c. GC performs root marking jobs. This includes scanning all
-//    stacks, shading all globals, and shading any heap pointers in
-//    off-heap runtime data structures. Scanning a stack stops a
-//    goroutine, shades any pointers found on its stack, and then
-//    resumes the goroutine.
+//    c. GC 执行 root mark 任务。这包括扫描所有栈、着色所有全局变量、以及
+//    堆外运行时数据结构中的任何堆指针。扫描栈的工作会停止运行的 goroutine，
+//    并为栈中找到的所有指针进行着色，然后恢复 goroutine 的执行。
 //
-//    d. GC drains the work queue of grey objects, scanning each grey
-//    object to black and shading all pointers found in the object
-//    (which in turn may add those pointers to the work queue).
+//    d. GC 将灰色对象的工作队列排除，将每个灰色对象扫描为黑色，并对对象中找到的
+//    所有指针进行着色（然后将这些指针添加回工作队列）。
 //
 // 3. 一旦全局工作队列为空（但本地工作队列高速缓存可能仍包含 work），GC将执行 "mark 2" 子阶段。
 //
-//    a. GC stops all workers, disables local work queue caches,
-//    flushes each P's local work queue cache to the global work queue
-//    cache, and reenables workers.
+//    a. GC 停止所有 worker，禁用本地工作队列缓存，刷新每个 P 的本地工作队列缓存
+//    和全局队列缓存，然后重新激活 worker。
 //
-//    b. GC again drains the work queue, as in 2d above.
+//    b. GC 重新排除工作队列的灰色对象，与 2d 相同。
 //
 // 4. 一旦工作队列为空，GC 执行标记终止(mark termination)
 //
-//    a. Stop the world.
+//    a. STW
 //
-//    b. Set gcphase to _GCmarktermination, and disable workers and
-//    assists.
+//    b. 设置 gcphase 为 _GCmarktermination，并禁用所有的 worker 和 assist
 //
-//    c. Drain any remaining work from the work queue (typically there
-//    will be none).
+//    c. 排除所有仍在工作队列中的 work（通常情况下是没有的）
 //
-//    d. Perform other housekeeping like flushing mcaches.
+//    d. 执行其他类似刷新 mcache 的事情
 //
 // 5. GC 执行扫描阶段 (sweep phase)
 //
-//    a. Prepare for the sweep phase by setting gcphase to _GCoff,
-//    setting up sweep state and disabling the write barrier.
+//    a. 通过设置 gcphase 到 _GCoff 来准备 sweep 阶段，设置 sweep 状态并禁用 write barrier。
 //
-//    b. Start the world. From this point on, newly allocated objects
-//    are white, and allocating sweeps spans before use if necessary.
+//    b. Start the world。这时，所有新创建的对象为白色，并在必要时分配 sweep span。
 //
-//    c. GC does concurrent sweeping in the background and in response
-//    to allocation. See description below.
+//    c. GC 并发执行 sweep，来响应分配工作，见下面的描述。
 //
 // 6. 当用户进行了足够的分配工作后，重新从上面 1 开始。 请参阅下面有关 GC 频率的讨论。
 

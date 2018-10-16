@@ -172,6 +172,9 @@ needtls:
 	JEQ 2(PC)
 	CALL	runtime·abort(SB)
 ok:
+	// 程序刚刚启动，此时位于主线程
+	// 当前栈与资源保存在 g0
+	// 该线程保存在 m0
 	// set the per-goroutine and per-mach "registers"
 	get_tls(BX)
 	LEAQ	runtime·g0(SB), CX
@@ -249,45 +252,44 @@ TEXT runtime·gosave(SB), NOSPLIT, $0-8
 	RET
 
 // void gogo(Gobuf*)
-// restore state from Gobuf; longjmp
+// 从 Gobuf 恢复状态; longjmp
 TEXT runtime·gogo(SB), NOSPLIT, $16-8
-	MOVQ	buf+0(FP), BX		// gobuf
+	MOVQ	buf+0(FP), BX		// 运行现场
 	MOVQ	gobuf_g(BX), DX
-	MOVQ	0(DX), CX		// make sure g != nil
+	MOVQ	0(DX), CX		// 确认 g != nil
 	get_tls(CX)
 	MOVQ	DX, g(CX)
-	MOVQ	gobuf_sp(BX), SP	// restore SP
+	MOVQ	gobuf_sp(BX), SP	// 恢复 SP
 	MOVQ	gobuf_ret(BX), AX
 	MOVQ	gobuf_ctxt(BX), DX
 	MOVQ	gobuf_bp(BX), BP
-	MOVQ	$0, gobuf_sp(BX)	// clear to help garbage collector
+	MOVQ	$0, gobuf_sp(BX)	// 清理，辅助 GC
 	MOVQ	$0, gobuf_ret(BX)
 	MOVQ	$0, gobuf_ctxt(BX)
 	MOVQ	$0, gobuf_bp(BX)
-	MOVQ	gobuf_pc(BX), BX
-	JMP	BX
+	MOVQ	gobuf_pc(BX), BX	// 获取 g 要执行的函数的入口地址
+	JMP	BX						// 开始执行
 
 // func mcall(fn func(*g))
-// Switch to m->g0's stack, call fn(g).
-// Fn must never return. It should gogo(&g->sched)
-// to keep running g.
+// 切换到 m->g0 栈, 并调用 fn(g).
+// Fn 必须永不返回. 它应该使用 gogo(&g->sched) 来持续运行 g
 TEXT runtime·mcall(SB), NOSPLIT, $0-8
 	MOVQ	fn+0(FP), DI
 	
 	get_tls(CX)
 	MOVQ	g(CX), AX	// save state in g->sched
-	MOVQ	0(SP), BX	// caller's PC
+	MOVQ	0(SP), BX	// 调用方 PC
 	MOVQ	BX, (g_sched+gobuf_pc)(AX)
-	LEAQ	fn+0(FP), BX	// caller's SP
+	LEAQ	fn+0(FP), BX	// 调用方 SP
 	MOVQ	BX, (g_sched+gobuf_sp)(AX)
 	MOVQ	AX, (g_sched+gobuf_g)(AX)
 	MOVQ	BP, (g_sched+gobuf_bp)(AX)
 
-	// switch to m->g0 & its stack, call fn
+	// 切换到 m->g0 及其栈，调用 fn
 	MOVQ	g(CX), BX
 	MOVQ	g_m(BX), BX
 	MOVQ	m_g0(BX), SI
-	CMPQ	SI, AX	// if g == m->g0 call badmcall
+	CMPQ	SI, AX	// 如果 g == m->g0 要调用 badmcall
 	JNE	3(PC)
 	MOVQ	$runtime·badmcall(SB), AX
 	JMP	AX
@@ -296,7 +298,7 @@ TEXT runtime·mcall(SB), NOSPLIT, $0-8
 	PUSHQ	AX
 	MOVQ	DI, DX
 	MOVQ	0(DI), DI
-	CALL	DI
+	CALL	DI	// 好了 开始调用
 	POPQ	AX
 	MOVQ	$runtime·badmcall2(SB), AX
 	JMP	AX
@@ -592,22 +594,19 @@ TEXT gosave<>(SB),NOSPLIT,$0
 	RET
 
 // func asmcgocall(fn, arg unsafe.Pointer) int32
-// Call fn(arg) on the scheduler stack,
-// aligned appropriately for the gcc ABI.
-// See cgocall.go for more details.
+// 在调度器栈上调用 fn(arg), 已为 gcc ABI 对齐，见 cgocall.go
 TEXT ·asmcgocall(SB),NOSPLIT,$0-20
 	MOVQ	fn+0(FP), AX
 	MOVQ	arg+8(FP), BX
 
 	MOVQ	SP, DX
 
-	// Figure out if we need to switch to m->g0 stack.
-	// We get called to create new OS threads too, and those
-	// come in on the m->g0 stack already.
+	// 考虑是否需要切换到 m->g0 栈
+	// 也用来调用创建新的 OS 线程，这些线程已经在 m->g0 栈中了
 	get_tls(CX)
 	MOVQ	g(CX), R8
 	CMPQ	R8, $0
-	JEQ	nosave
+	JEQ	nosave	// 连 g 都没有？
 	MOVQ	g_m(R8), R8
 	MOVQ	m_g0(R8), SI
 	MOVQ	g(CX), DI
@@ -626,9 +625,10 @@ TEXT ·asmcgocall(SB),NOSPLIT,$0-20
 	// Now on a scheduling stack (a pthread-created stack).
 	// Make sure we have enough room for 4 stack-backed fast-call
 	// registers as per windows amd64 calling convention.
+	// 于调度栈中（pthread 新创建的栈）
 	SUBQ	$64, SP
-	ANDQ	$~15, SP	// alignment for gcc ABI
-	MOVQ	DI, 48(SP)	// save g
+	ANDQ	$~15, SP	// 对齐 for gcc ABI
+	MOVQ	DI, 48(SP)	// 保存 g
 	MOVQ	(g_stack+stack_hi)(DI), DI
 	SUBQ	DX, DI
 	MOVQ	DI, 40(SP)	// save depth in stack (can't just save SP, as stack might be copied during a callback)
@@ -636,7 +636,7 @@ TEXT ·asmcgocall(SB),NOSPLIT,$0-20
 	MOVQ	BX, CX		// CX = first argument in Win64
 	CALL	AX
 
-	// Restore registers, g, stack pointer.
+	// 恢复寄存器、 g、栈指针
 	get_tls(CX)
 	MOVQ	48(SP), DI
 	MOVQ	(g_stack+stack_hi)(DI), SI
@@ -662,10 +662,10 @@ nosave:
 	ANDQ	$~15, SP
 	MOVQ	$0, 48(SP)		// where above code stores g, in case someone looks during debugging
 	MOVQ	DX, 40(SP)	// save original stack pointer
-	MOVQ	BX, DI		// DI = first argument in AMD64 ABI
-	MOVQ	BX, CX		// CX = first argument in Win64
+	MOVQ	BX, DI		// DI = AMD64 ABI 第一个参数
+	MOVQ	BX, CX		// CX = Win64 第一个参数
 	CALL	AX
-	MOVQ	40(SP), SI	// restore original stack pointer
+	MOVQ	40(SP), SI	// 恢复原来的栈指针
 	MOVQ	SI, SP
 	MOVL	AX, ret+16(FP)
 	RET
