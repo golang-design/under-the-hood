@@ -15,7 +15,9 @@
 	CALL	runtime·mstart(SB)
 ```
 
-这个过程中，只会将 `runtime·main` 的入口地址压入栈中，将其传递给 `newproc` 进行使用，而后 `runtime·newproc` 完成主 G 的创建，因此真正执行会等到 `runtime·mstart` 后才会被调度执行，在 [5 调度器: 执行调度](5-sched/exec.md) 中讨论。
+这个过程中，只会将 `runtime·main` 的入口地址压栈，进而将其传递给 `newproc` 进行使用，
+而后 `runtime·newproc` 完成 G 的创建保存到 G 的运行现场中，因此真正执行会
+等到 `runtime·mstart` 后才会被调度执行，我们在 [5 调度器: 执行调度](5-sched/exec.md) 中讨论。
 
 `runtime.main` 即为 runtime 包中的 main 函数。
 
@@ -25,28 +27,26 @@ func main() {
 	g := getg()
 
 	// race 检测有关，不关心
-	// Racectx of m0->g0 is used only as the parent of the main goroutine.
-	// It must not be used for anything else.
 	g.m.g0.racectx = 0
 
 	// 执行栈最大限制：1GB（64位系统）或者 250MB（32位系统）
-	// Max stack size is 1 GB on 64-bit, 250 MB on 32-bit.
-	// Using decimal instead of binary GB and MB because
-	// they look nicer in the stack overflow failure message.
+	// 这里使用十进制而非二进制的 GB 和 MB 因为在栈溢出失败消息中好看一些
 	if sys.PtrSize == 8 {
 		maxstacksize = 1000000000
 	} else {
 		maxstacksize = 250000000
 	}
 
-	// Allow newproc to start new Ms.
+	// 允许 newproc 启动新的 m，见 [5 调度器: 初始化]
 	mainStarted = true
 
-	if GOARCH != "wasm" { // wasm 是 1.11 新引入的 web assembly, 目前支持还很少
+	if GOARCH != "wasm" { // 1.11 新引入的 web assembly, 目前 wasm 不支持线程，无系统监控
+
 		// 启动系统后台监控（定期垃圾回收、并发任务调度）
 		systemstack(func() {
 			newm(sysmon, nil)
 		})
+
 	}
 
 	// 将主 goroutine 锁在主 OS 线程下进行初始化工作
@@ -60,13 +60,14 @@ func main() {
 		throw("runtime.main not on m0")
 	}
 
-	// 执行 runtime 包所有初始化函数 init
+	// 执行 runtime.init
+	// 实际上只做一件事情，启动 gchelper goroutine
 	runtime_init() // defer 必须在此调用结束后才能使用
 	if nanotime() == 0 {
 		throw("nanotime returning zero")
 	}
 
-	// Defer unlock so that runtime.Goexit during init does the unlock too.
+	// defer unlock，从而在 init 期间 runtime.Goexit 来 unlock
 	needUnlock := true
 	defer func() {
 		if needUnlock {
@@ -74,8 +75,8 @@ func main() {
 		}
 	}()
 
-	// Record when the world started. Must be after runtime_init
-	// because nanotime on some platforms depends on startNano.
+	// 记录程序的启动时间，必须在 runtime.init 之后调用
+	// 因为 nanotime 在某些平台上依赖于 startNano。
 	runtimeInitTime = nanotime()
 
 	// 启动垃圾回收器后台操作
@@ -99,38 +100,41 @@ func main() {
 		}
 		// Start the template thread in case we enter Go from
 		// a C-created thread and need to create a new thread.
+		// 启动模板线程来处理从 C 创建的线程进入 Go 时需要创建一个新的线程。
 		startTemplateThread()
 		cgocall(_cgo_notify_runtime_init_done, nil)
 	}
 
 	// 执行用户 main 包中的 init 函数
-	fn := main_init // make an indirect call, as the linker doesn't know the address of the main package when laying down the runtime
+	// 处理为非间接调用，因为链接器在设定运行时不知道 main 包的地址
+	fn := main_init
 	fn()
-	close(main_init_done)
+	close(main_init_done) // main.init 执行完毕
 
 	needUnlock = false
 	unlockOSThread()
 
 	// 如果是基础库则不需要执行 main 函数了
 	if isarchive || islibrary {
-		// A program compiled with -buildmode=c-archive or c-shared
-		// has a main, but it is not executed.
+		// 由 -buildmode=c-archive 或 c-shared 但不会执行的程序
 		return
 	}
 
 	// 执行用户 main 包中的 main 函数
-	fn = main_main // make an indirect call, as the linker doesn't know the address of the main package when laying down the runtime
+	// 处理为非间接调用，因为链接器在设定运行时不知道 main 包的地址
+	fn = main_main
 	fn()
+
+	// race 相关
 	if raceenabled {
 		racefini()
 	}
 
-	// Make racy client program work: if panicking on
-	// another goroutine at the same time as main returns,
-	// let the other goroutine finish printing the panic trace.
-	// Once it does, it will exit. See issues 3934 and 20018.
+	// 使客户端程序可行：如果在其他 goroutine 上 panic 、与此同时
+	// main 返回，也让其他 goroutine 能够完成 panic trace 的打印。
+	// 打印完成后，立即退出。见 issue 3934 和 20018
 	if atomic.Load(&runningPanicDefers) != 0 {
-		// Running deferred functions should not take long.
+		// 运行包含 defer 的函数不会花太长时间
 		for c := 0; c < 1000; c++ {
 			if atomic.Load(&runningPanicDefers) == 0 {
 				break
@@ -146,7 +150,7 @@ func main() {
 	exit(0)
 
 	// 如果 exit 没有被正确实现，则下面的代码能够强制退出程序，因为 *nil (nil deref) 会崩溃。
-	// http://golang.org/ref/spec#Terminating_statements + forced crashed (nil deref) if exit isn't implemented properly.
+	// http://golang.org/ref/spec#Terminating_statements
 	// https://github.com/golang/go/commit/c81a0ed3c50606d1ada0fd9b571611b3687c90e1
 	for {
 		var x *int32
@@ -157,18 +161,19 @@ func main() {
 
 整个执行过程分这样几个步骤：
 
-1. `systemstack` 会运行 `newm(sysmon, nil)` 启动后台监控
+1. `systemstack` 会运行 `newm(sysmon, nil)` 启动后台监控，`wasm` 上不会启动
 2. `lockOSThread` 初始化阶段将主 goroutine 锁定在主 OS 线程上，原因在于某些特殊的调用（尤其是一些[图形库](https://github.com/golang/go/wiki/LockOSThread)，Cocoa, OpenGL 等会使用本地线程状态）需要主线程的支持。用户层可以通过 `runtime.LockOSThread` 来绑定当前的线程（由于调度器的影响，不一定会是主线程）
-3. `runtime_init` 运行时初始化
-4. `gcenable` 启动 GC
-5. 如果是 Cgo 则还会额外启动一个模板线程，来处理 Go 代码进入 C 创建的线程这种情况
+3. `runtime_init` 运行时初始化，启动 gchelper goroutine
+4. `gcenable` 启用 GC
+5. 如果是 `cgo` 则还会额外启动一个模板线程，来处理 C 创建的线程进入 Go 的情况
 6. `cgocall` 从 Go 调用 C
-7. 开始执行用户态 init 函数（所有的 main_init 均在同一个 goroutine （主）中执行）
-8. 当用户态的 init 执行完毕后，`unlockOSThread` 来取消主 goroutine 与 OS 线程的绑定，从而让调度器能够灵活调度 goroutine 和 OS 线程（G 与 M）。
-9. 然后可以开始执行用户态 main 函数（如果是库则不需要再执行 main 函数了）。
-10. 当用户态 main 结束执行后，程序会退出。
+7. 开始执行用户态 `main.init` 函数（所有的 `main.init` 均在同一个 `goroutine` （主）中执行）
+8. 当用户态的 `main.init` 执行完毕后，`unlockOSThread` 来取消主 goroutine 与 OS 线程的绑定，从而让调度器能够灵活调度 goroutine 和 OS 线程（G 与 M）。
+9. 然后可以开始执行用户态 `main.main` 函数（如果是库则不需要再执行 `main.main` 函数了）。
+10. 当用户态 `main.main` 结束执行后，处理其他 goroutine panic 但 `main.main` 正好同时返回会丢失回溯信息的情况，处理完毕后，程序正式退出。
 
-值得一提的是，从主 goroutine 的实现方式中我们可以看到官方内存模型文档中宣称的 `main.init` happens before `main.main` 本质上是通过 channel `main_init_done` 实现的。
+值得一提的是，从主 goroutine 的实现方式中我们可以看到官方内存模型文档中宣称的 
+`main.init` **happens before** `main.main` 本质上是通过 channel `main_init_done` 实现的。
 
 那么还会有几个疑问：
 
@@ -245,10 +250,14 @@ TEXT main.init(SB) <autogenerated>
 看到这里我们已经结束了整个 Go 程序的执行，但非常多的细节还没有被敲定，完全还没有深入
 运行时的三大核心组件，总结一下这节讨论中遗留下来的问题：
 
-1. 系统监控做了什么事情，它的工作原理是什么？
-2. `lockOSThread/unlockOSThread` 具体做了什么事情？
-3. `cgo` 中如果是 C 调用 Go 代码，会发生什么事情？
-4. `runtime·mstart` 会如何将主 goroutine 调度执行？
+1. `runtime·mstart` 会如何将主 goroutine 调度执行？
+2. 系统监控做了什么事情，它的工作原理是什么？
+3. `runtime.init` 的 `gchelper` 是什么？
+4. `lockOSThread/unlockOSThread` 具体做了什么事情？他们到底有多重要？
+5. `cgo` 中如果是 C 调用 Go 代码，会发生什么事情？为什么需要模板线程？
+6. `cgo` 中如果是 Go 调用 C 代码，那么 `cgocall` 究竟在做什么？
+
+我们在随后的章节中一一研究。
 
 ## 进一步阅读的参考文献
 

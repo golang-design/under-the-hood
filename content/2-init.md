@@ -1,6 +1,6 @@
 # 2 初始化概览
 
-本节简单讨论程序初始化工作，即 `runtime.schedinit`。
+书说上回，本节简单讨论程序初始化工作，即 `runtime.schedinit`。
 
 ```go
 // 启动顺序
@@ -21,7 +21,7 @@ func schedinit() {
 		_g_.racectx, raceprocctx0 = raceinit()
 	}
 
-	// 最大系统线程数量（即 M），参考标准库 runtime/debug.SetMaxThreads
+	// 最大系统线程数量（即 M），参考 runtime/debug.SetMaxThreads
 	sched.maxmcount = 10000
 
 	// 不重要，与 trace 有关
@@ -29,7 +29,7 @@ func schedinit() {
 	moduledataverify()
 
 	// 栈、内存分配器、调度器相关初始化。
-	// 栈初始化，复用管理链表
+	// 栈初始化
 	stackinit()
 	// 内存分配器初始化
 	mallocinit()
@@ -94,7 +94,8 @@ func schedinit() {
 我们来收紧一下这个函数中的关注点：
 
 首先 `sched` 会获取 G，通过 `stackinit()` 初始化程序栈、`mallocinit()` 初始化
-内存分配器、通过 `mcommoninit()` 对 M 进行初步的初始化（真正的初始化会在 M 开始运行时进行，在 [5 调度器：执行调度](5-sched/exec.md) 讨论）。
+内存分配器、通过 `mcommoninit()` 对 M 进行初步的初始化（真正的初始化会在 M 开始运行时进行，
+在 [5 调度器：执行调度](5-sched/exec.md) 讨论）。
 然后初始化一些与 CPU 相关的值，获取 CPU 指令集相关支持，然后通过 `alginit()` 来根据
 所提供的 CPU 指令集，进而初始化 hash 算法，用于 map 结构。再接下来初始化一些与模块加载
 相关的内容、保存 M 的 signal mask，处理入口参数和环境变量。
@@ -110,6 +111,7 @@ func schedinit() {
 - P 初始化 `procresize()`
 
 注意，`schedinit` 函数名表面上是调度器的初始化，但实际上它包含了所有核心组件的初始化工作。
+
 具体内容我们留到对应组件中进行讨论，我们在下一节中着先着重讨论当一切都初始化好后，程序的正式启动过程。
 
 ## 总结
