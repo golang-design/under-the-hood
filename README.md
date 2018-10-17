@@ -63,6 +63,7 @@
     - [初始化](content/5-sched/init.md)
     - [调度执行](content/5-sched/exec.md)
     - [系统监控](content/5-sched/sysmon.md)
+    - [调度理论](content/5-sched/theory.md)
 6. 垃圾回收器
     - [基本知识](content/6-gc/basic.md)
     - [初始化](content/6-gc/init.md)
