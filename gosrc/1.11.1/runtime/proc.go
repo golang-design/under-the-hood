@@ -3019,7 +3019,7 @@ func reentersyscall(pc, sp uintptr) {
 	_g_.m.locks--
 }
 
-// Standard syscall entry used by the go syscall library and normal cgo calls.
+// 标准系统调用入口，用于 go syscall 库以及普通的 cgo 调用
 //go:nosplit
 func entersyscall() {
 	reentersyscall(getcallerpc(), getcallersp())

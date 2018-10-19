@@ -574,7 +574,7 @@ TEXT runtime·jmpdefer(SB), NOSPLIT, $0-16
 	MOVQ	0(DX), BX
 	JMP	BX	// but first run the deferred function
 
-// Save state of caller into g->sched. Smashes R8, R9.
+// 保存调用方状态到 g->sched，摧毁 R8 R9
 TEXT gosave<>(SB),NOSPLIT,$0
 	get_tls(R8)
 	MOVQ	g(R8), R8
@@ -584,7 +584,7 @@ TEXT gosave<>(SB),NOSPLIT,$0
 	MOVQ	R9, (g_sched+gobuf_sp)(R8)
 	MOVQ	$0, (g_sched+gobuf_ret)(R8)
 	MOVQ	BP, (g_sched+gobuf_bp)(R8)
-	// Assert ctxt is zero. See func save.
+	// 断言 ctxt 为 0. 见 func save.
 	MOVQ	(g_sched+gobuf_ctxt)(R8), R9
 	TESTQ	R9, R9
 	JZ	2(PC)
@@ -604,7 +604,7 @@ TEXT ·asmcgocall(SB),NOSPLIT,$0-20
 	get_tls(CX)
 	MOVQ	g(CX), R8
 	CMPQ	R8, $0
-	JEQ	nosave	// 连 g 都没有？
+	JEQ	nosave
 	MOVQ	g_m(R8), R8
 	MOVQ	m_g0(R8), SI
 	MOVQ	g(CX), DI
@@ -614,25 +614,24 @@ TEXT ·asmcgocall(SB),NOSPLIT,$0-20
 	CMPQ	SI, DI
 	JEQ	nosave
 	
-	// Switch to system stack.
+	// 切换到系统栈
 	MOVQ	m_g0(R8), SI
 	CALL	gosave<>(SB)
 	MOVQ	SI, g(CX)
 	MOVQ	(g_sched+gobuf_sp)(SI), SP
 
-	// Now on a scheduling stack (a pthread-created stack).
-	// Make sure we have enough room for 4 stack-backed fast-call
-	// registers as per windows amd64 calling convention.
 	// 于调度栈中（pthread 新创建的栈）
+	// 确保有足够的空间给四个 stack-based fast-call 寄存器
+	// 为使得 windows amd64 调用服务
 	SUBQ	$64, SP
-	ANDQ	$~15, SP	// 对齐 for gcc ABI
+	ANDQ	$~15, SP	// 为 gcc ABI 对齐
 	MOVQ	DI, 48(SP)	// 保存 g
 	MOVQ	(g_stack+stack_hi)(DI), DI
 	SUBQ	DX, DI
-	MOVQ	DI, 40(SP)	// save depth in stack (can't just save SP, as stack might be copied during a callback)
-	MOVQ	BX, DI		// DI = first argument in AMD64 ABI
-	MOVQ	BX, CX		// CX = first argument in Win64
-	CALL	AX
+	MOVQ	DI, 40(SP)	// 保存栈深 (不能仅保存 SP, 因为栈可能在回调时被复制)
+	MOVQ	BX, DI		// DI = AMD64 ABI 第一个参数
+	MOVQ	BX, CX		// CX = Win64 第一个参数
+	CALL	AX			// 调用 fn
 
 	// 恢复寄存器、 g、栈指针
 	get_tls(CX)
@@ -646,20 +645,15 @@ TEXT ·asmcgocall(SB),NOSPLIT,$0-20
 	RET
 
 nosave:
-	// Running on a system stack, perhaps even without a g.
-	// Having no g can happen during thread creation or thread teardown
-	// (see needm/dropm on Solaris, for example).
-	// This code is like the above sequence but without saving/restoring g
-	// and without worrying about the stack moving out from under us
-	// (because we're on a system stack, not a goroutine stack).
-	// The above code could be used directly if already on a system stack,
-	// but then the only path through this code would be a rare case on Solaris.
-	// Using this code for all "already on system stack" calls exercises it more,
-	// which should help keep it correct.
+	// 在系统栈上运行，可能没有 g
+	// 没有 g 的情况发生在线程创建中或线程结束中（比如 Solaris 平台上的 needm/dropm）
+	// 这段代码和上面类似，但没有保存和恢复 g，且没有考虑栈的移动问题（因为我们在系统栈上，而非 goroutine 栈）
+	// 如果已经在系统栈上，则上面的代码可被直接使用，但而后进入这段代码的情况非常少见的 Solaris 上。
+	// 使用这段代码来为所有 "已经在系统栈" 的调用进行服务，从而保持正确性。
 	SUBQ	$64, SP
-	ANDQ	$~15, SP
-	MOVQ	$0, 48(SP)		// where above code stores g, in case someone looks during debugging
-	MOVQ	DX, 40(SP)	// save original stack pointer
+	ANDQ	$~15, SP	// ABI 对齐
+	MOVQ	$0, 48(SP)	// 上面的代码保存了 g, 确保 debug 时可用
+	MOVQ	DX, 40(SP)	// 保存原始的栈指针
 	MOVQ	BX, DI		// DI = AMD64 ABI 第一个参数
 	MOVQ	BX, CX		// CX = Win64 第一个参数
 	CALL	AX

@@ -95,41 +95,33 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 
 	// 宣布正在进入系统调用，从而调度器会创建另一个 M 来运行 goroutine
 	//
-	// 对 asmcgocall 的调用保证了不会增加堆栈并且不分配内存，
-	// 因此在 $GOMAXPROCS 计数之外的 “系统调用内” 的调用是安全的。
+	// 对 asmcgocall 的调用保证了不会增加栈并且不分配内存，
+	// 因此在 $GOMAXPROCS 计数之外的 "系统调用内" 的调用是安全的。
 	//
 	// fn 可能会回调 Go 代码，这种情况下我们将退出系统调用来运行 Go 代码
 	//（可能增长栈），然后再重新进入系统调用来复用 entersyscall 保存的
 	// PC 和 SP 寄存器
 	entersyscall()
 
+	// 将 m 标记为正在 cgo
 	mp.incgo = true
+
+	// 进入调用
 	errno := asmcgocall(fn, arg)
 
-	// Call endcgo before exitsyscall because exitsyscall may
-	// reschedule us on to a different M.
 	// 在 exitsyscall 之前调用 endcgo ，因为 exitsyscall 可能会把
 	// 我们重新调度到不同的 M 中
 	endcgo(mp)
 
+	// 宣告退出系统调用
 	exitsyscall()
 
-	// From the garbage collector's perspective, time can move
-	// backwards in the sequence above. If there's a callback into
-	// Go code, GC will see this function at the call to
-	// asmcgocall. When the Go call later returns to C, the
-	// syscall PC/SP is rolled back and the GC sees this function
-	// back at the call to entersyscall. Normally, fn and arg
-	// would be live at entersyscall and dead at asmcgocall, so if
-	// time moved backwards, GC would see these arguments as dead
-	// and then live. Prevent these undead arguments from crashing
-	// GC by forcing them to stay live across this time warp.
 	// 从垃圾收集器的角度来看，时间可以按照上面的顺序向后移动。
 	// 如果对 Go 代码进行回调，GC 将在调用 asmcgocall 时能看到此函数。
-	// 当Go调用稍后返回到C时，回调系统调用PC / SP并且GC在调用
-	// enteryscall时看到此函数。通常情况下，fn和arg将在enteryscall上运行
-	// 并在 asmcgocal l处死机，因此如果时间向后移动，GC会将这些参数视为已死，
-	// 然后生效。 通过强制它们在这个时间扭曲中保持活动来防止这些不死参数崩溃。
+	// 当 Go 调用稍后返回到 C 时，系统调用 PC/SP 将被回滚并且 GC 在调用
+	// enteryscall 时看到此函数。通常情况下，fn 和 arg 将在 enteryscall 上运行
+	// 并在 asmcgocall 处死亡，因此如果时间向后移动，GC 会将这些参数视为已死，
+	// 然后生效。通过强制它们在这个时间中保持活跃来防止这些未死亡的参数崩溃。
 	KeepAlive(fn)
 	KeepAlive(arg)
 	KeepAlive(mp)
@@ -139,7 +131,11 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 
 //go:nosplit
 func endcgo(mp *m) {
+
+	// 取消运行 cgo 的标记
 	mp.incgo = false
+
+	// 正在进行的 cgo 数量减少
 	mp.ncgo--
 
 	if raceenabled {

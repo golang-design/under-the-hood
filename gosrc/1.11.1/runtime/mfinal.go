@@ -424,11 +424,11 @@ okarg:
 // Mark KeepAlive as noinline so that it is easily detectable as an intrinsic.
 //go:noinline
 
-// KeepAlive marks its argument as currently reachable.
-// This ensures that the object is not freed, and its finalizer is not run,
-// before the point in the program where KeepAlive is called.
+// KeepAlive 将其参数标记为当前可达。
+// 这保证了对象在调用 KeepAlive 之前不会被释放，且它的 finalizer 不会运行，
 //
-// A very simplified example showing where KeepAlive is required:
+// 一个非常简单的例子展示了什么情况下需要 KeepAlive：
+//
 // 	type File struct { d int }
 // 	d, err := syscall.Open("/file/path", syscall.O_RDONLY, 0)
 // 	// ... do something if err != nil ...
@@ -436,17 +436,16 @@ okarg:
 // 	runtime.SetFinalizer(p, func(p *File) { syscall.Close(p.d) })
 // 	var buf [10]byte
 // 	n, err := syscall.Read(p.d, buf[:])
-// 	// Ensure p is not finalized until Read returns.
+// 	// 确保 Read 返回前 p 不会被 finalize
 // 	runtime.KeepAlive(p)
-// 	// No more uses of p after this point.
+// 	// 在此之后不再使用 p
 //
-// Without the KeepAlive call, the finalizer could run at the start of
-// syscall.Read, closing the file descriptor before syscall.Read makes
-// the actual system call.
+// 若没有调用 KeepAlive，则 finalizer 会在 syscall.Read 之前运行，在 syscall.Read
+// 之前关闭文件描述符
 func KeepAlive(x interface{}) {
-	// Introduce a use of x that the compiler can't eliminate.
-	// This makes sure x is alive on entry. We need x to be alive
-	// on entry for "defer runtime.KeepAlive(x)"; see issue 21402.
+	// 引入一个关于 x 的使用，使得编译器不会将其消除。从而保证了 x 保持活跃。
+	// 这段代码确保了 x 在入口处保持活跃，当使用 `defer runtime.KeepAlive(x)` 时
+	// 见 issue 21402
 	if cgoAlwaysFalse {
 		println(x)
 	}

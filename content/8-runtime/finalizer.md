@@ -1,6 +1,10 @@
-# 8 runtime.SetFinalizer
+# 8 runtime.SetFinalizer 与 runtime.KeepAlive
 
 TODO:
+
+## runtime.SetFinalizer
+
+## runtime.KeepAlive
 
 ## 许可
 

@@ -102,9 +102,7 @@ func _cgo_runtime_cgocall(unsafe.Pointer, uintptr) int32
 
 ## `cgocall`
 
-### 原理概述
-
-#### Go 调用 C
+### 原理概述: Go 调用 C
 
 为从 Go 调用 C 函数 f，cgo 生成的代码调用 `runtime.cgocall(_cgo_Cfunc_f, frame)`,
 其中 `_cgo_Cfunc_f` 为由 cgo 编写的并由 gcc 编译的函数。
@@ -128,7 +126,172 @@ Go --> runtime.cgocall --> runtime.entersyscall --> runtime.asmcgocall --> _cgo_
 Go <-- runtime.exitsyscall <-- runtime.cgocall <-- runtime.asmcgocall <----------+
 ```
 
-#### C 调用 Go
+### 实际代码
+
+```go
+// 从 Go 调用 C
+//go:nosplit
+func cgocall(fn, arg unsafe.Pointer) int32 {
+	if !iscgo && GOOS != "solaris" && GOOS != "windows" {
+		throw("cgocall unavailable")
+	}
+
+	// cgo 调用不允许为空
+	if fn == nil {
+		throw("cgocall nil")
+	}
+
+	if raceenabled {
+		racereleasemerge(unsafe.Pointer(&racecgosync))
+	}
+
+	// 运行时会记录 cgo 调用的次数
+	mp := getg().m
+	mp.ncgocall++
+	mp.ncgo++
+
+	// 重置回溯信息
+	mp.cgoCallers[0] = 0
+
+	// 宣布正在进入系统调用，从而调度器会创建另一个 M 来运行 goroutine
+	//
+	// 对 asmcgocall 的调用保证了不会增加栈并且不分配内存，
+	// 因此在 $GOMAXPROCS 计数之外的 "系统调用内" 的调用是安全的。
+	//
+	// fn 可能会回调 Go 代码，这种情况下我们将退出系统调用来运行 Go 代码
+	//（可能增长栈），然后再重新进入系统调用来复用 entersyscall 保存的
+	// PC 和 SP 寄存器
+	entersyscall()
+
+	// 将 m 标记为正在 cgo
+	mp.incgo = true
+
+	// 进入调用
+	errno := asmcgocall(fn, arg)
+
+	// 在 exitsyscall 之前调用 endcgo ，因为 exitsyscall 可能会把
+	// 我们重新调度到不同的 M 中
+	endcgo(mp)
+
+	// 宣告退出系统调用
+	exitsyscall()
+
+	// 从垃圾收集器的角度来看，时间可以按照上面的顺序向后移动。
+	// 如果对 Go 代码进行回调，GC 将在调用 asmcgocall 时能看到此函数。
+	// 当 Go 调用稍后返回到 C 时，系统调用 PC/SP 将被回滚并且 GC 在调用
+	// enteryscall 时看到此函数。通常情况下，fn 和 arg 将在 enteryscall 上运行
+	// 并在 asmcgocall 处死亡，因此如果时间向后移动，GC 会将这些参数视为已死，
+	// 然后生效。通过强制它们在这个时间中保持活跃来防止这些未死亡的参数崩溃。
+	KeepAlive(fn)
+	KeepAlive(arg)
+	KeepAlive(mp)
+
+	return errno
+}
+
+//go:nosplit
+func endcgo(mp *m) {
+
+	// 取消运行 cgo 的标记
+	mp.incgo = false
+
+	// 正在进行的 cgo 数量减少
+	mp.ncgo--
+
+	if raceenabled {
+		raceacquire(unsafe.Pointer(&racecgosync))
+	}
+}
+
+//go:noescape
+func asmcgocall(fn, arg unsafe.Pointer) int32
+```
+
+从名字上我们可以看出 `asmcgocall` 是由汇编写成的：
+
+```asm
+// func asmcgocall(fn, arg unsafe.Pointer) int32
+// 在调度器栈上调用 fn(arg), 已为 gcc ABI 对齐，见 cgocall.go
+TEXT ·asmcgocall(SB),NOSPLIT,$0-20
+	MOVQ	fn+0(FP), AX
+	MOVQ	arg+8(FP), BX
+
+	MOVQ	SP, DX
+
+	// 考虑是否需要切换到 m->g0 栈
+	// 也用来调用创建新的 OS 线程，这些线程已经在 m->g0 栈中了
+	get_tls(CX)
+	MOVQ	g(CX), R8
+	CMPQ	R8, $0
+	JEQ	nosave
+	MOVQ	g_m(R8), R8
+	MOVQ	m_g0(R8), SI
+	MOVQ	g(CX), DI
+	CMPQ	SI, DI
+	JEQ	nosave
+	MOVQ	m_gsignal(R8), SI
+	CMPQ	SI, DI
+	JEQ	nosave
+	
+	// 切换到系统栈
+	MOVQ	m_g0(R8), SI
+	CALL	gosave<>(SB)
+	MOVQ	SI, g(CX)
+	MOVQ	(g_sched+gobuf_sp)(SI), SP
+
+	// 于调度栈中（pthread 新创建的栈）
+	// 确保有足够的空间给四个 stack-based fast-call 寄存器
+	// 为使得 windows amd64 调用服务
+	SUBQ	$64, SP
+	ANDQ	$~15, SP	// 为 gcc ABI 对齐
+	MOVQ	DI, 48(SP)	// 保存 g
+	MOVQ	(g_stack+stack_hi)(DI), DI
+	SUBQ	DX, DI
+	MOVQ	DI, 40(SP)	// 保存栈深 (不能仅保存 SP, 因为栈可能在回调时被复制)
+	MOVQ	BX, DI		// DI = AMD64 ABI 第一个参数
+	MOVQ	BX, CX		// CX = Win64 第一个参数
+	CALL	AX			// 调用 fn
+
+	// 恢复寄存器、 g、栈指针
+	get_tls(CX)
+	MOVQ	48(SP), DI
+	MOVQ	(g_stack+stack_hi)(DI), SI
+	SUBQ	40(SP), SI
+	MOVQ	DI, g(CX)
+	MOVQ	SI, SP
+
+	MOVL	AX, ret+16(FP)
+	RET
+
+nosave:
+	// 在系统栈上运行，可能没有 g
+	// 没有 g 的情况发生在线程创建中或线程结束中（比如 Solaris 平台上的 needm/dropm）
+	// 这段代码和上面类似，但没有保存和恢复 g，且没有考虑栈的移动问题（因为我们在系统栈上，而非 goroutine 栈）
+	// 如果已经在系统栈上，则上面的代码可被直接使用，但而后进入这段代码的情况非常少见的 Solaris 上。
+	// 使用这段代码来为所有 "已经在系统栈" 的调用进行服务，从而保持正确性。
+	SUBQ	$64, SP
+	ANDQ	$~15, SP	// ABI 对齐
+	MOVQ	$0, 48(SP)	// 上面的代码保存了 g, 确保 debug 时可用
+	MOVQ	DX, 40(SP)	// 保存原始的栈指针
+	MOVQ	BX, DI		// DI = AMD64 ABI 第一个参数
+	MOVQ	BX, CX		// CX = Win64 第一个参数
+	CALL	AX
+	MOVQ	40(SP), SI	// 恢复原来的栈指针
+	MOVQ	SI, SP
+	MOVL	AX, ret+16(FP)
+	RET
+```
+
+在这段调用中本质上有两种情况：
+
+1. 不在系统栈上：这种情况下，由于 goroutine 栈的移动，判断当前是否在系统栈上，如果不在，则切换到系统栈上调用 C。
+2. 在系统栈上：无论是否有 g ，如果已经在系统栈上，所以保存现场不需要自行处理，因此进入 nosave 直接调用 C，当返回时会自行恢复现场。
+
+## `cgocallbackg`
+
+本质上我们忽略了一个过程，如果一个调用是从 C 进入 Go 那么情况完全不一样。
+
+### 原理概述: C 调用 Go
 
 上面的描述跳过了当 gcc 编译的函数 f 调用回 Go 的情况。如果此类情况发生，则下面描述了 f 执行期间的调用过程。
 
@@ -168,11 +331,14 @@ f --> GoF --> crosscall2 --> _cgoexp_GoF --> runtime.cgocallbackg --> runtime.cg
 f <-- GoF <-- crosscall2 <-- _cgoexp_GoF <-- runtime.cgocallback <-- runtime.entersyscall <-----------------------------+
 ```
 
-## 实际代码
-
-下面我们来仔细讨论这些涉及的调用。
+### 实际代码
 
 TODO:
+
+
+## 总结
+
+
 
 ## 进一步阅读的参考文献
 
