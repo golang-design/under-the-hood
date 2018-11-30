@@ -109,12 +109,21 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 	// 进入调用
 	errno := asmcgocall(fn, arg)
 
-	// 在 exitsyscall 之前调用 endcgo ，因为 exitsyscall 可能会把
+	// 在 exitsyscall 之前进行计数，因为 exitsyscall 可能会把
 	// 我们重新调度到不同的 M 中
-	endcgo(mp)
+	//
+	// 取消运行 cgo 的标记
+	mp.incgo = false
+	// 正在进行的 cgo 数量减少
+	mp.ncgo--
 
 	// 宣告退出系统调用
 	exitsyscall()
+
+	// race 相关，raceacquire 必须在 exitsyscall 连接了 M 和 P 之后调用
+	if raceenabled {
+		raceacquire(unsafe.Pointer(&racecgosync))
+	}
 
 	// 从垃圾收集器的角度来看，时间可以按照上面的顺序向后移动。
 	// 如果对 Go 代码进行回调，GC 将在调用 asmcgocall 时能看到此函数。
@@ -127,20 +136,6 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 	KeepAlive(mp)
 
 	return errno
-}
-
-//go:nosplit
-func endcgo(mp *m) {
-
-	// 取消运行 cgo 的标记
-	mp.incgo = false
-
-	// 正在进行的 cgo 数量减少
-	mp.ncgo--
-
-	if raceenabled {
-		raceacquire(unsafe.Pointer(&racecgosync))
-	}
 }
 
 // Call from C back to Go.
@@ -326,13 +321,14 @@ func unwindm(restore *bool) {
 			sched.sp = *(*uintptr)(unsafe.Pointer(sched.sp + 16))
 		}
 
-		// Call endcgo to do the accounting that cgocall will not have a
-		// chance to do during an unwind.
+		// Do the accounting that cgocall will not have a chance to do
+		// during an unwind.
 		//
 		// In the case where a Go call originates from C, ncgo is 0
 		// and there is no matching cgocall to end.
 		if mp.ncgo > 0 {
-			endcgo(mp)
+			mp.incgo = false
+			mp.ncgo--
 		}
 
 		releasem(mp)

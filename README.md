@@ -2,7 +2,7 @@
 
 # Go under the hood
 
-目前基于 `go1.11.1`
+目前基于 `go1.11.2`
 
 ## 致读者
 
@@ -25,7 +25,7 @@
 确实已经有很多很多讨论 Go 源码的文章了，不读他们的文章有几个原因：
 
 1. 别人的是二手资料，自己的是一手资料，通过理解别人理解代码的思路来理解代码，增加了额外的成本，不如直接理解代码。
-2. 已经存在的资料大多已经存在一定程度上的过时，Go 运行时的开发是相当活跃的，本仓库目前基于 1.11.1。
+2. 已经存在的资料大多已经存在一定程度上的过时，Go 运行时的开发是相当活跃的，本仓库目前基于 1.11.2。
 
 ### 那关注什么？
 
@@ -79,7 +79,7 @@
     - [`runtime.GOMAXPROCS`](content/8-runtime/gomaxprocs.md)
     - [`runtime.SetFinalizer` 与 `runtime.KeepAlive`](content/8-runtime/finalizer.md)
     - [`runtime.LockOSThread` 与 `runtime.UnlockOSThread`](content/8-runtime/lockosthread.md)
-9.  [`unsafe`](content/9-unsafe.md)
+9. [`unsafe`](content/9-unsafe.md)
 10. [`cgo`](content/10-cgo.md)
 11. 依赖运行时的标准库
     - [`sync.Pool`](content/11-pkg/sync/pool.md)
@@ -93,17 +93,17 @@
 12. [WebAssembly](content/12-wasm.md)
 13. 附录
     - [基于工作窃取的多线程计算调度](papers/sched/work-steal-sched.md)
-    - [Go 运行时编程](gosrc/1.11.1/runtime/README.md)
+    - [Go 运行时编程](gosrc/1.11.2/runtime/README.md)
 
 [结束语](content/finalwords.md)
 
 ## 环境
 
-```
+```bash
 → go version
-go version go1.11.1 darwin/amd64
+go version go1.11.2 darwin/amd64
 → uname -a
-Darwin changkun-pro 18.0.0 Darwin Kernel Version 18.0.0: Wed Aug 22 20:13:40 PDT 2018; root:xnu-4903.201.2~1/RELEASE_X86_64 x86_64
+Darwin changkun-mini 18.2.0 Darwin Kernel Version 18.2.0: Fri Oct  5 19:41:49 PDT 2018; root:xnu-4903.221.2~2/RELEASE_X86_64 x86_64
 ```
 
 ## Acknowledgement
