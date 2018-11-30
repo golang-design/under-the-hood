@@ -169,9 +169,21 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 	// 进入调用
 	errno := asmcgocall(fn, arg)
 
-	// 在 exitsyscall 之前调用 endcgo ，因为 exitsyscall 可能会把
+	// 在 exitsyscall 之前进行计数，因为 exitsyscall 可能会把
 	// 我们重新调度到不同的 M 中
-	endcgo(mp)
+	//
+	// 取消运行 cgo 的标记
+	mp.incgo = false
+	// 正在进行的 cgo 数量减少
+	mp.ncgo--
+
+	// 宣告退出系统调用
+	exitsyscall()
+
+	// race 相关，raceacquire 必须在 exitsyscall 连接了 M 和 P 之后调用
+	if raceenabled {
+		raceacquire(unsafe.Pointer(&racecgosync))
+	}
 
 	// 宣告退出系统调用
 	exitsyscall()
@@ -187,20 +199,6 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 	KeepAlive(mp)
 
 	return errno
-}
-
-//go:nosplit
-func endcgo(mp *m) {
-
-	// 取消运行 cgo 的标记
-	mp.incgo = false
-
-	// 正在进行的 cgo 数量减少
-	mp.ncgo--
-
-	if raceenabled {
-		raceacquire(unsafe.Pointer(&racecgosync))
-	}
 }
 
 //go:noescape
