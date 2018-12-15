@@ -138,7 +138,7 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 	return errno
 }
 
-// Call from C back to Go.
+// 从 C 调用 Go
 //go:nosplit
 func cgocallbackg(ctxt uintptr) {
 	gp := getg()
@@ -147,33 +147,29 @@ func cgocallbackg(ctxt uintptr) {
 		exit(2)
 	}
 
-	// The call from C is on gp.m's g0 stack, so we must ensure
-	// that we stay on that M. We have to do this before calling
-	// exitsyscall, since it would otherwise be free to move us to
-	// a different M. The call to unlockOSThread is in unwindm.
+	// 从 C 发起的调用运行在 gp.m 的 g0 栈上，因此我们必须确认我们停留在这个 M 上
+	// 在调用 exitsyscall 之前，必须调用这个操作，否则它会被释放且将我们移动到其他的 M 上
+	// 当前调用结束前，会调用 unlockOSThread
 	lockOSThread()
 
-	// Save current syscall parameters, so m.syscall can be
-	// used again if callback decide to make syscall.
+	// 保存当前系统调用的参数，因此 m.syscall 可以在进行系统调用时候进而回调使用
 	syscall := gp.m.syscall
 
-	// entersyscall saves the caller's SP to allow the GC to trace the Go
-	// stack. However, since we're returning to an earlier stack frame and
-	// need to pair with the entersyscall() call made by cgocall, we must
-	// save syscall* and let reentersyscall restore them.
+	// entersyscall 保存了调用方 SP 并允许 GC 能够跟踪 Go 栈。然而因为我们会返回到
+	// 前一个栈帧并需要与 cgocall 的 entersyscall() 匹配，我们必须保存 syscall*
+	// 并让 reentersyscall 恢复它们
 	savedsp := unsafe.Pointer(gp.syscallsp)
 	savedpc := gp.syscallpc
-	exitsyscall() // coming out of cgo call
+	exitsyscall() // 离开 cgo 调用
 	gp.m.incgo = false
 
 	cgocallbackg1(ctxt)
 
-	// At this point unlockOSThread has been called.
-	// The following code must not change to a different m.
-	// This is enforced by checking incgo in the schedule function.
+	// 这时，unlockOSThread 已经被调用，下面的代码不能修改到其他的 m 上。
+	// incgo 检查位于 schedule 函数中，这是强制的
 
 	gp.m.incgo = true
-	// going back to cgo call
+	// 返回到 cgo 调用going back to cgo call
 	reentersyscall(savedpc, uintptr(savedsp))
 
 	gp.m.syscall = syscall
