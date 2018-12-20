@@ -4,7 +4,7 @@
 
 package runtime
 
-// Numbers fundamental to the encoding.
+// 编码的数字基础
 const (
 	runeError = '\uFFFD'     // the "error" Rune or "Unicode replacement character"
 	runeSelf  = 0x80         // characters below Runeself are represented as themselves in a single byte.

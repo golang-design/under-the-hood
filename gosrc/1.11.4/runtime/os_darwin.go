@@ -39,6 +39,7 @@ func semasleep(ns int64) int32 {
 		start = nanotime()
 	}
 	mp := getg().m
+	// 在持有 P 的情况下对 M 加锁
 	pthread_mutex_lock(&mp.mutex)
 	for {
 		if mp.count > 0 {
@@ -67,6 +68,7 @@ func semasleep(ns int64) int32 {
 
 //go:nosplit
 func semawakeup(mp *m) {
+	// 唤醒 M 线程
 	pthread_mutex_lock(&mp.mutex)
 	mp.count++
 	if mp.count > 0 {

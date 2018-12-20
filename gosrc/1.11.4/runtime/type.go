@@ -290,7 +290,13 @@ func (t *_type) textOff(off textOff) unsafe.Pointer {
 	// for each text section is set to its offset within the text.  Each method's offset is compared against the section
 	// vaddrs and sizes to determine the containing section.  Then the section relative offset is added to the section's
 	// relocated baseaddr to compute the method addess.
-
+	// 文本或指令流生成为一个大缓冲区。
+	// 方法的 off（偏移量）是它在此缓冲区内的偏移量。
+	// 如果文本总大小太大，如果调用目标对于调用指令来说太远，则在 ppc64 等平台上可能会出现问题。
+	// 要解决大文本问题，文本将拆分为多个文本部分，以允许链接器在必要时生成长调用。
+	// 发生这种情况时，每个文本部分的 vaddr 都设置为文本中的偏移量。
+	// 将每个方法的偏移量与部分 vaddrs 和 size 进行比较，以确定包含部分。
+	// 然后将节相对偏移添加到节的重定位 baseaddr 以计算方法 addess。
 	if len(md.textsectmap) > 1 {
 		for i := range md.textsectmap {
 			sectaddr := md.textsectmap[i].vaddr
@@ -301,7 +307,7 @@ func (t *_type) textOff(off textOff) unsafe.Pointer {
 			}
 		}
 	} else {
-		// single text section
+		// 单文本区
 		res = md.text + uintptr(off)
 	}
 

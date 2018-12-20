@@ -34,14 +34,11 @@ const (
 	alg_max
 )
 
-// typeAlg is also copied/used in reflect/type.go.
-// keep them in sync.
+// typeAlg 还用于 reflect/type.go，保持同步
 type typeAlg struct {
-	// function for hashing objects of this type
-	// (ptr to object, seed) -> hash
+	// 函数用于对此类型的对象求 hash，(指向对象的指针, 种子) --> hash
 	hash func(unsafe.Pointer, uintptr) uintptr
-	// function for comparing objects of this type
-	// (ptr to object A, ptr to object B) -> ==?
+	// 函数用于比较此类型的对象，(指向对象 A 的指针, 指向对象 B 的指针) --> ==?
 	equal func(unsafe.Pointer, unsafe.Pointer) bool
 }
 
@@ -98,10 +95,8 @@ func strhash(a unsafe.Pointer, h uintptr) uintptr {
 	return memhash(x.str, h, uintptr(x.len))
 }
 
-// NOTE: Because NaN != NaN, a map can contain any
-// number of (mostly useless) entries keyed with NaNs.
-// To avoid long hash chains, we assign a random number
-// as the hash value for a NaN.
+// 注意: 因为 NaN != NaN, 一个 map 可以用 NaNs 包含任意数量（大量无用）的条目。
+// 为避免长 hash 链，我们分配一个随机数来来作为 NaN 的哈希值。
 
 func f32hash(p unsafe.Pointer, h uintptr) uintptr {
 	f := *(*float32)(p)
@@ -109,7 +104,7 @@ func f32hash(p unsafe.Pointer, h uintptr) uintptr {
 	case f == 0:
 		return c1 * (c0 ^ h) // +0, -0
 	case f != f:
-		return c1 * (c0 ^ h ^ uintptr(fastrand())) // any kind of NaN
+		return c1 * (c0 ^ h ^ uintptr(fastrand())) // 任意类型的 NaN
 	default:
 		return memhash(p, h, 4)
 	}
@@ -121,7 +116,7 @@ func f64hash(p unsafe.Pointer, h uintptr) uintptr {
 	case f == 0:
 		return c1 * (c0 ^ h) // +0, -0
 	case f != f:
-		return c1 * (c0 ^ h ^ uintptr(fastrand())) // any kind of NaN
+		return c1 * (c0 ^ h ^ uintptr(fastrand())) // 任意类型的 NaN
 	default:
 		return memhash(p, h, 8)
 	}
@@ -243,7 +238,7 @@ func ifaceeq(tab *itab, x, y unsafe.Pointer) bool {
 	return eq(x, y)
 }
 
-// Testing adapters for hash quality tests (see hash_test.go)
+// hash 质量测试的测试适配器（见 hash_test.go）
 func stringHash(s string, seed uintptr) uintptr {
 	return algarray[alg_STRING].hash(noescape(unsafe.Pointer(&s)), seed)
 }
@@ -273,10 +268,10 @@ func ifaceHash(i interface {
 
 const hashRandomBytes = sys.PtrSize / 4 * 64
 
-// used in asm_{386,amd64,arm64}.s to seed the hash function
+// 在 asm_{386,amd64,arm64}.s 中用于初始化 hash 函数的种子
 var aeskeysched [hashRandomBytes]byte
 
-// used in hash{32,64}.go to seed the hash function
+// 在 hash{32,64}.go 中用于初始化 hash 函数的种子
 var hashkey [4]uintptr
 
 func alginit() {
@@ -294,7 +289,7 @@ func alginit() {
 		return
 	}
 	getRandomData((*[len(hashkey) * sys.PtrSize]byte)(unsafe.Pointer(&hashkey))[:])
-	hashkey[0] |= 1 // make sure these numbers are odd
+	hashkey[0] |= 1 // 确保这些数字为奇数
 	hashkey[1] |= 1
 	hashkey[2] |= 1
 	hashkey[3] |= 1
@@ -305,6 +300,6 @@ func initAlgAES() {
 	algarray[alg_MEM32].hash = aeshash32
 	algarray[alg_MEM64].hash = aeshash64
 	algarray[alg_STRING].hash = aeshashstr
-	// Initialize with random data so hash collisions will be hard to engineer.
+	// 使用随机数据初始化，从而使哈希冲突攻击变得困难。
 	getRandomData(aeskeysched[:])
 }

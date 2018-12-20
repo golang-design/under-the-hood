@@ -121,7 +121,7 @@ func notetsleepg(n *note, ns int64) bool {
 	return true
 }
 
-// checkTimeouts resumes goroutines that are waiting on a note which has reached its deadline.
+// checkTimeouts 恢复那些在等待一个 note 且已经触发其 deadline 时的 goroutine。
 func checkTimeouts() {
 	now := nanotime()
 	for n, nt := range notesWithTimeout {

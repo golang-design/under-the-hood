@@ -49,7 +49,7 @@ func NumCPU() int {
 	return int(ncpu)
 }
 
-// NumCgoCall returns the number of cgo calls made by the current process.
+// NumCgoCall 返回了当前进程产生的 cgo 调用的数量
 func NumCgoCall() int64 {
 	var n int64
 	for mp := (*m)(atomic.Loadp(unsafe.Pointer(&allm))); mp != nil; mp = mp.alllink {
@@ -58,7 +58,7 @@ func NumCgoCall() int64 {
 	return n
 }
 
-// NumGoroutine returns the number of goroutines that currently exist.
+// NumGoroutine 返回当前存在的 goroutine 的数量
 func NumGoroutine() int {
 	return int(gcount())
 }

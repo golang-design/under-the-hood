@@ -85,36 +85,28 @@ const (
 // 互斥锁。在无竞争的情况下，与自旋锁 spin lock（只是一些用户级指令）一样快，
 // 但在争用路径 contention path 中，它们在内核中休眠。零值互斥锁为未加锁状态（无需初始化每个锁）。
 type mutex struct {
-	// Futex-based impl treats it as uint32 key,
-	// while sema-based impl as M* waitm.
-	// Used to be a union, but unions break precise GC.
+	// 基于 futex 的实现将其视为 uint32 key (linux)
+	// 而基于 sema 实现则将其视为 M* waitm。 (darwin)
+	// 以前作为 union 使用，但 union 会打破精确 GC
 	key uintptr
 }
 
-// sleep and wakeup on one-time events.
-// before any calls to notesleep or notewakeup,
-// must call noteclear to initialize the Note.
-// then, exactly one thread can call notesleep
-// and exactly one thread can call notewakeup (once).
-// once notewakeup has been called, the notesleep
-// will return.  future notesleep will return immediately.
-// subsequent noteclear must be called only after
-// previous notesleep has returned, e.g. it's disallowed
-// to call noteclear straight after notewakeup.
+// 休眠与唤醒一次性事件.
+// 在任何调用 notesleep 或 notewakeup 之前，必须调用 noteclear 来初始化这个 note
+// 且只能有一个线程调用 notewakeup 一次。一旦 notewakeup 被调用后，notesleep 会返回。
+// 随后的 notesleep 调用则会立即返回。
+// 随后的 noteclear 必须在前一个 notesleep 返回前调用，例如 notewakeup 调用后
+// 直接调用 noteclear 是不允许的。
 //
-// notetsleep is like notesleep but wakes up after
-// a given number of nanoseconds even if the event
-// has not yet happened.  if a goroutine uses notetsleep to
-// wake up early, it must wait to call noteclear until it
-// can be sure that no other goroutine is calling
-// notewakeup.
+// notetsleep 类似于 notesleep 但会在给定数量的纳秒时间后唤醒，即使事件尚未发生。
+// 如果一个 goroutine 使用 notetsleep 来提前唤醒，则必须等待调用 noteclear，直到可以确定
+// 没有其他 goroutine 正在调用 notewakeup。
 //
-// notesleep/notetsleep are generally called on g0,
-// notetsleepg is similar to notetsleep but is called on user g.
+// notesleep/notetsleep 通常在 g0 上调用，notetsleepg 类似于 notetsleep 但会在用户 g 上调用。
 type note struct {
-	// Futex-based impl treats it as uint32 key,
-	// while sema-based impl as M* waitm.
-	// Used to be a union, but unions break precise GC.
+	// 基于 futex 的实现将其视为 uint32 key (linux)
+	// 而基于 sema 实现则将其视为 M* waitm。 (darwin)
+	// 以前作为 union 使用，但 union 会打破精确 GC
 	key uintptr
 }
 
@@ -358,7 +350,7 @@ type g struct {
 	cgoCtxt        []uintptr      // cgo 回溯上下文
 	labels         unsafe.Pointer // profiler 的标签
 	timer          *timer         // 为 time.Sleep 缓存的计时器
-	selectDone     uint32         // 我们是否正在参与 select 且某个 goroutine 胜出？
+	selectDone     uint32         // 我们是否正在参与 select 且某个 goroutine 胜出
 
 	// Per-G GC 状态
 

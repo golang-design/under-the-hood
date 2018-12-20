@@ -175,9 +175,7 @@ func main() {
 		if _cgo_notify_runtime_init_done == nil {
 			throw("_cgo_notify_runtime_init_done missing")
 		}
-		// Start the template thread in case we enter Go from
-		// a C-created thread and need to create a new thread.
-		// 启动模板线程来处理从 C 创建的线程进入 Go 时需要创建一个新的线程。
+		// 启动模板线程来处理从 C 创建的线程进入 Go 时需要创建一个新的线程的情况。
 		startTemplateThread()
 		cgocall(_cgo_notify_runtime_init_done, nil)
 	}
@@ -268,8 +266,7 @@ func forcegchelper() {
 
 //go:nosplit
 
-// Gosched yields the processor, allowing other goroutines to run. It does not
-// suspend the current goroutine, so execution resumes automatically.
+// Gosched 会解绑当前的 P，并允许其他 goroutine 运行。它不会推迟当前的 goroutine，因此执行会被自动恢复
 func Gosched() {
 	checkTimeouts()
 	mcall(gosched_m)

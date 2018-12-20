@@ -3,12 +3,11 @@
 // license that can be found in the LICENSE file.
 
 /*
-Package runtime contains operations that interact with Go's runtime system,
-such as functions to control goroutines. It also includes the low-level type information
-used by the reflect package; see reflect's documentation for the programmable
-interface to the run-time type system.
+Package runtime 包含与 Go 的运行时系统交互的操作，
+比如控制 goroutines 的功能。 它还包括低级类型信息 reflect 包使用；
+请参阅 reflect 可编程的文档运行时类型系统的接口。
 
-Environment Variables
+环境变量
 
 The following environment variables ($name or %name%, depending on the host
 operating system) control the run-time behavior of Go programs. The meanings
@@ -165,16 +164,16 @@ package runtime
 
 import "runtime/internal/sys"
 
-// Caller reports file and line number information about function invocations on
-// the calling goroutine's stack. The argument skip is the number of stack frames
-// to ascend, with 0 identifying the caller of Caller.  (For historical reasons the
-// meaning of skip differs between Caller and Callers.) The return values report the
-// program counter, file name, and line number within the file of the corresponding
-// call. The boolean ok is false if it was not possible to recover the information.
+// Caller 在调用 goroutine 的堆栈上报告有关函数调用的文件和行号信息。
+// 参数 skip 是要提升的堆栈帧数，0 表示调用者的调用者。
+// （由于历史原因，Caller 和 Callers 之间 skip 的含义不同。）返回值报告相应调用文件中的程序计数器，
+// 文件名和行号。如果无法恢复信息，则布尔值 ok 为 false。
 func Caller(skip int) (pc uintptr, file string, line int, ok bool) {
 	// Make room for three PCs: the one we were asked for,
 	// what it called, so that CallersFrames can see if it "called"
 	// sigpanic, and possibly a PC for skipPleaseUseCallersFrames.
+	// 为三个 PC 让出空间，包括我们要求的 PC、调用它的，从而 CallersFrames 可观察到它是被调用、
+	// sigpanic 和可能
 	var rpc [3]uintptr
 	if callers(1+skip-1, rpc[:]) < 2 {
 		return
@@ -195,19 +194,14 @@ func Caller(skip int) (pc uintptr, file string, line int, ok bool) {
 	return
 }
 
-// Callers fills the slice pc with the return program counters of function invocations
-// on the calling goroutine's stack. The argument skip is the number of stack frames
-// to skip before recording in pc, with 0 identifying the frame for Callers itself and
-// 1 identifying the caller of Callers.
-// It returns the number of entries written to pc.
+// Callers 使用调用 goroutine 栈上的函数调用的返回程序计数器数组 pc。
+// 参数 skip 是在 pc 中记录之前要跳过的堆栈帧数，0 表示 Callers 本身的帧，1 表示 Callers 的调用者。
+// 它返回写入 pc 的条目数。
 //
-// To translate these PCs into symbolic information such as function
-// names and line numbers, use CallersFrames. CallersFrames accounts
-// for inlined functions and adjusts the return program counters into
-// call program counters. Iterating over the returned slice of PCs
-// directly is discouraged, as is using FuncForPC on any of the
-// returned PCs, since these cannot account for inlining or return
-// program counter adjustment.
+// 要将这些PC转换为符号信息（如函数名称和行号），请使用 CallersFrames。
+// CallersFrames 考虑内联函数并将返回程序计数器调整为调用程序计数器。
+// 不鼓励迭代返回的 PC 片，就像在任何返回的 PC 上使用 FuncForPC 一样，
+// 因为这些不能解释内联或返回程序计数器调整。
 func Callers(skip int, pc []uintptr) int {
 	// runtime.callers uses pc.array==nil as a signal
 	// to print a stack trace. Pick off 0-length pc here
@@ -218,9 +212,7 @@ func Callers(skip int, pc []uintptr) int {
 	return callers(skip, pc)
 }
 
-// GOROOT returns the root of the Go tree. It uses the
-// GOROOT environment variable, if set at process start,
-// or else the root used during the Go build.
+// GOROOT 返回 Go 树的根。 它使用了 GOROOT 环境变量，如果在进程启动时设置，或者在Go构建期间使用的根。
 func GOROOT() string {
 	s := gogetenv("GOROOT")
 	if s != "" {
@@ -229,17 +221,16 @@ func GOROOT() string {
 	return sys.DefaultGoroot
 }
 
-// Version returns the Go tree's version string.
-// It is either the commit hash and date at the time of the build or,
-// when possible, a release tag like "go1.3".
+// Version 返回 Go 树的版本字符串。
+// 它是构建时的提交哈希和日期，或者，在可能的情况下，发布标签如 "go1.3"。
 func Version() string {
 	return sys.TheVersion
 }
 
-// GOOS is the running program's operating system target:
-// one of darwin, freebsd, linux, and so on.
+// GOOS 是正在运行的程序的操作系统目标：
+// darwin，freebsd，linux 等之一。
 const GOOS string = sys.GOOS
 
-// GOARCH is the running program's architecture target:
-// one of 386, amd64, arm, s390x, and so on.
+// GOARCH 是正在运行的程序的架构目标：
+// 386，amd64，arm，s390x 之一，等等。
 const GOARCH string = sys.GOARCH

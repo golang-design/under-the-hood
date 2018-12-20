@@ -27,34 +27,83 @@ const (
 )
 
 type hchan struct {
-	qcount   uint           // total data in the queue
-	dataqsiz uint           // size of the circular queue
-	buf      unsafe.Pointer // points to an array of dataqsiz elements
+	qcount   uint           // 队列中的所有数据数
+	dataqsiz uint           // 环形队列的大小
+	buf      unsafe.Pointer // 指向大小为 dataqsiz 的数组
 	elemsize uint16
 	closed   uint32
-	elemtype *_type // element type
-	sendx    uint   // send index
-	recvx    uint   // receive index
-	recvq    waitq  // list of recv waiters
-	sendq    waitq  // list of send waiters
+	elemtype *_type // 元素类型
+	sendx    uint   // 发送索引
+	recvx    uint   // 接受索引
+	recvq    waitq  // recv 等待列表
+	sendq    waitq  // send 等待列表
 
-	// lock protects all fields in hchan, as well as several
-	// fields in sudogs blocked on this channel.
+	// lock 保护了 hchan 的所有字段，以及在此 channel 上阻塞的 sudog 的一些字段
 	//
-	// Do not change another G's status while holding this lock
-	// (in particular, do not ready a G), as this can deadlock
-	// with stack shrinking.
+	// 当持有此锁时不改变其他 G 的状态（特别的，不 ready 一个 G），因为
+	// 它会在栈收缩时发生死锁
+	//
 	lock mutex
 }
 
+// 等待队列 sudog 双向队列
 type waitq struct {
 	first *sudog
 	last  *sudog
 }
 
-//go:linkname reflect_makechan reflect.makechan
-func reflect_makechan(t *chantype, size int) *hchan {
-	return makechan(t, size)
+// 入队
+func (q *waitq) enqueue(sgp *sudog) {
+	sgp.next = nil
+	x := q.last
+	if x == nil { // 此时队列空
+		sgp.prev = nil // 将 sgp 插入到队列中
+		q.first = sgp  // 队首指针指向 sgp
+		q.last = sgp   // 队尾指针指向 sgp
+		return
+	}
+	// 此时队列不空
+	sgp.prev = x
+	x.next = sgp // sgp 放到最后一个 sgp 的后面
+	q.last = sgp // 修改队尾指针
+}
+
+func (q *waitq) dequeue() *sudog {
+	for {
+		// 获得队首 sgp
+		sgp := q.first
+		// 如果队列空，直接返回
+		if sgp == nil {
+			return nil
+		}
+		// 获得队首的下一个元素
+		y := sgp.next
+		// 如果此时队列已空，清空队首队尾指针
+		if y == nil {
+			q.first = nil
+			q.last = nil
+		} else {
+			// 否则将队首指针移到下一个元素
+			y.prev = nil
+			q.first = y
+			sgp.next = nil // 标记为已移除 (see dequeueSudog)
+		}
+
+		// 如果一个 goroutine 由于一个 select 被放到此队列，则在 goroutine 唤醒前
+		// 如果由于 select 而将 goroutine 放在此队列中，则在由不同的情况唤醒的 goroutine 之间
+		// 存在一个小窗口并且它获取 channel lock。 一旦锁定，它会将自己从队列中删除，
+		// 因此我们不会在那之后看到它。
+		// 我们在 G 结构中使用一个标志来告诉我们其他人何时获得了这个竞争条件以告知这个 goroutine，
+		// 但是 goroutine 还没有将自己从队列中移除。
+		if sgp.isSelect { // 正在参与一个 select
+			// 如果将 g 标记为已完成失败，则说明此 sgp 已经不在队列中，继续循环并重新出队
+			if !atomic.Cas(&sgp.g.selectDone, 0, 1) {
+				continue
+			}
+		}
+
+		return sgp
+	}
 }
 
 func makechan64(t *chantype, size int64) *hchan {
@@ -123,18 +172,16 @@ func chansend1(c *hchan, elem unsafe.Pointer) {
 	chansend(c, elem, true, getcallerpc())
 }
 
-/*
- * generic single channel send/recv
- * If block is not nil,
- * then the protocol will not
- * sleep but return if it could
- * not complete.
- *
- * sleep can wake up with g.param == nil
- * when a channel involved in the sleep has
- * been closed.  it is easiest to loop and re-run
- * the operation; we'll see that it's now closed.
- */
+// generic single channel send/recv
+// If block is not nil,
+// then the protocol will not
+// sleep but return if it could
+// not complete.
+//
+// sleep can wake up with g.param == nil
+// when a channel involved in the sleep has
+// been closed.  it is easiest to loop and re-run
+// the operation; we'll see that it's now closed.
 func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 	if c == nil {
 		if !block {
@@ -654,6 +701,11 @@ func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool
 	return
 }
 
+//go:linkname reflect_makechan reflect.makechan
+func reflect_makechan(t *chantype, size int) *hchan {
+	return makechan(t, size)
+}
+
 //go:linkname reflect_chansend reflect.chansend
 func reflect_chansend(c *hchan, elem unsafe.Pointer, nb bool) (selected bool) {
 	return chansend(c, elem, !nb, getcallerpc())
@@ -683,54 +735,6 @@ func reflect_chancap(c *hchan) int {
 //go:linkname reflect_chanclose reflect.chanclose
 func reflect_chanclose(c *hchan) {
 	closechan(c)
-}
-
-func (q *waitq) enqueue(sgp *sudog) {
-	sgp.next = nil
-	x := q.last
-	if x == nil {
-		sgp.prev = nil
-		q.first = sgp
-		q.last = sgp
-		return
-	}
-	sgp.prev = x
-	x.next = sgp
-	q.last = sgp
-}
-
-func (q *waitq) dequeue() *sudog {
-	for {
-		sgp := q.first
-		if sgp == nil {
-			return nil
-		}
-		y := sgp.next
-		if y == nil {
-			q.first = nil
-			q.last = nil
-		} else {
-			y.prev = nil
-			q.first = y
-			sgp.next = nil // mark as removed (see dequeueSudog)
-		}
-
-		// if a goroutine was put on this queue because of a
-		// select, there is a small window between the goroutine
-		// being woken up by a different case and it grabbing the
-		// channel locks. Once it has the lock
-		// it removes itself from the queue, so we won't see it after that.
-		// We use a flag in the G struct to tell us when someone
-		// else has won the race to signal this goroutine but the goroutine
-		// hasn't removed itself from the queue yet.
-		if sgp.isSelect {
-			if !atomic.Cas(&sgp.g.selectDone, 0, 1) {
-				continue
-			}
-		}
-
-		return sgp
-	}
 }
 
 func (c *hchan) raceaddr() unsafe.Pointer {

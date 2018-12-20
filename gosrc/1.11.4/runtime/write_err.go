@@ -8,6 +8,7 @@ package runtime
 
 import "unsafe"
 
+// 向 std.err 写错误信息
 func writeErr(b []byte) {
 	write(2, unsafe.Pointer(&b[0]), int32(len(b)))
 }

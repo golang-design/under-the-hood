@@ -17,20 +17,16 @@ func add(p unsafe.Pointer, x uintptr) unsafe.Pointer {
 // that fetch the g directly (from TLS or from the dedicated register).
 func getg() *g
 
-// mcall switches from the g to the g0 stack and invokes fn(g),
-// where g is the goroutine that made the call.
-// mcall saves g's current PC/SP in g->sched so that it can be restored later.
-// It is up to fn to arrange for that later execution, typically by recording
-// g in a data structure, causing something to call ready(g) later.
-// mcall returns to the original goroutine g later, when g has been rescheduled.
-// fn must not return at all; typically it ends by calling schedule, to let the m
-// run other goroutines.
+// mcall 从 g 切换到 g0 栈并调用 fn(g)，其中 g 为调用该方法的 goroutine
+// mcall 保存了 g 在 g->sched 中当前的 PC/SP，进而可以在之后被恢复。
+// fn 通常通过在一个数据结构中记录 g 来安排随后的执行，从而为随后调用 ready(g)。
+// 当 g 被重新调度时，mcall 随后返回了原始的 goroutine g.
+// fn 必须不能返回；通常已调用 schedule 结束，进而让 m 来运行其他的 goroutine。
 //
-// mcall can only be called from g stacks (not g0, not gsignal).
+// mcall 只能从 g 栈中被调用（而非 g0 和 gsignal）
 //
-// This must NOT be go:noescape: if fn is a stack-allocated closure,
-// fn puts g on a run queue, and g executes before fn returns, the
-// closure will be invalidated while it is still executing.
+// 如果 fn 是一个栈分配的 closure 该函数不允许是 go:noescape: 的，fn 将 g 放入运行队列中
+// 且 g 在 fn 返回前执行，则 closure 将在它仍在执行时失效。
 func mcall(fn func(*g))
 
 // systemstack 在系统栈上运行 fn. 如果：
