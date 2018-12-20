@@ -79,6 +79,7 @@
     - [`runtime.GOMAXPROCS`](content/8-runtime/gomaxprocs.md)
     - [`runtime.SetFinalizer` 与 `runtime.KeepAlive`](content/8-runtime/finalizer.md)
     - [`runtime.LockOSThread` 与 `runtime.UnlockOSThread`](content/8-runtime/lockosthread.md)
+    - [`runtime.note` 与 `runtime.mutex`](content/8-runtime/note.md)
 9. [`unsafe`](content/9-unsafe.md)
 10. [`cgo`](content/10-cgo.md)
 11. 依赖运行时的标准库
