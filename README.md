@@ -13,7 +13,8 @@
 3. [主 goroutine 生命周期](content/3-main.md)
 4. 内存分配器: alloc
     - [基本知识](content/4-mem/basic.md)
-    - [TCMalloc](content/4-mem/tcmalloc.md)
+    - [全局分配组件](content/4-mem/galloc.md)
+    - [FixAlloc、LinearAlloc 组件](content/4-mem/fixalloc.md)
     - [初始化](content/4-mem/init.md)
     - [分配过程](content/4-mem/alloc.md)
 5. 调度器: sched

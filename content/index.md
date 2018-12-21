@@ -11,7 +11,7 @@ TODO: 补全
     ├── reflect
     ├── runtime
     │   ├── README.md
-    // boot
+    // boot                               1-init.md
     │   ├── rt0_darwin_amd64.s
     │   ├── rt0_js_wasm.s
     │   ├── rt0_linux_amd64.s
@@ -27,6 +27,36 @@ TODO: 补全
     │   ├── runtime2.go
     │   ├── proc.go
     │   ├── stack.go
+
+    // mem
+    │   ├── lfstack.go
+    │   ├── lfstack_64bit.go
+    │   ├── malloc.go
+    │   ├── mbarrier.go
+    │   ├── mbitmap.go
+    │   ├── mcache.go
+    │   ├── mcentral.go
+    │   ├── mprof.go
+    │   ├── mem_darwin.go
+    │   ├── mem_js.go
+    │   ├── mem_linux.go
+    │   ├── memclr_amd64.s
+    │   ├── memclr_wasm.s
+    │   ├── memmove_amd64.s
+    │   ├── memmove_wasm.s
+    │   ├── mfixalloc.go
+    │   ├── mheap.go
+    │   ├── mkduff.go
+    │   ├── duff_amd64.s
+    │   ├── mksizeclasses.go
+    │   ├── sizeclasses.go
+    │   ├── mmap.go
+    │   ├── msan.go
+    │   ├── msan0.go
+    │   ├── msan_amd64.s
+    │   ├── msize.go
+    │   ├── mstats.go
+    │   ├── mwbbuf.go
 
     // GC                                 6-GC/*.md
     │   ├── mgc.go
@@ -103,37 +133,8 @@ TODO: 补全
 
     // extern
     │   ├── extern.go
+    │   ├── symtab.go
     │   ├── mfinal.go                           8-runtime/finalizer.md
-
-    // mem
-    │   ├── lfstack.go
-    │   ├── lfstack_64bit.go
-    │   ├── malloc.go
-    │   ├── mbarrier.go
-    │   ├── mbitmap.go
-    │   ├── mcache.go
-    │   ├── mcentral.go
-    │   ├── mprof.go
-    │   ├── mem_darwin.go
-    │   ├── mem_js.go
-    │   ├── mem_linux.go
-    │   ├── memclr_amd64.s
-    │   ├── memclr_wasm.s
-    │   ├── memmove_amd64.s
-    │   ├── memmove_wasm.s
-    │   ├── mfixalloc.go
-    │   ├── mheap.go
-    │   ├── mkduff.go
-    │   ├── duff_amd64.s
-    │   ├── mksizeclasses.go
-    │   ├── sizeclasses.go
-    │   ├── mmap.go
-    │   ├── msan.go
-    │   ├── msan0.go
-    │   ├── msan_amd64.s
-    │   ├── msize.go
-    │   ├── mstats.go
-    │   ├── mwbbuf.go
 
     // os/signal
     │   ├── sigaction.go
@@ -174,7 +175,6 @@ TODO: 补全
     │   ├── stubs_linux.go
     │   ├── stubs_nonlinux.go
     │   ├── stubs_x86.go
-    │   ├── symtab.go
     │   ├── sys_darwin.go
     │   ├── sys_darwin_amd64.s
     │   ├── sys_linux_amd64.s
