@@ -7,7 +7,7 @@
 
 package runtime
 
-// ELF64 structure definitions for use by the vDSO loader
+// 用于 vDSO 加载程序的 ELF64 结构定义
 
 type elfSym struct {
 	st_name  uint32

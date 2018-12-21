@@ -43,15 +43,13 @@ type mheap struct {
 	// 在 STW 期间可能不会被锁住，但必须确保在其访问时不能发生分配（因为可能释放 backing store）
 	allspans []*mspan // 所有 spans 从这里分配出去
 
-	// sweepSpans contains two mspan stacks: one of swept in-use
-	// spans, and one of unswept in-use spans. These two trade
-	// roles on each GC cycle. Since the sweepgen increases by 2
-	// on each cycle, this means the swept spans are in
-	// sweepSpans[sweepgen/2%2] and the unswept spans are in
-	// sweepSpans[1-sweepgen/2%2]. Sweeping pops spans from the
-	// unswept stack and pushes spans that are still in-use on the
-	// swept stack. Likewise, allocating an in-use span pushes it
-	// on the swept stack.
+	// sweepSpans 包含了两个 mspan 栈：
+	// 一个用于扫描使用中的 span，另一个用于未扫描的 span。
+	// 这两个身份位于 GC 的不同阶段。由于 sweepgen 在每个周期中增加 2，
+	// 即扫描的 span 在 sweepSpan[sweepgen/2%2] 中
+	// 未扫描的 span 在 sweepSpan[1-sweepgen/2%2] 中。
+	// 扫描从 unswept 栈中出栈 span，并对仍在使用的 span 压入 swept 栈中。
+	// 同样，分配一个使用中的 span 会被压入 swept 栈中。
 	sweepSpans [2]gcSweepBuf
 
 	//_ uint32 // align uint64 fields on 32-bit for atomics
@@ -82,12 +80,12 @@ type mheap struct {
 	// TODO(austin): pagesInUse should be a uintptr, but the 386
 	// compiler can't 8-byte align fields.
 
-	// Malloc stats.
-	largealloc  uint64                  // bytes allocated for large objects
-	nlargealloc uint64                  // number of large object allocations
-	largefree   uint64                  // bytes freed for large objects (>maxsmallsize)
-	nlargefree  uint64                  // number of frees for large objects (>maxsmallsize)
-	nsmallfree  [_NumSizeClasses]uint64 // number of frees for small objects (<=maxsmallsize)
+	// 内存分配统计
+	largealloc  uint64                  // 分配给大对象的总字节数
+	nlargealloc uint64                  // 进行大对象分配的次数
+	largefree   uint64                  // 释放大对象的总字节数 (>maxsmallsize)
+	nlargefree  uint64                  // 释放大对象的次数    (>maxsmallsize)
+	nsmallfree  [_NumSizeClasses]uint64 // 释放小对象的次数    (<=maxsmallsize)
 
 	// arenas is the heap arena map. It points to the metadata for
 	// the heap for every arena frame of the entire usable virtual
@@ -111,42 +109,36 @@ type mheap struct {
 	// will never be nil.
 	arenas [1 << arenaL1Bits]*[1 << arenaL2Bits]*heapArena
 
-	// heapArenaAlloc is pre-reserved space for allocating heapArena
-	// objects. This is only used on 32-bit, where we pre-reserve
-	// this space to avoid interleaving it with the heap itself.
+	// heapArenaAlloc 是用于分配 heapArena 预留的空间。
+	// 仅用于 32 位系统，保留这个空间用以避免堆本身的交错。
 	heapArenaAlloc linearAlloc
 
-	// arenaHints is a list of addresses at which to attempt to
-	// add more heap arenas. This is initially populated with a
-	// set of general hint addresses, and grown with the bounds of
-	// actual heap arena ranges.
+	// arenaHints 是一个尝试添加更多堆 arena 的地址链表。
+	// 它最初填充了一组通用的 hint 地址，并随着堆 arena 范围的实际边界而增长。
 	arenaHints *arenaHint
 
-	// arena is a pre-reserved space for allocating heap arenas
-	// (the actual arenas). This is only used on 32-bit.
+	// arena 是一个提前预留的分配堆 arena （实际 arena）的空间，仅用于 32 位系统
 	arena linearAlloc
 
 	//_ uint32 // ensure 64-bit alignment of central
 
-	// central free lists for small size classes.
-	// the padding makes sure that the MCentrals are
-	// spaced CacheLineSize bytes apart, so that each MCentral.lock
-	// gets its own cache line.
-	// central is indexed by spanClass.
+	// 用于大小较小的类的 central free lists
+	// pad 保证了 MCentral 的间隔为 CacheLineSize 字节，从而便于每个 MCentral.lock 获得自己的缓存行。
+	// central 由 spanClass 进行索引
 	central [numSpanClasses]struct {
 		mcentral mcentral
 		pad      [sys.CacheLineSize - unsafe.Sizeof(mcentral{})%sys.CacheLineSize]byte
 	}
 
-	spanalloc             fixalloc // allocator for span*
-	cachealloc            fixalloc // allocator for mcache*
-	treapalloc            fixalloc // allocator for treapNodes* used by large objects
-	specialfinalizeralloc fixalloc // allocator for specialfinalizer*
-	specialprofilealloc   fixalloc // allocator for specialprofile*
-	speciallock           mutex    // lock for special record allocators.
-	arenaHintAlloc        fixalloc // allocator for arenaHints
+	spanalloc             fixalloc // span* 分配器
+	cachealloc            fixalloc // mcache* 分配器
+	treapalloc            fixalloc // treapNodes* 分配器，用于大对象
+	specialfinalizeralloc fixalloc // specialfinalizer* 分配器
+	specialprofilealloc   fixalloc // specialprofile* 分配器
+	speciallock           mutex    // 特殊记录分配器的锁
+	arenaHintAlloc        fixalloc // arenaHints 分配器
 
-	unused *specialfinalizer // never set, just here to force the specialfinalizer type into DWARF
+	unused *specialfinalizer // 从不设置，仅强制让 specialfinalizer 类型进入 DWARF
 }
 
 var mheap_ mheap
@@ -181,13 +173,13 @@ type arenaHint struct {
 	next *arenaHint
 }
 
-// An MSpan is a run of pages.
+// 一个 MSpan 是一系列 page
 //
-// When a MSpan is in the heap free list, state == MSpanFree
-// and heapmap(s->start) == span, heapmap(s->start+s->npages-1) == span.
+// 当一个 MSpan 是堆中自由表时， state == MSpanFree
+// 且 heapmap(s->start) == span, heapmap(s->start+s->npages-1) == span.
 //
-// When a MSpan is allocated, state == MSpanInUse or MSpanManual
-// and heapmap(i) == span for all s->start <= i < s->start+s->npages.
+// 当 MSpan 被分配后, state == MSpanInUse 或 MSpanManual
+// 且对于所有的 s->start <= i < s->start+s->npages，heapmap(i) == span。
 
 // Every MSpan is in one doubly-linked list,
 // either one of the MHeap's free lists or one of the
@@ -334,15 +326,12 @@ func (s *mspan) layout() (size, n, total uintptr) {
 	return
 }
 
-// recordspan adds a newly allocated span to h.allspans.
+// recordspan 为 h.allspans 添加新分配的 span。
 //
-// This only happens the first time a span is allocated from
-// mheap.spanalloc (it is not called when a span is reused).
+// 这仅在第一次从 mheap.spanalloc 分配 span 时发生（在重用 span 时不调用）。
 //
-// Write barriers are disallowed here because it can be called from
-// gcWork when allocating new workbufs. However, because it's an
-// indirect call from the fixalloc initializer, the compiler can't see
-// this.
+// 这里不允许写入障碍，因为在分配新的 workbuf 时可以从 gcWork 调用它。
+// 但是，因为它是来自 fixalloc 初始化程序的间接调用，所以编译器无法观察到这点。
 //
 //go:nowritebarrierrec
 func recordspan(vh unsafe.Pointer, p unsafe.Pointer) {

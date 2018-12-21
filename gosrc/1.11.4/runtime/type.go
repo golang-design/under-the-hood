@@ -2,15 +2,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Runtime type representation.
+// 运行时类型表示
 
 package runtime
 
 import "unsafe"
 
-// tflag is documented in reflect/type.go.
+// tflag 再 reflect/type.go 中进行说明.
 //
-// tflag values must be kept in sync with copies in:
+// tflag 的值必须与以下文件进行同步:
 //	cmd/compile/internal/gc/reflect.go
 //	cmd/link/internal/ld/decodesym.go
 //	reflect/type.go
@@ -430,8 +430,8 @@ type structtype struct {
 	fields  []structfield
 }
 
-// name is an encoded type name with optional extra data.
-// See reflect/type.go for details.
+// name 是带有可选附加数据的编码类型的名称。
+// 见 reflect/type.go.
 type name struct {
 	bytes *byte
 }
@@ -554,27 +554,21 @@ type _typePair struct {
 	t2 *_type
 }
 
-// typesEqual reports whether two types are equal.
+// typesEqual 报告两种类型是否相等。
 //
-// Everywhere in the runtime and reflect packages, it is assumed that
-// there is exactly one *_type per Go type, so that pointer equality
-// can be used to test if types are equal. There is one place that
-// breaks this assumption: buildmode=shared. In this case a type can
-// appear as two different pieces of memory. This is hidden from the
-// runtime and reflect package by the per-module typemap built in
-// typelinksinit. It uses typesEqual to map types from later modules
-// back into earlier ones.
+// 运行时和反射包中的任何地方，均假设每个 Go 类型只有一个 *_type，因此使用指针相等性
+// 来测试类型是否相等。有一个地方除外：buildmode=shared。在这种情况下，类型可以显示
+// 为两个不同的内存块。这种行为被运行时和反射包通过 typelinksinit 中各模块内建的
+// typemap 来隐藏。它使用 typesEqual 将以后模块中的类型映射回早起模块。
 //
-// Only typelinksinit needs this function.
+// 只有 typelinksinit 需要此函数
 func typesEqual(t, v *_type, seen map[_typePair]struct{}) bool {
 	tp := _typePair{t, v}
 	if _, ok := seen[tp]; ok {
 		return true
 	}
 
-	// mark these types as seen, and thus equivalent which prevents an infinite loop if
-	// the two types are identical, but recursively defined and loaded from
-	// different modules
+	// 将这些类型标记为可见，因此如果两个类型相同，则可以防止无限循环，但从不同模块递归定义和加载。
 	seen[tp] = struct{}{}
 
 	if t == v {

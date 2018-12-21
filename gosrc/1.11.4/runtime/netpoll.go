@@ -11,16 +11,16 @@ import (
 	"unsafe"
 )
 
-// Integrated network poller (platform-independent part).
-// A particular implementation (epoll/kqueue) must define the following functions:
-// func netpollinit()			// to initialize the poller
-// func netpollopen(fd uintptr, pd *pollDesc) int32	// to arm edge-triggered notifications
-// and associate fd with pd.
-// An implementation must call the following function to denote that the pd is ready.
+// 集成的网络轮训器（平台无关的部分）
+//
+// 一个特定的实现（epoll/equeue）必须包含下面的函数：
+// func netpollinit()			// 来初始化轮训器
+// func netpollopen(fd uintptr, pd *pollDesc) int32	// 给 arm edge-triggered 通知以及关联 fd 和 pd
+// 一个实现必须调用下面的函数来表明 pd 已经就绪
 // func netpollready(gpp **g, pd *pollDesc, mode int32)
 
-// pollDesc contains 2 binary semaphores, rg and wg, to park reader and writer
-// goroutines respectively. The semaphore can be in the following states:
+// pollDesc 包含两个二进制的信号量: rg 和 wg，分别用于 park reader 和 writer goroutine
+// 信号量可以处于以下状态：
 // pdReady - io readiness notification is pending;
 //           a goroutine consumes the notification by changing the state to nil.
 // pdWait - a goroutine prepares to park on the semaphore, but not yet parked;
@@ -30,7 +30,7 @@ import (
 // G pointer - the goroutine is blocked on the semaphore;
 //             io notification or timeout/close changes the state to READY or nil respectively
 //             and unparks the goroutine.
-// nil - nothing of the above.
+// nil - 以上都不是
 const (
 	pdReady uintptr = 1
 	pdWait  uintptr = 2
@@ -38,9 +38,9 @@ const (
 
 const pollBlockSize = 4 * 1024
 
-// Network poller descriptor.
+// 网络轮训器描述符
 //
-// No heap pointers.
+// 无堆指针
 //
 //go:notinheap
 type pollDesc struct {

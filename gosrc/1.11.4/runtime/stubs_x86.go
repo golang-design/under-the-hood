@@ -6,5 +6,5 @@
 
 package runtime
 
-// stackcheck checks that SP is in range [g->stack.lo, g->stack.hi).
+// stackcheck检查了 SP 是否在 [g.stack.lo, g.stack.hi) 范围内
 func stackcheck()

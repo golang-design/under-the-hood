@@ -10,10 +10,8 @@ import (
 	"unsafe"
 )
 
-// Calling panic with one of the errors below will call errorString.Error
-// which will call mallocgc to concatenate strings. That will fail if
-// malloc is locked, causing a confusing error message. Throw a better
-// error message instead.
+// 使用下面的错误之一调用 panic 将调用 errorString.Error，进而将调用 mallocgc 来连接字符串。
+// 如果 malloc 被锁定则会调用失败，从而导致更令人困惑的错误消息。因此选择抛出一个更好的错误消息。
 func panicCheckMalloc(err error) {
 	gp := getg()
 	if gp != nil && gp.m != nil && gp.m.mallocing != 0 {

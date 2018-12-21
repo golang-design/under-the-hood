@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 //
-// System calls and other sys.stuff for AMD64, Linux
+// 系统调用和其他 sys.stuff for AMD64, Linux
 //
 
 #include "go_asm.h"
@@ -173,12 +173,11 @@ TEXT runtime·mincore(SB),NOSPLIT,$0-28
 
 // func walltime() (sec int64, nsec int32)
 TEXT runtime·walltime(SB),NOSPLIT,$0-12
-	// We don't know how much stack space the VDSO code will need,
-	// so switch to g0.
-	// In particular, a kernel configured with CONFIG_OPTIMIZE_INLINING=n
-	// and hardening can use a full page of stack space in gettime_sym
-	// due to stack probes inserted to avoid stack/heap collisions.
-	// See issue #20427.
+	// 我们不知道 VDSO 代码需要多少栈空间，因此切换到 g0。
+	// 特别是，配置了 CONFIG_OPTIMIZE_INLINING = n 的内核
+	// 和加固可以再 gettime_sym 中使用整页的栈空间
+	// 由于插入了栈探针已避免栈/堆冲突
+	// 参考 issue 20427
 
 	MOVQ	SP, BP	// Save old SP; BP unchanged by C code.
 
@@ -192,11 +191,11 @@ TEXT runtime·walltime(SB),NOSPLIT,$0-12
 	LEAQ	sec+0(SP), DX
 	MOVQ	DX, m_vdsoSP(BX)
 
-	CMPQ	AX, m_curg(BX)	// Only switch if on curg.
+	CMPQ	AX, m_curg(BX)	// 仅当 curg 时进行交换.
 	JNE	noswitch
 
 	MOVQ	m_g0(BX), DX
-	MOVQ	(g_sched+gobuf_sp)(DX), SP	// Set SP to g0 stack
+	MOVQ	(g_sched+gobuf_sp)(DX), SP	// 将 SP 设置到 g0 栈
 
 noswitch:
 	SUBQ	$16, SP		// Space for results

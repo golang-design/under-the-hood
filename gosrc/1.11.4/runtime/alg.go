@@ -15,7 +15,7 @@ const (
 	c1 = uintptr((8-sys.PtrSize)/4*3267000013 + (sys.PtrSize-4)/4*23344194077549503)
 )
 
-// type algorithms - known to compiler
+// 类型算法 - 编译器知晓
 const (
 	alg_NOEQ = iota
 	alg_MEM0

@@ -6,15 +6,14 @@ package runtime
 
 import "unsafe"
 
-// Should be a built-in for unsafe.Pointer?
+// 是否应该内建到 unsafe.Pointer?
 //go:nosplit
 func add(p unsafe.Pointer, x uintptr) unsafe.Pointer {
 	return unsafe.Pointer(uintptr(p) + x)
 }
 
-// getg returns the pointer to the current g.
-// The compiler rewrites calls to this function into instructions
-// that fetch the g directly (from TLS or from the dedicated register).
+// getg 返回指向当前 g 的指针
+// 编译器将对此函数的调用重写为指令，从而直接获取 g（来自 TLS 或来自专用寄存器）
 func getg() *g
 
 // mcall 从 g 切换到 g0 栈并调用 fn(g)，其中 g 为调用该方法的 goroutine
@@ -272,7 +271,7 @@ func call1073741824(typ, fn, arg unsafe.Pointer, n, retoffset uint32)
 
 func systemstack_switch()
 
-// round n up to a multiple of a.  a must be a power of 2.
+// 四舍五入 n 到 a 的倍数， a 一定是2的幂
 func round(n, a uintptr) uintptr {
 	return (n + a - 1) &^ (a - 1)
 }

@@ -21,8 +21,11 @@
 //	mcache: 具有空闲空间的 mspan 的 per-P 缓存
 //	mstats: 分配统计
 //
-// Allocating a small object proceeds up a hierarchy of caches:
+// 分配一个小对象会进入缓存层次结构：
 //
+//	1. 将大小调整为一个 small size class，并查看此 P 的 mcache 中相应的 mspan。
+//	   扫描 mspan 的免费位图以找到空闲 slot。如果有空闲 slot，则分配它。
+//	   这可以在不获取锁定的情况下完成。
 //	1. Round the size up to one of the small size classes
 //	   and look in the corresponding mspan in this P's mcache.
 //	   Scan the mspan's free bitmap to find a free slot.
@@ -139,7 +142,7 @@ const (
 	_TinySize      = 16
 	_TinySizeClass = int8(2)
 
-	_FixAllocChunk = 16 << 10               // Chunk size for FixAlloc
+	_FixAllocChunk = 16 << 10               // FixAlloc 一个 Chunk 的大小
 	_MaxMHeapList  = 1 << (20 - _PageShift) // Maximum page length for fixed-size list in MHeap.
 
 	// Per-P, 每个 order 对应栈所分割的缓存大小
@@ -1108,8 +1111,8 @@ func nextSampleNoFP() int32 {
 }
 
 type persistentAlloc struct {
-	base *notInHeap
-	off  uintptr
+	base *notInHeap // 空结构，内存首地址
+	off  uintptr    // 偏移量
 }
 
 var globalAlloc struct {
@@ -1117,13 +1120,13 @@ var globalAlloc struct {
 	persistentAlloc
 }
 
-// Wrapper around sysAlloc that can allocate small chunks.
-// There is no associated free operation.
-// Intended for things like function/type/debug-related persistent data.
-// If align is 0, uses default align (currently 8).
-// The returned memory will be zeroed.
+// sysAlloc 的一层封装，能够分配小的 chunk
+// 没有释放操作
+// 用于 函数、类型、调试相关的持久型数据分配。
+// 如果 align 为 0 则使用默认对其（当前为 8）
+// 返回的内存会被清零
 //
-// Consider marking persistentalloc'd types go:notinheap.
+// 考虑使此函数类型为 go:notinheap
 func persistentalloc(size, align uintptr, sysStat *uint64) unsafe.Pointer {
 	var p *notInHeap
 	systemstack(func() {
@@ -1132,8 +1135,7 @@ func persistentalloc(size, align uintptr, sysStat *uint64) unsafe.Pointer {
 	return unsafe.Pointer(p)
 }
 
-// Must run on system stack because stack growth can (re)invoke it.
-// See issue 9174.
+// 必须在系统栈上执行，因为栈增长可以（再）调用它。见 issue 9174
 //go:systemstack
 func persistentalloc1(size, align uintptr, sysStat *uint64) *notInHeap {
 	const (
@@ -1141,9 +1143,11 @@ func persistentalloc1(size, align uintptr, sysStat *uint64) *notInHeap {
 		maxBlock = 64 << 10 // VM reservation granularity is 64K on windows
 	)
 
+	// 不允许分配大小为 0 的空间
 	if size == 0 {
 		throw("persistentalloc: size == 0")
 	}
+	// 对齐数必须为 2 的指数、且不大于 PageSize
 	if align != 0 {
 		if align&(align-1) != 0 {
 			throw("persistentalloc: align is not a power of 2")
@@ -1152,21 +1156,26 @@ func persistentalloc1(size, align uintptr, sysStat *uint64) *notInHeap {
 			throw("persistentalloc: align is too large")
 		}
 	} else {
+		// 若未指定则默认为 8
 		align = 8
 	}
 
+	// 分配大内存：分配的大小如果超过最大的 block 大小，则直接调用 sysAlloc 进行分配
 	if size >= maxBlock {
 		return (*notInHeap)(sysAlloc(size, sysStat))
 	}
 
+	// 分配小内存：在 m 上进行
+	// 先获取 m
 	mp := acquirem()
 	var persistent *persistentAlloc
-	if mp != nil && mp.p != 0 {
+	if mp != nil && mp.p != 0 { // 如果能够获取到 m 且同时持有 p，则直接分配到 p 的 palloc 上
 		persistent = &mp.p.ptr().palloc
-	} else {
+	} else { // 否则就分配到全局的 globalAlloc.persistentAlloc 上
 		lock(&globalAlloc.mutex)
 		persistent = &globalAlloc.persistentAlloc
 	}
+	// 四舍五入 off 到 align 的倍数
 	persistent.off = round(persistent.off, align)
 	if persistent.off+size > chunk || persistent.base == nil {
 		persistent.base = (*notInHeap)(sysAlloc(chunk, &memstats.other_sys))
@@ -1192,13 +1201,12 @@ func persistentalloc1(size, align uintptr, sysStat *uint64) *notInHeap {
 	return p
 }
 
-// linearAlloc is a simple linear allocator that pre-reserves a region
-// of memory and then maps that region as needed. The caller is
-// responsible for locking.
+// linearAlloc 是一个简单的线性分配器，提前储备了内存的一块区域并在需要时指向该区域。
+// 调用方负责加锁。
 type linearAlloc struct {
-	next   uintptr // next free byte
-	mapped uintptr // one byte past end of mapped space
-	end    uintptr // end of reserved space
+	next   uintptr // 下一个可用的字节
+	mapped uintptr // 映射空间后的一个字节
+	end    uintptr // 保留空间的末尾
 }
 
 func (l *linearAlloc) init(base, size uintptr) {
@@ -1220,12 +1228,10 @@ func (l *linearAlloc) alloc(size, align uintptr, sysStat *uint64) unsafe.Pointer
 	return unsafe.Pointer(p)
 }
 
-// notInHeap is off-heap memory allocated by a lower-level allocator
-// like sysAlloc or persistentAlloc.
+// notInHeap 是类似于 sysAlloc 或 persistentAlloc 等底层分配器分配的堆外内存。
 //
-// In general, it's better to use real types marked as go:notinheap,
-// but this serves as a generic type for situations where that isn't
-// possible (like in the allocators).
+// 一般来说，最好使用标记为 go:notinheap 的实际类型，但这对于无法实现的情况
+// （如分配器中）则充当泛型类型。
 //
 // TODO: Use this as the return type of sysAlloc, persistentAlloc, etc?
 //

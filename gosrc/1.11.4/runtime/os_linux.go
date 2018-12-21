@@ -411,7 +411,7 @@ func setSignalstackSP(s *stackt, sp uintptr) {
 func (c *sigctxt) fixsigcode(sig uint32) {
 }
 
-// sysSigaction calls the rt_sigaction system call.
+// sysSigaction 调用了 rt_sigaction 系统调用.
 //go:nosplit
 func sysSigaction(sig uint32, new, old *sigactiont) {
 	if rt_sigaction(uintptr(sig), new, old, unsafe.Sizeof(sigactiont{}.sa_mask)) != 0 {
@@ -435,6 +435,6 @@ func sysSigaction(sig uint32, new, old *sigactiont) {
 	}
 }
 
-// rt_sigaction is implemented in assembly.
+// rt_sigaction 由汇编实现
 //go:noescape
 func rt_sigaction(sig uintptr, new, old *sigactiont, size uintptr) int32

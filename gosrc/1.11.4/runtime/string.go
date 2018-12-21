@@ -9,17 +9,14 @@ import (
 	"unsafe"
 )
 
-// The constant is known to the compiler.
-// There is no fundamental theory behind this number.
+// 该常量是编译器已知的，这个数字背后没有理论。
 const tmpStringBufSize = 32
 
 type tmpBuf [tmpStringBufSize]byte
 
-// concatstrings implements a Go string concatenation x+y+z+...
-// The operands are passed in the slice a.
-// If buf != nil, the compiler has determined that the result does not
-// escape the calling function, so the string data can be stored in buf
-// if small enough.
+// concatstrings 实现了一个 Go 字符串连接 x+y+z+...
+// 操作数在 slice a 中进行传递
+// 如果 buf != nil，则编译器确定结果不是转义调用函数，因此如果足够小，字符串数据可以存储在 buf 中。
 func concatstrings(buf *tmpBuf, a []string) string {
 	idx := 0
 	l := 0
@@ -40,9 +37,9 @@ func concatstrings(buf *tmpBuf, a []string) string {
 		return ""
 	}
 
-	// If there is just one string and either it is not on the stack
-	// or our result does not escape the calling frame (buf != nil),
-	// then we can return that string directly.
+	// 如果只有一个字符串，则它不再栈中
+	// 或者我们的记过没有逃脱调用帧（buf != nil）
+	// 然后我们可以直接返回该字符串
 	if count == 1 && (buf != nil || !stringDataOnStack(a[idx])) {
 		return a[idx]
 	}

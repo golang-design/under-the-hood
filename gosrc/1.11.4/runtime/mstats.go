@@ -12,19 +12,17 @@ import (
 	"unsafe"
 )
 
-// Statistics.
-// If you edit this structure, also edit type MemStats below.
-// Their layouts must match exactly.
+// 统计.
+// 如果你编辑此结构，则还需要同时修改下面的 MemStats 结构，他们的布局必须完全一致
 //
 // For detailed descriptions see the documentation for MemStats.
 // Fields that differ from MemStats are further documented here.
 //
-// Many of these fields are updated on the fly, while others are only
-// updated when updatememstats is called.
+// 很多字段都会被及时更新，其他则只会在 updatememstats 被调用时更新。
 type mstats struct {
-	// General statistics.
-	alloc       uint64 // bytes allocated and not yet freed
-	total_alloc uint64 // bytes allocated (even if freed)
+	// 一般统计
+	alloc       uint64 // 分配切还未释放的字节数
+	total_alloc uint64 // 分配的总字节数 (包含已释放的)
 	sys         uint64 // bytes obtained from system (should be sum of xxx_sys below, no locking, approximate)
 	nlookup     uint64 // number of pointer lookups (unused)
 	nmalloc     uint64 // number of mallocs
