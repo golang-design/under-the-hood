@@ -73,7 +73,6 @@ const (
 	wbBufEntryPointers = 2
 )
 
-// reset empties b by resetting its next and end pointers.
 // 通过重置 b 的 next 与 end 指针来清空 p
 func (b *wbBuf) reset() {
 	start := uintptr(unsafe.Pointer(&b.buf[0]))

@@ -2,12 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// This file implements runtime support for signal handling.
+// 本文实现了支持了运行时信号处理。
 //
-// Most synchronization primitives are not available from
-// the signal handler (it cannot block, allocate memory, or use locks)
-// so the handler communicates with a processing goroutine
-// via struct sig, below.
+// 信号的 handler 不支持大多数同步源语（无法阻塞、分配内存或使用锁）。
+// 因此 handler 间通过一个通过 sig 结构的 goroutine 进行处理，见下。
 //
 // sigsend is called by the signal handler to queue a new signal.
 // signal_recv is called by the Go program to receive a newly queued signal.
@@ -33,8 +31,8 @@ import (
 	_ "unsafe" // for go:linkname
 )
 
-// sig handles communication between the signal handler and os/signal.
-// Other than the inuse and recv fields, the fields are accessed atomically.
+// sig 处理了信号 handler 和 os/signal 包之间的通信。
+// 除了 inuse 和 recv 字段之外的其他字段均为原子访问。
 //
 // The wanted and ignored fields are only written by one goroutine at
 // a time; access is controlled by the handlers Mutex in os/signal.
@@ -220,7 +218,7 @@ func signal_disable(s uint32) {
 	atomic.Store(&sig.wanted[s/32], w)
 }
 
-// Must only be called from a single goroutine at a time.
+// 只能在某个时刻由一个 goroutine 调用
 //go:linkname signal_ignore os/signal.signal_ignore
 func signal_ignore(s uint32) {
 	if s >= uint32(len(sig.wanted)*32) {
@@ -247,7 +245,7 @@ func sigInitIgnored(s uint32) {
 	atomic.Store(&sig.ignored[s/32], i)
 }
 
-// Checked by signal handlers.
+// 由信号 handler 检查
 //go:linkname signal_ignored os/signal.signal_ignored
 func signal_ignored(s uint32) bool {
 	i := atomic.Load(&sig.ignored[s/32])

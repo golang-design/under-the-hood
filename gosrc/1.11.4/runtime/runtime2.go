@@ -376,7 +376,7 @@ type m struct {
 	mstartfn      func()
 	curg          *g       // 当前运行的用户 goroutine
 	caughtsig     guintptr // goroutine 在 fatal signal 中运行
-	p             puintptr // attached p for executing go code (nil if not executing go code)
+	p             puintptr // 执行 go 代码时持有的 p (如果没有执行则为 nil)
 	nextp         puintptr
 	id            int64
 	mallocing     int32

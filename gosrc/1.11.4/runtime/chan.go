@@ -129,9 +129,9 @@ func makechan(t *chantype, size int) *hchan {
 		panic(plainError("makechan: size out of range"))
 	}
 
-	// Hchan does not contain pointers interesting for GC when elements stored in buf do not contain pointers.
-	// buf points into the same allocation, elemtype is persistent.
-	// SudoG's are referenced from their owning thread so they can't be collected.
+	// Hchan 在当元素存储在 buf 切不包含指针时，不包含对 GC 感兴趣的指针，
+	// buf 指向了相同的分配区，elemtype 是持久的。
+	// SudoG 则被他们拥有的线程索引，因此他们无法被搜集。
 	// TODO(dvyukov,rlh): Rethink when collector can move allocated objects.
 	var c *hchan
 	switch {
