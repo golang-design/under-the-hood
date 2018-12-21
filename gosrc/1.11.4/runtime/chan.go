@@ -117,7 +117,7 @@ func makechan64(t *chantype, size int64) *hchan {
 func makechan(t *chantype, size int) *hchan {
 	elem := t.elem
 
-	// compiler checks this but be safe.
+	// 编译器检查
 	if elem.size >= 1<<16 {
 		throw("makechan: invalid channel element type")
 	}
@@ -146,7 +146,7 @@ func makechan(t *chantype, size int) *hchan {
 		c = (*hchan)(mallocgc(hchanSize+uintptr(size)*elem.size, nil, true))
 		c.buf = add(unsafe.Pointer(c), hchanSize)
 	default:
-		// Elements contain pointers.
+		// 元素包含指针
 		c = new(hchan)
 		c.buf = mallocgc(uintptr(size)*elem.size, elem, true)
 	}

@@ -1,7 +1,6 @@
-# 7 关键字: chan
+# 7 关键字: chan 与 select
 
 TODO:
-
 
 ## 许可
 
