@@ -29,9 +29,10 @@
 
 ### 那关注什么？
 
-本仓库主要关注与运行时相关的代码，例如 `runtime`/`cgo`/`sync`/`net`/`syscall` 等。
+本仓库主要关注与运行时相关的代码，例如 `runtime`/`cgo`/`sync`/`net`/`reflect`/`syscall`/`signal`/`time` 等。
 在极少数的情况下，会讨论不同平台下的差异，代码实验以 darwin 为基础，linux 为辅助关注点，其他平台几乎不关注。
-作为 Go 1.11 起引入的 `wasm` 特性，我们特别给 WebAssembly 平台以特别关注。
+作为 Go 1.11 起引入的 `wasm` 特性，我们特别给 WebAssembly 平台以特别关注。此外，
+还会统一的对 race/trace/pprof 等嵌入运行时的性能分析工具进行分析。
 
 所以，诸如 `crypto/database/regexp/strings/strconv/sort/container/unicode` 等一些运行时无关的标准库
 可能不在研究范围。
@@ -53,21 +54,21 @@
 1. [引导](content/1-boot.md)
 2. [初始化概览](content/2-init.md)
 3. [主 goroutine 生命周期](content/3-main.md)
-4. 内存分配器
+4. 内存分配器: alloc
     - [基本知识](content/4-mem/basic.md)
     - [TCMalloc](content/4-mem/tcmalloc.md)
     - [初始化](content/4-mem/init.md)
     - [分配过程](content/4-mem/alloc.md)
-5. 调度器
+5. 调度器: sched
     - [基本知识](content/5-sched/basic.md)
     - [初始化](content/5-sched/init.md)
     - [调度执行](content/5-sched/exec.md)
     - [系统监控](content/5-sched/sysmon.md)
     - [调度理论](content/5-sched/theory.md)
-6. 垃圾回收器
-    - [基本知识](content/6-gc/basic.md)
-    - [初始化](content/6-gc/init.md)
-    - [三色标记法](content/6-gc/mark.md)
+6. 垃圾回收器：GC
+    - [基本知识](content/6-GC/basic.md)
+    - [初始化](content/6-GC/init.md)
+    - [三色标记法](content/6-GC/mark.md)
 7. 关键字
     - [`go`](content/7-lang/go.md)
     - [`defer`](content/7-lang/defer.md)
@@ -89,10 +90,20 @@
     - [`sync.WaitGroup`](content/11-pkg/sync/waitgroup.md)
     - [`sync.Mutex`](content/11-pkg/sync/mutex.md)
     - [`sync.Cond`](content/11-pkg/sync/cond.md)
-    - [`atomic`](content/11-pkg/atomic/atomic.md)
-    - `net`
+    - [`atomic.*`](content/11-pkg/atomic/atomic.md)
+    - [`syscall`](content/11-pkg/syscall/syscall.md)
+    - [`reflect`](content/11-pkg/reflect/reflect.md)
+    - [`net`](content/11-pkg/net/net.md)
+    - [`time`](content/11-pkg/time/time.md)
 12. [WebAssembly](content/12-wasm.md)
-13. 附录
+13. [race 竞争检测](content/13-race.md)
+14. [trace 运行追踪](content/14-trace.md)
+15. Go 编译器: gc
+    - [词法与文法](content/15-compile/parse.md)
+    - [类型系统](content/15-compile/type.md)
+    - [编译后端 SSA](content/15-compile/ssa.md)
+16. 附录
+    - [源码索引](content/index.md)
     - [基于工作窃取的多线程计算调度](papers/sched/work-steal-sched.md)
     - [Go 运行时编程](gosrc/1.11.4/runtime/README.md)
 

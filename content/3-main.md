@@ -1,5 +1,11 @@
 # 3 主 goroutine 生命周期
 
+本文涉及的 Go 源码包括以下文件：
+
+```
+src/runtime/proc.go
+```
+
 `runtime·schedinit` 完成初始化工作后并不会立即执行 `runtime·main`（即主 goroutine 运行的地方）。
 相反，会在后续的 `runtime·mstart` 调用中被调度器调度执行。
 

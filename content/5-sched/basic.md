@@ -1,5 +1,11 @@
 # 5 调度器: 基本知识
 
+本文涉及的 Go 源码包括以下文件：
+
+```
+src/runtime/runtime2.go
+```
+
 在详细进入代码之前，我们了解一下调度器的设计原则及一些基本概念来建立较为宏观的认识。
 运行时调度器的任务是给不同的工作线程 (worker thread) 分发 ready-to-run goroutine。
 
@@ -338,7 +344,7 @@ type stack struct {
 }
 ```
 
-`sudog` 用于组织产生阻塞的 g （例如进入系统调用）：
+`sudog` 用于组织产生阻塞的 g（例如在 channel 上阻塞）：
 
 ```go
 // sudog 表示了一个等待队列中的 g，例如在一个 channel 中进行发送和接受
@@ -453,7 +459,8 @@ type schedt struct {
 - 管理了需要在 safe point 时执行的函数
 - 统计了(极少发生的)动态调整 P 所花的时间
 
-其中 `muintptr` 本质上就是 `uintptr`，在 [9 unsafe 范式](../9-unsafe) 中我们知道，因为栈会发生移动，uintptr 在 safe point 之外是不能被局部持有的，所以 `muintptr` 的使用必须非常小心：
+其中 `muintptr` 本质上就是 `uintptr`，在 [9 unsafe 范式](../9-unsafe) 中我们知道，
+因为栈会发生移动，uintptr 在 safe point 之外是不能被局部持有的，所以 `muintptr` 的使用必须非常小心：
 
 ```go
 // muintptr 是一个 *m 指针，不受 GC 的追踪

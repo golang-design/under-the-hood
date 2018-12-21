@@ -1,6 +1,10 @@
 # 2 初始化概览
 
-书说上回，本节简单讨论程序初始化工作，即 `runtime.schedinit`。
+书说上回，本节简单讨论程序初始化工作，即 `runtime.schedinit`。本文涉及的 Go 源码包括以下文件：
+
+```
+src/runtime/proc.go
+```
 
 ```go
 // 启动顺序

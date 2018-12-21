@@ -35,8 +35,8 @@ type hchan struct {
 	elemtype *_type // 元素类型
 	sendx    uint   // 发送索引
 	recvx    uint   // 接受索引
-	recvq    waitq  // recv 等待列表
-	sendq    waitq  // send 等待列表
+	recvq    waitq  // recv 等待列表，即（ <-chan）
+	sendq    waitq  // send 等待列表，即（ ch<- ）
 
 	// lock 保护了 hchan 的所有字段，以及在此 channel 上阻塞的 sudog 的一些字段
 	//
