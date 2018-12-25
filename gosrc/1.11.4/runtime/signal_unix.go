@@ -663,7 +663,7 @@ func sigfwdgo(sig uint32, info *siginfo, ctx unsafe.Pointer) bool {
 	return true
 }
 
-// msigsave 将当前线程的 signal mast 保存到 mp.sigmask。
+// msigsave 将当前线程的 signal mask 保存到 mp.sigmask。
 // 当一个非 Go 线程调用 Go 函数时，用于保留非 Go signal mask。
 // 这个函数是 nosplit 和 nowritebarrierrec 的，因为它由 needm 调用，即
 // 在一个非 Go 线程上调用时候，没有 G。

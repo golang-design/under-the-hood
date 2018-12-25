@@ -96,7 +96,7 @@ var mainStarted bool
 // runtimeInitTime is the nanotime() at which the runtime started.
 var runtimeInitTime int64
 
-// Value to use for signal mask for newly created M's.
+// 用于新创建的 M 的信号掩码 signal mask 的值。
 var initSigmask sigset
 
 // 主 goroutine
@@ -493,8 +493,7 @@ func cpuinit() {
 	if haveexperiment("debugcpu") && (GOOS == "linux" || GOOS == "darwin") {
 		internal_cpu_debugOptions = true
 
-		// Similar to goenv_unix but extracts the environment value for
-		// GODEBUGCPU directly.
+		// 类似于 goenv_unix 但为 GODEBUGCPU 直接提取了环境变量
 		// TODO(moehrmann): remove when general goenvs() can be called before cpuinit()
 		n := int32(0)
 		for argv_index(argv, argc+1+n) != nil {
@@ -534,8 +533,8 @@ func schedinit() {
 	_g_ := getg()
 
 	// 不重要，race 检查有关
-	// raceinit must be the first call to race detector.
-	// In particular, it must be done before mallocinit below calls racemapshadow.
+	// raceinit 必须受限调用竞争检查器 race detector
+	// 特别的，它必须在 mallocinit 下面的 racemapshadow 之前完成。
 	if raceenabled {
 		_g_.racectx, raceprocctx0 = raceinit()
 	}
@@ -545,6 +544,8 @@ func schedinit() {
 
 	// 不重要，与 trace 有关
 	tracebackinit()
+
+	// 模块数据验证
 	moduledataverify()
 
 	// 栈、内存分配器、调度器相关初始化。
@@ -562,12 +563,12 @@ func schedinit() {
 	// 模块加载相关的初始化
 	modulesinit()   // 模块链接，提供 activeModules
 	typelinksinit() // 使用 maps, activeModules
-	itabsinit()     // 使用 activeModules
+	itabsinit()     // 初始化 interface table，使用 activeModules
 
 	msigsave(_g_.m)
 	initSigmask = _g_.m.sigmask
 
-	// 处理命令行参数和环境变量
+	// 处理y命令行用户参数和环境变量
 	goargs()
 	goenvs()
 
@@ -577,6 +578,7 @@ func schedinit() {
 	// 垃圾回收器初始化
 	gcinit()
 
+	// 网络的上次轮询时间
 	sched.lastpoll = uint64(nanotime())
 
 	// 通过 CPU 核心数和 GOMAXPROCS 环境变量确定 P 的数量
@@ -5236,7 +5238,7 @@ func setMaxThreads(in int) (out int) {
 
 func haveexperiment(name string) bool {
 	if name == "framepointer" {
-		return framepointer_enabled // set by linker
+		return framepointer_enabled // 通过链接器设置
 	}
 	x := sys.Goexperiment
 	for x != "" {

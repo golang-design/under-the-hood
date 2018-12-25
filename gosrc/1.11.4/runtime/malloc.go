@@ -312,12 +312,10 @@ const (
 	minLegalPointer uintptr = 4096
 )
 
-// physPageSize is the size in bytes of the OS's physical pages.
-// Mapping and unmapping operations must be done at multiples of
-// physPageSize.
+// physPageSize 是操作系统的物理页字节大小。内存页的映射和反映射操作必须以
+// physPageSize 的整数倍完成
 //
-// This must be set by the OS init code (typically in osinit) before
-// mallocinit.
+// 它必须在操作系统初始化代码中、mallocinit 之前进行设置（通常在 osinit）
 var physPageSize uintptr
 
 // OS-defined helpers: 操作系统级别的辅助函数

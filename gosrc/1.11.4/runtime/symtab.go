@@ -379,11 +379,10 @@ const (
 	funcID_debugCallV1
 )
 
-// moduledata records information about the layout of the executable
-// image. It is written by the linker. Any changes here must be
-// matched changes to the code in cmd/internal/ld/symtab.go:symtab.
-// moduledata is stored in statically allocated non-pointer memory;
-// none of the pointers here are visible to the garbage collector.
+// moduledata 记录有关可执行映像布局的信息。它由链接器编写。
+// 此处的任何更改必须与 cmd/internal/ld/ symtab.go:symtab 中的代码匹配更改。
+// moduledata 存储在静态分配的非指针内存中;
+// 这里没有任何指针对垃圾收集器可见。
 type moduledata struct {
 	pclntable    []byte
 	ftab         []functab
@@ -400,7 +399,7 @@ type moduledata struct {
 	types, etypes         uintptr
 
 	textsectmap []textsect
-	typelinks   []int32 // offsets from types
+	typelinks   []int32 // 类型偏移
 	itablinks   []*itab
 
 	ptab []ptabEntry
@@ -411,13 +410,13 @@ type moduledata struct {
 	modulename   string
 	modulehashes []modulehash
 
-	hasmain uint8 // 1 if module contains the main function, 0 otherwise
+	hasmain uint8 // 如果模块包含 main 函数，则为1，否则为 0
 
 	gcdatamask, gcbssmask bitvector
 
-	typemap map[typeOff]*_type // offset to *_rtype in previous module
+	typemap map[typeOff]*_type // 在前一个模块中偏移到 *_rtype
 
-	bad bool // module failed to load and should be ignored
+	bad bool // 如果模块加载失败，应该被忽略
 
 	next *moduledata
 }
@@ -449,8 +448,8 @@ type modulehash struct {
 // To make sure the map isn't collected, we keep a second reference here.
 var pinnedTypemaps []map[typeOff]*_type
 
-var firstmoduledata moduledata  // linker symbol
-var lastmoduledatap *moduledata // linker symbol
+var firstmoduledata moduledata  // 链接器符号
+var lastmoduledatap *moduledata // 链接器符号
 var modulesSlice *[]*moduledata // see activeModules
 
 // activeModules 返回 active module 的 slice
@@ -561,6 +560,8 @@ func moduledataverify1(datap *moduledata) {
 	// See golang.org/s/go12symtab for header: 0xfffffffb,
 	// two zero bytes, a byte giving the PC quantum,
 	// and a byte giving the pointer width in bytes.
+	// 关于 header，请参阅 golang.org/s/go12symtab：
+	// 0xfffffffb，两个零字节，一个给出 PC 量子的字节，和一个以字节为单位给出指针宽度的字节。
 	pcln := *(**[8]byte)(unsafe.Pointer(&datap.pclntable))
 	pcln32 := *(**[2]uint32)(unsafe.Pointer(&datap.pclntable))
 	if pcln32[0] != 0xfffffffb || pcln[4] != 0 || pcln[5] != 0 || pcln[6] != sys.PCQuantum || pcln[7] != sys.PtrSize {

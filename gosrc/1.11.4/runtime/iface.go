@@ -13,7 +13,7 @@ import (
 const itabInitSize = 512
 
 var (
-	itabLock      mutex                               // lock for accessing itab table
+	itabLock      mutex                               // 访问 itab 表的锁
 	itabTable     = &itabTableInit                    // pointer to current table
 	itabTableInit = itabTableType{size: itabInitSize} // starter table
 )

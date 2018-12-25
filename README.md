@@ -57,11 +57,14 @@
 12. [WebAssembly](content/12-wasm.md)
 13. [race 竞争检测](content/13-race.md)
 14. [trace 运行追踪](content/14-trace.md)
-15. Go 编译器: gc
-    - [词法与文法](content/15-compile/parse.md)
-    - [类型系统](content/15-compile/type.md)
-    - [编译后端 SSA](content/15-compile/ssa.md)
-16. 附录
+15. Go 模块链接器
+    - [初始化](content/15-linker/init.md)
+    - [模块链接](content/15-linker/link.md)
+16. Go 编译器: gc
+    - [词法与文法](content/16-compile/parse.md)
+    - [类型系统](content/16-compile/type.md)
+    - [编译后端 SSA](content/16-compile/ssa.md)
+17. 附录
     - [源码索引](content/index.md)
     - [基于工作窃取的多线程计算调度](papers/sched/work-steal-sched.md)
     - [Go 运行时编程](gosrc/1.11.4/runtime/README.md)

@@ -300,6 +300,6 @@ func initAlgAES() {
 	algarray[alg_MEM32].hash = aeshash32
 	algarray[alg_MEM64].hash = aeshash64
 	algarray[alg_STRING].hash = aeshashstr
-	// 使用随机数据初始化，从而使哈希冲突攻击变得困难。
+	// 使用随机数据初始化，从而使哈希碰撞攻击变得困难。
 	getRandomData(aeskeysched[:])
 }

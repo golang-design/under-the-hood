@@ -80,7 +80,8 @@ TEXT main.write(SB) /Users/changkun/dev/go-under-the-hood/demo/7-lang/map/main.g
 
 可以看到运行时通过 `runtime.mapassign_fast64` 来给一个 map 进行赋值。那么我们就来仔细看一看这个函数。
 
-TODO:
+TODO: `runtime.extendRandom`
+
 
 ## 许可
 
