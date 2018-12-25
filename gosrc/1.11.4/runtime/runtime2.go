@@ -610,8 +610,8 @@ type itab struct {
 	fun   [1]uintptr // variable sized. fun[0]==0 means _type does not implement inter.
 }
 
-// Lock-free stack node.
-// // Also known to export_test.go.
+// lock-free 栈节点
+// 还用于 export_test.go.
 type lfnode struct {
 	next    uint64
 	pushcnt uintptr
@@ -627,14 +627,13 @@ type forcegcstate struct {
 // the ELF AT_RANDOM auxiliary vector (vdso_linux_amd64.go or os_linux_386.go).
 var startupRandomData []byte
 
-// extendRandom extends the random numbers in r[:n] to the whole slice r.
-// Treats n<0 as n==0.
+// extendRandom 将 r[:n] 中的随机数扩展到整个切片 r。 将 n<0 视为 n==0。
 func extendRandom(r []byte, n int) {
 	if n < 0 {
 		n = 0
 	}
 	for n < len(r) {
-		// Extend random bits using hash function & time seed
+		// 使用散列函数和时间种子扩展随机位
 		w := n
 		if w > 16 {
 			w = 16

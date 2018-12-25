@@ -225,16 +225,17 @@ type mSpanList struct {
 	last  *mspan // last span in list, or nil if none
 }
 
+// mspan 是 mSpanList 的一个节点
 //go:notinheap
 type mspan struct { // 双向链表
-	next *mspan     // next span in list, or nil if none
-	prev *mspan     // previous span in list, or nil if none
-	list *mSpanList // For debugging. TODO: Remove.
+	next *mspan     // 链表中的下一个 span，如果为空则为 nil
+	prev *mspan     // 链表中的前一个 span，如果为空则为 nil
+	list *mSpanList // 用于调试
 
-	startAddr uintptr // address of first byte of span aka s.base()
+	startAddr uintptr // span 的第一个字节的地址，即 s.base()
 	npages    uintptr // 一个 span 中的 page 数量
 
-	manualFreeList gclinkptr // list of free objects in _MSpanManual spans
+	manualFreeList gclinkptr // _MSpanManual span 的释放对象链表
 
 	// freeindex is the slot index between 0 and nelems at which to begin scanning
 	// for the next free object in this span.
@@ -254,14 +255,11 @@ type mspan struct { // 双向链表
 	freeindex uintptr
 	// TODO: Look up nelems from sizeclass and remove this field if it
 	// helps performance.
-	nelems uintptr // number of object in the span.
+	nelems uintptr // span 中对象的数量
 
-	// Cache of the allocBits at freeindex. allocCache is shifted
-	// such that the lowest bit corresponds to the bit freeindex.
-	// allocCache holds the complement of allocBits, thus allowing
-	// ctz (count trailing zero) to use it directly.
-	// allocCache may contain bits beyond s.nelems; the caller must ignore
-	// these.
+	// freeindex 上的 allocBits 缓存。allocCache 进行了移位使其最低位对应于 freeindex 位。
+	// allocCache 保存 allocBits 的补码，因此允许 ctz （计数尾零）直接使用它。
+	// allocCache 可能包含 s.nelems 之外的位，调用者必须忽略它们。
 	allocCache uint64
 
 	// allocBits and gcmarkBits hold pointers to a span's mark and
@@ -289,11 +287,11 @@ type mspan struct { // 双向链表
 	allocBits  *gcBits
 	gcmarkBits *gcBits
 
-	// sweep generation:
-	// if sweepgen == h->sweepgen - 2, the span needs sweeping
-	// if sweepgen == h->sweepgen - 1, the span is currently being swept
-	// if sweepgen == h->sweepgen, the span is swept and ready to use
-	// h->sweepgen is incremented by 2 after every GC
+	// sweep 代:
+	// 如果 sweepgen == h->sweepgen - 2, 则 span 需要扫描
+	// 如果 sweepgen == h->sweepgen - 1, 则 span 正在被扫描
+	// 如果 sweepgen == h->sweepgen, 则 span 已经被扫描可以被使用
+	// h->sweepgen 每次 GC 后都增加 2
 
 	sweepgen    uint32
 	divMul      uint16     // for divide by elemsize - divMagic.mul

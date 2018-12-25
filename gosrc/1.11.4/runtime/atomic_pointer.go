@@ -9,15 +9,12 @@ import (
 	"unsafe"
 )
 
-// These functions cannot have go:noescape annotations,
-// because while ptr does not escape, new does.
-// If new is marked as not escaping, the compiler will make incorrect
-// escape analysis decisions about the pointer value being stored.
-// Instead, these are wrappers around the actual atomics (casp1 and so on)
-// that use noescape to convey which arguments do not escape.
+// 这些函数不能拥有 go:noescape 标记，因为虽然 ptr 没有逃逸，但是 new 会逃逸。
+// 如果 new 被标记为非逃逸，则编译器将不正确的对该指针变量存储的值进行逃逸分析决策。
+// 相反，他们实际上是围绕原子 (casp1 等) 的封装，它们使用 noescape 来传递哪些参数不会逃逸。
 
-// atomicwb performs a write barrier before an atomic pointer write.
-// The caller should guard the call with "if writeBarrier.enabled".
+// atomicwb 在原子指针写入之前执行 write barrier，调用方应使用 "if writeBarrier.enabled" 对调用
+// 进行保护
 //
 //go:nosplit
 func atomicwb(ptr *unsafe.Pointer, new unsafe.Pointer) {
