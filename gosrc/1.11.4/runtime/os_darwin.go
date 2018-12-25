@@ -77,10 +77,9 @@ func semawakeup(mp *m) {
 	pthread_mutex_unlock(&mp.mutex)
 }
 
-// BSD interface for threading.
+// BSD 接口作线程操作
 func osinit() {
-	// pthread_create delayed until end of goenvs so that we
-	// can look at the environment first.
+	// pthread_create 推迟到 goenvs 末尾，从而可以先检查环境
 
 	ncpu = getncpu()
 	physPageSize = getPageSize()
@@ -105,7 +104,7 @@ func getncpu() int32 {
 }
 
 func getPageSize() uintptr {
-	// Use sysctl to fetch hw.pagesize.
+	// 使用 sysctl 来获取 hw.pagesize.
 	mib := [2]uint32{_CTL_HW, _HW_PAGESIZE}
 	out := uint32(0)
 	nout := unsafe.Sizeof(out)

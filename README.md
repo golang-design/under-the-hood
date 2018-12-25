@@ -8,7 +8,7 @@
 
 [引言](content/preface.md)
 
-1. [引导](content/1-boot.md)
+1. [程序引导](content/1-boot.md)
 2. [初始化概览](content/2-init.md)
 3. [主 goroutine 生命周期](content/3-main.md)
 4. 内存分配器: alloc
@@ -38,6 +38,8 @@
     - [`runtime.SetFinalizer` 与 `runtime.KeepAlive`](content/8-runtime/finalizer.md)
     - [`runtime.LockOSThread` 与 `runtime.UnlockOSThread`](content/8-runtime/lockosthread.md)
     - [`runtime.note` 与 `runtime.mutex`](content/8-runtime/note.md)
+    - [参与运行时的系统调用: darwin](content/8-runtime/syscall-darwin.md)
+    - [参与运行时的系统调用: linux](content/8-runtime/syscall-linux.md)
 9. [`unsafe`](content/9-unsafe.md)
 10. [`cgo`](content/10-cgo.md)
 11. 依赖运行时的标准库

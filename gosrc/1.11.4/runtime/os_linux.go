@@ -202,28 +202,34 @@ func mincore(addr unsafe.Pointer, n uintptr, dst *byte) int32
 func sysargs(argc int32, argv **byte) {
 	n := argc + 1
 
-	// skip over argv, envp to get to auxv
+	// 跳过 argv, envp 来获取 auxv
 	for argv_index(argv, n) != nil {
 		n++
 	}
 
-	// skip NULL separator
+	// 跳过 NULL 分隔符
 	n++
 
-	// now argv+n is auxv
+	// 现在 argv+n 即为 auxv
 	auxv := (*[1 << 28]uintptr)(add(unsafe.Pointer(argv), uintptr(n)*sys.PtrSize))
+
+	// 如果此时 auxv 读取成功，则直接返回
 	if sysauxv(auxv[:]) != 0 {
 		return
 	}
-	// In some situations we don't get a loader-provided
-	// auxv, such as when loaded as a library on Android.
-	// Fall back to /proc/self/auxv.
+	// 某些情况下，我们无法获取装载器提供的 auxv，例如 Android 上的装载器
+	// 为一个库文件。这时退回到 /proc/self/auxv
+	// 使用 open 系统调用打开文件
 	fd := open(&procAuxv[0], 0 /* O_RDONLY */, 0)
+
+	// 若 /proc/self/auxv 打开也失败了
 	if fd < 0 {
-		// On Android, /proc/self/auxv might be unreadable (issue 9229), so we fallback to
-		// try using mincore to detect the physical page size.
-		// mincore should return EINVAL when address is not a multiple of system page size.
-		const size = 256 << 10 // size of memory region to allocate
+		// 在 Android 下，/proc/self/auxv 可能不可读取（见 #9229），因此我们再回退到
+		// 通过 mincore 来检测物理页的大小。
+		// mincore 会在地址不是系统页大小的倍数时返回 EINVAL。
+		const size = 256 << 10 // 需要分配的内存大小
+
+		// 使用 mmap 系统调用分配内存
 		p, err := mmap(nil, size, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_PRIVATE, -1, 0)
 		if err != 0 {
 			return
@@ -232,44 +238,52 @@ func sysargs(argc int32, argv **byte) {
 		for n = 4 << 10; n < size; n <<= 1 {
 			err := mincore(unsafe.Pointer(uintptr(p)+n), 1, &addrspace_vec[0])
 			if err == 0 {
+				// 如果没有出现错误，则说明此时的 n 是系统内存页的整数倍，我们便已第一次拿到的 n 作为 go 运行时的
+				// 物理页的大小
 				physPageSize = n
 				break
 			}
 		}
+		// 如果遍历完后仍然无法得到物理页的大小，则直接以 size 的大小作为物理页的大小。
 		if physPageSize == 0 {
 			physPageSize = size
 		}
+		// 使用 munmap 释放分配的内存，这时已经确定好系统页的大小，直接返回。
 		munmap(p, size)
 		return
 	}
+
+	// 打开文件成功，我们从文件中读取 auxv 信息。
 	var buf [128]uintptr
 	n = read(fd, noescape(unsafe.Pointer(&buf[0])), int32(unsafe.Sizeof(buf)))
 	closefd(fd)
 	if n < 0 {
 		return
 	}
-	// Make sure buf is terminated, even if we didn't read
-	// the whole file.
+	// 即便我们无法读取整个文件，也要确保 buf 已经被终止
 	buf[len(buf)-2] = _AT_NULL
-	sysauxv(buf[:])
+	sysauxv(buf[:]) // 调用并确定物理页的大小，读取 vdso 表
 }
 
 func sysauxv(auxv []uintptr) int {
 	var i int
+	// 依次读取 auxv 键值对
 	for ; auxv[i] != _AT_NULL; i += 2 {
 		tag, val := auxv[i], auxv[i+1]
 		switch tag {
 		case _AT_RANDOM:
-			// The kernel provides a pointer to 16-bytes
-			// worth of random data.
+			// 内核提供了一个指针，指向16字节的随机数据
 			startupRandomData = (*[16]byte)(unsafe.Pointer(val))[:]
 
 		case _AT_PAGESZ:
+			// 读取内存页的大小
 			physPageSize = val
+			// 这里其实也可能出现无法读取到物理页大小的情况，但后续再内存分配器初始化的时候还会对
+			// physPageSize 的大小进行检查，如果读取失败则无法运行程序，从而抛出运行时错误
 		}
 
-		archauxv(tag, val)
-		vdsoauxv(tag, val)
+		archauxv(tag, val) // amd64 下什么也不做的空函数
+		vdsoauxv(tag, val) // 读取 vdso 表
 	}
 	return i / 2
 }

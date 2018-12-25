@@ -28,15 +28,20 @@ TODO: 补全
     │   ├── proc.go
     │   ├── stack.go
 
-    // mem
-    │   ├── lfstack.go
-    │   ├── lfstack_64bit.go
+    // mem                               4-mem/*.md
     │   ├── malloc.go
-    │   ├── mbarrier.go
-    │   ├── mbitmap.go
     │   ├── mcache.go
     │   ├── mcentral.go
     │   ├── mprof.go
+    │   ├── mfixalloc.go
+    │   ├── mheap.go
+    │   ├── mmap.go
+    │   ├── msize.go
+    │   ├── mstats.go
+    │   ├── mkduff.go
+    │   ├── duff_amd64.s
+    │   ├── mksizeclasses.go
+    │   ├── sizeclasses.go
     │   ├── mem_darwin.go
     │   ├── mem_js.go
     │   ├── mem_linux.go
@@ -44,19 +49,9 @@ TODO: 补全
     │   ├── memclr_wasm.s
     │   ├── memmove_amd64.s
     │   ├── memmove_wasm.s
-    │   ├── mfixalloc.go
-    │   ├── mheap.go
-    │   ├── mkduff.go
-    │   ├── duff_amd64.s
-    │   ├── mksizeclasses.go
-    │   ├── sizeclasses.go
-    │   ├── mmap.go
     │   ├── msan.go
     │   ├── msan0.go
     │   ├── msan_amd64.s
-    │   ├── msize.go
-    │   ├── mstats.go
-    │   ├── mwbbuf.go
 
     // GC                                 6-GC/*.md
     │   ├── mgc.go
@@ -65,6 +60,11 @@ TODO: 补全
     │   ├── mgcsweep.go
     │   ├── mgcsweepbuf.go
     │   ├── mgcwork.go
+    │   ├── mbarrier.go
+    │   ├── mwbbuf.go
+    │   ├── mbitmap.go
+    │   ├── lfstack.go
+    │   ├── lfstack_64bit.go
 
     // common
     │   ├── asm.s
