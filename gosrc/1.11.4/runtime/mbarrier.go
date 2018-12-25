@@ -2,14 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Garbage collector: write barriers.
+// 垃圾回收器：写屏障（write barrier）
 //
-// For the concurrent garbage collector, the Go compiler implements
-// updates to pointer-valued fields that may be in heap objects by
-// emitting calls to write barriers. The main write barrier for
-// individual pointer writes is gcWriteBarrier and is implemented in
-// assembly. This file contains write barrier entry points for bulk
-// operations. See also mwbbuf.go.
+// 对于并发 GC，go 编译器通过调用 write barrier 来实现对可能在堆对象中的指针值字段更新。
+// 单个指针写入的主要 write barrier 是 gcWriteBarrier，并在汇编中实现。
+// 此文件包含 bulk 操作的 write barrier，另见 mwbbuf.go。
 
 package runtime
 
@@ -18,12 +15,10 @@ import (
 	"unsafe"
 )
 
-// Go uses a hybrid barrier that combines a Yuasa-style deletion
-// barrier—which shades the object whose reference is being
-// overwritten—with Dijkstra insertion barrier—which shades the object
-// whose reference is being written. The insertion part of the barrier
-// is necessary while the calling goroutine's stack is grey. In
-// pseudocode, the barrier is:
+// Go 使用了一个混合屏障（hybrid barrier），它结合了 Yuasa 风格的
+// 删除屏障（deletion barrier）[对需要覆盖其引用的对象进行着色] 和
+// Dijkstra 风格的插入屏障（insertion barrier）[对正在写入其引用的对象进行着色]。
+// 调用的 goroutine 栈是灰色时，插入部分的 barrier 是必要的，伪代码如下：
 //
 //     writePointer(slot, ptr):
 //         shade(*slot)
@@ -31,38 +26,29 @@ import (
 //             shade(ptr)
 //         *slot = ptr
 //
-// slot is the destination in Go code.
-// ptr is the value that goes into the slot in Go code.
+// 在 Go 代码中：
+//   slot 是 dst
+//   ptr 是进入 slot 的 src
 //
-// Shade indicates that it has seen a white pointer by adding the referent
-// to wbuf as well as marking it.
+// shade 表示 通过对 wbuf 添加引用并标记它已经观察到了白色指针。
 //
-// The two shades and the condition work together to prevent a mutator
-// from hiding an object from the garbage collector:
+// 两个 shade 以及条件语句一起工作来防止 mutator 隐藏垃圾搜集器中的对象：
 //
-// 1. shade(*slot) prevents a mutator from hiding an object by moving
-// the sole pointer to it from the heap to its stack. If it attempts
-// to unlink an object from the heap, this will shade it.
+// 1. shade(*slot) 通过将一个指针从堆移动到栈 来防止 mutator 一个对象。
+//    如果它视图从堆中取消链接，则会进行着色。
 //
-// 2. shade(ptr) prevents a mutator from hiding an object by moving
-// the sole pointer to it from its stack into a black object in the
-// heap. If it attempts to install the pointer into a black object,
-// this will shade it.
+// 2. shade(ptr) 通过将一个对象从栈移动到堆的黑色对象来防止 mutator 隐藏对象。
+//    如果它尝试将指针安插在黑色对象中，将对其着色。
 //
-// 3. Once a goroutine's stack is black, the shade(ptr) becomes
-// unnecessary. shade(ptr) prevents hiding an object by moving it from
-// the stack to the heap, but this requires first having a pointer
-// hidden on the stack. Immediately after a stack is scanned, it only
-// points to shaded objects, so it's not hiding anything, and the
-// shade(*slot) prevents it from hiding any other pointers on its
-// stack.
+// 3. 一旦 goroutine 栈为黑色，shade(ptr) 便不必要了。shade(ptr) 通过将对象从栈
+//    移动到堆来防止隐藏对象，但这需要首先在堆上隐藏指针。扫描堆后，它立即只指向着色对象，
+//    因此它不会隐藏任何内容，并且 shade(*slot) 可以防止它隐藏其堆上任何其他指针。
 //
-// For a detailed description of this barrier and proof of
-// correctness, see https://github.com/golang/proposal/blob/master/design/17503-eliminate-rescan.md
+// 关于此屏障的细节描述和正确性证明，请参考：https://github.com/golang/proposal/blob/master/design/17503-eliminate-rescan.md
 //
 //
 //
-// Dealing with memory ordering:
+// 处理内存顺序:
 //
 // Both the Yuasa and Dijkstra barriers can be made conditional on the
 // color of the object containing the slot. We chose not to make these
@@ -117,7 +103,7 @@ import (
 // stack frames that have not been active.
 //
 //
-// Global writes:
+// 全局写(global writes):
 //
 // The Go garbage collector requires write barriers when heap pointers
 // are stored in globals. Many garbage collectors ignore writes to

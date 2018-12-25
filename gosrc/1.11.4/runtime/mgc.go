@@ -156,19 +156,18 @@ func gcinit() {
 		throw("size of Workbuf is suboptimal")
 	}
 
-	// No sweep on the first cycle.
+	// 第一个周期没有扫描。
 	mheap_.sweepdone = 1
 
-	// Set a reasonable initial GC trigger.
+	// 设置合理的初始 GC 触发比率。
 	memstats.triggerRatio = 7 / 8.0
 
-	// Fake a heap_marked value so it looks like a trigger at
-	// heapminimum is the appropriate growth from heap_marked.
-	// This will go into computing the initial GC goal.
+	// 伪造一个 heap_marked 值，使它看起来像一个触发器
+	// heapminimum 是 heap_marked的 适当增长。
+	// 这将用于计算初始 GC 目标。
 	memstats.heap_marked = uint64(float64(heapminimum) / (1 + memstats.triggerRatio))
 
-	// Set gcpercent from the environment. This will also compute
-	// and set the GC trigger and goal.
+	// 从环境中设置 gcpercent。这也将计算并设置 GC 触发器和目标。
 	_ = setGCPercent(readgogc())
 
 	work.startSema = 1

@@ -2,23 +2,18 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// This implements the write barrier buffer. The write barrier itself
-// is gcWriteBarrier and is implemented in assembly.
+// 此文件实现了写屏障缓存（write barrier buffer）。
+// write barrier 自身为 gcWriteBarrier，并在汇编中实现。
 //
-// See mbarrier.go for algorithmic details on the write barrier. This
-// file deals only with the buffer.
+// 关于 write barrier 算法的细节信息，请参考 mbarrier.go，此文件仅处理其 buffer。
 //
-// The write barrier has a fast path and a slow path. The fast path
-// simply enqueues to a per-P write barrier buffer. It's written in
-// assembly and doesn't clobber any general purpose registers, so it
-// doesn't have the usual overheads of a Go call.
+// write barrier 具有 fast path 和 slow path。fast path 简单的入队到一个 per-P 的
+// write barrier buffer 中。由汇编写成，不会破坏任何通用寄存器，因此它没有通常的 Go 调用开销。
 //
-// When the buffer fills up, the write barrier invokes the slow path
-// (wbBufFlush) to flush the buffer to the GC work queues. In this
-// path, since the compiler didn't spill registers, we spill *all*
-// registers and disallow any GC safe points that could observe the
-// stack frame (since we don't know the types of the spilled
-// registers).
+// 当 buffer 被填满时，write barrier 调用 slow path （wbBufFlush）将缓冲区刷新到 GC 工作队列。
+// 在这条 path 中，由于编译器没有移动（spill）寄存器，我们移动所有寄存器，并禁止任何可以观察栈帧的 GC 安全点
+// （因为我们不知道移动寄存器的类型）。
+//
 
 package runtime
 

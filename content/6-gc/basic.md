@@ -53,6 +53,7 @@ Go 中的 happends before 有以下保证：
 
 1. [The Go Memory Model](https://golang.org/ref/mem)
 2. [Getting to Go: The Journey of Go's Garbage Collector](https://blog.golang.org/ismmkeynote)
+3. [Eliminate STW stack re-scanning](https://github.com/golang/proposal/blob/master/design/17503-eliminate-rescan.md)
 
 ## 许可
 

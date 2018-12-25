@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Page heap.
+// 页堆.
 //
-// See malloc.go for the general overview.
+// 关于一般综述，参见 malloc.go。
 //
 // Large spans are the subject of this file. Spans consisting of less than
 // _MaxMHeapLists are held in lists of like sized spans. Larger spans
