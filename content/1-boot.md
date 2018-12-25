@@ -1,13 +1,6 @@
 # 1 程序引导
 
-本节讨论程序引导流程。本文涉及的 Go 源码包括以下文件：
-
-```
-src/runtime/rt0_darwin_amd64.s
-src/runtime/asm_amd64.s
-src/runtime/runtime1.go
-src/runtime/os_darwin.go
-```
+本节讨论程序引导流程。
 
 ## 入口
 

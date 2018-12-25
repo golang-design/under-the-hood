@@ -169,7 +169,7 @@ func main() {
 
 1. `systemstack` 会运行 `newm(sysmon, nil)` 启动后台监控，`wasm` 上不会启动
 2. `lockOSThread` 初始化阶段将主 goroutine 锁定在主 OS 线程上，原因在于某些特殊的调用（尤其是一些[图形库](https://github.com/golang/go/wiki/LockOSThread)，Cocoa, OpenGL 等会使用本地线程状态）需要主线程的支持。用户层可以通过 `runtime.LockOSThread` 来绑定当前的线程（由于调度器的影响，不一定会是主线程）
-3. `runtime_init` 运行时初始化，启动 gchelper goroutine
+3. `runtime_init` 运行时初始化，启动 gchelper goroutine // TODO: 有多个 init 函数
 4. `gcenable` 启用 GC
 5. 如果是 `cgo` 则还会额外启动一个模板线程，来处理 C 创建的线程进入 Go 的情况
 6. `cgocall` 从 Go 调用 C

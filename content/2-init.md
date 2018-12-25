@@ -1,12 +1,10 @@
 # 2 初始化概览
 
-书说上回，本节简单讨论程序初始化工作，即 `runtime.schedinit`。
+本节简单讨论程序初始化工作，即 `runtime.schedinit`。
 
 ## 概览
 
-```
-src/runtime/proc.go
-```
+> 位于 runtime/proc.go
 
 ```go
 // 启动顺序
@@ -21,21 +19,23 @@ func schedinit() {
 	_g_ := getg()
 
 	// 不重要，race 检查有关
-	// raceinit must be the first call to race detector.
-	// In particular, it must be done before mallocinit below calls racemapshadow.
+	// raceinit 必须受限调用竞争检查器 race detector
+	// 特别的，它必须在 mallocinit 下面的 racemapshadow 之前完成。
 	if raceenabled {
 		_g_.racectx, raceprocctx0 = raceinit()
 	}
 
-	// 最大系统线程数量（即 M），参考 runtime/debug.SetMaxThreads
+	// 最大系统线程数量（即 M），参考标准库 runtime/debug.SetMaxThreads
 	sched.maxmcount = 10000
 
 	// 不重要，与 trace 有关
 	tracebackinit()
+
+	// 模块数据验证
 	moduledataverify()
 
 	// 栈、内存分配器、调度器相关初始化。
-	// 栈初始化
+	// 栈初始化，复用管理链表
 	stackinit()
 	// 内存分配器初始化
 	mallocinit()
@@ -49,12 +49,12 @@ func schedinit() {
 	// 模块加载相关的初始化
 	modulesinit()   // 模块链接，提供 activeModules
 	typelinksinit() // 使用 maps, activeModules
-	itabsinit()     // 使用 activeModules
+	itabsinit()     // 初始化 interface table，使用 activeModules
 
 	msigsave(_g_.m)
 	initSigmask = _g_.m.sigmask
 
-	// 处理命令行参数和环境变量
+	// 处理y命令行用户参数和环境变量
 	goargs()
 	goenvs()
 
@@ -98,10 +98,14 @@ func schedinit() {
 }
 ```
 
+我们在下面的小节中一一讨论整个过程。
+
 ### CPU 相关信息的初始化
 
 初始化过程中，会根据当前运行程序的 CPU 初始化一些与 CPU 相关的值，
 获取 CPU 指令集相关支持，并支持对 CPU 指令集的调试，例如禁用部分指令集。
+
+> 位于 runtime/proc.go
 
 ```go
 // cpuinit 提取环境变量 GODEBUGCPU，如果 GOEXPERIMENT debugcpu 被设置，
@@ -417,7 +421,7 @@ func alginit() {
 }
 ```
 
-在支持良好的情况下，amd64 平台会调用 `initAlgAES` 来使用 AES 哈希算法。
+可以看到，在指令集支持良好的情况下，amd64 平台会调用 `initAlgAES` 来使用 AES 哈希算法。
 
 ```go
 var useAeshash bool
@@ -619,6 +623,8 @@ initSigmask = _g_.m.sigmask
 
 用于当新创建 m 时（`runtime.newm`），将 m 的 sigmask 进行设置。
 
+对于具体的运行时信号处理机制，我们在 [8 运行时杂项: runtime.signal](./8-runtime/signal.md) 中讨论。
+
 ### 内存分配器的初始化
 
 首先 `sched` 会获取 G，通过 `stackinit` 初始化程序栈、`mallocinit` 初始化
@@ -646,7 +652,7 @@ sched.lastpoll = uint64(nanotime())
 
 ## 总结
 
-我们最感兴趣的调用包括：
+我们最感兴趣的三大运行时组件调用包括：
 
 - 栈初始化 `stackinit()`
 - 内存分配器初始化 `mallocinit()`
@@ -665,6 +671,7 @@ sched.lastpoll = uint64(nanotime())
 
 1. [sigprocmask - Linux man page](https://linux.die.net/man/2/rt_sigprocmask)
 2. [pthread_sigmask - Linux man page](https://linux.die.net/man/3/pthread_sigmask)
+3. [Unix 信号](https://en.wikipedia.org/wiki/Signal_(IPC))
 
 ## 许可
 

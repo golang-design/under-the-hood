@@ -65,7 +65,8 @@
     - [类型系统](content/16-compile/type.md)
     - [编译后端 SSA](content/16-compile/ssa.md)
 17. 附录
-    - [源码索引](content/index.md)
+    - [源码索引](content/appendix/index.md)
+    - [Plan 9 汇编介绍](content/appendix/asm.md)
     - [基于工作窃取的多线程计算调度](papers/sched/work-steal-sched.md)
     - [Go 运行时编程](gosrc/1.11.4/runtime/README.md)
 

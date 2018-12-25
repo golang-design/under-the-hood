@@ -1,34 +1,30 @@
 # 附录：源码文件分配索引
 
-TODO: 补全
-
-下面列出了 Go 源码文件的分配以及他们出现在正文中对应的（粗略）位置：
+下面列出了 Go 源码文件所实现的功能，以及他们主要功能的介绍，在本书正文中对应的（粗略）位置：
 
 ```
     ├── cmd
-    │   └── cgo                          10-cgo.md
+    │   └── cgo                            10-cgo.md
     ├── net
     ├── reflect
     ├── runtime
     │   ├── README.md
-    // boot                               1-init.md
+    // boot                                1-init.md
     │   ├── rt0_darwin_amd64.s
     │   ├── rt0_js_wasm.s
     │   ├── rt0_linux_amd64.s
     │   ├── runtime1.go
-    │   ├── os_darwin.go
-    │   ├── os_linux.go
-    │   ├── os_linux_generic.go
+    │   ├── os_darwin.go                8-runtime/syscall-darwin.md
+    │   ├── os_linux.go                 8-runtime/syscall-linux.md
     │   ├── go_tls.h
-    │   ├── cpuflags_amd64.go
 
-    // sched                              5-sched/*.md
+    // sched                            5-sched/*.md
     │   ├── runtime.go
     │   ├── runtime2.go
     │   ├── proc.go
     │   ├── stack.go
 
-    // mem                               4-mem/*.md
+    // mem                                4-mem/*.md
     │   ├── malloc.go
     │   ├── mcache.go
     │   ├── mcentral.go
@@ -134,9 +130,10 @@ TODO: 补全
     // extern
     │   ├── extern.go
     │   ├── symtab.go
-    │   ├── mfinal.go                           8-runtime/finalizer.md
+    │   ├── mfinal.go              8-runtime/finalizer.md
 
-    // os/signal
+    // signal
+    │   ├── os_linux_generic.go
     │   ├── sigaction.go
     │   ├── signal_amd64x.go
     │   ├── signal_darwin.go
@@ -162,7 +159,8 @@ TODO: 补全
     │   ├── debug.go
     │   ├── debugcall.go
 
-    // others
+    // call utils
+    │   ├── cpuflags_amd64.go
     │   ├── cputicks.go
     │   ├── env_posix.go
     │   ├── error.go
@@ -198,6 +196,11 @@ TODO: 补全
     │   ├── runtime.go
     │   ├── rwmutex.go            11-pkg/sync/mutex.md
     │   └── waitgroup.go          11-pkg/sync/waitgroup.md
+    │
     ├── syscall
     └── unsafe                      9-unsafe.md
 ```
+
+## 许可
+
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)
