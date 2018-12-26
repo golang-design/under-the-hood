@@ -21,11 +21,11 @@ func gogetenv(key string) string {
 	return ""
 }
 
-var _cgo_setenv unsafe.Pointer   // pointer to C function
-var _cgo_unsetenv unsafe.Pointer // pointer to C function
+var _cgo_setenv unsafe.Pointer   // 指向 C 函数的指针
+var _cgo_unsetenv unsafe.Pointer // 指向 C 函数的指针
 
-// Update the C environment if cgo is loaded.
-// Called from syscall.Setenv.
+// 当 cgo 被加载后，更新 C 环境
+// 从 syscall.Setenv 中调用
 //go:linkname syscall_setenv_c syscall.setenv_c
 func syscall_setenv_c(k string, v string) {
 	if _cgo_setenv == nil {
@@ -35,8 +35,8 @@ func syscall_setenv_c(k string, v string) {
 	asmcgocall(_cgo_setenv, unsafe.Pointer(&arg))
 }
 
-// Update the C environment if cgo is loaded.
-// Called from syscall.unsetenv.
+// 当 cgo 被加载后，更新 C 环境
+// 从 syscall.unsetenv 中调用
 //go:linkname syscall_unsetenv_c syscall.unsetenv_c
 func syscall_unsetenv_c(k string) {
 	if _cgo_unsetenv == nil {

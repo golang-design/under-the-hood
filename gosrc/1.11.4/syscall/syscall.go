@@ -2,27 +2,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package syscall contains an interface to the low-level operating system
-// primitives. The details vary depending on the underlying system, and
-// by default, godoc will display the syscall documentation for the current
-// system. If you want godoc to display syscall documentation for another
-// system, set $GOOS and $GOARCH to the desired system. For example, if
-// you want to view documentation for freebsd/arm on linux/amd64, set $GOOS
-// to freebsd and $GOARCH to arm.
-// The primary use of syscall is inside other packages that provide a more
-// portable interface to the system, such as "os", "time" and "net".  Use
-// those packages rather than this one if you can.
-// For details of the functions and data types in this package consult
-// the manuals for the appropriate operating system.
-// These calls return err == nil to indicate success; otherwise
-// err is an operating system error describing the failure.
-// On most systems, that error has type syscall.Errno.
+// Package syscall 包含低级操作系统原语的接口。细节因底层系统而异，默认情况下，godoc 将显示
+// 当前系统的系统调用文档。如果你希望 godoc 显示另一个系统的系统调用文档，请将 $GOOS 和
+// $GOARCH 设置为所需的系统。例如，如果要在 linux/amd64 上查看 freebsd/arm 的文档，
+// 请将 $GOOS 设置为 freebsd，将 $GOARCH 设置为 arm。
+// syscall 的主要用途是在其他软件包中，为系统提供更便携的接口，例如 "os"，"time" 和 "net"。
+// 如果可以，请使用这些包而不是这个包。有关此包中的功能和数据类型的详细信息，请参阅相应操作系统的手册。
+// 这些调用返回 err == nil 表示成功；否则错误是描述失败的操作系统错误。
+// 在大多数系统上，该错误的类型为 syscall.Errno。
 //
-// Deprecated: this package is locked down. Callers should use the
-// corresponding package in the golang.org/x/sys repository instead.
-// That is also where updates required by new systems or versions
-// should be applied. See https://golang.org/s/go1.4-syscall for more
-// information.
+// 弃用：此软件包已被锁定。调用者应该使用 golang.org/x/sys 存储库中的相应包。
+// 这也是应该应用新系统或版本所需的更新的地方。有关更多信息，请参阅 https://golang.org/s/go1.4-syscall。
 //
 package syscall
 

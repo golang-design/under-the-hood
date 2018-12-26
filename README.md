@@ -51,7 +51,7 @@
     - [`sync.Mutex`](content/11-pkg/sync/mutex.md)
     - [`sync.Cond`](content/11-pkg/sync/cond.md)
     - [`atomic.*`](content/11-pkg/atomic/atomic.md)
-    - [`syscall`](content/11-pkg/syscall/syscall.md)
+    - [`syscall.*`](content/11-pkg/syscall/syscall.md)
     - [`reflect`](content/11-pkg/reflect/reflect.md)
     - [`net`](content/11-pkg/net/net.md)
     - [`time`](content/11-pkg/time/time.md)

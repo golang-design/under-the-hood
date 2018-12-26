@@ -1890,8 +1890,7 @@ func unlockextra(mp *m) {
 	atomic.Storeuintptr(&extram, uintptr(unsafe.Pointer(mp)))
 }
 
-// execLock serializes exec and clone to avoid bugs or unspecified behaviour
-// around exec'ing while creating/destroying threads.  See issue #19546.
+// execLock 序列化 exec 和 clone 以避免在创建/销毁线程时执行错误或未指定的行为。见 issue #19546。
 var execLock rwmutex
 
 // newmHandoff contains a list of m structures that need new OS threads.
@@ -2922,28 +2921,21 @@ func save(pc, sp uintptr) {
 	}
 }
 
-// The goroutine g is about to enter a system call.
-// Record that it's not using the cpu anymore.
-// This is called only from the go syscall library and cgocall,
-// not from the low-level system calls used by the runtime.
+// goroutine g 即将进入系统调用。记录它不再使用 cpu 了。
+// 此函数只能从 go syscall 库和 cgocall 调用，而不是从运行时使用的低级系统调用中调用。
 //
-// Entersyscall cannot split the stack: the gosave must
-// make g->sched refer to the caller's stack segment, because
-// entersyscall is going to return immediately after.
+// Entersyscall无法拆分栈：gosave必须使得 g.sched 指的是调用者的栈段，
+// 因为 enteryscall 将在之后立即返回。
 //
-// Nothing entersyscall calls can split the stack either.
-// We cannot safely move the stack during an active call to syscall,
-// because we do not know which of the uintptr arguments are
-// really pointers (back into the stack).
-// In practice, this means that we make the fast path run through
-// entersyscall doing no-split things, and the slow path has to use systemstack
-// to run bigger things on the system stack.
+// 没有任何 enteryscall 调用可以拆分堆栈。
+// 在对 syscall 的活动调用期间，我们无法安全地移动栈，因为我们不知道哪个 uintptr 参数
+// 确实是指针（返回栈）。
+// 在实践中，这意味着我们使 fast path 通过 enteryscall 执行无拆分事务，而 slow path
+// 必须使用 systemstack 在系统堆栈上运行更大的东西。
 //
-// reentersyscall is the entry point used by cgo callbacks, where explicitly
-// saved SP and PC are restored. This is needed when exitsyscall will be called
-// from a function further up in the call stack than the parent, as g->syscallsp
-// must always point to a valid stack frame. entersyscall below is the normal
-// entry point for syscalls, which obtains the SP and PC from the caller.
+// reentersyscall 是 cgo 回调使用的入口点，其中显式保存的 SP 和 PC 已恢复。
+// 当从调用栈中的函数调用 exitsyscall 而不是父函数时，需要这样做，因为 g.syscallsp
+// 必须始终指向有效的堆栈帧。下面的 enteryscall 是系统调用的正常入口点，它从调用者获取 SP 和 PC。
 //
 // Syscall tracing:
 // At the start of a syscall we emit traceGoSysCall to capture the stack trace.
@@ -3101,12 +3093,11 @@ func entersyscallblock_handoff() {
 	handoffp(releasep())
 }
 
-// The goroutine g exited its system call.
-// Arrange for it to run on a cpu again.
-// This is called only from the go syscall library, not
-// from the low-level system calls used by the runtime.
+// goroutine g 退出其系统调用。
+// 为其再次安排一个 cpu。
+// 这个调用只从 go syscall 库调用，不能从运行时其他低级系统调用使用。
 //
-// Write barriers are not allowed because our P may have been stolen.
+// write barrier 不被允许，因为我们的 P 可能已经被偷走了
 //
 //go:nosplit
 //go:nowritebarrierrec
@@ -3165,7 +3156,7 @@ func exitsyscall() {
 
 	_g_.m.locks--
 
-	// Call the scheduler.
+	// 调用调度器
 	mcall(exitsyscall0)
 
 	if _g_.m.mcache == nil {
@@ -3344,45 +3335,38 @@ func syscall_runtime_AfterFork() {
 	systemstack(afterfork)
 }
 
-// inForkedChild is true while manipulating signals in the child process.
-// This is used to avoid calling libc functions in case we are using vfork.
+// inForkedChild 在处理子进程中的信号时是正确的。
+// 这用于避免在我们使用 vfork 时调用 libc 函数。
 var inForkedChild bool
 
-// Called from syscall package after fork in child.
-// It resets non-sigignored signals to the default handler, and
-// restores the signal mask in preparation for the exec.
-//
-// Because this might be called during a vfork, and therefore may be
-// temporarily sharing address space with the parent process, this must
-// not change any global variables or calling into C code that may do so.
-//
+// 在 syscall 包 fork 之后从子进程中调用。
+// 它将非 sigignored 信号重置为默认处理程序，并恢复信号掩码以准备 exec。
+// 因为这可能在 vfork 期间调用，因此可能暂时与父进程共享地址空间，
+// 所以这不能更改任何全局变量或调用可能执行此操作的 C 代码。
 //go:linkname syscall_runtime_AfterForkInChild syscall.runtime_AfterForkInChild
 //go:nosplit
 //go:nowritebarrierrec
 func syscall_runtime_AfterForkInChild() {
-	// It's OK to change the global variable inForkedChild here
-	// because we are going to change it back. There is no race here,
-	// because if we are sharing address space with the parent process,
-	// then the parent process can not be running concurrently.
+	// 可以在这里更改 inForkedChild 中的全局变量，因为我们要将其更改回来。
+	// 这里没有竞争，因为如果我们与父进程共享地址空间，则父进程不能同时运行。
 	inForkedChild = true
 
 	clearSignalHandlers()
 
-	// When we are the child we are the only thread running,
-	// so we know that nothing else has changed gp.m.sigmask.
+	// 因为我们是子进程且是唯一运行的线程，所以我们知道没有其他任何方式修改 gp.m.sigmask。
 	msigrestore(getg().m.sigmask)
 
 	inForkedChild = false
 }
 
-// Called from syscall package before Exec.
+// 从 syscall.Exec 开始前调用
 //go:linkname syscall_runtime_BeforeExec syscall.runtime_BeforeExec
 func syscall_runtime_BeforeExec() {
-	// Prevent thread creation during exec.
+	// 在exec期间阻止创建线程。
 	execLock.lock()
 }
 
-// Called from syscall package after Exec.
+// 从 syscall.Exec 结束后调用
 //go:linkname syscall_runtime_AfterExec syscall.runtime_AfterExec
 func syscall_runtime_AfterExec() {
 	execLock.unlock()
