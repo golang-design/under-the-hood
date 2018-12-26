@@ -309,10 +309,8 @@ type dbgVar struct {
 	value *int32
 }
 
-// Holds variables parsed from GODEBUG env var,
-// except for "memprofilerate" since there is an
-// existing int var for that value, which may
-// already have an initial value.
+// 保存从 GODEBUG env var 解析的变量，
+// 除了 "memprofilerate"，因为该值存在一个int var，它可能已经有一个初始值。
 var debug struct {
 	allocfreetrace     int32
 	cgocheck           int32

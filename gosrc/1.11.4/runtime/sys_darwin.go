@@ -6,13 +6,11 @@ package runtime
 
 import "unsafe"
 
-// 用 arg 作为参数调用 fn。返回 fn 返回的内容。
-// fn 是所需函数入口点的原始 pc 值。
-// 切换到系统堆栈（如果尚未存在）。
-// 将调用点保留为 profiler 回溯开始的地方。
+// 用 arg 作为参数调用 fn。返回 fn 返回的内容。fn 是所需函数入口点的原始 pc 值。
+// 切换到系统堆栈（如果尚未存在）。将调用点保留为 profiler 回溯开始的地方。
 //go:nosplit
 func libcCall(fn, arg unsafe.Pointer) int32 {
-	// Leave caller's PC/SP/G around for traceback.
+	// 为回溯而离开调用方 PC/SP/G
 	gp := getg()
 	var mp *m
 	if gp != nil {
@@ -21,38 +19,29 @@ func libcCall(fn, arg unsafe.Pointer) int32 {
 	if mp != nil && mp.libcallsp == 0 {
 		mp.libcallg.set(gp)
 		mp.libcallpc = getcallerpc()
-		// sp must be the last, because once async cpu profiler finds
-		// all three values to be non-zero, it will use them
+		// sp 必须是最后一个被设置，因为一旦 async cpu profiler 发现所有三个值都非零，就会使用它们
 		mp.libcallsp = getcallersp()
 	} else {
-		// Make sure we don't reset libcallsp. This makes
-		// libcCall reentrant; We remember the g/pc/sp for the
-		// first call on an M, until that libcCall instance
-		// returns.  Reentrance only matters for signals, as
-		// libc never calls back into Go.  The tricky case is
-		// where we call libcX from an M and record g/pc/sp.
-		// Before that call returns, a signal arrives on the
-		// same M and the signal handling code calls another
-		// libc function.  We don't want that second libcCall
-		// from within the handler to be recorded, and we
-		// don't want that call's completion to zero
-		// libcallsp.
-		// We don't need to set libcall* while we're in a sighandler
-		// (even if we're not currently in libc) because we block all
-		// signals while we're handling a signal. That includes the
-		// profile signal, which is the one that uses the libcall* info.
+		// 确保我们不重置 libcallsp。这使得 libcCall 可以重入;
+		// 我们记住第一次调用 M 的 g/pc/sp，直到 libcCall 实例返回。
+		// 重入只对信号有用，因为 libc 从不回调 Go。
+		// 棘手的情况是我们从 M 调用 libcX 并记录 g/pc/sp。
+		// 在该调用返回之前，信号到达同一个 M，信号处理代码调用另一个 libc 函数。
+		// 我们不希望记录处理程序中的第二个 libcCall，并且我们不希望
+		// 该调用的完成为零 libcallsp。
+		// 在 sighandler 中时，因为我们在处理信号时会阻塞所有信号，所以
+		// 我们不需要设置 libcall*（即使我们当前不在 libc 中）。
+		// 这包括配置文件信号，它使用的是 libcall* info 的信号。
 		mp = nil
 	}
-	res := asmcgocall(fn, arg)
+	res := asmcgocall(fn, arg) // 发起 cgo 调用。
 	if mp != nil {
 		mp.libcallsp = 0
 	}
 	return res
 }
 
-// The *_trampoline functions convert from the Go calling convention to the C calling convention
-// and then call the underlying libc function.  They are defined in sys_darwin_$ARCH.s.
-
+// * _trampoline 函数从 Go 调用约定转换为 C 调用约定，然后调用底层的 libc 函数。它们在 sys_darwin_$ARCH.s 中定义。
 //go:nosplit
 //go:cgo_unsafe_args
 func pthread_attr_init(attr *pthreadattr) int32 {
@@ -326,9 +315,7 @@ func closeonexec(fd int32) {
 	fcntl(fd, _F_SETFD, _FD_CLOEXEC)
 }
 
-// Tell the linker that the libc_* functions are to be found
-// in a system library, with the libc_ prefix missing.
-
+// 告诉链接器可以在系统库中找到 libc_* 函数，但缺少 libc_ 前缀。
 //go:cgo_import_dynamic libc_pthread_attr_init pthread_attr_init "/usr/lib/libSystem.B.dylib"
 //go:cgo_import_dynamic libc_pthread_attr_setstacksize pthread_attr_setstacksize "/usr/lib/libSystem.B.dylib"
 //go:cgo_import_dynamic libc_pthread_attr_setdetachstate pthread_attr_setdetachstate "/usr/lib/libSystem.B.dylib"

@@ -1347,36 +1347,7 @@ func newosproc(mp *m) {
 }
 ```
 
-我们终于看到进程的创建了，原来还是走的 C 调用：
-
-```go
-//go:nosplit
-//go:cgo_unsafe_args
-func pthread_create(attr *pthreadattr, start uintptr, arg unsafe.Pointer) int32 {
-	return libcCall(unsafe.Pointer(funcPC(pthread_create_trampoline)), unsafe.Pointer(&attr))
-}
-func pthread_create_trampoline()
-```
-
-```asm
-TEXT runtime·pthread_create_trampoline(SB),NOSPLIT,$0
-	PUSHL	BP
-	MOVL	SP, BP
-	SUBL	$24, SP
-	MOVL	32(SP), CX
-	LEAL	16(SP), AX	// arg "0" &threadid (which we throw away)
-	MOVL	AX, 0(SP)
-	MOVL	0(CX), AX	// arg 1 attr
-	MOVL	AX, 4(SP)
-	MOVL	4(CX), AX	// arg 2 start
-	MOVL	AX, 8(SP)
-	MOVL	8(CX), AX	// arg 3 arg
-	MOVL	AX, 12(SP)
-	CALL	libc_pthread_create(SB)
-	MOVL	BP, SP
-	POPL	BP
-	RET
-```
+`pthread_create` 就是系统调用了，我们在 [8 运行时杂项: 参与运行时的系统调用（darwin）](../8-runtime/syscall-darwin.md) 中讨论。
 
 ##### `runtime/os_linux.go`
 
@@ -1410,69 +1381,9 @@ func newosproc(mp *m) {
 	}
 }
 
-//go:noescape
-func clone(flags int32, stk, mp, gp, fn unsafe.Pointer) int32
 ```
 
-```asm
-// int32 clone(int32 flags, void *stk, M *mp, G *gp, void (*fn)(void));
-TEXT runtime·clone(SB),NOSPLIT,$0
-	MOVL	flags+0(FP), DI
-	MOVQ	stk+8(FP), SI
-	MOVQ	$0, DX
-	MOVQ	$0, R10
-
-	// Copy mp, gp, fn off parent stack for use by child.
-	// Careful: Linux system call clobbers CX and R11.
-	MOVQ	mp+16(FP), R8
-	MOVQ	gp+24(FP), R9
-	MOVQ	fn+32(FP), R12
-
-	MOVL	$SYS_clone, AX
-	SYSCALL
-
-	// In parent, return.
-	CMPQ	AX, $0
-	JEQ	3(PC)
-	MOVL	AX, ret+40(FP)
-	RET
-
-	// In child, on new stack.
-	MOVQ	SI, SP
-
-	// If g or m are nil, skip Go-related setup.
-	CMPQ	R8, $0    // m
-	JEQ	nog
-	CMPQ	R9, $0    // g
-	JEQ	nog
-
-	// Initialize m->procid to Linux tid
-	MOVL	$SYS_gettid, AX
-	SYSCALL
-	MOVQ	AX, m_procid(R8)
-
-	// Set FS to point at m->tls.
-	LEAQ	m_tls(R8), DI
-	CALL	runtime·settls(SB)
-
-	// In child, set up new stack
-	get_tls(CX)
-	MOVQ	R8, g_m(R9)
-	MOVQ	R9, g(CX)
-	CALL	runtime·stackcheck(SB)
-
-nog:
-	// Call fn
-	CALL	R12
-
-	// It shouldn't return. If it does, exit that thread.
-	MOVL	$111, DI
-	MOVL	$SYS_exit, AX
-	SYSCALL
-	JMP	-3(PC)	// keep exiting
-```
-
-linux 下为原生系统调用，似乎感受到了不平等待遇 :)
+`clone` 同是系统调用，我们在 [8 运行时杂项: 参与运行时的系统调用（linux）](../8-runtime/syscall-linux.md) 中讨论。
 
 #### M/G 解绑
 

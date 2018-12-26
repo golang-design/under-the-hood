@@ -53,8 +53,7 @@ type gclink struct {
 	next gclinkptr
 }
 
-// A gclinkptr is a pointer to a gclink, but it is opaque
-// to the garbage collector.
+// gclinkptr 是指向 gclink 的指针，但它对垃圾收集器是不透明的。
 type gclinkptr uintptr
 
 // ptr returns the *gclink form of p.

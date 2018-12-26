@@ -14,7 +14,7 @@
 //
 // 分配器的数据结构为:
 //
-//	fixalloc: 固定大小(fixed-size)非堆(off-heap)中对象的分配器空闲列表(free-list)
+//	fixalloc: 固定大小(fixed-size)非堆(off-heap)中对象的分配器自由表(free-list)
 //	mheap: 分配的堆，在 page (8192字节=8KB)的粒度上进行管理。
 //	mspan: mheap 管理的一连串 page
 //	mcentral: 搜集给定大小的 class 的所有 span
@@ -23,20 +23,14 @@
 //
 // 分配一个小对象会进入缓存层次结构：
 //
-//	1. 将大小调整为一个 small size class，并查看此 P 的 mcache 中相应的 mspan。
-//	   扫描 mspan 的免费位图以找到空闲 slot。如果有空闲 slot，则分配它。
+//	1. 将大小调整为 small size classes 中的一个，并查看此 P 的
+//	   mcache 中相应的 mspan。
+//	   扫描 mspan 的 free bitmap 以找到 free slot。如果有 free slot，则分配它。
 //	   这可以在不获取锁定的情况下完成。
-//	1. Round the size up to one of the small size classes
-//	   and look in the corresponding mspan in this P's mcache.
-//	   Scan the mspan's free bitmap to find a free slot.
-//	   If there is a free slot, allocate it.
-//	   This can all be done without acquiring a lock.
 //
-//	2. If the mspan has no free slots, obtain a new mspan
-//	   from the mcentral's list of mspans of the required size
-//	   class that have free space.
-//	   Obtaining a whole span amortizes the cost of locking
-//	   the mcentral.
+//	2. 如果 mspan 没有 free slot，则从 mcentrals 列表中获取一个
+//	   具有所需class大小的空间的新的 mspan。
+//	   获取整个 span 均摊了对 mcentral 加锁的成本。
 //
 //	3. If the mcentral's mspan list is empty, obtain a run
 //	   of pages from the mheap to use for the mspan.
@@ -755,9 +749,9 @@ func (c *mcache) nextFree(spc spanClass) (v gclinkptr, s *mspan, shouldhelpgc bo
 	return
 }
 
-// Allocate an object of size bytes.
-// Small objects are allocated from the per-P cache's free lists.
-// Large objects (> 32 kB) are allocated straight from the heap.
+// 分配大小为字节的对象。
+// 从每个 P 缓存的空闲列表中分配小对象。
+// 大对象（> 32 kB）直接从堆中分配。
 func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	if gcphase == _GCmarktermination {
 		throw("mallocgc called with gcphase == _GCmarktermination")
@@ -1013,9 +1007,7 @@ func largeAlloc(size uintptr, needzero bool, noscan bool) *mspan {
 	return s
 }
 
-// implementation of new builtin
-// compiler (both frontend and SSA backend) knows the signature
-// of this function
+// new 关键字的实现，编译器（前端和SSA后端）的实现知道此函数的签名
 func newobject(typ *_type) unsafe.Pointer {
 	return mallocgc(typ.size, typ, true)
 }

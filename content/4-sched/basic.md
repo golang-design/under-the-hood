@@ -1,11 +1,5 @@
 # 4 调度器: 基本知识
 
-本文涉及的 Go 源码包括以下文件：
-
-```
-src/runtime/runtime2.go
-```
-
 在详细进入代码之前，我们了解一下调度器的设计原则及一些基本概念来建立较为宏观的认识。
 运行时调度器的任务是给不同的工作线程 (worker thread) 分发 ready-to-run goroutine。
 
@@ -83,6 +77,8 @@ ready 一个 goroutine 的通用范式为：
 ### M 的结构
 
 M 是 OS 线程的实体。
+
+> 位于 `runtime/runtime2.go`
 
 ```go
 type m struct {

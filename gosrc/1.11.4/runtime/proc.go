@@ -654,7 +654,7 @@ func mcommoninit(mp *m) {
 		mp.fastrand[1] = 1
 	}
 
-	// 初始化 gsignal
+	// 初始化 gsignal，用于处理 m 上的信号。
 	mpreinit(mp)
 
 	// 初始化 gsignal 的运行栈

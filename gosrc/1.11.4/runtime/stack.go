@@ -112,7 +112,7 @@ const (
 	//            == 3: logging of per-word updates
 	//            == 4: logging of per-word reads
 	stackDebug       = 0
-	stackFromSystem  = 0 // allocate stacks from system memory instead of the heap
+	stackFromSystem  = 0 // 从系统内存而不是堆分配栈
 	stackFaultOnFree = 0 // old stacks are mapped noaccess to detect use after free
 	stackPoisonCopy  = 0 // fill stack that should not be accessed with garbage, to detect bad dereferences during copy
 	stackNoCache     = 0 // disable per-P small stack caches
@@ -249,8 +249,8 @@ func stackpoolfree(x gclinkptr, order uint8) {
 	}
 }
 
-// stackcacherefill/stackcacherelease implement a global pool of stack segments.
-// The pool is required to prevent unlimited growth of per-thread caches.
+// stackcacherefill/stackcacherelease 实现栈段的全局池。
+// 该池需要防止每个线程的缓存无限增长。
 //
 //go:systemstack
 func stackcacherefill(c *mcache, order uint8) {
@@ -331,6 +331,7 @@ func stackalloc(n uint32) stack {
 		print("stackalloc ", n, "\n")
 	}
 
+	// 直接从系统中分配内存，用于调试。
 	if debug.efence != 0 || stackFromSystem != 0 {
 		n = uint32(round(uintptr(n), physPageSize))
 		v := sysAlloc(uintptr(n), &memstats.stacks_sys)
@@ -343,7 +344,9 @@ func stackalloc(n uint32) stack {
 	// 小栈由自由表分配器分配有固定大小。
 	// 如果我们需要更大尺寸的栈，我们将重新分配专用 span。
 	var v unsafe.Pointer
+	// 检查是否从缓存分配
 	if n < _FixedStack<<_NumStackOrders && n < _StackCacheSize {
+		// 计算 order 登记
 		order := uint8(0)
 		n2 := n
 		for n2 > _FixedStack {
@@ -361,7 +364,9 @@ func stackalloc(n uint32) stack {
 			x = stackpoolalloc(order)
 			unlock(&stackpoolmu)
 		} else {
+			// 从对应链表提取可复用的空间
 			x = c.stackcache[order].list
+			// 提取失败，扩容再重试
 			if x.ptr() == nil {
 				stackcacherefill(c, order)
 				x = c.stackcache[order].list
@@ -371,6 +376,7 @@ func stackalloc(n uint32) stack {
 		}
 		v = unsafe.Pointer(x)
 	} else {
+		// 大空间从 stackLarge 进行分配
 		var s *mspan
 		npage := uintptr(n) >> _PageShift
 		log2npage := stacklog2(npage)
@@ -384,7 +390,7 @@ func stackalloc(n uint32) stack {
 		unlock(&stackLarge.lock)
 
 		if s == nil {
-			// Allocate a new stack from the heap.
+			// 从堆中分配一个新的栈
 			s = mheap_.allocManual(npage, &memstats.stacks_inuse)
 			if s == nil {
 				throw("out of memory")
