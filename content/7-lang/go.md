@@ -100,7 +100,7 @@ func add(p unsafe.Pointer, x uintptr) unsafe.Pointer {
 func getcallerpc() uintptr
 ```
 
-而这个 `newproc1` 函数的功能我们已经在 [5 调度器：初始化](../5-sched/init.md) 中讨论过了。
+而这个 `newproc1` 函数的功能我们已经在 [4 调度器：初始化](../4-sched/init.md) 中讨论过了。
 
 ## 许可
 

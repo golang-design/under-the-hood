@@ -18,13 +18,13 @@
     │   ├── os_linux.go                 8-runtime/syscall-linux.md
     │   ├── go_tls.h
 
-    // sched                            5-sched/*.md
+    // sched                            4-sched/*.md
     │   ├── runtime.go
     │   ├── runtime2.go
     │   ├── proc.go
     │   ├── stack.go
 
-    // mem                                4-mem/*.md
+    // mem                                5-mem/*.md
     │   ├── malloc.go
     │   ├── mcache.go
     │   ├── mcentral.go

@@ -6,7 +6,7 @@ about: 报告错误
 
 ## 实际描述
 
-- 文件路径：例如，content/5-sched/init.md
+- 文件路径：例如，content/4-sched/init.md
 - 原文段落：
 
 ```

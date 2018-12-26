@@ -312,16 +312,14 @@ func stackcache_clear(c *mcache) {
 	unlock(&stackpoolmu)
 }
 
-// stackalloc allocates an n byte stack.
+// stackalloc 分配一个 n 字节的栈。
 //
-// stackalloc must run on the system stack because it uses per-P
-// resources and must not split the stack.
+// stackalloc 必须在系统栈上运行，因为它使用 per-P 资源，不得拆分堆栈。
 //
 //go:systemstack
 func stackalloc(n uint32) stack {
-	// Stackalloc must be called on scheduler stack, so that we
-	// never try to grow the stack during the code that stackalloc runs.
-	// Doing so would cause a deadlock (issue 1547).
+	// 必须在调度器栈上调用 Stackalloc，这样我们永不在 stackalloc 运行的代码中尝试增加栈。
+	// 这样做会导致死锁（#1547）。
 	thisg := getg()
 	if thisg != thisg.m.g0 {
 		throw("stackalloc not on scheduler stack")
@@ -342,9 +340,8 @@ func stackalloc(n uint32) stack {
 		return stack{uintptr(v), uintptr(v) + uintptr(n)}
 	}
 
-	// Small stacks are allocated with a fixed-size free-list allocator.
-	// If we need a stack of a bigger size, we fall back on allocating
-	// a dedicated span.
+	// 小栈由自由表分配器分配有固定大小。
+	// 如果我们需要更大尺寸的栈，我们将重新分配专用 span。
 	var v unsafe.Pointer
 	if n < _FixedStack<<_NumStackOrders && n < _StackCacheSize {
 		order := uint8(0)

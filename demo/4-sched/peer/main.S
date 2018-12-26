@@ -224,7 +224,7 @@ TEXT runtime.main.func2(SB) /usr/local/Cellar/go/1.11/libexec/src/runtime/proc.g
   :-1			0x104727e		cc			INT $0x3				
   :-1			0x104727f		cc			INT $0x3				
 
-TEXT main.longcall(SB) /Users/changkun/dev/go-under-the-hood/demo/5-sched/peer/main.go
+TEXT main.longcall(SB) /Users/changkun/dev/go-under-the-hood/demo/4-sched/peer/main.go
   main.go:5		0x10508d0		65488b0c2530000000	MOVQ GS:0x30, CX			
   main.go:5		0x10508d9		483b6110		CMPQ 0x10(CX), SP			
   main.go:5		0x10508dd		7623			JBE 0x1050902				
@@ -247,7 +247,7 @@ TEXT main.longcall(SB) /Users/changkun/dev/go-under-the-hood/demo/5-sched/peer/m
   :-1			0x105090e		cc			INT $0x3				
   :-1			0x105090f		cc			INT $0x3				
 
-TEXT main.main(SB) /Users/changkun/dev/go-under-the-hood/demo/5-sched/peer/main.go
+TEXT main.main(SB) /Users/changkun/dev/go-under-the-hood/demo/4-sched/peer/main.go
   main.go:11		0x1050910		65488b0c2530000000	MOVQ GS:0x30, CX			
   main.go:11		0x1050919		483b6110		CMPQ 0x10(CX), SP			
   main.go:11		0x105091d		763b			JBE 0x105095a				

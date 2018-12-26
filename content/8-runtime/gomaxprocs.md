@@ -1,6 +1,6 @@
 # 8 runtime.GOMAXPROCS
 
-我们已经在 [5 调度器: 初始化](../5-sched/init.md) 中讨论过 `runtime.procresize` 调用的作用了。
+我们已经在 [4 调度器: 初始化](../4-sched/init.md) 中讨论过 `runtime.procresize` 调用的作用了。
 我们知道在大部分的时间里，P 的数量是不会被动态调整的。
 
 但是我们已经知道 `runtime.GOMAXPROCS` 能够在运行时动态调整 P 的数量，我们就来看看

@@ -119,8 +119,8 @@ func (f *fixalloc) alloc() unsafe.Pointer {
 
 上面的代码中：
 
-- `memclrNoHeapPointers` 具体实现分析见 [5 调度器: 初始化](../5-sched/init.md)。
-- `persistentalloc` 具体实现分析见 [4 内存分配器: 全局分配](../5-mem/galloc.md)
+- `memclrNoHeapPointers` 具体实现分析见 [4 调度器: 初始化](../4-sched/init.md)。
+- `persistentalloc` 具体实现分析见 [5 内存分配器: 全局分配](../5-mem/galloc.md)
 
 ### 回收
 

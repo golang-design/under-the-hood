@@ -11,18 +11,18 @@
 1. [程序引导](content/1-boot.md)
 2. [初始化概览](content/2-init.md)
 3. [主 goroutine 生命周期](content/3-main.md)
-4. 内存分配器: alloc
-    - [基本知识](content/4-mem/basic.md)
-    - [全局分配组件](content/4-mem/galloc.md)
-    - [FixAlloc、LinearAlloc 组件](content/4-mem/fixalloc.md)
-    - [初始化](content/4-mem/init.md)
-    - [分配过程](content/4-mem/alloc.md)
-5. 调度器: sched
-    - [基本知识](content/5-sched/basic.md)
-    - [初始化](content/5-sched/init.md)
-    - [调度执行](content/5-sched/exec.md)
-    - [系统监控](content/5-sched/sysmon.md)
-    - [调度理论](content/5-sched/theory.md)
+4. 调度器: sched
+    - [基本知识](content/4-sched/basic.md)
+    - [初始化](content/4-sched/init.md)
+    - [调度执行](content/4-sched/exec.md)
+    - [系统监控](content/4-sched/sysmon.md)
+    - [调度理论](content/4-sched/theory.md)
+5. 内存分配器: alloc
+    - [基本知识](content/5-mem/basic.md)
+    - [全局分配组件](content/5-mem/galloc.md)
+    - [FixAlloc、LinearAlloc 组件](content/5-mem/fixalloc.md)
+    - [初始化](content/5-mem/init.md)
+    - [分配过程](content/5-mem/alloc.md)
 6. 垃圾回收器：GC
     - [基本知识](content/6-GC/basic.md)
     - [初始化](content/6-GC/init.md)
@@ -33,6 +33,7 @@
     - [`panic` 与 `recover`](content/7-lang/panic.md)
     - [`map`](content/7-lang/map.md)
     - [`chan` 与 `select`](content/7-lang/chan.md)
+    - [`interface`](content/7-lang/interface.md)
 8. 运行时杂项
     - [`runtime.GOMAXPROCS`](content/8-runtime/gomaxprocs.md)
     - [`runtime.SetFinalizer` 与 `runtime.KeepAlive`](content/8-runtime/finalizer.md)

@@ -17,7 +17,7 @@
 
 这个过程中，只会将 `runtime·main` 的入口地址压栈，进而将其传递给 `newproc` 进行使用，
 而后 `runtime·newproc` 完成 G 的创建保存到 G 的运行现场中，因此真正执行会
-等到 `runtime·mstart` 后才会被调度执行，我们在 [5 调度器: 执行调度](5-sched/exec.md) 中讨论。
+等到 `runtime·mstart` 后才会被调度执行，我们在 [4 调度器: 执行调度](4-sched/exec.md) 中讨论。
 
 ## 概览
 
@@ -39,7 +39,7 @@ func main() {
 		maxstacksize = 250000000
 	}
 
-	// 允许 newproc 启动新的 m，见 [5 调度器: 初始化]
+	// 允许 newproc 启动新的 m，见 [4 调度器: 初始化]
 	mainStarted = true
 
 	if GOARCH != "wasm" { // 1.11 新引入的 web assembly, 目前 wasm 不支持线程，无系统监控

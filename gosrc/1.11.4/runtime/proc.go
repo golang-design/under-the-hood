@@ -114,7 +114,7 @@ func main() {
 		maxstacksize = 250000000
 	}
 
-	// 允许 newproc 启动新的 m，见 [5 调度器: 初始化]
+	// 允许 newproc 启动新的 m，见 [4 调度器: 初始化]
 	mainStarted = true
 
 	if GOARCH != "wasm" { // 1.11 新引入的 web assembly, 目前 wasm 不支持线程，无系统监控
