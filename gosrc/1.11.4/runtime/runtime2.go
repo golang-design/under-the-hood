@@ -784,10 +784,9 @@ var (
 	sched      schedt
 	newprocs   int32
 
-	// Information about what cpu features are available.
-	// Set on startup in runtime.cpuinit.
-	// Packages outside the runtime should not use these
-	// as they are not an external api.
+	// 有关可用的 cpu 功能的信息。
+	// 在 runtime.cpuinit 中启动时设置。
+	// 运行时之外的包不应使用这些包因为它们不是外部 api。
 	// TODO: deprecate these; use internal/cpu directly.
 	processorVersionInfo uint32
 	isIntel              bool

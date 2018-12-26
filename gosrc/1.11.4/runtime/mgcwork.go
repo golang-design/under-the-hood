@@ -11,14 +11,12 @@ import (
 )
 
 const (
-	_WorkbufSize = 2048 // in bytes; larger values result in less contention
+	_WorkbufSize = 2048 // 单位为字节; 值越大，争用越少
 
-	// workbufAlloc is the number of bytes to allocate at a time
-	// for new workbufs. This must be a multiple of pageSize and
-	// should be a multiple of _WorkbufSize.
+	// workbufAlloc 是一次为新的 workbuf 分配的字节数。
+	// 必须是 pageSize 的倍数，并且应该是 _WorkbufSize 的倍数。
 	//
-	// Larger values reduce workbuf allocation overhead. Smaller
-	// values reduce heap fragmentation.
+	// 较大的值会减少 workbuf 分配开销。较小的值可减少堆碎片。
 	workbufAlloc = 32 << 10
 )
 

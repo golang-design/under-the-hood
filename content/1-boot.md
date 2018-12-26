@@ -470,10 +470,12 @@ func getPageSize() uintptr {
 }
 ```
 
-`darwin` 从操作系统发展来看，是从 NEXTSTEP 和 FreeBSD 2.x 发展而来的后代，
-物理页大小获取的方式也可以通过 FreeBSD 系的 `sysctl` 系统调用进行获取 [9, 10]。
+`darwin` 从操作系统发展来看，是从 NeXTSTEP 和 FreeBSD 2.x 发展而来的后代，
+macOS 系统调用的特殊之处在于它提供了两套调用接口，一个是 Mach 调用，另一个则是 POSIX 调用。
+Mach 是 NeXTSTEP 遗留下来的产物，BSD 层本质上是堆 Mach 内核的一层封装。尽管用户态进程
+可以直接访问 Mach 调用，但出于通用性的考虑，这里的物理页大小获取的方式是通过 POSIX `sysctl` 这个系统调用进行获取 [9, 10]。
 
-至于 `darwin` 下的系统调用如何实现，这里不再做深入讨论，我们留到
+至于 `darwin` 下的系统调用如何参与到 Go 程序中去，这里不再做深入讨论，我们留到
 [8 参与运行时的系统调用: darwin](./8-runtime/syscall-darwin.md) 中再讨论。
 
 ### 步骤4：runtime.schedinit

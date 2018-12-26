@@ -93,7 +93,7 @@ func main_main()
 // mainStarted 表示主 M 是否已经开始运行
 var mainStarted bool
 
-// runtimeInitTime is the nanotime() at which the runtime started.
+// runtimeInitTime 是运行时启动的 nanotime()
 var runtimeInitTime int64
 
 // 用于新创建的 M 的信号掩码 signal mask 的值。
@@ -138,7 +138,6 @@ func main() {
 	}
 
 	// 执行 runtime.init
-	// 实际上只做一件事情，启动 gchelper goroutine
 	runtime_init() // defer 必须在此调用结束后才能使用
 	if nanotime() == 0 {
 		throw("nanotime returning zero")
@@ -241,7 +240,7 @@ func os_beforeExit() {
 	}
 }
 
-// start forcegc helper goroutine
+// 启动 forcegc helper goroutine
 func init() {
 	go forcegchelper()
 }

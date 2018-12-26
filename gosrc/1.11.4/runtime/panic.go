@@ -193,7 +193,7 @@ func deferArgs(d *_defer) unsafe.Pointer {
 	return add(unsafe.Pointer(d), unsafe.Sizeof(*d))
 }
 
-var deferType *_type // type of _defer struct
+var deferType *_type // _defer 结构的类型
 
 func init() {
 	var x interface{}

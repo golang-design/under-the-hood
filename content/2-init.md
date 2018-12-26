@@ -18,7 +18,7 @@
 func schedinit() {
 	_g_ := getg()
 
-	// 不重要，race 检查有关
+	// race 检查有关
 	// raceinit 必须受限调用竞争检查器 race detector
 	// 特别的，它必须在 mallocinit 下面的 racemapshadow 之前完成。
 	if raceenabled {
@@ -28,7 +28,7 @@ func schedinit() {
 	// 最大系统线程数量（即 M），参考标准库 runtime/debug.SetMaxThreads
 	sched.maxmcount = 10000
 
-	// 不重要，与 trace 有关
+	// 与 trace 有关
 	tracebackinit()
 
 	// 模块数据验证
