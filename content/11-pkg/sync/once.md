@@ -32,8 +32,8 @@ func (o *Once) Do(f func()) {
 	if atomic.LoadUint32(&o.done) == 1 {
 		return
 	}
-	// 注意，我们只使用原子读读取了 o.done 的值，这是最快速的路径执行原子操作，即 fast-path
-	// 但当我们需要确保在并发状态下，是不是有多个人读到 0，因此必须加锁，这个操作相对昂贵，即 slow-path
+	// 注意，我们只使用原子读读取了 o.done 的值，这是 fast path 的情况。
+	// 但当我们需要确保在并发状态下，是不是有多个人读到 0，因此必须加锁，即 slow-path
 	o.m.Lock()
 	defer o.m.Unlock()
 

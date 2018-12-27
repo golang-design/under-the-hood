@@ -1,4 +1,4 @@
-# 8 runtime.signal
+# 8 运行时组件: 信号处理
 
 TODO: 讨论调度器里涉及的 signal 机制
 

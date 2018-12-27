@@ -104,7 +104,7 @@ func _cgo_runtime_cgocall(unsafe.Pointer, uintptr) int32
 
 ### 原理概述: Go 调用 C
 
-为从 Go 调用 C 函数 f，cgo 生成的代码调用 `runtime.cgocall(_cgo_Cfunc_f, frame)`,
+从 Go 调用 C 函数 f，cgo 生成的代码会调用 `runtime.cgocall(_cgo_Cfunc_f, frame)`,
 其中 `_cgo_Cfunc_f` 为由 cgo 编写的并由 gcc 编译的函数。
 
 `runtime.cgocall` 会调用 `entersyscall`，从而不会阻塞其他 goroutine 或垃圾回收器

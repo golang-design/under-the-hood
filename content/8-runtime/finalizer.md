@@ -1,4 +1,4 @@
-# 8 runtime.SetFinalizer 与 runtime.KeepAlive
+# 8 运行时组件: SetFinalizer 与 KeepAlive
 
 TODO:
 

@@ -1,4 +1,4 @@
-# 8 runtime.LockOSThread 与 runtime.UnlockOSThread
+# 8 运行时组件: LockOSThread 与 UnlockOSThread
 
 我们已经知道了 `runtime.lockOSThread` 会将当前 goroutine 锁在主 OS 线程上。
 运行时导出了这个方法，允许用户态也能调用 `runtime.LockOSThread`。但导出的方法与运行时自用方法略有不同，

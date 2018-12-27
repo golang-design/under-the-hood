@@ -623,7 +623,7 @@ initSigmask = _g_.m.sigmask
 
 用于当新创建 m 时（`runtime.newm`），将 m 的 sigmask 进行设置。
 
-对于具体的运行时信号处理机制，我们在 [8 运行时杂项: runtime.signal](./8-runtime/signal.md) 中讨论。
+对于具体的运行时信号处理机制，我们在 [8 运行时组件: runtime.signal](./8-runtime/signal.md) 中讨论。
 
 ### 内存分配器的初始化
 

@@ -262,30 +262,7 @@ wg.Wait()
 这时将等待器也清零，并调用与等待器技术相同次数（此处为 1 次）的 `runtime_Semrelease`，这导致存储原语的值变为 1，计数器和等待器均为零。
 这时，`runtime_Semacquire` 在存储原语大于零后被唤醒，这时检查计数器和等待器是否为零（如果不为零则说明 Add 与 Wait 产生并发调用，直接 panic），这时他们为 0，因此进入下一个循环，当再次读取计数器时，发现计数器已经清理，于是退出 `wg.Wait()` 调用，结束阻塞。
 
-## `runtime_Semacquire` 与 `runtime_Semrelease`
-
-我们来看一下运行时中关于 `runtime_Semacquire` 与 `runtime_Semrelease` 的实现。
-
-```go
-//go:linkname sync_runtime_Semacquire sync.runtime_Semacquire
-func sync_runtime_Semacquire(addr *uint32) {
-	semacquire1(addr, false, semaBlockProfile)
-}
-//go:linkname sync_runtime_Semrelease sync.runtime_Semrelease
-func sync_runtime_Semrelease(addr *uint32, handoff bool) {
-	semrelease1(addr, handoff)
-}
-```
-
-可以看到他们均为运行时中的 `semacquire1` 和 `semrelease1` 函数。
-
-先来看 `semacquire1`。
-
-TODO: 考虑单独分章节描述这部分内容
-
-再来看 `semrelease1`
-
-TODO: 考虑单独分章节描述这部分内容
+至于 `runtime_Semrelease` 和 `runtime_Semacquire`，我们已经在 [8 运行时组件: 信号量机制](../../8-runtime/sema.md) 中讨论过了。
 
 ## 许可
 

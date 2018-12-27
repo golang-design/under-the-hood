@@ -121,7 +121,7 @@ TEXT runtime·asminit(SB),NOSPLIT,$0-0
 	RET
 ```
 
-TODO: 至于其他关于 Signal G 和 Note 的内容放到 8-runtime 中解释。
+关于运行时信号处理，以及 note 通知机制，我们分别在 [8 运行时组件: 信号处理](../8-runtime/signal.md) 和 [8 运行时组件: note 与 (rw)mutex](../8-runtime/note.md) 详细分析。
 
 ### M/P 的绑定
 
@@ -1347,7 +1347,7 @@ func newosproc(mp *m) {
 }
 ```
 
-`pthread_create` 就是系统调用了，我们在 [8 运行时杂项: 参与运行时的系统调用（darwin）](../8-runtime/syscall-darwin.md) 中讨论。
+`pthread_create` 就是系统调用了，我们在 [8 运行时组件: 参与运行时的系统调用（darwin）](../8-runtime/syscall-darwin.md) 中讨论。
 
 ##### `runtime/os_linux.go`
 
@@ -1383,7 +1383,7 @@ func newosproc(mp *m) {
 
 ```
 
-`clone` 同是系统调用，我们在 [8 运行时杂项: 参与运行时的系统调用（linux）](../8-runtime/syscall-linux.md) 中讨论。
+`clone` 同是系统调用，我们在 [8 运行时组件: 参与运行时的系统调用（linux）](../8-runtime/syscall-linux.md) 中讨论。
 
 #### M/G 解绑
 

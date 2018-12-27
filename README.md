@@ -34,7 +34,7 @@
     - [`map`](content/7-lang/map.md)
     - [`chan` 与 `select`](content/7-lang/chan.md)
     - [`interface`](content/7-lang/interface.md)
-8. 运行时杂项
+8. 运行时组件
     - [`runtime.GOMAXPROCS`](content/8-runtime/gomaxprocs.md)
     - [`runtime.SetFinalizer` 与 `runtime.KeepAlive`](content/8-runtime/finalizer.md)
     - [`runtime.LockOSThread` 与 `runtime.UnlockOSThread`](content/8-runtime/lockosthread.md)
