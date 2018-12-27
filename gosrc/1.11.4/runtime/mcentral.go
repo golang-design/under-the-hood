@@ -2,13 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Central free lists.
+// central 自由表
 //
-// See malloc.go for an overview.
+// 请参考 malloc.go 的综述
 //
-// The MCentral doesn't actually contain the list of free objects; the MSpan does.
-// Each MCentral is two lists of MSpans: those with free objects (c->nonempty)
-// and those that are completely allocated (c->empty).
+// mcentral 不包含空闲对象，相反 mspan 会。每个 mcentral 包含两个 mspan 链表，
+// 分别是包含空闲对象（c-nonempty）的链表和完整分配的（c->empty）链表
 
 package runtime
 
@@ -148,7 +147,7 @@ havespan:
 	return s
 }
 
-// Return span from an MCache.
+// 从 mcache 归还 span
 func (c *mcentral) uncacheSpan(s *mspan) {
 	lock(&c.lock)
 

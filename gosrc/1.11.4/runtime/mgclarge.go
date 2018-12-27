@@ -6,24 +6,23 @@
 //
 // 关于一般综述，参见 malloc.go。
 //
-// Large spans are the subject of this file. Spans consisting of less than
-// _MaxMHeapLists are held in lists of like sized spans. Larger spans
-// are held in a treap. See https://en.wikipedia.org/wiki/Treap or
-// https://faculty.washington.edu/aragon/pubs/rst89.pdf for an overview.
-// sema.go also holds an implementation of a treap.
+// 大 span 是此文件的考虑的问题。
+// 少于 _MaxMHeapLists 的 span 保存在大小相似的 span 列表中。
+// 更大的 span 是在一个 treap 持有。
+// 有关概述，请参阅 https://en.wikipedia.org/wiki/Treap 或
+// https://faculty.washington.edu/aragon/pubs/rst89.pdf。
+// sema.go 也有一个 treap 的实现。
 //
-// Each treapNode holds a single span. The treap is sorted by page size
-// and for spans of the same size a secondary sort based on start address
-// is done.
-// Spans are returned based on a best fit algorithm and for spans of the same
-// size the one at the lowest address is selected.
+// 每个 treapNode 都包含一个 span。 treap 按页面大小排序，对于相同大小的 span，
+// 基于起始地址的辅助排序已完成。
+// 基于 best fit 算法返回 span，并且对于相同大小的 span，选择地址更低的 span。
 //
-// The primary routines are
-// insert: adds a span to the treap
-// remove: removes the span from that treap that best fits the required size
-// removeSpan: which removes a specific span from the treap
+// 主要操作包括：
+// insert: 将一个 span 添加到 treap
+// remove: 从最适合所需大小的 treap 中移除 span
+// removeSpan: 从 treap 中删除特定的 span
 //
-// _mheap.lock must be held when manipulating this data structure.
+// 操作此数据结构时必须持有 _mheap.lock
 
 package runtime
 

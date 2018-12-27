@@ -49,14 +49,11 @@
 //
 // 检查标记 (checkmark)
 //
-// In a concurrent garbage collector, one worries about failing to mark
-// a live object due to mutations without write barriers or bugs in the
-// collector implementation. As a sanity check, the GC has a 'checkmark'
-// mode that retraverses the object graph with the world stopped, to make
-// sure that everything that should be marked is marked.
-// In checkmark mode, in the heap bitmap, the high bit of the 2-bit entry
-// for the second word of the object holds the checkmark bit.
-// When not in checkmark mode, this bit is set to 1.
+// 在并发垃圾收集器中，人们担心由于没有 write barrier 的 mutation 或垃圾回收器实现的 bug 会导致标记活动对象失败
+// 作为完整性检查，GC 具有 'checkmark' 模式，该模式在 STW 时重新遍历对象图，以确保标记了应标记的所有内容。
+//
+// 在 checkmark 模式中，在堆位图中，对象的第二个字的 2 位条目的高位保持 checkmark 位。
+// 不处于 checkmark 模式时，该位设置为1。
 //
 // The smallest possible allocation is 8 bytes. On a 32-bit machine, that
 // means every allocated object has two words, so there is room for the
@@ -68,6 +65,13 @@
 // It is still used in general, except in checkmark the type bit is repurposed
 // as the checkmark bit and then reinitialized (to 1) as the type bit when
 // finished.
+// 可能的最小分配是 8 个字节。
+// 在 32 位机器上，意味着每个分配的对象都有两个字，因此可以使用复选标记位。
+// 但在 64 位机器上，8 字节分配只是一个字，因此第二个位对不可用于对 checkmark 进行编码。
+// 但是，因为非指针分配被组合成更大的 16 字节（maxTinySize）分配，
+// 所以普通的 8 字节分配必须是指针，因此实际上不需要第一个字中的类型位。
+// 它仍然是一般使用的，除了在 checkmark 中，类型位被重新用作 checkmark 位，
+// 然后在完成时作为类型位重新初始化（为 1）。
 //
 
 package runtime

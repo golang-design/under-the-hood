@@ -213,7 +213,7 @@ func stackpoolalloc(order uint8) gclinkptr {
 	return x
 }
 
-// Adds stack x to the free pool. Must be called with stackpoolmu held.
+// 将栈 x 放回到池中，必须在持有 stackpoolmu 下调用
 func stackpoolfree(x gclinkptr, order uint8) {
 	s := spanOfUnchecked(uintptr(x))
 	if s.state != _MSpanManual {

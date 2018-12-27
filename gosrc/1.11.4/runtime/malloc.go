@@ -77,28 +77,17 @@
 // 堆是 arena 组成的集合，在 64 位机器上为 64MB，在 32 位机器上
 // 为 4MB（heapArenaBytes）。每个 arena 的起始地址与 arena 的大小对齐。
 //
-// Each arena has an associated heapArena object that stores the
-// metadata for that arena: the heap bitmap for all words in the arena
-// and the span map for all pages in the arena. heapArena objects are
-// themselves allocated off-heap.
 // 每个 arena 与一个 heapArena 对象关联，用于保存了 arena 的 metadata：
-// 堆的 bitmap 用于 arena 中所有字，span map 用于 arena 中的所有 page。
+// arena 中所有字的 heap bitmap，和 arena 中所有页的 span map。
 // heapArena 对象是在堆外分配的。
 //
-// Since arenas are aligned, the address space can be viewed as a
-// series of arena frames. The arena map (mheap_.arenas) maps from
-// arena frame number to *heapArena, or nil for parts of the address
-// space not backed by the Go heap. The arena map is structured as a
-// two-level array consisting of a "L1" arena map and many "L2" arena
-// maps; however, since arenas are large, on many architectures, the
-// arena map consists of a single, large L2 map.
 // 由于 arena 是对齐的，地址空间可以视为一系列 arena 帧。arena map (mheap_.arenas)
-// 将 arena 帧数映射为 *heapArena 或 nil （对那些不返回 Go 对的地址空间）
+// 将 arena 帧数映射为 *heapArena 或 nil （对那些不返回 Go 堆的地址空间）。
+// arena map 被构造为两级数组，由 "L1" arena map 和多个 "L2" arena map 组成。
+// 然而由于 arena 非常大，在很多体系结构中，arena map 由一个单一的大的 L2 map 组成。
 //
-// The arena map covers the entire possible address space, allowing
-// the Go heap to use any part of the address space. The allocator
-// attempts to keep arenas contiguous so that large spans (and hence
-// large objects) can cross arenas.
+// arena map 覆盖了整个可能的地址空间，允许 Go 堆使用地址空间任何部分。
+// 分配器会尝试保持 arena 连续，因此大的 span （因此大的对象）可以跨多个 arena。
 
 package runtime
 
@@ -1038,13 +1027,10 @@ func profilealloc(mp *m, x unsafe.Pointer, size uintptr) {
 	mProf_Malloc(x, size)
 }
 
-// nextSample returns the next sampling point for heap profiling. The goal is
-// to sample allocations on average every MemProfileRate bytes, but with a
-// completely random distribution over the allocation timeline; this
-// corresponds to a Poisson process with parameter MemProfileRate. In Poisson
-// processes, the distance between two samples follows the exponential
-// distribution (exp(MemProfileRate)), so the best return value is a random
-// number taken from an exponential distribution whose mean is MemProfileRate.
+// nextSample 返回堆分析的下一个采样点。目标是平均每个 MemProfileRate 字节采样分配，
+// 但在分配时间线上具有完全随机的分布；这对应于带有参数 MemProfileRate 的泊松过程。
+// 在泊松过程中，两个样本之间的距离遵循指数分布（exp(MemProfileRate)），
+// 因此最佳返回值是取自指数分布的随机数，其均值为 MemProfileRate。
 func nextSample() int32 {
 	if GOOS == "plan9" {
 		// Plan 9 doesn't support floating point in note handler.
@@ -1053,7 +1039,7 @@ func nextSample() int32 {
 		}
 	}
 
-	return fastexprand(MemProfileRate)
+	return fastexprand(MemProfileRate) // exp(MemProfileRate)
 }
 
 // fastexprand returns a random number from an exponential distribution with
