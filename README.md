@@ -73,6 +73,12 @@
 
 [结束语](content/finalwords.md)
 
+## 捐助
+
+您的捐助将用于赞助我购买一台 [MacBook Pro](https://www.apple.com/de/macbook-pro/)：
+
+[![](https://img.shields.io/badge/%E6%8D%90%E5%8A%A9-PayPal-104098.svg?style=popout-square&logo=PayPal)](https://www.paypal.me/ouchangkun/4.99eur)
+
 ## Acknowledgement
 
 The author would like to thank [@egonelbre](https://github.com/egonelbre/gophers) for his charming gopher design.

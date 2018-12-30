@@ -121,3 +121,96 @@ func freemcache(c *mcache) {
 	})
 }
 ```
+
+### per-P? per-M?
+
+mcache 其实早在 [4 调度器: 调度执行](../4-sched/exec.md) 中与 mcache 打过照面了。
+
+首先，mcache 是一个 per-P 的 mcache，我们很自然的疑问就是，这个 mcache 在 p/m 这两个结构体上都有成员：
+
+```go
+type p struct {
+	(...)
+	mcache      *mcache
+	(...)
+}
+type m struct {
+	(...)
+	mcache      *mcache
+	(...)
+}
+```
+
+那么 mcache 是跟着谁跑的？结合调度器的知识不难发现，m 在执行时需要持有一个 p 才具备执行能力。
+那么在 `acquirep` 的时候，是否有发生 mcache 的持有呢？答案是有的：
+
+```go
+//go:yeswritebarrierrec
+func acquirep(_p_ *p) {
+	acquirep1(_p_)
+	_g_ := getg()
+	
+	// 将 p 上的 mcache 给到 m 上
+	_g_.m.mcache = _p_.mcache
+
+	(...)
+}
+```
+
+同样，我们还需要验证，当 releasep 的时候，是否会发生 mcache 和 m 的解绑？答案也是肯定的：
+
+```go
+func releasep() *p {
+	_g_ := getg()
+
+	(...)
+	_g_.m.mcache = nil
+
+	(...)
+}
+```
+
+更有利的证据是，当调用 `runtime.procresize` 时，初始化新的 P 时，mcache 是直接分配到 p 的；
+回收 p 时，mcache 是直接从 p 上获取：
+
+```go
+func procresize(nprocs int32) *p {
+	(...)
+	// 初始化新的 P
+	for i := int32(0); i < nprocs; i++ {
+		pp := allp[i]
+		(...)
+		// 为 P 分配 cache 对象
+		if pp.mcache == nil {
+			if old == 0 && i == 0 {
+				if getg().m.mcache == nil {
+					throw("missing mcache?")
+				}
+				pp.mcache = getg().m.mcache
+			} else {
+				// 创建 cache
+				pp.mcache = allocmcache()
+			}
+		}
+
+		(...)
+	}
+
+	// 释放未使用的 P
+	for i := nprocs; i < old; i++ {
+		p := allp[i]
+		(...)
+		// 释放当前 P 绑定的 cache
+		freemcache(p.mcache)
+		p.mcache = nil
+		(...)
+	}
+	(...)
+}
+```
+
+因而我们可以明确：
+
+- mcache 会被 P 持有，当 M 和 P 绑定时，M 同样会保留 mcache 的指针
+- mcache 直接向操作系统申请内存，且常驻运行时
+- p 通过 make 命令进行分配，会分配在 Go 堆上
