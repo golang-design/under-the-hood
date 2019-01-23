@@ -647,15 +647,15 @@ func extendRandom(r []byte, n int) {
 	}
 }
 
-// A _defer holds an entry on the list of deferred calls.
-// If you add a field here, add code to clear it in freedefer.
+// _defer 在被推迟调用的列表上保存了一个入口，
+// 如果你在这里增加了一个字段，则需要在 freedefer 中增加清除它的代码
 type _defer struct {
 	siz     int32
 	started bool
-	sp      uintptr // sp at time of defer
+	sp      uintptr // defer 时的 sp
 	pc      uintptr
 	fn      *funcval
-	_panic  *_panic // panic that is running defer
+	_panic  *_panic // panic 被 defer
 	link    *_defer
 }
 

@@ -84,20 +84,19 @@ func throwinit() {
 	throw("recursive call during initialization - linker skew")
 }
 
-// Create a new deferred function fn with siz bytes of arguments.
-// The compiler turns a defer statement into a call to this.
+// 创建一个新的被延期执行的函数 fn，具有 siz 字节大小的参数。
+// 编译器会将 defer 语句翻译为此调用。
 //go:nosplit
 func deferproc(siz int32, fn *funcval) { // arguments of fn follow fn
 	if getg().m.curg != getg() {
-		// go code on the system stack can't defer
+		// 在系统栈上的 go 代码不能 defer
 		throw("defer on system stack")
 	}
 
-	// the arguments of fn are in a perilous state. The stack map
-	// for deferproc does not describe them. So we can't let garbage
-	// collection or stack copying trigger until we've copied them out
-	// to somewhere safe. The memmove below does that.
-	// Until the copy completes, we can only call nosplit routines.
+	// fn 的参数处于不安全的状态中。deferproc 的栈 map 无法描述他们。因此，在
+	// 我们完全将他们复制到某个安全的地方之前，我们都不能触发让垃圾回收或栈拷贝。
+	// 下面的 memmove 就是做这件事情的。
+	// 直到拷贝完成，我们才调用 nosplit 协程。
 	sp := getcallersp()
 	argp := uintptr(unsafe.Pointer(&fn)) + unsafe.Sizeof(fn)
 	callerpc := getcallerpc()
@@ -118,15 +117,11 @@ func deferproc(siz int32, fn *funcval) { // arguments of fn follow fn
 		memmove(deferArgs(d), unsafe.Pointer(argp), uintptr(siz))
 	}
 
-	// deferproc returns 0 normally.
-	// a deferred func that stops a panic
-	// makes the deferproc return 1.
-	// the code the compiler generates always
-	// checks the return value and jumps to the
-	// end of the function if deferproc returns != 0.
+	// deferproc 正常返回 0。
+	// 一个终止 panic 而被延迟调用的函数会使 deferproc 返回 1
+	// 如果 deferproc 返回值不等于 0 则编译器保证了总是检查返回值且跳转到函数的末尾
 	return0()
-	// No code can go here - the C return register has
-	// been set and must not be clobbered.
+	// 没有代码可以执行到这里：C 返回寄存器已经被设置且不被 clobber
 }
 
 // Small malloc size classes >= 16 are the multiples of 16: 16, 32, 48, 64, 80, 96, 112, 128, 144, ...
@@ -139,7 +134,7 @@ const (
 	minDeferArgs    = minDeferAlloc - deferHeaderSize
 )
 
-// defer size class for arg size sz
+// defer 参数 sz 大小的 class
 //go:nosplit
 func deferclass(siz uintptr) uintptr {
 	if siz <= minDeferArgs {
@@ -201,22 +196,21 @@ func init() {
 	deferType = (*(**ptrtype)(unsafe.Pointer(&x))).elem
 }
 
-// Allocate a Defer, usually using per-P pool.
-// Each defer must be released with freedefer.
+// 分配一个 defer, 通常使用了 per-P 池.
+// 每个 defer 必须由 freedefer 释放.
 //
-// This must not grow the stack because there may be a frame without
-// stack map information when this is called.
+// 由于当它被调用时候可能存在没有栈map信息的帧存在，因此不能增长栈。
 //
 //go:nosplit
 func newdefer(siz int32) *_defer {
 	var d *_defer
 	sc := deferclass(uintptr(siz))
 	gp := getg()
+	// 检查 defer 参数的大小是否能放进 p 的 deferpool
 	if sc < uintptr(len(p{}.deferpool)) {
 		pp := gp.m.p.ptr()
 		if len(pp.deferpool[sc]) == 0 && sched.deferpool[sc] != nil {
-			// Take the slow path on the system stack so
-			// we don't grow newdefer's stack.
+			// 在系统栈上采取 slow path，从而我们不会增长 newdefer 的栈
 			systemstack(func() {
 				lock(&sched.deferlock)
 				for len(pp.deferpool[sc]) < cap(pp.deferpool[sc])/2 && sched.deferpool[sc] != nil {
@@ -235,23 +229,24 @@ func newdefer(siz int32) *_defer {
 		}
 	}
 	if d == nil {
-		// Allocate new defer+args.
+		// 如果 siz 太大，则重新
+		// 分配新的 defer 和 args
 		systemstack(func() {
 			total := roundupsize(totaldefersize(uintptr(siz)))
 			d = (*_defer)(mallocgc(total, deferType, true))
 		})
 	}
+	// 将 _defer 实例添加到 goroutine 的 _defer 链表上。
 	d.siz = siz
 	d.link = gp._defer
 	gp._defer = d
 	return d
 }
 
-// Free the given defer.
-// The defer cannot be used after this call.
+// 释放给定的 defer
+// defer 在此调用后不能被使用
 //
-// This must not grow the stack because there may be a frame without a
-// stack map when this is called.
+// 不允许增长栈，因为当调用时栈帧可能没有栈map
 //
 //go:nosplit
 func freedefer(d *_defer) {
@@ -267,10 +262,10 @@ func freedefer(d *_defer) {
 	}
 	pp := getg().m.p.ptr()
 	if len(pp.deferpool[sc]) == cap(pp.deferpool[sc]) {
-		// Transfer half of local cache to the central cache.
+		// 转移一半的 local cache 到 central cache
 		//
-		// Take this slow path on the system stack so
-		// we don't grow freedefer's stack.
+		// 将其转入系统栈上的 slow path
+		// 从而不会增长 freedefer 的栈
 		systemstack(func() {
 			var first, last *_defer
 			for len(pp.deferpool[sc]) > cap(pp.deferpool[sc])/2 {
@@ -292,15 +287,14 @@ func freedefer(d *_defer) {
 		})
 	}
 
-	// These lines used to be simply `*d = _defer{}` but that
-	// started causing a nosplit stack overflow via typedmemmove.
+	// 这些行以前只是为了简化 `*d = _defer{}`
+	// 但是通过 typedmemmove 开始的会导致一个 nosplit 栈溢出
 	d.siz = 0
 	d.started = false
 	d.sp = 0
 	d.pc = 0
-	// d._panic and d.fn must be nil already.
-	// If not, we would have called freedeferpanic or freedeferfn above,
-	// both of which throw.
+	// d._panic 和 d.fn 必须已经是 nil
+	// 否则我们会在上面调用 freedeferpanic 或 freedeferfn，它们都会 throw
 	d.link = nil
 
 	pp.deferpool[sc] = append(pp.deferpool[sc], d)
@@ -318,37 +312,33 @@ func freedeferfn() {
 	throw("freedefer with d.fn != nil")
 }
 
-// Run a deferred function if there is one.
-// The compiler inserts a call to this at the end of any
-// function which calls defer.
-// If there is a deferred function, this will call runtime·jmpdefer,
-// which will jump to the deferred function such that it appears
-// to have been called by the caller of deferreturn at the point
-// just before deferreturn was called. The effect is that deferreturn
-// is called again and again until there are no more deferred functions.
-// Cannot split the stack because we reuse the caller's frame to
-// call the deferred function.
-
-// The single argument isn't actually used - it just has its address
-// taken so it can be matched against pending defers.
+// 如果存在，则运行 defer 函数
+// 编译器会将这个调用插入到任何包含 defer 的函数的末尾。
+// 如果存在一个被 defer 的函数，此调用会调用 runtime.jmpdefer
+// 这将跳转到被延迟的函数，使得它看起来像是在调用 deferreturn 之前由 deferreturn 的调用者调用。
+// 产生的结果就是反复地调用 deferreturn，直到没有更多的 defer 函数为止。
+//
+// 无法拆分栈，因为我们复用了调用方栈帧来调用被 defer 的函数。
+//
+// 这个单独的参数没有被使用：它只是采用了它的地址，因此它可以与随后的延迟匹配。
 //go:nosplit
 func deferreturn(arg0 uintptr) {
 	gp := getg()
 	d := gp._defer
+	// 当没有 defer 调用时，直接返回
 	if d == nil {
 		return
 	}
+	// 当 defer 的调用方不是当前 deferreturn 的调用方时，也直接返回
 	sp := getcallersp()
 	if d.sp != sp {
 		return
 	}
 
-	// Moving arguments around.
+	// 移动参数
 	//
-	// Everything called after this point must be recursively
-	// nosplit because the garbage collector won't know the form
-	// of the arguments until the jmpdefer can flip the PC over to
-	// fn.
+	// 任何伺候的调用必须递归的 nosplit，因为垃圾回收器不会知道参数的形式，直到
+	// jmpdefer 能够翻转 PC 到 fn
 	switch d.siz {
 	case 0:
 		// Do nothing.
@@ -357,6 +347,7 @@ func deferreturn(arg0 uintptr) {
 	default:
 		memmove(unsafe.Pointer(&arg0), deferArgs(d), uintptr(d.siz))
 	}
+	// 获得 fn 的入口地址，并随后立即将 _defer 释放掉
 	fn := d.fn
 	d.fn = nil
 	gp._defer = d.link

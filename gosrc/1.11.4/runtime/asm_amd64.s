@@ -561,18 +561,18 @@ TEXT ·publicationBarrier(SB),NOSPLIT,$0-0
 	RET
 
 // void jmpdefer(fn, sp);
-// called from deferreturn.
-// 1. pop the caller
-// 2. sub 5 bytes from the callers return
-// 3. jmp to the argument
+// 从 deferreturn 调用
+// 1. 出栈调用方
+// 2. 替换调用方返回的 5 个字节
+// 3. 跳转到参数
 TEXT runtime·jmpdefer(SB), NOSPLIT, $0-16
 	MOVQ	fv+0(FP), DX	// fn
-	MOVQ	argp+8(FP), BX	// caller sp
-	LEAQ	-8(BX), SP	// caller sp after CALL
-	MOVQ	-8(SP), BP	// restore BP as if deferreturn returned (harmless if framepointers not in use)
-	SUBQ	$5, (SP)	// return to CALL again
+	MOVQ	argp+8(FP), BX	// 调用方 sp
+	LEAQ	-8(BX), SP	// CALL 后的调用方 sp
+	MOVQ	-8(SP), BP	// 恢复BP，好像 deferreturn 返回（如果没有使用 framepointers，则无害）
+	SUBQ	$5, (SP)	// 再次返回到 CALL
 	MOVQ	0(DX), BX
-	JMP	BX	// but first run the deferred function
+	JMP	BX	// 最后才运行被 defer 的函数
 
 // 保存调用方状态到 g->sched，摧毁 R8 R9
 TEXT gosave<>(SB),NOSPLIT,$0

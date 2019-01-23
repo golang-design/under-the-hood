@@ -214,3 +214,7 @@ func procresize(nprocs int32) *p {
 - mcache 会被 P 持有，当 M 和 P 绑定时，M 同样会保留 mcache 的指针
 - mcache 直接向操作系统申请内存，且常驻运行时
 - p 通过 make 命令进行分配，会分配在 Go 堆上
+
+## 许可
+
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

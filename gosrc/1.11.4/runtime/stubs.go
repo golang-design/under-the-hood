@@ -205,7 +205,7 @@ func publicationBarrier()
 func getcallerpc() uintptr
 
 //go:noescape
-func getcallersp() uintptr // implemented as an intrinsic on all platforms
+func getcallersp() uintptr // 在所有平台上作为 intrinsic 实现
 
 // getclosureptr returns the pointer to the current closure.
 // getclosureptr can only be used in an assignment statement
@@ -233,11 +233,9 @@ func morestack()
 func morestack_noctxt()
 func rt0_go()
 
-// return0 is a stub used to return 0 from deferproc.
-// It is called at the very end of deferproc to signal
-// the calling Go function that it should not jump
-// to deferreturn.
-// in asm_*.s
+// return0 是一个用于在 deferproc 中返回 0 的 stub
+// 他会在每个 deferproc 结束时返回 0 来通知调用的 go 函数，从而不会跳转到
+// deferreturn, 在 asm_*.s 中实现
 func return0()
 
 // in asm_*.s
