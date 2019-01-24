@@ -659,23 +659,20 @@ type _defer struct {
 	link    *_defer
 }
 
-// A _panic holds information about an active panic.
+// _panic 保存了一个活跃的 panic
 //
-// This is marked go:notinheap because _panic values must only ever
-// live on the stack.
+// 这个标记了 go:notinheap 因为 _panic 的值必须位于栈上
 //
-// The argp and link fields are stack pointers, but don't need special
-// handling during stack growth: because they are pointer-typed and
-// _panic values only live on the stack, regular stack pointer
-// adjustment takes care of them.
+// argp 和 link 字段为栈指针，但在栈增长时不需要特殊处理：因为他们是指针类型且
+// _panic 值只位于栈上，正常的栈指针调整会处理他们。
 //
 //go:notinheap
 type _panic struct {
-	argp      unsafe.Pointer // pointer to arguments of deferred call run during panic; cannot move - known to liblink
-	arg       interface{}    // argument to panic
-	link      *_panic        // link to earlier panic
-	recovered bool           // whether this panic is over
-	aborted   bool           // the panic was aborted
+	argp      unsafe.Pointer // panic 期间 defer 调用参数的指针; 无法移动 - liblink 已知
+	arg       interface{}    // panic 的参数
+	link      *_panic        // link 链接到更早的 panic
+	recovered bool           // 表明 panic 是否结束
+	aborted   bool           // 表明 panic 是否忽略
 }
 
 // stack traces

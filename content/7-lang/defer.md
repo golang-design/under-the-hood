@@ -152,6 +152,8 @@ func newdefer(siz int32) *_defer {
 	// 检查 defer 参数的大小是否从 p 的 deferpool 直接分配
 	if sc < uintptr(len(p{}.deferpool)) {
 		pp := gp.m.p.ptr()
+
+		// 如果 p 本地无法分配，则从全局池中获取一批
 		if len(pp.deferpool[sc]) == 0 && sched.deferpool[sc] != nil {
 			// 在系统栈上采取 slow path，从而我们不会增长 newdefer 的栈
 			systemstack(func() {
@@ -165,6 +167,8 @@ func newdefer(siz int32) *_defer {
 				unlock(&sched.deferlock)
 			})
 		}
+
+		// 从本地分配
 		if n := len(pp.deferpool[sc]); n > 0 {
 			d = pp.deferpool[sc][n-1]
 			pp.deferpool[sc][n-1] = nil
@@ -184,6 +188,23 @@ func newdefer(siz int32) *_defer {
 	d.link = gp._defer
 	gp._defer = d
 	return d
+}
+```
+
+`_defer` 的具体结构也非常简单，包含了参数的大小、pc/sp、入口地址、panic 链表
+和自身的 link 指针：
+
+```go
+// _defer 在被推迟调用的列表上保存了一个入口，
+// 如果你在这里增加了一个字段，则需要在 freedefer 中增加清除它的代码
+type _defer struct {
+	siz     int32
+	started bool
+	sp      uintptr // defer 时的 sp
+	pc      uintptr
+	fn      *funcval
+	_panic  *_panic // panic 被 defer
+	link    *_defer
 }
 ```
 
