@@ -659,18 +659,20 @@ func goexit0(gp *g) {
 		print("invalid m->lockedInt = ", _g_.m.lockedInt, "\n")
 		throw("internal lockOSThread error")
 	}
-	_g_.m.lockedExt = 0
 
 	// 将 g 扔进 gfree 链表中等待复用
 	gfput(_g_.m.p.ptr(), gp)
 
 	if locked {
 		// 该 goroutine 可能在当前线程上锁住，因为它可能导致了不正常的内核状态
-		// 这时候应该 kill 该线程，而非将 m 放回到线程池。
+		// 这时候 kill 该线程，而非将 m 放回到线程池。
 
 		// 此举会返回到 mstart，从而释放当前的 P 并退出该线程
 		if GOOS != "plan9" { // See golang.org/issue/22227.
 			gogo(&_g_.m.g0.sched)
+		} else {
+			// 因为我们可能已重用此线程结束，在 plan9 上清除 lockedExt
+			_g_.m.lockedExt = 0
 		}
 	}
 

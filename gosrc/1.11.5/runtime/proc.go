@@ -2870,7 +2870,6 @@ func goexit0(gp *g) {
 		print("invalid m->lockedInt = ", _g_.m.lockedInt, "\n")
 		throw("internal lockOSThread error")
 	}
-	_g_.m.lockedExt = 0
 
 	// 将 g 扔进 gfree 链表中等待复用
 	gfput(_g_.m.p.ptr(), gp)
@@ -2882,6 +2881,9 @@ func goexit0(gp *g) {
 		// 此举会返回到 mstart，从而释放当前的 P 并退出该线程
 		if GOOS != "plan9" { // See golang.org/issue/22227.
 			gogo(&_g_.m.g0.sched)
+		} else {
+			// 因为我们可能已重用此线程结束，在 plan9 上清除 lockedExt
+			_g_.m.lockedExt = 0
 		}
 	}
 
@@ -3479,9 +3481,11 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 		if writeBarrier.needed && !_g_.m.curg.gcscandone {
 			f := findfunc(fn.fn)
 			stkmap := (*stackmap)(funcdata(f, _FUNCDATA_ArgsPointerMaps))
-			// We're in the prologue, so it's always stack map index 0.
-			bv := stackmapdata(stkmap, 0)
-			bulkBarrierBitmap(spArg, spArg, uintptr(narg), 0, bv.bytedata)
+			if stkmap.nbit > 0 {
+				// 我们正位于序言部分，因此栈 map 索引总是 0
+				bv := stackmapdata(stkmap, 0)
+				bulkBarrierBitmap(spArg, spArg, uintptr(bv.n)*sys.PtrSize, 0, bv.bytedata)
+			}
 		}
 	}
 
