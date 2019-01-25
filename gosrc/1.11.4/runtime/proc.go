@@ -1893,24 +1893,19 @@ func unlockextra(mp *m) {
 // execLock 序列化 exec 和 clone 以避免在创建/销毁线程时执行错误或未指定的行为。见 issue #19546。
 var execLock rwmutex
 
-// newmHandoff contains a list of m structures that need new OS threads.
-// This is used by newm in situations where newm itself can't safely
-// start an OS thread.
+// newmHandoff 包含需要新 OS 线程的 m 的列表。
+// 在 newm 本身无法安全启动 OS 线程的情况下，newm 会使用它。
 var newmHandoff struct {
 	lock mutex
 
-	// newm points to a list of M structures that need new OS
-	// threads. The list is linked through m.schedlink.
+	// newm 指向需要新 OS 线程的M结构列表。 该列表通过 m.schedlink 链接。
 	newm muintptr
 
-	// waiting indicates that wake needs to be notified when an m
-	// is put on the list.
+	// waiting 表示当 m 列入列表时需要通知唤醒。
 	waiting bool
 	wake    note
 
-	// haveTemplateThread indicates that the templateThread has
-	// been started. This is not protected by lock. Use cas to set
-	// to 1.
+	// haveTemplateThread 表示 templateThread 已经启动。没有锁保护，使用 cas 设置为 1。
 	haveTemplateThread uint32
 }
 
@@ -1977,10 +1972,9 @@ func newm1(mp *m) {
 	execLock.runlock()
 }
 
-// startTemplateThread starts the template thread if it is not already
-// running.
+// 如果模板线程尚未运行，则startTemplateThread将启动它。
 //
-// The calling thread must itself be in a known-good state.
+// 调用线程本身必须处于已知良好状态。
 func startTemplateThread() {
 	if GOARCH == "wasm" { // no threads on wasm yet
 		return
@@ -1991,16 +1985,13 @@ func startTemplateThread() {
 	newm(templateThread, nil)
 }
 
-// templateThread is a thread in a known-good state that exists solely
-// to start new threads in known-good states when the calling thread
-// may not be a a good state.
+// templateThread是处于已知良好状态的线程，仅当调用线程可能不是良好状态时，
+// 该线程仅用于在已知良好状态下启动新线程。
 //
-// Many programs never need this, so templateThread is started lazily
-// when we first enter a state that might lead to running on a thread
-// in an unknown state.
+// 许多程序不需要这个，所以当我们第一次进入可能导致在未知状态的线程上运行的状态时，
+// templateThread 会懒启动。
 //
-// templateThread runs on an M without a P, so it must not have write
-// barriers.
+// templateThread 在没有 P 的 M 上运行，因此它必须没有写障碍。
 //
 //go:nowritebarrierrec
 func templateThread() {
@@ -2023,6 +2014,8 @@ func templateThread() {
 			}
 			lock(&newmHandoff.lock)
 		}
+
+		// 等待新的创建请求
 		newmHandoff.waiting = true
 		noteclear(&newmHandoff.wake)
 		unlock(&newmHandoff.lock)
@@ -2194,7 +2187,7 @@ func wakep() {
 	startm(nil, true)
 }
 
-// 停止当前正在执行做主的 g 的 m 的执行，直到 g 重新变为 runnable。
+// 停止当前正在执行锁住的 g 的 m 的执行，直到 g 重新变为 runnable。
 // 返回获得的 P
 func stoplockedm() {
 	_g_ := getg()
@@ -3708,9 +3701,8 @@ func Breakpoint() {
 	breakpoint()
 }
 
-// dolockOSThread is called by LockOSThread and lockOSThread below
-// after they modify m.locked. Do not allow preemption during this call,
-// or else the m might be different in this function than in the caller.
+// dolockOSThread 在修改 m.locked 后由 LockOSThread 和 lockOSThread 调用。
+// 在此调用期间不允许抢占，否则此函数中的 m 可能与调用者中的 m 不同。
 //go:nosplit
 func dolockOSThread() {
 	if GOARCH == "wasm" {
@@ -3739,9 +3731,8 @@ func dolockOSThread() {
 // non-Go library functions that depend on per-thread state.
 func LockOSThread() {
 	if atomic.Load(&newmHandoff.haveTemplateThread) == 0 && GOOS != "plan9" {
-		// If we need to start a new thread from the locked
-		// thread, we need the template thread. Start it now
-		// while we're in a known-good state.
+		// 如果我们需要从锁定的线程启动一个新线程，我们需要模板线程。
+		// 当我们处于一个已知良好的状态时，立即启动它。
 		startTemplateThread()
 	}
 	_g_ := getg()
@@ -3759,9 +3750,8 @@ func lockOSThread() {
 	dolockOSThread()
 }
 
-// dounlockOSThread is called by UnlockOSThread and unlockOSThread below
-// after they update m->locked. Do not allow preemption during this call,
-// or else the m might be in different in this function than in the caller.
+// dounlockOSThread 在更新 m->locked 后由 UnlockOSThread 和 unlockOSThread 调用。
+// 在此调用期间不允许抢占，否则此函数中的 m 可能与调用者中的 m 不同。
 //go:nosplit
 func dounlockOSThread() {
 	if GOARCH == "wasm" {

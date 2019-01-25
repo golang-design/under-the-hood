@@ -14,7 +14,7 @@
 4. 调度器: sched
     - [基本知识](content/4-sched/basic.md)
     - [初始化](content/4-sched/init.md)
-    - [调度执行](content/4-sched/exec.md)
+    - [调度循环](content/4-sched/exec.md)
     - [系统监控](content/4-sched/sysmon.md)
     - [调度理论](content/4-sched/theory.md)
 5. 内存分配器: alloc
@@ -37,7 +37,7 @@
 8. 运行时组件
     - [`runtime.GOMAXPROCS`](content/8-runtime/gomaxprocs.md)
     - [`runtime.SetFinalizer` 与 `runtime.KeepAlive`](content/8-runtime/finalizer.md)
-    - [`runtime.LockOSThread` 与 `runtime.UnlockOSThread`](content/8-runtime/lockosthread.md)
+    - [`LockOSThread/UnlockOSThread` 与运行时线程管理](content/8-runtime/lockosthread.md)
     - [`runtime.note` 与 `runtime.mutex`](content/8-runtime/note.md)
     - [参与运行时的系统调用: darwin](content/8-runtime/syscall-darwin.md)
     - [参与运行时的系统调用: linux](content/8-runtime/syscall-linux.md)
