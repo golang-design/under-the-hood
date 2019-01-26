@@ -265,7 +265,7 @@ func forcegchelper() {
 
 //go:nosplit
 
-// Gosched 会解绑当前的 P，并允许其他 goroutine 运行。它不会推迟当前的 goroutine，因此执行会被自动恢复
+// Gosched 会让出当前的 P，并允许其他 goroutine 运行。它不会推迟当前的 goroutine，因此执行会被自动恢复
 func Gosched() {
 	checkTimeouts()
 	mcall(gosched_m)
@@ -680,7 +680,7 @@ func mcommoninit(mp *m) {
 	}
 }
 
-// Mark gp ready to run.
+// 将 gp 标记为 ready 来运行
 func ready(gp *g, traceskip int, next bool) {
 	if trace.enabled {
 		traceGoUnpark(gp, traceskip)
@@ -688,22 +688,22 @@ func ready(gp *g, traceskip int, next bool) {
 
 	status := readgstatus(gp)
 
-	// Mark runnable.
+	// 标记为 runnable.
 	_g_ := getg()
-	_g_.m.locks++ // disable preemption because it can be holding p in a local var
+	_g_.m.locks++ // 禁止抢占，因为它可以在局部变量中保存 p
 	if status&^_Gscan != _Gwaiting {
 		dumpgstatus(gp)
 		throw("bad g->status in ready")
 	}
 
-	// status is Gwaiting or Gscanwaiting, make Grunnable and put on runq
+	// 状态为 Gwaiting 或 Gscanwaiting, 标记 Grunnable 并将其放入运行队列 runq
 	casgstatus(gp, _Gwaiting, _Grunnable)
 	runqput(_g_.m.p.ptr(), gp, next)
 	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 {
 		wakep()
 	}
 	_g_.m.locks--
-	if _g_.m.locks == 0 && _g_.preempt { // restore the preemption request in Case we've cleared it in newstack
+	if _g_.m.locks == 0 && _g_.preempt { // 在 newstack 中已经清除它的情况下恢复抢占请求
 		_g_.stackguard0 = stackPreempt
 	}
 }
@@ -2764,21 +2764,25 @@ func park_m(gp *g) {
 }
 
 func goschedImpl(gp *g) {
+	// 放弃当前 g 的运行状态
 	status := readgstatus(gp)
 	if status&^_Gscan != _Grunning {
 		dumpgstatus(gp)
 		throw("bad g status")
 	}
 	casgstatus(gp, _Grunning, _Grunnable)
+	// 使当前 m 放弃 g
 	dropg()
+	// 并将 g 放回全局队列中
 	lock(&sched.lock)
 	globrunqput(gp)
 	unlock(&sched.lock)
 
+	// 重新进入调度循环
 	schedule()
 }
 
-// Gosched continuation on g0.
+// Gosched 在 g0 上继续执行
 func gosched_m(gp *g) {
 	if trace.enabled {
 		traceGoSched()

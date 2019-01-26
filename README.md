@@ -2,7 +2,7 @@
 
 # Go under the hood
 
-当前基于 `go1.11.5`
+Go 源码研究 | 当前基于 `go1.11.5`
 
 ## 目录
 
@@ -44,7 +44,6 @@
     - [`LockOSThread/UnlockOSThread` 与运行时线程管理](content/8-runtime/lockosthread.md)
     - [`note` 与 `mutex`](content/8-runtime/note.md)
     - [`SetFinalizer` 与 `KeepAlive`](content/8-runtime/finalizer.md)
-    - [`Gosched`](content/8-runtime/gosched.md)
     - [信号量 sema 机制](content/8-runtime/sema.md)
     - [系统信号处理](content/8-runtime/signal.md)
 9. [`unsafe`](content/9-unsafe.md)
@@ -73,6 +72,7 @@
     - [编译后端 SSA](content/16-compile/ssa.md)
 17. 附录
     - [源码索引](content/appendix/index.md)
+    - [术语表](content/appendix/glossary.md)
     - [Plan 9 汇编介绍](content/appendix/asm.md)
     - [基于工作窃取的多线程计算调度](papers/sched/work-steal-sched.md)
     - [Go 运行时编程](gosrc/1.11.5/runtime/README.md)
