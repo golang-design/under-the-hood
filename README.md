@@ -20,9 +20,7 @@ Go 源码研究 | 当前基于 `go1.11.5`
     - [调度理论](content/4-sched/theory.md)
 5. 内存分配器: alloc
     - [基本知识](content/5-mem/basic.md)
-    - [全局分配组件](content/5-mem/galloc.md)
     - [分配器组件](content/5-mem/component.md)
-    - [FixAlloc、LinearAlloc 组件](content/5-mem/fixalloc.md)
     - [初始化](content/5-mem/init.md)
     - [分配过程](content/5-mem/alloc.md)
 6. 垃圾回收器：GC

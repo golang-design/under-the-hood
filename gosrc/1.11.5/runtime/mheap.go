@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Page heap.
+// 页堆 page heap
 //
-// See malloc.go for overview.
+// 见 malloc.go 了解综述.
 
 package runtime
 
@@ -32,8 +32,8 @@ type mheap struct {
 	busy      [_MaxMHeapList]mSpanList // busy lists of large spans of given length
 	busylarge mSpanList                // busy lists of large spans length >= _MaxMHeapList
 	sweepgen  uint32                   // sweep generation, see comment in mspan
-	sweepdone uint32                   // all spans are swept
-	sweepers  uint32                   // number of active sweepone calls
+	sweepdone uint32                   // 所有清扫过的 span
+	sweepers  uint32                   // 活跃的清扫调用数
 
 	// allspans 是所有创建过的 mspans 的 slice。每个 mspan 只出现一次.
 	//
@@ -54,7 +54,7 @@ type mheap struct {
 
 	//_ uint32 // align uint64 fields on 32-bit for atomics
 
-	// Proportional sweep
+	// 成比例清扫 (propotional sweep)
 	//
 	// These parameters represent a linear function from heap_live
 	// to page sweep count. The proportional sweep system works to
@@ -521,8 +521,9 @@ func spanOfHeap(p uintptr) *mspan {
 	return s
 }
 
-// 堆初始化.
+// 堆初始化
 func (h *mheap) init() {
+	// 初始化堆中各个组件的分配器
 	h.treapalloc.init(unsafe.Sizeof(treapNode{}), nil, nil, &memstats.other_sys)
 	h.spanalloc.init(unsafe.Sizeof(mspan{}), recordspan, unsafe.Pointer(h), &memstats.mspan_sys)
 	h.cachealloc.init(unsafe.Sizeof(mcache{}), nil, nil, &memstats.mcache_sys)
@@ -530,16 +531,14 @@ func (h *mheap) init() {
 	h.specialprofilealloc.init(unsafe.Sizeof(specialprofile{}), nil, nil, &memstats.other_sys)
 	h.arenaHintAlloc.init(unsafe.Sizeof(arenaHint{}), nil, nil, &memstats.other_sys)
 
-	// Don't zero mspan allocations. Background sweeping can
-	// inspect a span concurrently with allocating it, so it's
-	// important that the span's sweepgen survive across freeing
-	// and re-allocating a span to prevent background sweeping
-	// from improperly cas'ing it from 0.
+	// 不对 mspan 的分配清零，后台扫描可以通过分配它来并发的检查一个 span
+	// 因此 span 的 sweepgen 在释放和重新分配时候能存活，从而可以防止后台扫描
+	// 不正确的将其从 0 进行 CAS。
 	//
-	// This is safe because mspan contains no heap pointers.
+	// 因为 mspan 不包含堆指针，因此它是安全的
 	h.spanalloc.zero = false
 
-	// h->mapcache needs no init
+	// h->mapcache 不需要初始化
 	for i := range h.free {
 		h.free[i].init()
 		h.busy[i].init()

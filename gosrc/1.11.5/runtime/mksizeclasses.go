@@ -4,28 +4,19 @@
 
 // +build ignore
 
-// Generate tables for small malloc size classes.
+// 为小型分配大小等级生成表
 //
-// See malloc.go for overview.
+// 参见 malloc.go 了解综述
 //
-// The size classes are chosen so that rounding an allocation
-// request up to the next size class wastes at most 12.5% (1.125x).
+// 选择的大小等级能够使得分配的请求大小舍入到下一个等级且最多浪费 12.5% (1.125x)。
 //
-// Each size class has its own page count that gets allocated
-// and chopped up when new objects of the size class are needed.
-// That page count is chosen so that chopping up the run of
-// pages into objects of the given size wastes at most 12.5% (1.125x)
-// of the memory. It is not necessary that the cutoff here be
-// the same as above.
+// 每个大小等级都有自己的页数，当需要给定大小等级的新对象时，它会被分配和切断。
+// 选择的页数使得将页面运行截断成给定大小的对象最多浪费 12.5％(1.125x) 的内存。
+// 这里的截断值不必与上述相同。
 //
-// The two sources of waste multiply, so the worst possible case
-// for the above constraints would be that allocations of some
-// size might have a 26.6% (1.266x) overhead.
-// In practice, only one of the wastes comes into play for a
-// given size (sizes < 512 waste mainly on the round-up,
-// sizes > 512 waste mainly on the page chopping).
-// For really small sizes, alignment constraints force the
-// overhead higher.
+// 将两种造成浪费的来源相乘，因此上述限制的最坏情况可能是某些规模的分配可能具有 26.6％(1.266x) 的开销。
+// 在实践中，只有一种浪费在给定尺寸下发挥作用（sizes < 512 主要是在 round-up 时浪费，sizes > 512 主要是在页面截断上）。
+// 对于非常小的尺寸，对齐的约束会使开销更高。
 
 package main
 
@@ -40,7 +31,7 @@ import (
 	"os"
 )
 
-// Generate msize.go
+// 生成 msize.go
 
 var stdout = flag.Bool("stdout", false, "write to stdout instead of sizeclasses.go")
 

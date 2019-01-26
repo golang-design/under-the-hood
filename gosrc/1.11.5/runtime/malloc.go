@@ -14,7 +14,7 @@
 //
 // 分配器的数据结构为:
 //
-//	fixalloc: 固定大小(fixed-size)非堆(off-heap)中对象的分配器自由表(free-list)
+//	fixalloc: 固定大小(fixed-size)非堆(off-heap)中对象的自由表(free-list)分配器
 //	mheap: 分配的堆，在 page (8192字节=8KB)的粒度上进行管理。
 //	mspan: mheap 管理的一连串 page
 //	mcentral: 搜集给定大小的 class 的所有 span
@@ -23,8 +23,7 @@
 //
 // 分配一个小对象会进入缓存层次结构：
 //
-//	1. 将大小调整为 small size classes 中的一个，并查看此 P 的
-//	   mcache 中相应的 mspan。
+//	1. 将大小调整为 small 大小等级中的一个，并查看此 P 的 mcache 中相应的 mspan。
 //	   扫描 mspan 的 free bitmap 以找到 free slot。如果有 free slot，则分配它。
 //	   这可以在不获取锁定的情况下完成。
 //
@@ -32,45 +31,34 @@
 //	   具有所需class大小的空间的新的 mspan。
 //	   获取整个 span 均摊了对 mcentral 加锁的成本。
 //
-//	3. If the mcentral's mspan list is empty, obtain a run
-//	   of pages from the mheap to use for the mspan.
+//	3. 如果 mcentral 的 mspan 列表为空, 则从 mheap 中获取一连串页给这个 mspan
 //
-//	4. If the mheap is empty or has no page runs large enough,
-//	   allocate a new group of pages (at least 1MB) from the
-//	   operating system. Allocating a large run of pages
-//	   amortizes the cost of talking to the operating system.
+//	4. 如果 mheap 为空，或没有足够的页来分配如此大的对象，则从操作系统中分配一组新的页（至少 1MB）
+//	   一次性分配一大片页能够均摊与操作系统沟通的成本
 //
-// Sweeping an mspan and freeing objects on it proceeds up a similar
-// hierarchy:
+// 扫描 mspan 并在其上释放对象会产生类似的层次结构：
 //
-//	1. If the mspan is being swept in response to allocation, it
-//	   is returned to the mcache to satisfy the allocation.
+//	1. 如果 mspan 在响应分配时被扫描，则返回到 mcache 以满足分配需求。
 //
-//	2. Otherwise, if the mspan still has allocated objects in it,
-//	   it is placed on the mcentral free list for the mspan's size
-//	   class.
+//	2. 否则，如果 mspan 仍然在其中分配了对象，
+//	   则将其放置在 mspan 的大小等级的 mcentral 自由列表中。
 //
-//	3. Otherwise, if all objects in the mspan are free, the mspan
-//	   is now "idle", so it is returned to the mheap and no longer
-//	   has a size class.
-//	   This may coalesce it with adjacent idle mspans.
+//	3. 否则，如果 mspan 中的所有对象都是空闲的，则 mspan 现在处于“空闲”状态，
+//	   因此它将返回到 mheap 并且不再具有大小等级。
+//	   这可以将其与相邻的空闲 mspans 合并。
 //
-//	4. If an mspan remains idle for long enough, return its pages
-//	   to the operating system.
+//	4. 如果 mspan 保持空闲的时间足够长，则将其页面归还给操作系统。
 //
-// Allocating and freeing a large object uses the mheap
-// directly, bypassing the mcache and mcentral.
+// 分配并释放大对象直接使用 mheap，绕过 mcache 和 mcentral。
 //
-// Free object slots in an mspan are zeroed only if mspan.needzero is
-// false. If needzero is true, objects are zeroed as they are
-// allocated. There are various benefits to delaying zeroing this way:
+// 仅当 mspan.needzero 为 false 时，mspan 中的自由对象槽才会归零。
+// 如果 needzero 为 true，则对象在分配时归零。以这种方式延迟归零有很多好处：
 //
-//	1. Stack frame allocation can avoid zeroing altogether.
+//	1. 栈帧分配可以完全避免归零。
 //
-//	2. It exhibits better temporal locality, since the program is
-//	   probably about to write to the memory.
+//	2. 它表现出更好的时间局部性，因为程序可能要写入内存。
 //
-//	3. We don't zero pages that never get reused.
+//	3. 我们不会零页面则永远不会被重用。
 
 // 虚拟内存布局
 //
@@ -213,9 +201,9 @@ const (
 	//       */32-bit         32         4MB           1      4KB
 	//     */mips(le)         31         4MB           1      2KB
 
-	// heapArenaBytes is the size of a heap arena. The heap
-	// consists of mappings of size heapArenaBytes, aligned to
-	// heapArenaBytes. The initial heap mapping is one arena.
+	// heapArenaBytes 为 heap arena 的大小。
+	// heap 由大小为 heapArenaBytes 的映射构成，与 heapArenaBytes 对齐。
+	// 初始的 heap 只有一个 arena。
 	//
 	// This is currently 64MB on 64-bit non-Windows and 4MB on
 	// 32-bit and on Windows. We use smaller arenas on Windows
@@ -225,6 +213,7 @@ const (
 	// This is particularly important with the race detector,
 	// since it significantly amplifies the cost of committed
 	// memory.
+	//
 	heapArenaBytes = 1 << logHeapArenaBytes
 
 	// logHeapArenaBytes is log_2 of heapArenaBytes. For clarity,
@@ -232,7 +221,7 @@ const (
 	// constant to compute some other constants).
 	logHeapArenaBytes = (6+20)*(_64bit*(1-sys.GoosWindows)) + (2+20)*(_64bit*sys.GoosWindows) + (2+20)*(1-_64bit)
 
-	// heapArenaBitmapBytes is the size of each heap arena's bitmap.
+	// heapArenaBitmapBytes 为每个 heap arena 的 bitmap 的大小
 	heapArenaBitmapBytes = heapArenaBytes / (sys.PtrSize * 8 / 2)
 
 	pagesPerArena = heapArenaBytes / pageSize
@@ -369,7 +358,7 @@ func mallocinit() {
 	_g_ := getg()
 	_g_.m.mcache = allocmcache()
 
-	// Create initial arena growth hints.
+	// 创建初始的 arena 增长 hint
 	if sys.PtrSize == 8 && GOARCH != "wasm" {
 		// 64 位机器上，我们选取下面的 hint，因为：
 		//

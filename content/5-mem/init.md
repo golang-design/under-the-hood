@@ -1,10 +1,8 @@
 # 5 内存管理: 初始化
 
-在第二节中，我们已经看到栈和内存分配器是最先完成初始化的。我们先来看这两个初始化的过程。
+栈和内存分配器是最先完成初始化的，我们先来看这两个初始化的过程。
 
 ### 栈初始化
-
-栈就是传统程序的栈内存的概念。传统程序的内存区块包含三个部分：静态内存、栈内存和堆内存。
 
 ```go
 // runtime/internal/sys/stubs.go
@@ -60,49 +58,20 @@ func (list *mSpanList) init() {
 
 ### 内存分配初始化
 
-TODO:
+内存分配器的初始化除去一些例行的检查之外，就是对堆的初始化了：
 
 ```go
 func mallocinit() {
-	if class_to_size[_TinySizeClass] != _TinySize {
-		throw("bad TinySizeClass")
-	}
-
-	testdefersizes()
-
-	if heapArenaBitmapBytes&(heapArenaBitmapBytes-1) != 0 {
-		// heapBits expects modular arithmetic on bitmap
-		// addresses to work.
-		throw("heapArenaBitmapBytes not a power of 2")
-	}
-
-	// 将 class size 复制到统计表中
-	for i := range class_to_size {
-		memstats.by_size[i].size = uint32(class_to_size[i])
-	}
-
-	// 检查 physPageSize
-	if physPageSize == 0 {
-		// 获取系统物理 page 大小失败
-		throw("failed to get system page size")
-	}
-	// 如果 page 太小也失败 4KB
-	if physPageSize < minPhysPageSize {
-		print("system page size (", physPageSize, ") is smaller than minimum page size (", minPhysPageSize, ")\n")
-		throw("bad system page size")
-	}
-	// 系统 page 大小必须是 2 的任意指数大小
-	if physPageSize&(physPageSize-1) != 0 {
-		print("system page size (", physPageSize, ") must be a power of 2\n")
-		throw("bad system page size")
-	}
+	// 一些涉及内存分配器的常量的检查，包括
+	// heapArenaBitmapBytes, physPageSize 等等
+	...
 
 	// 初始化堆
 	mheap_.init()
 	_g_ := getg()
 	_g_.m.mcache = allocmcache()
 
-	// Create initial arena growth hints.
+	// 创建初始的 arena 增长 hint
 	if sys.PtrSize == 8 && GOARCH != "wasm" {
 		// 64 位机器上，我们选取下面的 hint，因为：
 		//
@@ -147,28 +116,49 @@ func mallocinit() {
 			hint.next, mheap_.arenaHints = mheap_.arenaHints, hint
 		}
 	} else {
-		// 32 位机器，我们不关心
+		// 32 位机器，不关心
 		(...)
 	}
 }
 ```
 
-在这个过程中还包含 `allocmcache()`：
+堆的初始化：
 
 ```go
-func allocmcache() *mcache {
-	lock(&mheap_.lock)
-	c := (*mcache)(mheap_.cachealloc.alloc())
-	unlock(&mheap_.lock)
-	for i := range c.alloc {
-		c.alloc[i] = &emptymspan
+// 堆初始化
+func (h *mheap) init() {
+	// 初始化堆中各个组件的分配器
+	h.treapalloc.init(unsafe.Sizeof(treapNode{}), nil, nil, &memstats.other_sys)
+	h.spanalloc.init(unsafe.Sizeof(mspan{}), recordspan, unsafe.Pointer(h), &memstats.mspan_sys)
+	h.cachealloc.init(unsafe.Sizeof(mcache{}), nil, nil, &memstats.mcache_sys)
+	h.specialfinalizeralloc.init(unsafe.Sizeof(specialfinalizer{}), nil, nil, &memstats.other_sys)
+	h.specialprofilealloc.init(unsafe.Sizeof(specialprofile{}), nil, nil, &memstats.other_sys)
+	h.arenaHintAlloc.init(unsafe.Sizeof(arenaHint{}), nil, nil, &memstats.other_sys)
+
+	// 不对 mspan 的分配清零，后台扫描可以通过分配它来并发的检查一个 span
+	// 因此 span 的 sweepgen 在释放和重新分配时候能存活，从而可以防止后台扫描
+	// 不正确的将其从 0 进行 CAS。
+	//
+	// 因为 mspan 不包含堆指针，因此它是安全的
+	h.spanalloc.zero = false
+
+	// h->mapcache 不需要初始化
+	for i := range h.free {
+		h.free[i].init()
+		h.busy[i].init()
 	}
-	c.next_sample = nextSample()
-	return c
+
+	h.busylarge.init()
+	for i := range h.central {
+		h.central[i].mcentral.init(spanClass(i))
+	}
 }
 ```
 
-TODO: sdf
+在这个过程中还包含对 mcache 初始化 `allocmcache()`，这个 mcache 会在 `procresize` 中将 mcache
+转移到 P 的门下，而并非属于 M，这个我们在 [5 内存管理: 分配器组件](../5-mem/component.md) 中会讨论。
+
+TODO:
 
 ## 许可
 
