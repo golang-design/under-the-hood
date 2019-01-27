@@ -49,19 +49,13 @@ It is a comma-separated list of name=val pairs setting these named variables:
 	gcshrinkstackoff: setting gcshrinkstackoff=1 disables moving goroutines
 	onto smaller stacks. In this mode, a goroutine's stack can only grow.
 
-	gcrescanstacks: setting gcrescanstacks=1 enables stack
-	re-scanning during the STW mark termination phase. This is
-	helpful for debugging if objects are being prematurely
-	garbage collected.
-
 	gcstoptheworld: setting gcstoptheworld=1 disables concurrent garbage collection,
 	making every garbage collection a stop-the-world event. Setting gcstoptheworld=2
 	also disables concurrent sweeping after the garbage collection finishes.
 
 	gctrace: setting gctrace=1 causes the garbage collector to emit a single line to standard
 	error at each collection, summarizing the amount of memory collected and the
-	length of the pause. Setting gctrace=2 emits the same summary but also
-	repeats each collection. The format of this line is subject to change.
+	length of the pause. The format of this line is subject to change.
 	Currently, it is:
 		gc # @#s #%: #+#+# ms clock, #+#/#/#+# ms cpu, #->#-># MB, # MB goal, # P
 	where the fields are as follows:
@@ -93,6 +87,11 @@ It is a comma-separated list of name=val pairs setting these named variables:
 		sys: #       MB mapped from the system
 		released: #  MB released to the system
 		consumed: #  MB allocated from the system
+
+	madvdontneed: setting madvdontneed=1 will use MADV_DONTNEED
+	instead of MADV_FREE on Linux when returning memory to the
+	kernel. This is less efficient, but causes RSS numbers to drop
+	more quickly.
 
 	memprofilerate: setting memprofilerate=X will update the value of runtime.MemProfileRate.
 	When set to 0 memory profiling is disabled.  Refer to the description of
@@ -169,29 +168,13 @@ import "runtime/internal/sys"
 // （由于历史原因，Caller 和 Callers 之间 skip 的含义不同。）返回值报告相应调用文件中的程序计数器，
 // 文件名和行号。如果无法恢复信息，则布尔值 ok 为 false。
 func Caller(skip int) (pc uintptr, file string, line int, ok bool) {
-	// Make room for three PCs: the one we were asked for,
-	// what it called, so that CallersFrames can see if it "called"
-	// sigpanic, and possibly a PC for skipPleaseUseCallersFrames.
-	// 为三个 PC 让出空间，包括我们要求的 PC、调用它的，从而 CallersFrames 可观察到它是被调用、
-	// sigpanic 和可能
-	var rpc [3]uintptr
-	if callers(1+skip-1, rpc[:]) < 2 {
+	rpc := make([]uintptr, 1)
+	n := callers(skip+1, rpc[:])
+	if n < 1 {
 		return
 	}
-	var stackExpander stackExpander
-	callers := stackExpander.init(rpc[:])
-	// We asked for one extra, so skip that one. If this is sigpanic,
-	// stepping over this frame will set up state in Frames so the
-	// next frame is correct.
-	callers, _, ok = stackExpander.next(callers, true)
-	if !ok {
-		return
-	}
-	_, frame, _ := stackExpander.next(callers, true)
-	pc = frame.PC
-	file = frame.File
-	line = frame.Line
-	return
+	frame, _ := CallersFrames(rpc).Next()
+	return frame.PC, frame.File, frame.Line, frame.PC != 0
 }
 
 // Callers 使用调用 goroutine 栈上的函数调用的返回程序计数器数组 pc。
@@ -202,6 +185,7 @@ func Caller(skip int) (pc uintptr, file string, line int, ok bool) {
 // CallersFrames 考虑内联函数并将返回程序计数器调整为调用程序计数器。
 // 不鼓励迭代返回的 PC 片，就像在任何返回的 PC 上使用 FuncForPC 一样，
 // 因为这些不能解释内联或返回程序计数器调整。
+//go:noinline
 func Callers(skip int, pc []uintptr) int {
 	// runtime.callers uses pc.array==nil as a signal
 	// to print a stack trace. Pick off 0-length pc here
@@ -229,6 +213,7 @@ func Version() string {
 
 // GOOS 是正在运行的程序的操作系统目标：
 // darwin，freebsd，linux 等之一。
+// 查看所有 GOOS 和 GOARCH 的组合，请运行 "go tool dist list"
 const GOOS string = sys.GOOS
 
 // GOARCH 是正在运行的程序的架构目标：

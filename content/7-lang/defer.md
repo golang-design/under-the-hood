@@ -266,7 +266,8 @@ func deferreturn(arg0 uintptr) {
 只是函数的入口地址和参数，以及它的调用方 `deferreturn` 的 sp：
 
 ```asm
-// void jmpdefer(fn, sp);
+// func jmpdefer(fv *funcval, argp uintptr)
+// argp 为调用方 SP
 // 从 deferreturn 调用
 // 1. 出栈调用方
 // 2. 替换调用方返回的 5 个字节

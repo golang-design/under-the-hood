@@ -227,7 +227,7 @@ func notetsleepg(n *note, ns int64) bool {
 	return ok
 }
 
-func pauseSchedulerUntilCallback() bool {
+func beforeIdle() bool {
 	return false
 }
 

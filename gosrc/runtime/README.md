@@ -116,11 +116,8 @@ P 可以理解一个 OS 调度器中的 CPU，`p` 类型的内容类似于每个
 
 在非托管内存中分配对象**不得包含**堆指针，除非遵循下列原则：
 
-1. 任何来自非托管内存的堆指针必须在 `runtime.markroot` 中添加为显式垃圾回收的 root。
-2. If the memory is reused, the heap pointers must be zero-initialized
-   before they become visible as GC roots. Otherwise, the GC may
-   observe stale heap pointers. See "Zero-initialization versus
-   zeroing". 如果内存被重用，那么堆指针必须进行在他们作为 GC root 可见前进行零初始化。否则，GC 可能会回收已经过时的堆指针。请参考「零初始化与归零」
+1. 任何来自非托管内存的指向堆的指针必须为垃圾回收的 root。具体而言，所有指针必须要么能够被一个全局变量访问到，要么能够在 `runtime.markroot` 中添加为显式垃圾回收的 root。
+2. 如果内存被重用，那么堆指针必须进行在他们作为 GC root 可见前进行零初始化。否则，GC 可能会回收已经过时的堆指针。请参考「零初始化与归零」
 
 零初始化 v.s. 归零
 ==================================
