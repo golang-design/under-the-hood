@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build darwin dragonfly freebsd linux netbsd openbsd solaris
+// +build aix darwin dragonfly freebsd linux netbsd openbsd solaris
 
 package syscall
 
@@ -101,9 +101,9 @@ func (m *mmapper) Munmap(data []byte) (err error) {
 	return nil
 }
 
-// Errno 是描述错误条件的无符号数。
-// 它实现了 error 接口。零 Errno 按惯例是非错误的，
-// 因此从 Errno 转换为错误的代码应该使用：
+// An Errno is an unsigned number describing an error condition.
+// It implements the error interface. The zero Errno is by convention
+// a non-error, so code to convert from Errno to error should use:
 //	err = nil
 //	if errno != 0 {
 //		err = errno
@@ -128,14 +128,16 @@ func (e Errno) Timeout() bool {
 	return e == EAGAIN || e == EWOULDBLOCK || e == ETIMEDOUT
 }
 
-// 对于常见的 Errno 值，仅进行一次接口分配。
+// Do the interface allocations only once for common
+// Errno values.
 var (
 	errEAGAIN error = EAGAIN
 	errEINVAL error = EINVAL
 	errENOENT error = ENOENT
 )
 
-// errnoErr 返回常见的封装的 Errno 值，以防止在运行时进行分配。
+// errnoErr returns common boxed Errno values, to prevent
+// allocations at runtime.
 func errnoErr(e Errno) error {
 	switch e {
 	case 0:

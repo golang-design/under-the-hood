@@ -83,6 +83,7 @@ mksysctl=""
 zsysctl="zsysctl_$GOOSARCH.go"
 mksysnum=
 mktypes=
+mkasm=
 run="sh"
 
 case "$1" in
@@ -115,21 +116,38 @@ _* | *_ | _)
 	echo 'undefined $GOOS_$GOARCH:' "$GOOSARCH" 1>&2
 	exit 1
 	;;
+aix_ppc64)
+	mkerrors="$mkerrors -maix64"
+	mksyscall="./mksyscall_libc.pl -aix"
+	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
+	;;
 darwin_386)
 	mkerrors="$mkerrors -m32"
-	mksyscall="./mksyscall.pl -l32"
+	mksyscall="./mksyscall.pl -l32 -darwin"
 	mksysnum="./mksysnum_darwin.pl /usr/include/sys/syscall.h"
 	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
+	mkasm="go run mkasm_darwin.go"
 	;;
 darwin_amd64)
 	mkerrors="$mkerrors -m64"
+	mksyscall="./mksyscall.pl -darwin"
 	mksysnum="./mksysnum_darwin.pl /usr/include/sys/syscall.h"
 	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
+	mkasm="go run mkasm_darwin.go"
 	;;
 darwin_arm64)
 	mkerrors="$mkerrors -m64"
+	mksyscall="./mksyscall.pl -darwin"
 	mksysnum="./mksysnum_darwin.pl /usr/include/sys/syscall.h"
 	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
+	mkasm="go run mkasm_darwin.go"
+	;;
+darwin_arm)
+	mkerrors="$mkerrors -m32"
+	mksyscall="./mksyscall.pl -l32 -darwin"
+	mksysnum="./mksysnum_darwin.pl /usr/include/sys/syscall.h"
+	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
+	mkasm="go run mkasm_darwin.go"
 	;;
 dragonfly_amd64)
 	mkerrors="$mkerrors -m64"
@@ -292,7 +310,9 @@ openbsd_arm)
 	mksysctl="./mksysctl_openbsd.pl"
 	zsysctl="zsysctl_openbsd.go"
 	mksysnum="curl -s 'http://cvsweb.openbsd.org/cgi-bin/cvsweb/~checkout~/src/sys/kern/syscalls.master' | ./mksysnum_openbsd.pl"
-	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
+	# Let the type of C char be signed to make the bare syscall
+	# API consistent between platforms.
+	mktypes="GOARCH=$GOARCH go tool cgo -godefs -- -fsigned-char"
 	;;
 plan9_386)
 	mkerrors=
@@ -301,7 +321,7 @@ plan9_386)
 	mktypes="XXX"
 	;;
 solaris_amd64)
-	mksyscall="./mksyscall_solaris.pl"
+	mksyscall="./mksyscall_libc.pl -solaris"
 	mkerrors="$mkerrors -m64"
 	mksysnum=
 	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
@@ -327,5 +347,10 @@ esac
 	if [ -n "$mksyscall" ]; then echo "$mksyscall -tags $GOOS,$GOARCH $syscall_goos $GOOSARCH_in |gofmt >zsyscall_$GOOSARCH.go"; fi
 	if [ -n "$mksysctl" ]; then echo "$mksysctl |gofmt >$zsysctl"; fi
 	if [ -n "$mksysnum" ]; then echo "$mksysnum |gofmt >zsysnum_$GOOSARCH.go"; fi
-	if [ -n "$mktypes" ]; then echo "$mktypes types_$GOOS.go |go run mkpost.go >ztypes_$GOOSARCH.go"; fi
+	if [ -n "$mktypes" ]; then
+		# ztypes_$GOOSARCH.go could be erased before "go run mkpost.go" is called.
+		# Therefore, "go run" tries to recompile syscall package but ztypes is empty and it fails.
+		echo "$mktypes types_$GOOS.go |go run mkpost.go >ztypes_$GOOSARCH.go.NEW && mv ztypes_$GOOSARCH.go.NEW ztypes_$GOOSARCH.go";
+	fi
+	if [ -n "$mkasm" ]; then echo "$mkasm $GOARCH"; fi
 ) | $run
