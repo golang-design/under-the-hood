@@ -7,24 +7,23 @@
 // 请参考 malloc.go 的综述
 //
 // mcentral 不包含空闲对象，相反 mspan 会。每个 mcentral 包含两个 mspan 链表，
-// 分别是包含空闲对象（c-nonempty）的链表和完整分配的（c->empty）链表
+// 分别是包含空闲对象（c.nonempty）的链表和完整分配的（c.empty）链表
 
 package runtime
 
 import "runtime/internal/atomic"
 
-// Central list of free objects of a given size.
+// 给定大小的自由对象 central 列表。
 //
 //go:notinheap
 type mcentral struct {
 	lock      mutex
 	spanclass spanClass
-	nonempty  mSpanList // list of spans with a free object, ie a nonempty free list
-	empty     mSpanList // list of spans with no free objects (or cached in an mcache)
+	nonempty  mSpanList // 带有自由对象的 span 列表，即非空闲列表
+	empty     mSpanList // 没有自由对象的 span 列表（或缓存在 mcache 中）
 
-	// nmalloc is the cumulative count of objects allocated from
-	// this mcentral, assuming all spans in mcaches are
-	// fully-allocated. Written atomically, read under STW.
+	// 假设 mcaches 中的所有 span 都已完全分配，则 nmalloc 是
+	// 从此 mcentral 分配的对象的累积计数。原子地写，在 STW 下读。
 	nmalloc uint64
 }
 

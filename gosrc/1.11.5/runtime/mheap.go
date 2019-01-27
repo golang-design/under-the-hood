@@ -27,11 +27,11 @@ const minPhysPageSize = 4096
 //go:notinheap
 type mheap struct {
 	lock      mutex
-	free      [_MaxMHeapList]mSpanList // 给定 _MaxMHeapList 长度的空闲列表
-	freelarge mTreap                   // 长度大于 _MaxMHeapList 的空闲树堆(treap)
-	busy      [_MaxMHeapList]mSpanList // busy lists of large spans of given length
-	busylarge mSpanList                // busy lists of large spans length >= _MaxMHeapList
-	sweepgen  uint32                   // sweep generation, see comment in mspan
+	free      [_MaxMHeapList]mSpanList // 给定 _MaxMHeapList 长度的自由列表
+	freelarge mTreap                   // 长度大于 _MaxMHeapList 的空闲树堆 (treap)
+	busy      [_MaxMHeapList]mSpanList // 给定长度的大 span 的繁忙列表
+	busylarge mSpanList                // 长度大于 _MaxMHeapList 的大 span 的繁忙列表
+	sweepgen  uint32                   // sweep-generation, 参见 mspan 的注释
 	sweepdone uint32                   // 所有清扫过的 span
 	sweepers  uint32                   // 活跃的清扫调用数
 
@@ -181,9 +181,8 @@ type arenaHint struct {
 // 当 MSpan 被分配后, state == MSpanInUse 或 MSpanManual
 // 且对于所有的 s->start <= i < s->start+s->npages，heapmap(i) == span。
 
-// Every MSpan is in one doubly-linked list,
-// either one of the MHeap's free lists or one of the
-// MCentral's span lists.
+// 每个 mspan 都位于一个双向链表中，
+// 要么是 mheap 的自由表中的一个，要么是 mcentral 的 span 列表中的一个
 
 // An MSpan representing actual memory has state _MSpanInUse,
 // _MSpanManual, or _MSpanFree. Transitions between these states are
@@ -296,10 +295,10 @@ type mspan struct { // 双向链表
 	sweepgen    uint32
 	divMul      uint16     // for divide by elemsize - divMagic.mul
 	baseMask    uint16     // if non-0, elemsize is a power of 2, & this will get object allocation base
-	allocCount  uint16     // number of allocated objects
-	spanclass   spanClass  // size class and noscan (uint8)
-	incache     bool       // being used by an mcache
-	state       mSpanState // mspaninuse etc
+	allocCount  uint16     // 分配对象的数量
+	spanclass   spanClass  // 大小等级与 noscan (uint8)
+	incache     bool       // 是否被 mcache 使用
+	state       mSpanState // mspaninuse 等等信息
 	needzero    uint8      // needs to be zeroed before allocation
 	divShift    uint8      // for divide by elemsize - divMagic.shift
 	divShift2   uint8      // for divide by elemsize - divMagic.shift2

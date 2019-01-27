@@ -6,7 +6,7 @@
 
 ```go
 // runtime/internal/sys/stubs.go
-const PtrSize = 4 << (^uintptr(0) >> 63)           // unsafe.Sizeof(uintptr(0)) 理想情况下为常量
+const PtrSize = 4 << (^uintptr(0) >> 63) // unsafe.Sizeof(uintptr(0)) 理想情况下为常量 8
 
 // runtime/malloc.go
 // 获得缓存的 order 数。order 0 为 FixedStack，每个后序都是前一个的两倍
