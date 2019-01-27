@@ -9,7 +9,7 @@
 //
 // 主分配器工作在 page 上。小规模的分配（小于等于 32KB）被舍入为大约 70
 // 个大小的 class 中，每个 class 都有一组自己完全相同大小的对象。
-// 任何可用的内存 page 可以拆分为一个固定大小 class 的集合，
+// 任何可用的内存 page 可以拆分为一个固定大小等级的集合，
 // 然后使用 free bitmap 进行管理。
 //
 // 分配器的数据结构为:
@@ -785,35 +785,28 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	noscan := typ == nil || typ.kind&kindNoPointers != 0
 	if size <= maxSmallSize {
 		if noscan && size < maxTinySize {
-			// 小型分配器
+			// 微型分配器 (tiny)
 			//
-			// Tiny allocator combines several tiny allocation requests
-			// into a single memory block. The resulting memory block
-			// is freed when all subobjects are unreachable. The subobjects
-			// must be noscan (don't have pointers), this ensures that
-			// the amount of potentially wasted memory is bounded.
+			// 微型分配器结合了多个的微型分配请求，并将其合并到一个单一的内存块中。
+			// 微型分配器将几个微小的分配请求组合到一个内存块中。
+			// 当所有子对象都无法访问时，将释放生成的内存块。子对象必须是 noscan（没有指针），
+			// 这可以确保可能浪费的内存量是有界的。
 			//
-			// Size of the memory block used for combining (maxTinySize) is tunable.
-			// Current setting is 16 bytes, which relates to 2x worst case memory
-			// wastage (when all but one subobjects are unreachable).
-			// 8 bytes would result in no wastage at all, but provides less
-			// opportunities for combining.
-			// 32 bytes provides more opportunities for combining,
-			// but can lead to 4x worst case wastage.
-			// The best case winning is 8x regardless of block size.
+			// 用于组合的内存块的大小（maxTinySize）是可调的。
+			// 当前设置为 16 个字节，这与 2x 最坏情况的内存浪费
+			//（当除了一个子对象之外的所有子对象都无法访问时）有关。
+			// 8 字节虽然可以完全没有浪费，但会提供更少的组合机会。
+			// 32 字节提供了更多的组合机会，但可能导致 4 倍最坏情况下的浪费。
+			// 无论块大小如何，最好的做法是采用 8 倍。
 			//
-			// Objects obtained from tiny allocator must not be freed explicitly.
-			// So when an object will be freed explicitly, we ensure that
-			// its size >= maxTinySize.
+			// 从微型分配器获得的对象不得明确释放。
+			// 因此，当显式释放对象时，我们确保其大小 >= maxTinySize。
 			//
-			// SetFinalizer has a special case for objects potentially coming
-			// from tiny allocator, it such case it allows to set finalizers
-			// for an inner byte of a memory block.
+			// SetFinalizer 对于可能来自微型分配器的对象有一个特殊情况，
+			// 它允许为内存块的内部字节设置 finalizer。
 			//
-			// The main targets of tiny allocator are small strings and
-			// standalone escaping variables. On a json benchmark
-			// the allocator reduces number of allocations by ~12% and
-			// reduces heap size by ~20%.
+			// 微型分配器的主要目标是小字符串和独立的逃逸变量。
+			// 在 json 性能测试中，分配器将分配次数减少了大约 12％，并将堆大小占用减少了大约 20％。
 			off := c.tinyoffset
 			// Align tiny pointer for required (conservative) alignment.
 			if size&7 == 0 {

@@ -14,53 +14,42 @@ import (
 栈布局管理参数
 包括运行时（6c编译）和链接器（gcc编译）
 
- To cut one
-instruction from the check sequence for functions with tiny frames,
-the stack is allowed to protrude StackSmall bytes below the stack
-guard.  Functions with large frames don't bother with the check and
-always call morestack.  The sequences are (for amd64, others are
-similar):
-每个 goroutine 的 g->stackguard 被设置为从栈底增长的 StackGurard 字节。
-每个函数都会比较栈指针和g->stackguard来检查是否存在溢出。
+每个 goroutine 的 g.stackguard 被设置为从栈底增长的 StackGurard 字节。
+每个函数都会比较栈指针和 g.stackguard 来检查是否存在溢出。
 为了从具有小帧函数的检查序列中取出一条指令，允许栈在 stackguard 下延展
-StackSmall 字节。具有大帧的函数不会影响检查，总是调用更多的栈。
-序列为(amd64，其他类似)：
+StackSmall 字节。具有大帧的函数不会影响检查，总是调用 morestack。
+序列为 (amd64，其他类似)：
 
 	guard = g->stackguard
-	frame = function's stack frame size
-	argsize = size of function arguments (call + return)
+	frame = 函数的栈帧大小
+	argsize = 函数参数的大小 (call+return)
 
-	stack frame size <= StackSmall:
+	栈帧大小 <= StackSmall:
 		CMPQ guard, SP
 		JHI 3(PC)
 		MOVQ m->morearg, $(argsize << 32)
 		CALL morestack(SB)
 
-	stack frame size > StackSmall but < StackBig
+	栈帧大小 > StackSmall 但 < StackBig
 		LEAQ (frame-StackSmall)(SP), R0
 		CMPQ guard, R0
 		JHI 3(PC)
 		MOVQ m->morearg, $(argsize << 32)
 		CALL morestack(SB)
 
-	stack frame size >= StackBig:
+	栈帧大小 >= StackBig:
 		MOVQ m->morearg, $((argsize << 32) | frame)
 		CALL morestack(SB)
 
-The bottom StackGuard - StackSmall bytes are important: there has
-to be enough room to execute functions that refuse to check for
-stack overflow, either because they need to be adjacent to the
-actual caller's frame (deferproc) or because they handle the imminent
-stack overflow (morestack).
+底部的 StackGuard - StackSmall 字节非常重要:
+必须有足够的空间来执行拒绝检查栈溢出的函数，要么因为它们需要与实际调用者的帧（deferproc）相邻，
+或者要么因为它们处理即将发生的栈溢出（morestack）。
 
-For example, deferproc might call malloc, which does one of the
-above checks (without allocating a full frame), which might trigger
-a call to morestack.  This sequence needs to fit in the bottom
-section of the stack.  On amd64, morestack's frame is 40 bytes, and
-deferproc's frame is 56 bytes.  That fits well within the
-StackGuard - StackSmall bytes at the bottom.
-The linkers explore all possible call traces involving non-splitting
-functions to make sure that this limit cannot be violated.
+例如，deferproc 可能会调用 malloc，它会在不分配完整帧的情况下执行上述检查，
+从而可能会触发 morestack 调用。该序列需要适应栈的底部的区域。
+在 amd64 上，morestack 的帧为 40 个字节，deferproc 的帧是 56 个字节。
+这非常适合 StackGuard - StackSmall 字节。
+链接器会探测涉及不可拆分函数的所有可能的调用轨迹，以确保不会违反此限制。
 */
 
 const (

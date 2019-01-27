@@ -1,10 +1,11 @@
 # 5 内存管理: 基本知识
 
+[TOC]
+
 到目前为止，我们已经分析了 Go 程序如何启动、初始化需要进行的关键步骤、初始化结束后，
 主 goroutine 如何被调度器进行调度。现在我们来看 Go 中另一重要的关键组件：内存分配器。
 
-Go 的内存分配器基于 Thread-Cache Malloc (tcmalloc) [1]，tcmalloc 为每个线程实现了一个本地缓存，区分了小对象（小于 32kb）
-和大对象分配两种分配类型，其管理的内存单元称为 span。
+Go 的内存分配器基于 Thread-Cache Malloc (tcmalloc) [1]，tcmalloc 为每个线程实现了一个本地缓存，区分了小对象（小于 32kb）和大对象分配两种分配类型，其管理的内存单元称为 span。
 
 我们不再介绍更多 tcmalloc 的具体细节，因为 Go 的内存分配器与 tcmalloc 存在一定差异。
 这个差异来源于 Go 语言被设计为没有显式的内存分配与释放，
@@ -18,30 +19,20 @@ Go 的内存分配器基于 Thread-Cache Malloc (tcmalloc) [1]，tcmalloc 为每
 
 Go 的内存分配器主要包含以下几个核心组件：
 
-- fixalloc：用于分配固定大小的堆外内存，基于自由表实现
+- heapArena: 保留整个虚拟地址空间
 - mheap：分配的堆，在页大小为 8KB 的粒度上进行管理
 - mspan：是 mheap 上管理的一连串的页
 - mcentral：搜集了给定大小等级的所有 span
-- mcache：是一个 per-P 的缓存。
-- mstats：用于分配器的统计
+- mcache：为 per-P 的缓存。
 
 其中页是向操作系统申请内存的最小单位，目前设计为 8kb。
 
-每一个结构虽然不都像是调度器 M/P/G 结构那样的大部头，
-但初次阅读这些结构时想要理清他们之间的关系还是比较麻烦的。
-图 1 展示了所有结构的关系。
-
-![](../../images/mem-struct.png)
-
-_图 1: Go 内存管理结构总览_
+每一个结构虽然不都像是调度器 M/P/G 结构那样的大部头，但初次阅读这些结构时想要理清他们之间的关系还是比较麻烦的。传统意义上的栈被 Go 的运行时霸占，不开放给用户态代码；而传统意义上的堆内存，又被 Go 运行时划分为了两个部分，一个是 Go 运行时自身所需的堆内存，即堆外内存；另一部分则用于 Go 用户态代码所使用的堆内存，也叫做 Go 堆。Go 堆负责了用户态对象的存放以及 goroutine 的执行栈。
 
 ### Arena
 
 #### heapArena
 
-传统意义上的栈被 Go 的运行时霸占，不开放给用户态代码；
-而传统意义上的堆内存，又被 Go 运行时划分为了两个部分，
-一个是 Go 运行时自身所需的堆内存，即堆外内存；另一部分则用于 Go 用户态代码所使用的堆内存，也叫做 Go 堆。
 Go 堆被视为由多个 arena 组成，每个 arena 在 64 位机器上位 64MB，且起始地址与 arena 的大小对齐，
 所有的 arena 覆盖了整个 Go 堆的地址空间。
 
@@ -68,6 +59,8 @@ type heapArena struct {
 
 #### arenaHint
 
+结构比较简单，是 arenaHint 链表的节点结构，保存了arena 的起始地址、是否为最后一个 arena，以及下一个 arenaHint 指针。
+
 ```go
 //go:notinheap
 type arenaHint struct {
@@ -91,15 +84,17 @@ type arenaHint struct {
 type mspan struct { // 双向链表
 	next *mspan     // 链表中的下一个 span，如果为空则为 nil
 	prev *mspan     // 链表中的前一个 span，如果为空则为 nil
-	...
+    (...)
 	startAddr uintptr // span 的第一个字节的地址，即 s.base()
 	npages    uintptr // 一个 span 中的 page 数量
-	...
+    (...)
+	freeindex uintptr
+    (...)
 	allocCount  uint16     // 分配对象的数量
 	spanclass   spanClass  // 大小等级与 noscan (uint8)
 	incache     bool       // 是否被 mcache 使用
 	state       mSpanState // mspaninuse 等等信息
-	...
+	(...)
 }
 ```
 
@@ -111,10 +106,13 @@ type mspan struct { // 双向链表
 ```go
 //go:notinheap
 type mcache struct {
-	... 
+	(...)
+	tiny             uintptr
+	tinyoffset       uintptr
+	local_tinyallocs uintptr
 	alloc [numSpanClasses]*mspan // 用来分配的 spans，由 spanClass 索引
 	stackcache [_NumStackOrders]stackfreelist
-	...
+	(...)
 }
 ```
 
@@ -151,13 +149,13 @@ type mheap struct {
 	freelarge mTreap                   // 长度大于 _MaxMHeapList 的空闲树堆 (treap)
 	busy      [_MaxMHeapList]mSpanList // 128, 给定长度的大 span 的繁忙列表
 	busylarge mSpanList                // 长度大于 _MaxMHeapList 的大 span 的繁忙列表
-	...
+	(...)
 	allspans []*mspan // 所有 spans 从这里分配出去
-	...
+	(...)
 	arenas [1 << arenaL1Bits]*[1 << arenaL2Bits]*heapArena
-	...
+	(...)
 	arenaHints *arenaHint
-	...
+	(...)
 	central [numSpanClasses]struct {
 		mcentral mcentral
 		pad      [sys.CacheLineSize - unsafe.Sizeof(mcentral{})%sys.CacheLineSize]byte
@@ -171,9 +169,39 @@ type mheap struct {
 	specialprofilealloc   fixalloc // specialprofile* 分配器
 	speciallock           mutex    // 特殊记录分配器的锁
 	arenaHintAlloc        fixalloc // arenaHints 分配器
-	...
+	(...)
 }
 ```
+
+## 分配概览
+
+### 小对象分配
+
+当对一个小对象（<32kB）分配内存时，会将该对象所需的内存大小调整到某个能够容纳该对象的大小等级（size class），并查看 mcache 中对应等级的 mspan，通过扫描 mspan 的 `freeindex` 来确定是否能够进行分配。
+
+当没有可分配的 mspan 时，会从 mcentral 中获取一个所需大小空间的新的 mspan，从 mcentral 中分配会对其进行枷锁，但一次性获取整个 span 的过程均摊了对 mcentral 加锁的成本。
+
+如果 mcentral 的 mspan 也为空时，则它也会发生增长，从而从 mheap 中获取一连串的页，作为一个新的 mspan 进行提供。而如果 mheap 仍然为空，或者没有足够大的对象来进行分配时，则会从操作系统中分配一组新的页（至少 1MB），从而均摊与操作系统沟通的成本。
+
+### 微对象分配
+
+对于过小的微对象（<16B），它们的分配过程与小对象的分配过程基本类似，但是是直接存储在 mcache 上，并由其以 16B 的块大小直接进行管理和释放。
+
+### 大对象分配
+
+大对象分配非常粗暴，不与 mcache 和 mcentral 沟通，直接绕过并通过 mheap 进行分配。
+
+## 总结
+
+图 1 展示了所有结构的关系。
+
+![](../../images/mem-struct.png)
+
+_图 1: Go 内存管理结构总览_
+
+heap 最中间的灰色区域 arena 覆盖了 Go 程序的整个虚拟内存，每个 arena 包括一段 bitmap 和一段指向连续 span 的指针；每个 span 由一串连续的页组成；每个 arena 的起始位置通过 arenaHint 进行记录。
+
+分配的顺序从右向左，代价也就越来越大。小对象和微对象优先从白色区域 per-P 的 mcache 分配 span，这个过程不需要加锁（白色）；若失败则会从 mheap 持有的 mcentral 加锁获得新的 span，这个过程需要加锁，但只是局部（灰色）；若仍失败则会从右侧的 busy 和 free 进行分配，这个过程需要对整个 heap 进行加锁，代价最大（黑色）。
 
 ## 进一步阅读的参考文献
 
