@@ -48,8 +48,8 @@ Go 堆被视为由多个 arena 组成，每个 arena 在 64 位机器上位 64MB
 ```go
 const (
 	pageSize             = 8192                       // 8kb
-    heapArenaBytes       = 67108864                   // 64mb
-    heapArenaBitmapBytes = heapArenaBytes / 32        // 2097152
+	heapArenaBytes       = 67108864                   // 64mb
+	heapArenaBitmapBytes = heapArenaBytes / 32        // 2097152
 	pagesPerArena        = heapArenaBytes / pageSize  // 8192
 )
 
@@ -151,19 +151,19 @@ type mheap struct {
 	freelarge mTreap                   // 长度大于 _MaxMHeapList 的空闲树堆 (treap)
 	busy      [_MaxMHeapList]mSpanList // 128, 给定长度的大 span 的繁忙列表
 	busylarge mSpanList                // 长度大于 _MaxMHeapList 的大 span 的繁忙列表
-    ...
+	...
 	allspans []*mspan // 所有 spans 从这里分配出去
-    ...
+	...
 	arenas [1 << arenaL1Bits]*[1 << arenaL2Bits]*heapArena
-    ...
+	...
 	arenaHints *arenaHint
-    ...
+	...
 	central [numSpanClasses]struct {
 		mcentral mcentral
 		pad      [sys.CacheLineSize - unsafe.Sizeof(mcentral{})%sys.CacheLineSize]byte
 	}
 
-    // 各种分配器
+	// 各种分配器
 	spanalloc             fixalloc // span* 分配器
 	cachealloc            fixalloc // mcache* 分配器
 	treapalloc            fixalloc // treapNodes* 分配器，用于大对象
@@ -171,7 +171,7 @@ type mheap struct {
 	specialprofilealloc   fixalloc // specialprofile* 分配器
 	speciallock           mutex    // 特殊记录分配器的锁
 	arenaHintAlloc        fixalloc // arenaHints 分配器
-    ...
+	...
 }
 ```
 
