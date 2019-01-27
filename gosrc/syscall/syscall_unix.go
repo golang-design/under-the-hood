@@ -101,9 +101,9 @@ func (m *mmapper) Munmap(data []byte) (err error) {
 	return nil
 }
 
-// An Errno is an unsigned number describing an error condition.
-// It implements the error interface. The zero Errno is by convention
-// a non-error, so code to convert from Errno to error should use:
+// Errno 是描述错误条件的无符号数。
+// 它实现了 error 接口。零 Errno 按惯例是非错误的，
+// 因此从 Errno 转换为错误的代码应该使用：
 //	err = nil
 //	if errno != 0 {
 //		err = errno
@@ -128,16 +128,14 @@ func (e Errno) Timeout() bool {
 	return e == EAGAIN || e == EWOULDBLOCK || e == ETIMEDOUT
 }
 
-// Do the interface allocations only once for common
-// Errno values.
+// 对于常见的 Errno 值，仅进行一次接口分配。
 var (
 	errEAGAIN error = EAGAIN
 	errEINVAL error = EINVAL
 	errENOENT error = ENOENT
 )
 
-// errnoErr returns common boxed Errno values, to prevent
-// allocations at runtime.
+// errnoErr 返回常见的封装的 Errno 值，以防止在运行时进行分配。
 func errnoErr(e Errno) error {
 	switch e {
 	case 0:

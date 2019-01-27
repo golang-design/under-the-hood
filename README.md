@@ -73,7 +73,7 @@ Go 源码研究 | 当前基于 `go1.11.5`
     - [术语表](content/appendix/glossary.md)
     - [Plan 9 汇编介绍](content/appendix/asm.md)
     - [基于工作窃取的多线程计算调度](papers/sched/work-steal-sched.md)
-    - [Go 运行时编程](gosrc/1.11.5/runtime/README.md)
+    - [Go 运行时编程](gosrc/runtime/README.md)
 
 [结束语](content/finalwords.md)
 
