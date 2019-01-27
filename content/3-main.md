@@ -77,8 +77,7 @@ func main() {
 		}
 	}()
 
-	// 记录程序的启动时间，必须在 runtime.init 之后调用
-	// 因为 nanotime 在某些平台上依赖于 startNano。
+	// 记录程序的启动时间
 	runtimeInitTime = nanotime()
 
 	// 启动垃圾回收器后台操作
@@ -196,7 +195,7 @@ func runtime_init()
 		// 有关可用的 cpu 功能的信息。
 		// 在 runtime.cpuinit 中启动时设置。
 		// 运行时之外的包不应使用这些包因为它们不是外部 api。
-		// TODO: deprecate these; use internal/cpu directly.
+		// 启动时在 asm_{386,amd64,amd64p32}.s 中设置
 		processorVersionInfo uint32
 		isIntel              bool
 		lfenceBeforeRdtsc    bool

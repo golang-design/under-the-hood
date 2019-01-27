@@ -666,68 +666,57 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 // 如果 P 本地 gfree 链表为空，从调度器的全局 gfree 链表中取
 func gfget(_p_ *p) *g {
 retry:
-	// p 本地 gfree 链表
-	gp := _p_.gfree
-	if gp == nil && (sched.gfreeStack != nil || sched.gfreeNoStack != nil) {
-		lock(&sched.gflock)
-
-		// 从调度器的 gfree 链表中取
-		for _p_.gfreecnt < 32 {
-			if sched.gfreeStack != nil {
-				// 倾向于有栈的 G
-				gp = sched.gfreeStack
-				sched.gfreeStack = gp.schedlink.ptr()
-			} else if sched.gfreeNoStack != nil {
-				gp = sched.gfreeNoStack
-				sched.gfreeNoStack = gp.schedlink.ptr()
-			} else {
-				break
+	if _p_.gFree.empty() && (!sched.gFree.stack.empty() || !sched.gFree.noStack.empty()) {
+		lock(&sched.gFree.lock)
+		// 将一批空闲的 G 移动到 P
+		for _p_.gFree.n < 32 {
+			// 倾向于有栈的 G
+			gp := sched.gFree.stack.pop()
+			if gp == nil {
+				gp = sched.gFree.noStack.pop()
+				if gp == nil {
+					break
+				}
 			}
-			_p_.gfreecnt++
-			sched.ngfree--
-			gp.schedlink.set(_p_.gfree)
-			_p_.gfree = gp
+			sched.gFree.n--
+			_p_.gFree.push(gp)
+			_p_.gFree.n++
 		}
-		unlock(&sched.gflock)
-		// 反复找
+		unlock(&sched.gFree.lock)
 		goto retry
 	}
-	if gp != nil {
-
-		// 拿到一个 g
-		_p_.gfree = gp.schedlink.ptr()
-		_p_.gfreecnt--
-
-		// 查看是否需要分配运行栈
-		if gp.stack.lo == 0 {
-			// 栈可能从全局 gfree 链表中取得，栈已被 gfput 给释放，所以需要分配一个新的栈。
-			// 栈分配发生在系统栈上
-			systemstack(func() {
-				gp.stack = stackalloc(_FixedStack)
-			})
-			// 计算栈边界
-			gp.stackguard0 = gp.stack.lo + _StackGuard
-		} else {
-			// race 相关
-			if raceenabled {
-				racemalloc(unsafe.Pointer(gp.stack.lo), gp.stack.hi-gp.stack.lo)
-			}
-			// 当存在编译标志 msan
-			if msanenabled {
-				msanmalloc(unsafe.Pointer(gp.stack.lo), gp.stack.hi-gp.stack.lo)
-			}
+	gp := _p_.gFree.pop()
+	if gp == nil {
+		return nil
+	}
+	// 拿到一个 g
+	_p_.gFree.n--
+	// 查看是否需要分配运行栈
+	if gp.stack.lo == 0 {
+		// 栈可能从全局 gfree 链表中取得，栈已被 gfput 给释放，所以需要分配一个新的栈。
+		// 栈分配发生在系统栈上
+		systemstack(func() {
+			gp.stack = stackalloc(_FixedStack)
+		})
+		// 计算栈边界
+		gp.stackguard0 = gp.stack.lo + _StackGuard
+	} else {
+		if raceenabled {
+			racemalloc(unsafe.Pointer(gp.stack.lo), gp.stack.hi-gp.stack.lo)
+		}
+		if msanenabled {
+			msanmalloc(unsafe.Pointer(gp.stack.lo), gp.stack.hi-gp.stack.lo)
 		}
 	}
-	// 本地和全局都找过了，只能返回了
 	return gp
 }
 ```
 
-总结一下整个过程，gfree 用来表示已经执行完毕那些 g 对象，在 P 和调度器中均有保存，目的很明显是复用：
+总结一下整个过程，gFree 用来表示已经执行完毕那些 g 对象，在 P 和调度器中均有保存，目的很明显是复用：
 
-1. 首先从 P 的 gfree 链表中取；
-2. 如果从 P 的 gfree 链表中取不到，再看从调度器的 gfree 链表；
-    - 首先倾向于获取已经有执行栈的 g
+1. 首先从 P 的 gFree 链表中取；
+2. 如果从 P 的 gFree 链表中取不到，再看从调度器的 gfree 链表取；
+    - 首先倾向于获取已经有执行栈的 g，因为省去了执行栈的获取
     - 否则才去取没有执行栈的队列
     - 如果都找不到则确实找不到可以复用的 g 了；
 3. 无论如何，如果找到了，则从 gfree 链表中取一个 g，这时 g 可能是从调度器的 gfree 中取出的没有执行栈的 g，因此按需创建
@@ -862,12 +851,12 @@ func runqput(_p_ *p, gp *g, next bool) {
 	}
 
 retry:
-	h := atomic.Load(&_p_.runqhead) // load-acquire, 与 consumer 进行同步
+	h := atomic.LoadAcq(&_p_.runqhead) // load-acquire, 与 consumer 进行同步
 	t := _p_.runqtail
 	// 如果 P 的本地队列没有满，入队
 	if t-h < uint32(len(_p_.runq)) {
 		_p_.runq[t%uint32(len(_p_.runq))].set(gp)
-		atomic.Store(&_p_.runqtail, t+1) // store-release, 使 consumer 可以开始消费这个 item
+		atomic.StoreRel(&_p_.runqtail, t+1) // store-release, 使 consumer 可以开始消费这个 item
 		return
 	}
 	// 可运行队列已经满了，只能扔给全局队列了
@@ -896,7 +885,7 @@ func runqputslow(_p_ *p, gp *g, h, t uint32) bool {
 	for i := uint32(0); i < n; i++ {
 		batch[i] = _p_.runq[(h+i)%uint32(len(_p_.runq))].ptr()
 	}
-	if !atomic.Cas(&_p_.runqhead, h, h+n) { // cas-release, commits consume
+	if !atomic.CasRel(&_p_.runqhead, h, h+n) { // cas-release, commits consume
 		return false
 	}
 	batch[n] = gp
@@ -913,24 +902,23 @@ func runqputslow(_p_ *p, gp *g, h, t uint32) bool {
 	for i := uint32(0); i < n; i++ {
 		batch[i].schedlink.set(batch[i+1])
 	}
+	var q gQueue
+	q.head.set(batch[0])
+	q.tail.set(batch[n])
 
 	// 将这批 work 放到全局队列中去
 	lock(&sched.lock)
-	globrunqputbatch(batch[0], batch[n], int32(n+1))
+	globrunqputbatch(&q, int32(n+1))
 	unlock(&sched.lock)
 	return true
 }
 // 将一批 runnable goroutine 放入全局 runnable 队列中
+// 它会清楚 *batch
 // 调度器必须锁住才可调用
 func globrunqputbatch(ghead *g, gtail *g, n int32) {
-	gtail.schedlink = 0
-	if sched.runqtail != 0 {
-		sched.runqtail.ptr().schedlink.set(ghead)
-	} else {
-		sched.runqhead.set(ghead)
-	}
-	sched.runqtail.set(gtail)
+	sched.runq.pushBackAll(*batch)
 	sched.runqsize += n
+	*batch = gQueue{}
 }
 ```
 

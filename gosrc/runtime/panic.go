@@ -35,7 +35,7 @@ var indexError = error(errorString("index out of range"))
 // entire runtime stack for easier debugging.
 
 func panicindex() {
-	if hasprefix(funcname(findfunc(getcallerpc())), "runtime.") {
+	if hasPrefix(funcname(findfunc(getcallerpc())), "runtime.") {
 		throw(string(indexError.(errorString)))
 	}
 	panicCheckMalloc(indexError)
@@ -45,7 +45,7 @@ func panicindex() {
 var sliceError = error(errorString("slice bounds out of range"))
 
 func panicslice() {
-	if hasprefix(funcname(findfunc(getcallerpc())), "runtime.") {
+	if hasPrefix(funcname(findfunc(getcallerpc())), "runtime.") {
 		throw(string(sliceError.(errorString)))
 	}
 	panicCheckMalloc(sliceError)
@@ -235,6 +235,15 @@ func newdefer(siz int32) *_defer {
 			total := roundupsize(totaldefersize(uintptr(siz)))
 			d = (*_defer)(mallocgc(total, deferType, true))
 		})
+		if debugCachedWork {
+			// Duplicate the tail below so if there's a
+			// crash in checkPut we can tell if d was just
+			// allocated or came from the pool.
+			d.siz = siz
+			d.link = gp._defer
+			gp._defer = d
+			return d
+		}
 	}
 	// 将 _defer 实例添加到 goroutine 的 _defer 链表上。
 	d.siz = siz
@@ -713,10 +722,13 @@ func fatalpanic(msgs *_panic) {
 // It returns true if panic messages should be printed, or false if
 // the runtime is in bad shape and should just print stacks.
 //
-// It can have write barriers because the write barrier explicitly
-// ignores writes once dying > 0.
+// It must not have write barriers even though the write barrier
+// explicitly ignores writes once dying > 0. Write barriers still
+// assume that g.m.p != nil, and this function may not have P
+// in some contexts (e.g. a panic in a signal handler for a signal
+// sent to an M with no P).
 //
-//go:yeswritebarrierrec
+//go:nowritebarrierrec
 func startpanic_m() bool {
 	_g_ := getg()
 	if mheap_.cachealloc.size == 0 { // very early
@@ -736,8 +748,8 @@ func startpanic_m() bool {
 
 	switch _g_.m.dying {
 	case 0:
+		// Setting dying >0 has the side-effect of disabling this G's writebuf.
 		_g_.m.dying = 1
-		_g_.writebuf = nil
 		atomic.Xadd(&panicking, 1)
 		lock(&paniclk)
 		if debug.schedtrace > 0 || debug.scheddetail > 0 {
@@ -842,7 +854,7 @@ func canpanic(gp *g) bool {
 	return true
 }
 
-// shouldPushSigpanic returns true if pc should be used as sigpanic's
+// shouldPushSigpanic reports whether if pc should be used as sigpanic's
 // return PC (pushing a frame for the call). Otherwise, it should be
 // left alone so that LR is used as sigpanic's return PC, effectively
 // replacing the top-most frame with sigpanic. This is used by
@@ -880,7 +892,7 @@ func shouldPushSigpanic(gp *g, pc, lr uintptr) bool {
 	return true
 }
 
-// isAbortPC returns true if pc is the program counter at which
+// isAbortPC reports whether if pc is the program counter at which
 // runtime.abort raises a signal.
 //
 // It is nosplit because it's part of the isgoexception

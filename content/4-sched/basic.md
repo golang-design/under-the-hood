@@ -97,6 +97,7 @@ type m struct {
 	caughtsig     guintptr // goroutine 在 fatal signal 中运行
 	p             puintptr // attached p for executing go code (nil if not executing go code)
 	nextp         puintptr
+	oldp          puintptr // 执行系统调用之前绑定的 p
 	id            int64
 	mallocing     int32
 	throwing      int32
@@ -104,7 +105,6 @@ type m struct {
 	locks         int32
 	dying         int32
 	profilehz     int32
-	helpgc        int32
 	spinning      bool // m 当前没有运行 work 且正处于寻找 work 的活跃状态
 	blocked       bool // m 阻塞在一个 note 上
 	inwb          bool // m 正在执行 write barrier
@@ -210,8 +210,10 @@ type p struct {
 	runnext guintptr
 
 	// 有效的 G (状态 == Gdead)
-	gfree    *g
-	gfreecnt int32
+	gfree struct {
+		gList
+		n int32
+	}
 
 	sudogcache []*sudog
 	sudogbuf   [128]*sudog
@@ -247,7 +249,7 @@ type p struct {
 
 	runSafePointFn uint32 // 如果为 1, 则在下一个 safe-point 运行 sched.safePointFn
 
-	pad [sys.CacheLineSize]byte // 无实际用处，只是用于防止 P 的 false sharing
+	pad cpu.CacheLinePad
 }
 ```
 
@@ -404,15 +406,28 @@ type schedt struct {
 	nmspinning uint32   // 见 proc.go 中关于 "工作线程 parking/unparking" 的注释.
 
 	// 全局 runnable G 队列
-	runqhead guintptr
-	runqtail guintptr
+	runq     gQueue
 	runqsize int32
 
+	// disable 控制了选择性的禁止调度器
+	//
+	// 使用 schedEnableUser 来控制此这个
+	//
+	// disable 受到 sched.lock 保护
+	disable struct {
+		// 用户禁用用户 goroutine 的调度
+		user     bool
+		runnable gQueue // 即将发生的 runable Gs
+		n        int32  // runable 的数量
+	}
+
 	// 有效 dead G 的全局缓存.
-	gflock       mutex
-	gfreeStack   *g
-	gfreeNoStack *g
-	ngfree       int32
+	gFree struct {
+		lock    mutex
+		stack   gList // 包含栈的 Gs
+		noStack gList // 没有栈的 Gs
+		n       int32
+	}
 
 	// sudog 结构的集中缓存
 	sudoglock  mutex

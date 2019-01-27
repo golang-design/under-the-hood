@@ -43,8 +43,8 @@ func mstart() {
 	mstart1()
 
 	// 退出线程
-	if GOOS == "windows" || GOOS == "solaris" || GOOS == "plan9" || GOOS == "darwin" {
-		// 由于 windows, solaris, darwin 和 plan9 总是系统分配的栈，在在 mstart 之前放进 _g_.stack 的
+	if GOOS == "windows" || GOOS == "solaris" || GOOS == "plan9" || GOOS == "darwin" || GOOS == "aix" {
+		// 由于 windows, solaris, darwin, aix 和 plan9 总是系统分配的栈，在在 mstart 之前放进 _g_.stack 的
 		// 因此上面的逻辑还没有设置 osStack。
 		osStack = true
 	}
@@ -86,12 +86,8 @@ func mstart1() {
 		fn()
 	}
 
-	// GC startTheWorld 会检查 spinning M 是否少于并发标记需求
-	// 新建 m，设置 m.helpgc = -1，加入闲置队列等待唤醒
-	if _g_.m.helpgc != 0 {
-		_g_.m.helpgc = 0
-		stopm()
-	} else if _g_.m != &m0 {
+	// 如果当前 m 并非 m0，则要求绑定 p
+	if _g_.m != &m0 {
 		// 绑定 p
 		acquirep(_g_.m.nextp.ptr())
 		_g_.m.nextp = 0
@@ -137,27 +133,27 @@ m 与 p 的绑定过程只是简单的将 p 链表中的 p ，保存到 m 中的
 //go:yeswritebarrierrec
 func acquirep(_p_ *p) {
 	// 此处不允许 write barrier
-	acquirep1(_p_)
+	wirep(_p_)
 
 	// 已经获取了 p，因此之后允许 write barrier
-	_g_ := getg()
-
-	// 递交 mcache 给 m
-	_g_.m.mcache = _p_.mcache
+	//
+	// 在 P 可以从一个潜在设置的 mcache 分配前执行偏好的 mcache flush
+	_p_.mcache.prepareForSweep()
 
 	if trace.enabled {
 		traceProcStart()
 	}
 }
-// acquirep1 为 acquirep 的实际获取 p 的第一步。
+// wirep 为 acquirep 的实际获取 p 的第一步，它关联了当前的 M 到 P 上。
 // 之所以进行拆分是因为我们可以为这个部分驳回 write barrier
 //go:nowritebarrierrec
-func acquirep1(_p_ *p) {
+//go:nosplit
+func wirep(_p_ *p) {
 	_g_ := getg()
 
-	// 检查，确实没有 p
+	// 检查 确实没有 p
 	if _g_.m.p != 0 || _g_.m.mcache != nil {
-		throw("acquirep: already in go")
+		throw("wirep: already in go")
 	}
 
 	// 检查 m 是否正常，并检查要获取的 p 的状态
@@ -166,8 +162,8 @@ func acquirep1(_p_ *p) {
 		if _p_.m != 0 {
 			id = _p_.m.ptr().id
 		}
-		print("acquirep: p->m=", _p_.m, "(", id, ") p->status=", _p_.status, "\n")
-		throw("acquirep: invalid p state")
+		print("wirep: p->m=", _p_.m, "(", id, ") p->status=", _p_.status, "\n")
+		throw("wirep: invalid p state")
 	}
 
 	// 正式获取 p
@@ -207,7 +203,6 @@ func stopm() {
 		throw("stopm spinning")
 	}
 
-retry:
 	// 将 m 放回到 空闲列表中，因为我们马上就要 park 了
 	lock(&sched.lock)
 	mput(_g_.m)
@@ -219,17 +214,6 @@ retry:
 	// 清除 unpark 的 note
 	noteclear(&_g_.m.park)
 
-	// 如果需要 helpgc
-	if _g_.m.helpgc != 0 {
-		// helpgc() 会设置 _g_.m.p 与 _g_.m.mcache，因此我们会 acquire 一个 P 进行
-		gchelper()
-		// 撤销 helpgc() 的影响
-		_g_.m.helpgc = 0
-		_g_.m.mcache = nil
-		_g_.m.p = 0
-		goto retry
-	}
-
 	// 此时已经被 unpark，说明有任务要执行
 	// 立即 acquire P
 	acquirep(_g_.m.nextp.ptr())
@@ -238,10 +222,7 @@ retry:
 ```
 
 它的流程也非常简单，将 m 放回至空闲列表中，而后使用 note 注册一个 park 通知，
-阻塞到它重新被 unpark；如果在阻塞结束后，恰好需要 helpgc，则会重新被阻塞。
-
-至此，可以看出 helpgc 已经对 m 的 park/unpark 以及 mstart 产生影响，好在下一个版本中
-helpgc 的机制会被移除，我们留到后面的垃圾回收器中再详细讨论。
+阻塞到它重新被 unpark。
 
 ## 核心调度
 
@@ -330,6 +311,23 @@ top:
 		//   1. 从 spinning -> non-spinning
 		//   2. 在没有 spinning 的 m 的情况下，再多创建一个新的 spinning m
 		resetspinning()
+	}
+
+	if sched.disable.user && !schedEnabled(gp) {
+		// Scheduling of this goroutine is disabled. Put it on
+		// the list of pending runnable goroutines for when we
+		// re-enable user scheduling and look again.
+		lock(&sched.lock)
+		if schedEnabled(gp) {
+			// Something re-enabled scheduling while we
+			// were acquiring the lock.
+			unlock(&sched.lock)
+		} else {
+			sched.disable.runnable.pushBack(gp)
+			sched.disable.n++
+			unlock(&sched.lock)
+			goto top
+		}
 	}
 
 	if gp.lockedm != 0 {
@@ -616,7 +614,7 @@ func goexit0(gp *g) {
 
 	// 切换当前的 g 为 _Gdead
 	casgstatus(gp, _Grunning, _Gdead)
-	if isSystemGoroutine(gp) {
+	if isSystemGoroutine(gp, false) {
 		atomic.Xadd(&sched.ngsys, -1)
 	}
 
@@ -720,25 +718,14 @@ func globrunqget(_p_ *p, max int32) *g {
 
 	// 修改本地队列的剩余空间
 	sched.runqsize -= n
-
-	// 如果已经确定要放满，那么队尾指针置空
-	if sched.runqsize == 0 {
-		sched.runqtail = 0
-	}
-
 	// 拿到全局队列队头 g
-	gp := sched.runqhead.ptr()
-
-	// 修改全局队列队头指针
-	sched.runqhead = gp.schedlink
-
+	gp := sched.runq.pop()
 	// 计数
 	n--
 
 	// 继续取剩下的 n-1 个全局队列放入本地队列
 	for ; n > 0; n-- {
-		gp1 := sched.runqhead.ptr()
-		sched.runqhead = gp1.schedlink
+		gp1 := sched.runq.pop()
 		runqput(_p_, gp1, false)
 	}
 	return gp
@@ -773,7 +760,7 @@ func runqget(_p_ *p) (gp *g, inheritTime bool) {
 	// 没有 next
 	for {
 		// 本地队列是空，返回 nil
-		h := atomic.Load(&_p_.runqhead) // load-acquire, 与其他消费者同步
+		h := atomic.LoadAcq(&_p_.runqhead) // load-acquire, 与其他消费者同步
 		t := _p_.runqtail
 		if t == h {
 			return nil, false
@@ -781,7 +768,7 @@ func runqget(_p_ *p) (gp *g, inheritTime bool) {
 
 		// 从本地队列中以 cas 方式拿一个
 		gp := _p_.runq[h%uint32(len(_p_.runq))].ptr()
-		if atomic.Cas(&_p_.runqhead, h, h+1) { // cas-release, 提交消费
+		if atomic.CasRel(&_p_.runqhead, h, h+1) { // cas-release, 提交消费
 			return gp, false
 		}
 	}
@@ -844,8 +831,8 @@ top:
 	// 如果有任何类型的逻辑竞争与被阻塞的线程（例如它已经从 netpoll 返回，但尚未设置 lastpoll）
 	// 该线程无论如何都将阻塞 netpoll。
 	if netpollinited() && atomic.Load(&netpollWaiters) > 0 && atomic.Load64(&sched.lastpoll) != 0 {
-		if gp := netpoll(false); gp != nil { // 无阻塞
-			// netpoll 返回 schedlink 连接的 goroutine 链表
+		if list := netpoll(false); !list.empty() { // 无阻塞
+			gp := list.pop()
 			injectglist(gp.schedlink.ptr())
 			casgstatus(gp, _Gwaiting, _Grunnable)
 			if trace.enabled {
@@ -907,10 +894,10 @@ stop:
 	}
 
 	// 仅限于 wasm
-	// 检查一个 goroutine 是否在等待 WebAssembly 宿主机回调
-	// 如果是，暂停执行直到触发回调
-	if pauseSchedulerUntilCallback() {
-		// 回调触发后，至少一个 goroutine 被唤醒
+	// 如果一个回调返回后没有其他 goroutine 是苏醒的
+	// 则暂停执行直到回调被触发。
+	if beforeIdle() {
+		// 至少一个 goroutine 被唤醒
 		goto top
 	}
 

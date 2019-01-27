@@ -62,7 +62,7 @@ func badsystemstack() {
 //
 // 2. *ptr 是未初始化的内存（例如刚被新分配时使用的内存），则指包含 "junk" 垃圾内存
 //
-// 见 memclr_*.s
+// CPU 特定的实现参见 memclr_*.s
 //
 //go:noescape
 func memclrNoHeapPointers(ptr unsafe.Pointer, n uintptr)
@@ -138,6 +138,8 @@ func breakpoint()
 // 如果重新复制结果字节，则调用者应将参数帧类型作为 argtype 传递，以便该调用可以在复制期间执行适当的写障碍。
 // reflect 包传递帧类型。在 runtime 包中，只有一个调用将结果复制回来，即 cgocallbackg1，
 // 并且它不传递帧类型，这意味着没有调用写障碍。参见该调用的页面了解相关理由。
+//
+// 包 reflect 通过 linkname 访问此符号
 func reflectcall(argtype *_type, fn, arg unsafe.Pointer, argsize uint32, retoffset uint32)
 
 func procyield(cycles uint32)
@@ -159,7 +161,7 @@ func goexit(neverCallThisFunction)
 // cgocallback_gofunc is not called from go, only from cgocallback,
 // so the arguments will be found via cgocallback's pointer-declared arguments.
 // See the assembly implementations for more details.
-func cgocallback_gofunc(fv uintptr, frame uintptr, framesize, ctxt uintptr)
+func cgocallback_gofunc(fv, frame, framesize, ctxt uintptr)
 
 // publicationBarrier performs a store/store barrier (a "publication"
 // or "export" barrier). Some form of synchronization is required
@@ -270,7 +272,7 @@ func round(n, a uintptr) uintptr {
 	return (n + a - 1) &^ (a - 1)
 }
 
-// checkASM returns whether assembly runtime checks have passed.
+// checkASM reports whether assembly runtime checks have passed.
 func checkASM() bool
 
 func memequal_varlen(a, b unsafe.Pointer) bool

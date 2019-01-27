@@ -346,8 +346,11 @@ func reentersyscall(pc, sp uintptr) {
 	_g_.m.syscalltick = _g_.m.p.ptr().syscalltick
 	_g_.sysblocktraced = true
 	_g_.m.mcache = nil
-	_g_.m.p.ptr().m = 0
-	atomic.Store(&_g_.m.p.ptr().status, _Psyscall)
+	pp := _g_.m.p.ptr()
+	pp.m = 0
+	_g_.m.oldp.set(pp)
+	_g_.m.p = 0
+	atomic.Store(&pp.status, _Psyscall)
 	if sched.gcwaiting != 0 {
 		systemstack(entersyscall_gcwait)
 		save(pc, sp)
@@ -362,7 +365,7 @@ TODO:
 
 ```go
 //go:nosplit
-func exitsyscallfast() bool {
+func exitsyscallfast(oldp *p) bool {
 	_g_ := getg()
 
 	// Freezetheworld sets stopwait but does not retake P's.
@@ -375,6 +378,7 @@ func exitsyscallfast() bool {
 	// Try to re-acquire the last P.
 	if _g_.m.p != 0 && _g_.m.p.ptr().status == _Psyscall && atomic.Cas(&_g_.m.p.ptr().status, _Psyscall, _Prunning) {
 		// There's a cpu for us, so we can run.
+		wirep(oldp)
 		exitsyscallfast_reacquired()
 		return true
 	}
@@ -427,8 +431,9 @@ func exitsyscall() {
 	}
 
 	_g_.waitsince = 0
-	oldp := _g_.m.p.ptr()
-	if exitsyscallfast() {
+	oldp := _g_.m.oldp.ptr()
+	_g_.m.oldp = 0
+	if exitsyscallfast(oldp) {
 		if _g_.m.mcache == nil {
 			throw("lost mcache")
 		}
@@ -454,6 +459,12 @@ func exitsyscall() {
 			_g_.stackguard0 = _g_.stack.lo + _StackGuard
 		}
 		_g_.throwsplit = false
+
+		if sched.disable.user && !schedEnabled(_g_) {
+			// Scheduling of this goroutine is disabled.
+			Gosched()
+		}
+
 		return
 	}
 
