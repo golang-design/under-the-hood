@@ -394,16 +394,13 @@ type interfaceType struct {
 // mapType represents a map type.
 type mapType struct {
 	rtype
-	key           *rtype // map key type
-	elem          *rtype // map element (value) type
-	bucket        *rtype // internal bucket structure
-	keysize       uint8  // size of key slot
-	indirectkey   uint8  // store ptr to key instead of key itself
-	valuesize     uint8  // size of value slot
-	indirectvalue uint8  // store ptr to value instead of value itself
-	bucketsize    uint16 // size of bucket
-	reflexivekey  bool   // true if k==k for all keys
-	needkeyupdate bool   // true if we need to update key on an overwrite
+	key        *rtype // map key type
+	elem       *rtype // map element (value) type
+	bucket     *rtype // internal bucket structure
+	keysize    uint8  // size of key slot
+	valuesize  uint8  // size of value slot
+	bucketsize uint16 // size of bucket
+	flags      uint32
 }
 
 // ptrType represents a pointer type.
@@ -593,6 +590,7 @@ const (
 	kindMask        = (1 << 5) - 1
 )
 
+// String returns the name of k.
 func (k Kind) String() string {
 	if int(k) < len(kindNames) {
 		return kindNames[k]
@@ -1858,6 +1856,8 @@ func MapOf(key, elem Type) Type {
 	}
 
 	// Make a map type.
+	// Note: flag values must match those used in the TMAP case
+	// in ../cmd/compile/internal/gc/reflect.go:dtypesym.
 	var imap interface{} = (map[unsafe.Pointer]unsafe.Pointer)(nil)
 	mt := **(**mapType)(unsafe.Pointer(&imap))
 	mt.str = resolveReflectName(newName(s, "", false))
@@ -1866,29 +1866,37 @@ func MapOf(key, elem Type) Type {
 	mt.key = ktyp
 	mt.elem = etyp
 	mt.bucket = bucketOf(ktyp, etyp)
+	mt.flags = 0
 	if ktyp.size > maxKeySize {
 		mt.keysize = uint8(ptrSize)
-		mt.indirectkey = 1
+		mt.flags |= 1 // indirect key
 	} else {
 		mt.keysize = uint8(ktyp.size)
-		mt.indirectkey = 0
 	}
 	if etyp.size > maxValSize {
 		mt.valuesize = uint8(ptrSize)
-		mt.indirectvalue = 1
+		mt.flags |= 2 // indirect value
 	} else {
 		mt.valuesize = uint8(etyp.size)
-		mt.indirectvalue = 0
 	}
 	mt.bucketsize = uint16(mt.bucket.size)
-	mt.reflexivekey = isReflexive(ktyp)
-	mt.needkeyupdate = needKeyUpdate(ktyp)
+	if isReflexive(ktyp) {
+		mt.flags |= 4
+	}
+	if needKeyUpdate(ktyp) {
+		mt.flags |= 8
+	}
+	if hashMightPanic(ktyp) {
+		mt.flags |= 16
+	}
 	mt.ptrToThis = 0
 
 	ti, _ := lookupCache.LoadOrStore(ckey, &mt.rtype)
 	return ti.(Type)
 }
 
+// TODO(crawshaw): as these funcTypeFixedN structs have no methods,
+// they could be defined at runtime using the StructOf function.
 type funcTypeFixed4 struct {
 	funcType
 	args [4]*rtype
@@ -2119,6 +2127,27 @@ func needKeyUpdate(t *rtype) bool {
 	}
 }
 
+// hashMightPanic reports whether the hash of a map key of type t might panic.
+func hashMightPanic(t *rtype) bool {
+	switch t.Kind() {
+	case Interface:
+		return true
+	case Array:
+		tt := (*arrayType)(unsafe.Pointer(t))
+		return hashMightPanic(tt.elem)
+	case Struct:
+		tt := (*structType)(unsafe.Pointer(t))
+		for _, f := range tt.fields {
+			if hashMightPanic(f.typ) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
 // Make sure these routines stay in sync with ../../runtime/map.go!
 // These types exist only for GC, so we only fill out GC relevant info.
 // Currently, that's just size and the GC program. We also fill in string
@@ -2278,43 +2307,7 @@ type structTypeUncommon struct {
 	u uncommonType
 }
 
-// A *rtype representing a struct is followed directly in memory by an
-// array of method objects representing the methods attached to the
-// struct. To get the same layout for a run time generated type, we
-// need an array directly following the uncommonType memory. The types
-// structTypeFixed4, ...structTypeFixedN are used to do this.
-//
-// A similar strategy is used for funcTypeFixed4, ...funcTypeFixedN.
-
-// TODO(crawshaw): as these structTypeFixedN and funcTypeFixedN structs
-// have no methods, they could be defined at runtime using the StructOf
-// function.
-
-type structTypeFixed4 struct {
-	structType
-	u uncommonType
-	m [4]method
-}
-
-type structTypeFixed8 struct {
-	structType
-	u uncommonType
-	m [8]method
-}
-
-type structTypeFixed16 struct {
-	structType
-	u uncommonType
-	m [16]method
-}
-
-type structTypeFixed32 struct {
-	structType
-	u uncommonType
-	m [32]method
-}
-
-// isLetter returns true if a given 'rune' is classified as a Letter.
+// isLetter reports whether a given 'rune' is classified as a Letter.
 func isLetter(ch rune) bool {
 	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' || ch == '_' || ch >= utf8.RuneSelf && unicode.IsLetter(ch)
 }
@@ -2571,33 +2564,26 @@ func StructOf(fields []StructField) Type {
 	var typ *structType
 	var ut *uncommonType
 
-	switch {
-	case len(methods) == 0:
+	if len(methods) == 0 {
 		t := new(structTypeUncommon)
 		typ = &t.structType
 		ut = &t.u
-	case len(methods) <= 4:
-		t := new(structTypeFixed4)
-		typ = &t.structType
-		ut = &t.u
-		copy(t.m[:], methods)
-	case len(methods) <= 8:
-		t := new(structTypeFixed8)
-		typ = &t.structType
-		ut = &t.u
-		copy(t.m[:], methods)
-	case len(methods) <= 16:
-		t := new(structTypeFixed16)
-		typ = &t.structType
-		ut = &t.u
-		copy(t.m[:], methods)
-	case len(methods) <= 32:
-		t := new(structTypeFixed32)
-		typ = &t.structType
-		ut = &t.u
-		copy(t.m[:], methods)
-	default:
-		panic("reflect.StructOf: too many methods")
+	} else {
+		// A *rtype representing a struct is followed directly in memory by an
+		// array of method objects representing the methods attached to the
+		// struct. To get the same layout for a run time generated type, we
+		// need an array directly following the uncommonType memory.
+		// A similar strategy is used for funcTypeFixed4, ...funcTypeFixedN.
+		tt := New(StructOf([]StructField{
+			{Name: "S", Type: TypeOf(structType{})},
+			{Name: "U", Type: TypeOf(uncommonType{})},
+			{Name: "M", Type: ArrayOf(len(methods), TypeOf(methods[0]))},
+		}))
+
+		typ = (*structType)(unsafe.Pointer(tt.Elem().Field(0).UnsafeAddr()))
+		ut = (*uncommonType)(unsafe.Pointer(tt.Elem().Field(1).UnsafeAddr()))
+
+		copy(tt.Elem().Field(2).Slice(0, len(methods)).Interface().([]method), methods)
 	}
 	// TODO(sbinet): Once we allow embedding multiple types,
 	// methods will need to be sorted like the compiler does.
