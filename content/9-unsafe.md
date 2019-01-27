@@ -95,6 +95,14 @@ u := uintptr(p)
 p = unsafe.Pointer(u + offset)
 ```
 
+注意，指针还必须指向一个已经分配的对象，因此它可能不是 nil
+
+```go
+// 无效: nil 指针的转换
+u := unsafe.Pointer(nil)
+p := unsafe.Pointer(uintptr(u) + offset)
+```
+
 ### 情况 4: 当调用 `syscall.Syscall` 时候将 `Pointer` 转换为 `uintptr`
 
 `syscall` 包中的 `Syscall` 函数直接传递 `uintptr` 参数给操作系统，根据调用的细节，

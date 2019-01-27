@@ -78,6 +78,12 @@ type ArbitraryType int
 //	u := uintptr(p)
 //	p = unsafe.Pointer(u + offset)
 //
+// 注意，指针还必须指向一个已经分配的对象，因此它可能不是 nil
+//
+//	// 无效: nil 指针的转换
+//	u := unsafe.Pointer(nil)
+//	p := unsafe.Pointer(uintptr(u) + offset)
+//
 // (4) 当调用 syscall.Syscall 时候将 Pointer 转换为 uintptr
 //
 // syscall 包中的 Syscall 函数直接传递 uintptr 参数给操作系统，根据调用的细节，
@@ -139,14 +145,17 @@ type Pointer *ArbitraryType
 // Sizeof 返回任意类型 x 的假象变量（如果 v 通过 var v = x 声明）表达式所占用的字节数。
 // 该大小不包括 x 占用的内存。例如，x 是一个 slice，则 Sizeof 返回 slice 描述符的大小，
 // 而非 slice 指向的内存块的大小
+// 返回的值为 Go 常量
 func Sizeof(x ArbitraryType) uintptr
 
 // Offsetof 返回由 x 所代表的结构中字段的偏移量，它必须为 stuctValue.field 的形式。
 // 换句话说，它返回了该结构起始处于该字段起始数之间的字节数。
+// 返回的值为 Go 常量
 func Offsetof(x ArbitraryType) uintptr
 
 // Alignof 返回任意类型的表达式 x 的对齐方式。其返回值 m 满足变量 v 的类型地址与 m 取模为 0 的最大值。
 // 它与 reflect.TypeOf(x).Align() 返回的值相同。
 // 作为特殊情况，一个变量 s 如果是结构体类型且 f 是结构体的一个字段，那么 Alignof(s.f) 将返回
 // 结构体内部该类型要求对齐的值，与 reflect.TypeOf(s.f).FieldAlign() 值相同。
+// 返回的值为 Go 常量
 func Alignof(x ArbitraryType) uintptr
