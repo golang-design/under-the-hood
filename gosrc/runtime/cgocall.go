@@ -239,7 +239,8 @@ func cgocallbackg1(ctxt uintptr) {
 	case "arm64":
 		// On arm64, stack frame is four words and there's a saved LR between
 		// SP and the stack frame and between the stack frame and the arguments.
-		cb = (*args)(unsafe.Pointer(sp + 5*sys.PtrSize))
+		// Additional two words (16-byte alignment) are for saving FP.
+		cb = (*args)(unsafe.Pointer(sp + 7*sys.PtrSize))
 	case "amd64":
 		// On amd64, stack frame is two words, plus caller PC.
 		if framepointer_enabled {
@@ -579,7 +580,7 @@ func cgoCheckUnknownPointer(p unsafe.Pointer, msg string) (base, i uintptr) {
 	return
 }
 
-// cgoIsGoPointer returns whether the pointer is a Go pointer--a
+// cgoIsGoPointer reports whether the pointer is a Go pointer--a
 // pointer to Go memory. We only care about Go memory that might
 // contain pointers.
 //go:nosplit
@@ -602,7 +603,7 @@ func cgoIsGoPointer(p unsafe.Pointer) bool {
 	return false
 }
 
-// cgoInRange returns whether p is between start and end.
+// cgoInRange reports whether p is between start and end.
 //go:nosplit
 //go:nowritebarrierrec
 func cgoInRange(p unsafe.Pointer, start, end uintptr) bool {
