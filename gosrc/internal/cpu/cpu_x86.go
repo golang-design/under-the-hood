@@ -6,7 +6,7 @@
 
 package cpu
 
-const CacheLineSize = 64
+const CacheLinePadSize = 64
 
 // cpuid 在 cpu_x86.s 中实现
 func cpuid(eaxArg, ecxArg uint32) (eax, ebx, ecx, edx uint32)
@@ -40,28 +40,23 @@ const (
 
 func doinit() {
 	options = []option{
-		{"adx", &X86.HasADX},
-		{"aes", &X86.HasAES},
-		{"avx", &X86.HasAVX},
-		{"avx2", &X86.HasAVX2},
-		{"bmi1", &X86.HasBMI1},
-		{"bmi2", &X86.HasBMI2},
-		{"erms", &X86.HasERMS},
-		{"fma", &X86.HasFMA},
-		{"pclmulqdq", &X86.HasPCLMULQDQ},
-		{"popcnt", &X86.HasPOPCNT},
-		{"sse3", &X86.HasSSE3},
-		{"sse41", &X86.HasSSE41},
-		{"sse42", &X86.HasSSE42},
-		{"ssse3", &X86.HasSSSE3},
+		{Name: "adx", Feature: &X86.HasADX},
+		{Name: "aes", Feature: &X86.HasAES},
+		{Name: "avx", Feature: &X86.HasAVX},
+		{Name: "avx2", Feature: &X86.HasAVX2},
+		{Name: "bmi1", Feature: &X86.HasBMI1},
+		{Name: "bmi2", Feature: &X86.HasBMI2},
+		{Name: "erms", Feature: &X86.HasERMS},
+		{Name: "fma", Feature: &X86.HasFMA},
+		{Name: "pclmulqdq", Feature: &X86.HasPCLMULQDQ},
+		{Name: "popcnt", Feature: &X86.HasPOPCNT},
+		{Name: "sse3", Feature: &X86.HasSSE3},
+		{Name: "sse41", Feature: &X86.HasSSE41},
+		{Name: "sse41", Feature: &X86.HasSSE41},
+		{Name: "ssse3", Feature: &X86.HasSSSE3},
 
-		// sse2 设置为最后一个元素，因此可以轻松地再次删除它。见下面的代码。
-		{"sse2", &X86.HasSSE2},
-	}
-
-	// 从 amd64(p32) 上的选项中删除 sse2，因为 SSE2 是这些 GOARCH 的必需功能。
-	if GOARCH == "amd64" || GOARCH == "amd64p32" {
-		options = options[:len(options)-1]
+		// 下面这些特性必须总是在 amd64(p32) 上启用
+		{Name: "sse2", Feature: &X86.HasSSE2, Required: GOARCH == "amd64" || GOARCH == "amd64p32"},
 	}
 
 	maxID, _, _, _ := cpuid(0, 0)

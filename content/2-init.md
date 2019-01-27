@@ -111,13 +111,14 @@ func schedinit() {
 // cpuinit 提取环境变量 GODEBUGCPU，如果 GOEXPERIMENT debugcpu 被设置，
 // 则还会调用 internal/cpu.initialize
 func cpuinit() {
-	const prefix = "GODEBUGCPU="
+	const prefix = "GODEBUG="
 	var env string
 
-	if haveexperiment("debugcpu") && (GOOS == "linux" || GOOS == "darwin") {
-		internal_cpu_debugOptions = true
+	switch GOOS {
+	case "aix", "darwin", "dragonfly", "freebsd", "netbsd", "openbsd", "solaris", "linux":
+		cpu.DebugOptions = true
 
-		// 类似于 goenv_unix 但为 GODEBUGCPU 直接提取了环境变量
+		// 类似于 goenv_unix 但为 GODEBUG 直接提取了环境变量
 		// TODO(moehrmann): remove when general goenvs() can be called before cpuinit()
 		n := int32(0)
 		for argv_index(argv, argc+1+n) != nil {
@@ -135,33 +136,22 @@ func cpuinit() {
 		}
 	}
 
-	internal_cpu_initialize(env)
+	cpu.Initialize(env)
 
-	support_erms = cpu.X86.HasERMS
-	support_popcnt = cpu.X86.HasPOPCNT
-	support_sse2 = cpu.X86.HasSSE2
-	support_sse41 = cpu.X86.HasSSE41
-
-	arm64_support_atomics = cpu.ARM64.HasATOMICS
+	// 支持 CPU 特性的变量由编译器生成的代码来阻止指令的执行，从而不能假设总是支持的
+	x86HasPOPCNT = cpu.X86.HasPOPCNT
+	x86HasSSE41 = cpu.X86.HasSSE41
+	arm64HasATOMICS = cpu.ARM64.HasATOMICS
 }
 ```
 
-其中，`internal_cpu_initialize` 会被编译器链接到 `internal/cpu.initialize` 上
+其中，`cpu.Initialize(env)` 会调用 `internal/cpu/cpu.go` 中的函数：
 
 ```go
-//go:linkname internal_cpu_initialize internal/cpu.initialize
-func internal_cpu_initialize(env string)
-```
-
-即：
-
-> 位于 `internal/cpu/cpu.go`
-
-```go
-// initialize 检查处理器并设置上面的相关变量。
+// Initialize 检查处理器并设置上面的相关变量。
 // 该函数在程序初始化的早期由运行时包调用，在运行正常的 init 函数之前。
-// 如果 go 是使用 GOEXPERIMENT=debugcpu 编译的，则 env 在 Linux/Darwin 上由运行时设置
-func initialize(env string) {
+// 如果 go 是使用 GODEBUG 编译的，则 env 在 Linux/Darwin 上由运行时设置
+func Initialize(env string) {
 	doinit()
 	processOptions(env)
 }
@@ -170,15 +160,18 @@ func initialize(env string) {
 而 `doinit` 会根据 CPU 架构的不同，存在不同的实现，在 amd64 上：
 
 ```go
-// options 包含可在 GODEBUGCPU 中使用的 cpu 调试选项。
+// options 包含可在 GODEBUG 中使用的 cpu 调试选项。
 // options 取决于架构，并由架构特定的 doinit 函数添加。
 // 不应将特定 GOARCH 必需的功能添加到选项中（例如 amd64 上的 SSE2）。
 var options []option
 
 // Option 名称应为小写。 例如 avx 而不是 AVX。
 type option struct {
-	Name    string
-	Feature *bool
+	Name      string
+	Feature   *bool
+	Specified bool // whether feature value was specified in GODEBUG
+	Enable    bool // whether feature should be enabled
+	Required  bool // whether feature is mandatory and can not be disabled
 }
 
 const (
@@ -207,28 +200,23 @@ const (
 
 func doinit() {
 	options = []option{
-		{"adx", &X86.HasADX},
-		{"aes", &X86.HasAES},
-		{"avx", &X86.HasAVX},
-		{"avx2", &X86.HasAVX2},
-		{"bmi1", &X86.HasBMI1},
-		{"bmi2", &X86.HasBMI2},
-		{"erms", &X86.HasERMS},
-		{"fma", &X86.HasFMA},
-		{"pclmulqdq", &X86.HasPCLMULQDQ},
-		{"popcnt", &X86.HasPOPCNT},
-		{"sse3", &X86.HasSSE3},
-		{"sse41", &X86.HasSSE41},
-		{"sse42", &X86.HasSSE42},
-		{"ssse3", &X86.HasSSSE3},
+		{Name: "adx", Feature: &X86.HasADX},
+		{Name: "aes", Feature: &X86.HasAES},
+		{Name: "avx", Feature: &X86.HasAVX},
+		{Name: "avx2", Feature: &X86.HasAVX2},
+		{Name: "bmi1", Feature: &X86.HasBMI1},
+		{Name: "bmi2", Feature: &X86.HasBMI2},
+		{Name: "erms", Feature: &X86.HasERMS},
+		{Name: "fma", Feature: &X86.HasFMA},
+		{Name: "pclmulqdq", Feature: &X86.HasPCLMULQDQ},
+		{Name: "popcnt", Feature: &X86.HasPOPCNT},
+		{Name: "sse3", Feature: &X86.HasSSE3},
+		{Name: "sse41", Feature: &X86.HasSSE41},
+		{Name: "sse41", Feature: &X86.HasSSE41},
+		{Name: "ssse3", Feature: &X86.HasSSSE3},
 
-		// sse2 设置为最后一个元素，因此可以轻松地再次删除它。见下面的代码。
-		{"sse2", &X86.HasSSE2},
-	}
-
-	// 从 amd64(p32) 上的选项中删除 sse2，因为 SSE2 是这些 GOARCH 的必需功能。
-	if GOARCH == "amd64" || GOARCH == "amd64p32" {
-		options = options[:len(options)-1]
+		// 下面这些特性必须总是在 amd64(p32) 上启用
+		{Name: "sse2", Feature: &X86.HasSSE2, Required: GOARCH == "amd64" || GOARCH == "amd64p32"},
 	}
 
 	maxID, _, _, _ := cpuid(0, 0)
@@ -282,13 +270,18 @@ func isSet(hwc uint32, value uint32) bool {
 ```go
 var X86 x86
 
-const CacheLineSize = 64
+// CacheLinePad 用于填补结构体进而避免 false sharing
+type CacheLinePad struct{ _ [CacheLinePadSize]byte }
+
+// CacheLineSize 是 CPU 的假设的缓存行大小
+// 当前没有对实际的缓存航大小在运行时检测，因此我们使用针对每个 GOARCH 的 CacheLinePadSize 进行估计
+var CacheLineSize uintptr = CacheLinePadSize
 
 // x86 中的布尔值包含相应命名的 cpuid 功能位。
 // 仅当操作系统支持 XMM 和 YMM 寄存器时，才设置 HasAVX 和 HasAVX2
 // 除了正在设置的 cpuid 功能位，填充结构以避免 false sharing。
 type x86 struct {
-	_            [CacheLineSize]byte
+	_            CacheLinePad
 	HasAES       bool
 	HasADX       bool
 	HasAVX       bool
@@ -305,7 +298,7 @@ type x86 struct {
 	HasSSSE3     bool
 	HasSSE41     bool
 	HasSSE42     bool
-	_            [CacheLineSize]byte
+	_            CacheLinePad
 }
 ```
 
@@ -353,10 +346,9 @@ TEXT ·xgetbv(SB),NOSPLIT,$0-8
 
 ```go
 // processOptions 根据解析的 env 字符串来禁用 CPU 功能值。
-// env 字符串应该是 feature1=0,feature2=0... 格式
-// 其中功能名称是存储在其中的体系结构特定列表之一
-// cpu 包选项变量。如果 env 包含 all=0 则所有功能
-// 通过 options 变量引用会被禁用。其他功能默认忽略 0 以外的名称和值。
+// env 字符串应该是 cpu.feature1=value1,cpu.feature2=value2... 格式
+// 其中功能名称是存储在其中的体系结构特定列表之一 cpu 包选项变量，且这些值要么是 'on' 要么是 'off'。
+// 如果 env 包含 cpu.all=off 则所有功能通过 options 变量引用被禁用。其他功能名称和值将导致警告消息。
 func processOptions(env string) {
 field:
 	for env != "" {
@@ -367,28 +359,62 @@ field:
 		} else {
 			field, env = env[:i], env[i+1:]
 		}
-		i = indexByte(field, '=')
-		if i < 0 {
+		if len(field) < 4 || field[:4] != "cpu." {
 			continue
 		}
-		key, value := field[:i], field[i+1:]
+		i = indexByte(field, '=')
+		if i < 0 {
+			print("GODEBUG: no value specified for \"", field, "\"\n")
+			continue
+		}
+		key, value := field[4:i], field[i+1:] // e.g. "SSE2", "on"
 
-		// 仅允许通过指定“0”来关闭CPU功能。
-		if value == "0" {
-			if key == "all" {
-				for _, v := range options {
-					*v.Feature = false
-				}
-				return
-			} else {
-				for _, v := range options {
-					if v.Name == key {
-						*v.Feature = false
-						continue field
-					}
-				}
+		var enable bool
+		switch value {
+		case "on":
+			enable = true
+		case "off":
+			enable = false
+		default:
+			print("GODEBUG: value \"", value, "\" not supported for cpu option \"", key, "\"\n")
+			continue field
+		}
+
+		if key == "all" {
+			for i := range options {
+				options[i].Specified = true
+				options[i].Enable = enable || options[i].Required
+			}
+			continue field
+		}
+
+		for i := range options {
+			if options[i].Name == key {
+				options[i].Specified = true
+				options[i].Enable = enable
+				continue field
 			}
 		}
+
+		print("GODEBUG: unknown cpu feature \"", key, "\"\n")
+	}
+
+	for _, o := range options {
+		if !o.Specified {
+			continue
+		}
+
+		if o.Enable && !*o.Feature {
+			print("GODEBUG: can not enable \"", o.Name, "\", missing CPU support\n")
+			continue
+		}
+
+		if !o.Enable && o.Required {
+			print("GODEBUG: can not disable \"", o.Name, "\", required CPU feature\n")
+			continue
+		}
+
+		*o.Feature = o.Enable
 	}
 }
 ```

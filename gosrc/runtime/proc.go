@@ -478,21 +478,16 @@ const (
 	_GoidCacheBatch = 16
 )
 
-//go:linkname internal_cpu_initialize internal/cpu.initialize
-func internal_cpu_initialize(env string)
-
-//go:linkname internal_cpu_debugOptions internal/cpu.debugOptions
-var internal_cpu_debugOptions bool
-
 // cpuinit 提取环境变量 GODEBUGCPU，如果 GOEXPERIMENT debugcpu 被设置，则还会调用 internal/cpu.initialize
 func cpuinit() {
-	const prefix = "GODEBUGCPU="
+	const prefix = "GODEBUG="
 	var env string
 
-	if haveexperiment("debugcpu") && (GOOS == "linux" || GOOS == "darwin") {
-		internal_cpu_debugOptions = true
+	switch GOOS {
+	case "aix", "darwin", "dragonfly", "freebsd", "netbsd", "openbsd", "solaris", "linux":
+		cpu.DebugOptions = true
 
-		// 类似于 goenv_unix 但为 GODEBUGCPU 直接提取了环境变量
+		// 类似于 goenv_unix 但为 GODEBUG 直接提取了环境变量
 		// TODO(moehrmann): remove when general goenvs() can be called before cpuinit()
 		n := int32(0)
 		for argv_index(argv, argc+1+n) != nil {
@@ -510,14 +505,12 @@ func cpuinit() {
 		}
 	}
 
-	internal_cpu_initialize(env)
+	cpu.Initialize(env)
 
-	support_erms = cpu.X86.HasERMS
-	support_popcnt = cpu.X86.HasPOPCNT
-	support_sse2 = cpu.X86.HasSSE2
-	support_sse41 = cpu.X86.HasSSE41
-
-	arm64_support_atomics = cpu.ARM64.HasATOMICS
+	// 支持 CPU 特性的变量由编译器生成的代码来阻止指令的执行，从而不能假设总是支持的
+	x86HasPOPCNT = cpu.X86.HasPOPCNT
+	x86HasSSE41 = cpu.X86.HasSSE41
+	arm64HasATOMICS = cpu.ARM64.HasATOMICS
 }
 
 // 启动顺序

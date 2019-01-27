@@ -190,38 +190,34 @@ func runtime_init()
 
 1. CPU AVXmemmove 的支持情况，不过这部分代码已经准备弃用了。
 
-   > 位于 `runtime/cpuflags_amd64.go`
-   
-   ```go
-   var (
-   	// 有关可用的 cpu 功能的信息。
-   	// 在 runtime.cpuinit 中启动时设置。
-   	// 运行时之外的包不应使用这些包因为它们不是外部 api。
-   	// TODO: deprecate these; use internal/cpu directly.
-   	processorVersionInfo uint32
-   	isIntel              bool
-   	lfenceBeforeRdtsc    bool
-   )
-   // Offsets into internal/cpu records for use in assembly.
-   const (
-   	offsetX86HasAVX2 = unsafe.Offsetof(cpu.X86.HasAVX2)
-   )
-   
-   var useAVXmemmove bool
-   
-   func init() {
-   	// Let's remove stepping and reserved fields
-   	processor := processorVersionInfo & 0x0FFF3FF0
-   
-   	isIntelBridgeFamily := isIntel &&
-   		processor == 0x206A0 ||
-   		processor == 0x206D0 ||
-   		processor == 0x306A0 ||
-   		processor == 0x306E0
-   
-   	useAVXmemmove = cpu.X86.HasAVX && !isIntelBridgeFamily
-   }
-   ```
+	```go
+	// runtime/runtime2.go
+	var (
+		// 有关可用的 cpu 功能的信息。
+		// 在 runtime.cpuinit 中启动时设置。
+		// 运行时之外的包不应使用这些包因为它们不是外部 api。
+		// TODO: deprecate these; use internal/cpu directly.
+		processorVersionInfo uint32
+		isIntel              bool
+		lfenceBeforeRdtsc    bool
+	)
+
+	// runtime/cpuflags_amd64.go
+	var useAVXmemmove bool
+
+	func init() {
+		// Let's remove stepping and reserved fields
+		processor := processorVersionInfo & 0x0FFF3FF0
+
+		isIntelBridgeFamily := isIntel &&
+			processor == 0x206A0 ||
+			processor == 0x206D0 ||
+			processor == 0x306A0 ||
+			processor == 0x306E0
+
+		useAVXmemmove = cpu.X86.HasAVX && !isIntelBridgeFamily
+	}
+	```
 
 2. GC work 参数检查：
 
