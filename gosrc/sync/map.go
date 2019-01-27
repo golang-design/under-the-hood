@@ -172,29 +172,17 @@ func (m *Map) Store(key, value interface{}) {
 //
 // 如果 entry 被删除了，则 tryStore 返回 false 且不修改 entry
 func (e *entry) tryStore(i *interface{}) bool {
-
-	// 读取 entry
-	p := atomic.LoadPointer(&e.p)
-
-	// 如果 entry 已经删除，则无法存储，返回
-	if p == expunged {
-		return false
-	}
-
 	for {
-		// 交换 p 和 i 的值，原子操作，如果成功则立即返回
-		if atomic.CompareAndSwapPointer(&e.p, p, unsafe.Pointer(i)) {
-			return true
-		}
-
-		// 如果没有成功，则再读一次 entry
-		p = atomic.LoadPointer(&e.p)
+		// 读取 entry
+		p := atomic.LoadPointer(&e.p)
 		// 如果 entry 已经删除，则无法存储，返回
 		if p == expunged {
 			return false
 		}
-
-		// 再次尝试，说明只要 key 不删除，那么更新操作一定会直接更新 read map，不涉及 dirty map
+		// 交换 p 和 i 的值，如果成功则立即返回
+		if atomic.CompareAndSwapPointer(&e.p, p, unsafe.Pointer(i)) {
+			return true
+		}
 	}
 }
 
