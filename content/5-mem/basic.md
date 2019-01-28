@@ -5,7 +5,8 @@
 到目前为止，我们已经分析了 Go 程序如何启动、初始化需要进行的关键步骤、初始化结束后，
 主 goroutine 如何被调度器进行调度。现在我们来看 Go 中另一重要的关键组件：内存分配器。
 
-Go 的内存分配器基于 Thread-Cache Malloc (tcmalloc) [1]，tcmalloc 为每个线程实现了一个本地缓存，区分了小对象（小于 32kb）和大对象分配两种分配类型，其管理的内存单元称为 span。
+Go 的内存分配器基于 Thread-Cache Malloc (tcmalloc) [1]，tcmalloc 为每个线程实现了一个本地缓存，
+区分了小对象（小于 32kb）和大对象分配两种分配类型，其管理的内存单元称为 span。
 
 我们不再介绍更多 tcmalloc 的具体细节，因为 Go 的内存分配器与 tcmalloc 存在一定差异。
 这个差异来源于 Go 语言被设计为没有显式的内存分配与释放，
@@ -27,7 +28,10 @@ Go 的内存分配器主要包含以下几个核心组件：
 
 其中页是向操作系统申请内存的最小单位，目前设计为 8kb。
 
-每一个结构虽然不都像是调度器 M/P/G 结构那样的大部头，但初次阅读这些结构时想要理清他们之间的关系还是比较麻烦的。传统意义上的栈被 Go 的运行时霸占，不开放给用户态代码；而传统意义上的堆内存，又被 Go 运行时划分为了两个部分，一个是 Go 运行时自身所需的堆内存，即堆外内存；另一部分则用于 Go 用户态代码所使用的堆内存，也叫做 Go 堆。Go 堆负责了用户态对象的存放以及 goroutine 的执行栈。
+每一个结构虽然不都像是调度器 M/P/G 结构那样的大部头，但初次阅读这些结构时想要理清他们之间的关系还是比较麻烦的。
+传统意义上的栈被 Go 的运行时霸占，不开放给用户态代码；而传统意义上的堆内存，又被 Go 运行时划分为了两个部分，
+一个是 Go 运行时自身所需的堆内存，即堆外内存；另一部分则用于 Go 用户态代码所使用的堆内存，也叫做 Go 堆。
+Go 堆负责了用户态对象的存放以及 goroutine 的执行栈。
 
 ### Arena
 
@@ -48,14 +52,10 @@ const (
 type heapArena struct {
 	bitmap [heapArenaBitmapBytes]byte
 	spans [pagesPerArena]*mspan
+	pageInUse [pagesPerArena / 8]uint8
+	pageMarks [pagesPerArena / 8]uint8
 }
 ```
-
-每个 arena 都包含一个 heapArena 对象，它内部的对象与堆外进行关联，
-保存了 arena 的 metadata，这些 metadata 包括：
-
-- arena 中所有字的 heap bitmap
-- arena 中所有页的 span map
 
 #### arenaHint
 
@@ -116,7 +116,7 @@ type mcache struct {
 }
 ```
 
-当 mcache 中 span 的数量不够使用时，会想 mcentral 的 nonempty 列表中获得新的 span。
+当 mcache 中 span 的数量不够使用时，会向 mcentral 的 nonempty 列表中获得新的 span。
 
 ### mcentral
 
@@ -145,12 +145,8 @@ type mcentral struct {
 //go:notinheap
 type mheap struct {
 	lock      mutex
-	free      [_MaxMHeapList]mSpanList // 128, 给定 _MaxMHeapList 长度的自由列表
-	freelarge mTreap                   // 长度大于 _MaxMHeapList 的空闲树堆 (treap)
-	busy      [_MaxMHeapList]mSpanList // 128, 给定长度的大 span 的繁忙列表
-	busylarge mSpanList                // 长度大于 _MaxMHeapList 的大 span 的繁忙列表
-	(...)
-	allspans []*mspan // 所有 spans 从这里分配出去
+	free      mTreap // free 和 non-scavenged spans
+	scav      mTreap // free 和 scavenged spans
 	(...)
 	arenas [1 << arenaL1Bits]*[1 << arenaL2Bits]*heapArena
 	(...)
@@ -158,7 +154,7 @@ type mheap struct {
 	(...)
 	central [numSpanClasses]struct {
 		mcentral mcentral
-		pad      [sys.CacheLineSize - unsafe.Sizeof(mcentral{})%sys.CacheLineSize]byte
+		pad      [cpu.CacheLinePadSize - unsafe.Sizeof(mcentral{})%cpu.CacheLinePadSize]byte
 	}
 
 	// 各种分配器
@@ -177,11 +173,15 @@ type mheap struct {
 
 ### 小对象分配
 
-当对一个小对象（<32kB）分配内存时，会将该对象所需的内存大小调整到某个能够容纳该对象的大小等级（size class），并查看 mcache 中对应等级的 mspan，通过扫描 mspan 的 `freeindex` 来确定是否能够进行分配。
+当对一个小对象（<32kB）分配内存时，会将该对象所需的内存大小调整到某个能够容纳该对象的大小等级（size class），
+并查看 mcache 中对应等级的 mspan，通过扫描 mspan 的 `freeindex` 来确定是否能够进行分配。
 
-当没有可分配的 mspan 时，会从 mcentral 中获取一个所需大小空间的新的 mspan，从 mcentral 中分配会对其进行枷锁，但一次性获取整个 span 的过程均摊了对 mcentral 加锁的成本。
+当没有可分配的 mspan 时，会从 mcentral 中获取一个所需大小空间的新的 mspan，从 mcentral 中分配会对其进行加锁，
+但一次性获取整个 span 的过程均摊了对 mcentral 加锁的成本。
 
-如果 mcentral 的 mspan 也为空时，则它也会发生增长，从而从 mheap 中获取一连串的页，作为一个新的 mspan 进行提供。而如果 mheap 仍然为空，或者没有足够大的对象来进行分配时，则会从操作系统中分配一组新的页（至少 1MB），从而均摊与操作系统沟通的成本。
+如果 mcentral 的 mspan 也为空时，则它也会发生增长，从而从 mheap 中获取一连串的页，作为一个新的 mspan 进行提供。
+而如果 mheap 仍然为空，或者没有足够大的对象来进行分配时，则会从操作系统中分配一组新的页（至少 1MB），
+从而均摊与操作系统沟通的成本。
 
 ### 微对象分配
 
@@ -199,9 +199,14 @@ type mheap struct {
 
 _图 1: Go 内存管理结构总览_
 
-heap 最中间的灰色区域 arena 覆盖了 Go 程序的整个虚拟内存，每个 arena 包括一段 bitmap 和一段指向连续 span 的指针；每个 span 由一串连续的页组成；每个 arena 的起始位置通过 arenaHint 进行记录。
+heap 最中间的灰色区域 arena 覆盖了 Go 程序的整个虚拟内存，
+每个 arena 包括一段 bitmap 和一段指向连续 span 的指针；
+每个 span 由一串连续的页组成；每个 arena 的起始位置通过 arenaHint 进行记录。
 
-分配的顺序从右向左，代价也就越来越大。小对象和微对象优先从白色区域 per-P 的 mcache 分配 span，这个过程不需要加锁（白色）；若失败则会从 mheap 持有的 mcentral 加锁获得新的 span，这个过程需要加锁，但只是局部（灰色）；若仍失败则会从右侧的 busy 和 free 进行分配，这个过程需要对整个 heap 进行加锁，代价最大（黑色）。
+分配的顺序从右向左，代价也就越来越大。
+小对象和微对象优先从白色区域 per-P 的 mcache 分配 span，这个过程不需要加锁（白色）；
+若失败则会从 mheap 持有的 mcentral 加锁获得新的 span，这个过程需要加锁，但只是局部（灰色）；
+若仍失败则会从右侧的 free 或 scav 进行分配，这个过程需要对整个 heap 进行加锁，代价最大（黑色）。
 
 ## 进一步阅读的参考文献
 

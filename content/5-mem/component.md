@@ -206,6 +206,12 @@ type mcache struct {
 	local_largefree  uintptr                  // bytes freed for large objects (>maxsmallsize)
 	local_nlargefree uintptr                  // number of frees for large objects (>maxsmallsize)
 	local_nsmallfree [_NumSizeClasses]uintptr // number of frees for small objects (<=maxsmallsize)
+
+	// flushGen indicates the sweepgen during which this mcache
+	// was last flushed. If flushGen != mheap_.sweepgen, the spans
+	// in this mcache are stale and need to the flushed so they
+	// can be swept. This is done in acquirep.
+	flushGen uint32
 }
 ```
 
@@ -221,6 +227,7 @@ var emptymspan mspan
 func allocmcache() *mcache {
 	lock(&mheap_.lock)
 	c := (*mcache)(mheap_.cachealloc.alloc())
+	c.flushGen = mheap_.sweepgen
 	unlock(&mheap_.lock)
 	for i := range c.alloc {
 		c.alloc[i] = &emptymspan // 暂时指向虚拟的 mspan 中
@@ -315,35 +322,7 @@ type m struct {
 ```
 
 那么 mcache 是跟着谁跑的？结合调度器的知识不难发现，m 在执行时需要持有一个 p 才具备执行能力。
-那么在 `acquirep` 的时候，是否有发生 mcache 的持有呢？答案是有的：
-
-```go
-//go:yeswritebarrierrec
-func acquirep(_p_ *p) {
-	acquirep1(_p_)
-	_g_ := getg()
-	
-	// 将 p 上的 mcache 给到 m 上
-	_g_.m.mcache = _p_.mcache
-
-	(...)
-}
-```
-
-同样，我们还需要验证，当 releasep 的时候，是否会发生 mcache 和 m 的解绑？答案也是肯定的：
-
-```go
-func releasep() *p {
-	_g_ := getg()
-
-	(...)
-	_g_.m.mcache = nil
-
-	(...)
-}
-```
-
-更有利的证据是，当调用 `runtime.procresize` 时，初始化新的 P 时，mcache 是直接分配到 p 的；
+有利的证据是，当调用 `runtime.procresize` 时，初始化新的 P 时，mcache 是直接分配到 p 的；
 回收 p 时，mcache 是直接从 p 上获取：
 
 ```go

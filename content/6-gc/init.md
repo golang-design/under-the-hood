@@ -3,15 +3,14 @@
 TODO:
 
 ```go
+// runtime/mgcwork.go
 const (
-	_WorkbufSize = 2048 // in bytes; larger values result in less contention
+	_WorkbufSize = 2048 // 单位为字节; 值越大，争用越少
 
-	// workbufAlloc is the number of bytes to allocate at a time
-	// for new workbufs. This must be a multiple of pageSize and
-	// should be a multiple of _WorkbufSize.
+	// workbufAlloc 是一次为新的 workbuf 分配的字节数。
+	// 必须是 pageSize 的倍数，并且应该是 _WorkbufSize 的倍数。
 	//
-	// Larger values reduce workbuf allocation overhead. Smaller
-	// values reduce heap fragmentation.
+	// 较大的值会减少 workbuf 分配开销。较小的值可减少堆碎片。
 	workbufAlloc = 32 << 10
 )
 //go:notinheap
@@ -20,24 +19,25 @@ type workbuf struct {
 	// account for the above fields
 	obj [(_WorkbufSize - unsafe.Sizeof(workbufhdr{})) / sys.PtrSize]uintptr
 }
+
+// runtime/mgc.go
 func gcinit() {
 	if unsafe.Sizeof(workbuf{}) != _WorkbufSize {
 		throw("size of Workbuf is suboptimal")
 	}
 
-	// No sweep on the first cycle.
+	// 第一个周期没有扫描。
 	mheap_.sweepdone = 1
 
-	// Set a reasonable initial GC trigger.
+	// 设置合理的初始 GC 触发比率。
 	memstats.triggerRatio = 7 / 8.0
 
-	// Fake a heap_marked value so it looks like a trigger at
-	// heapminimum is the appropriate growth from heap_marked.
-	// This will go into computing the initial GC goal.
+	// 伪造一个 heap_marked 值，使它看起来像一个触发器
+	// heapminimum 是 heap_marked的 适当增长。
+	// 这将用于计算初始 GC 目标。
 	memstats.heap_marked = uint64(float64(heapminimum) / (1 + memstats.triggerRatio))
 
-	// Set gcpercent from the environment. This will also compute
-	// and set the GC trigger and goal.
+	// 从环境中设置 gcpercent。这也将计算并设置 GC 触发器和目标。
 	_ = setGCPercent(readgogc())
 
 	work.startSema = 1

@@ -94,6 +94,7 @@ func mallocinit() {
 		// 但是，在 arm64 中，当使用 4K 大小具有三级的转换缓冲区的页（page）时，用户地址空间
 		// 被限制在了 39 bit，因此我们忽略了上面所有的建议并强制分配在 0x40 << 32 上。
 		// 在 darwin/arm64 中，地址空间甚至更小。
+		// 在 AIX 64 位系统中, mmaps 从 0x0A00000000000000 开始处理。
 		//
 		// 从 0xc000000000 开始设置保留地址
 		// 如果失败，则尝试 0x1c000000000 ~ 0x7fc000000000
@@ -102,14 +103,7 @@ func mallocinit() {
 			switch {
 			case GOARCH == "arm64" && GOOS == "darwin":
 				p = uintptr(i)<<40 | uintptrMask&(0x0013<<28)
-			case GOARCH == "arm64":
-				p = uintptr(i)<<40 | uintptrMask&(0x0040<<32)
-			case raceenabled:
-				// TSAN 运行时需要堆地址在 [0x00c000000000, 0x00e000000000) 范围内
-				p = uintptr(i)<<32 | uintptrMask&(0x00c0<<32)
-				if p >= uintptrMask&0x00e000000000 {
-					continue
-				}
+			(...)
 			default:
 				p = uintptr(i)<<40 | uintptrMask&(0x00c0<<32)
 			}
@@ -145,12 +139,6 @@ func (h *mheap) init() {
 	h.spanalloc.zero = false
 
 	// h->mapcache 不需要初始化
-	for i := range h.free {
-		h.free[i].init()
-		h.busy[i].init()
-	}
-
-	h.busylarge.init()
 	for i := range h.central {
 		h.central[i].mcentral.init(spanClass(i))
 	}
