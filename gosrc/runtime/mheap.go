@@ -1010,9 +1010,11 @@ func (h *mheap) alloc(npage uintptr, spanclass spanClass, large bool, needzero b
 	})
 
 	if s != nil {
+		// 需要清零时，对分配的 span 进行清零
 		if needzero && s.needzero != 0 {
 			memclrNoHeapPointers(unsafe.Pointer(s.base()), s.npages<<_PageShift)
 		}
+		// 标记已经清零
 		s.needzero = 0
 	}
 	return s
@@ -1070,6 +1072,7 @@ func (h *mheap) pickFreeSpan(npage uintptr) *mspan {
 	// Check for whichever treap gave us the smaller, non-nil result.
 	// Note that we want the _smaller_ free span, i.e. the free span
 	// closer in size to the amount we requested (npage).
+	// 选择更小的 span
 	var s *mspan
 	if tf != nil && (ts == nil || tf.spanKey.npages <= ts.spanKey.npages) {
 		s = tf.spanKey

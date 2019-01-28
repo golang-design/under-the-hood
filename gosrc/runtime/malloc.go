@@ -699,7 +699,7 @@ retry:
 	}
 }
 
-// base address for all 0-byte allocations
+// 适用于所有的 0 字节分配的基地址
 var zerobase uintptr
 
 // nextFreeFast returns the next free object if one is quickly available.
@@ -769,6 +769,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		throw("mallocgc called with gcphase == _GCmarktermination")
 	}
 
+	// 创建大小为零的对象，例如空结构体
 	if size == 0 {
 		return unsafe.Pointer(&zerobase)
 	}
@@ -814,6 +815,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 
 	shouldhelpgc := false
 	dataSize := size
+	// 获取 mcache
 	c := gomcache()
 	var x unsafe.Pointer
 	noscan := typ == nil || typ.kind&kindNoPointers != 0
@@ -990,9 +992,11 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 func largeAlloc(size uintptr, needzero bool, noscan bool) *mspan {
 	// print("largeAlloc size=", size, "\n")
 
+	// 对象太大，溢出
 	if size+_PageSize < size {
 		throw("out of memory")
 	}
+	// 根据分配的大小计算需要分配的页数
 	npages := size >> _PageShift
 	if size&_PageMask != 0 {
 		npages++
@@ -1003,6 +1007,7 @@ func largeAlloc(size uintptr, needzero bool, noscan bool) *mspan {
 	// pays the debt down to npage pages.
 	deductSweepCredit(npages*_PageSize, npages)
 
+	// 从堆上分配
 	s := mheap_.alloc(npages, makeSpanClass(0, noscan), true, needzero)
 	if s == nil {
 		throw("out of memory")
