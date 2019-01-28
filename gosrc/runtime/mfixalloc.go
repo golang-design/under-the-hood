@@ -11,7 +11,7 @@ package runtime
 import "unsafe"
 
 // FixAlloc 是一个简单的固定大小对象的自由表内存分配器。
-// Malloc 使用围绕 sysAlloc 的 FixAlloc 来管理其 MCache 和 MSpan 对象。
+// Malloc 使用围绕 sysAlloc 的 FixAlloc 来管理其 mcache 和 mspan 对象。
 //
 // fixalloc.alloc 返回的内存默认为零，但调用者可以通过将 zero 标志设置为 false
 // 来自行负责将分配归零。如果这部分内存永远不包含堆指针，则这样的操作是安全的。

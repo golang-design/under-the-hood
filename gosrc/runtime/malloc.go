@@ -81,6 +81,7 @@ package runtime
 
 import (
 	"runtime/internal/atomic"
+	"runtime/internal/math"
 	"runtime/internal/sys"
 	"unsafe"
 )
@@ -99,8 +100,6 @@ const (
 	// have the most objects per span.
 	maxObjsPerSpan = pageSize / 8
 
-	mSpanInUse = _MSpanInUse
-
 	concurrentSweep = _ConcurrentSweep
 
 	_PageSize = 1 << _PageShift // 8KB
@@ -113,8 +112,7 @@ const (
 	_TinySize      = 16
 	_TinySizeClass = int8(2)
 
-	_FixAllocChunk = 16 << 10               // FixAlloc 一个 Chunk 的大小
-	_MaxMHeapList  = 1 << (20 - _PageShift) // Maximum page length for fixed-size list in MHeap.
+	_FixAllocChunk = 16 << 10 // FixAlloc 一个 Chunk 的大小
 
 	// Per-P, 每个 order 对应栈所分割的缓存大小
 	_StackCacheSize = 32 * 1024
@@ -134,7 +132,7 @@ const (
 	// amd64, addresses are sign-extended beyond heapAddrBits. On
 	// other arches, they are zero-extended.
 	//
-	// On 64-bit platforms, we limit this to 48 bits based on a
+	// On most 64-bit platforms, we limit this to 48 bits based on a
 	// combination of hardware and OS limitations.
 	//
 	// amd64 hardware limits addresses to 48 bits, sign-extended
@@ -152,10 +150,9 @@ const (
 	// bits, in the range [0, 1<<48).
 	//
 	// ppc64, mips64, and s390x support arbitrary 64 bit addresses
-	// in hardware. However, since Go only supports Linux on
-	// these, we lean on OS limits. Based on Linux's processor.h,
-	// the user address space is limited as follows on 64-bit
-	// architectures:
+	// in hardware. On Linux, Go leans on stricter OS limits. Based
+	// on Linux's processor.h, the user address space is limited as
+	// follows on 64-bit architectures:
 	//
 	// Architecture  Name              Maximum Value (exclusive)
 	// ---------------------------------------------------------------------
@@ -172,13 +169,17 @@ const (
 	// exceed Go's 48 bit limit, it's extremely unlikely in
 	// practice.
 	//
+	// On aix/ppc64, the limits is increased to 1<<60 to accept addresses
+	// returned by mmap syscall. These are in range:
+	//  0x0a00000000000000 - 0x0afffffffffffff
+	//
 	// On 32-bit platforms, we accept the full 32-bit address
 	// space because doing so is cheap.
 	// mips32 only has access to the low 2GB of virtual memory, so
 	// we further limit it to 31 bits.
 	//
 	// WebAssembly currently has a limit of 4GB linear memory.
-	heapAddrBits = (_64bit*(1-sys.GoarchWasm))*48 + (1-_64bit+sys.GoarchWasm)*(32-(sys.GoarchMips+sys.GoarchMipsle))
+	heapAddrBits = (_64bit*(1-sys.GoarchWasm)*(1-sys.GoosAix))*48 + (1-_64bit+sys.GoarchWasm)*(32-(sys.GoarchMips+sys.GoarchMipsle)) + 60*sys.GoosAix
 
 	// maxAlloc is the maximum size of an allocation. On 64-bit,
 	// it's theoretically possible to allocate 1<<heapAddrBits bytes. On
@@ -190,16 +191,17 @@ const (
 	// The number of bits in a heap address, the size of heap
 	// arenas, and the L1 and L2 arena map sizes are related by
 	//
-	//   (1 << addrBits) = arenaBytes * L1entries * L2entries
+	//   (1 << addr bits) = arena size * L1 entries * L2 entries
 	//
 	// Currently, we balance these as follows:
 	//
-	//       Platform  Addr bits  Arena size  L1 entries  L2 size
-	// --------------  ---------  ----------  ----------  -------
-	//       */64-bit         48        64MB           1     32MB
-	// windows/64-bit         48         4MB          64      8MB
-	//       */32-bit         32         4MB           1      4KB
-	//     */mips(le)         31         4MB           1      2KB
+	//       Platform  Addr bits  Arena size  L1 entries   L2 entries
+	// --------------  ---------  ----------  ----------  -----------
+	//       */64-bit         48        64MB           1    4M (32MB)
+	//     aix/64-bit         60       256MB        4096    4M (32MB)
+	// windows/64-bit         48         4MB          64    1M  (8MB)
+	//       */32-bit         32         4MB           1  1024  (4KB)
+	//     */mips(le)         31         4MB           1   512  (2KB)
 
 	// heapArenaBytes 为 heap arena 的大小。
 	// heap 由大小为 heapArenaBytes 的映射构成，与 heapArenaBytes 对齐。
@@ -219,7 +221,7 @@ const (
 	// logHeapArenaBytes is log_2 of heapArenaBytes. For clarity,
 	// prefer using heapArenaBytes where possible (we need the
 	// constant to compute some other constants).
-	logHeapArenaBytes = (6+20)*(_64bit*(1-sys.GoosWindows)) + (2+20)*(_64bit*sys.GoosWindows) + (2+20)*(1-_64bit)
+	logHeapArenaBytes = (6+20)*(_64bit*(1-sys.GoosWindows)*(1-sys.GoosAix)) + (2+20)*(_64bit*sys.GoosWindows) + (2+20)*(1-_64bit) + (8+20)*sys.GoosAix
 
 	// heapArenaBitmapBytes 为每个 heap arena 的 bitmap 的大小
 	heapArenaBitmapBytes = heapArenaBytes / (sys.PtrSize * 8 / 2)
@@ -239,8 +241,10 @@ const (
 	// We use the L1 map on 64-bit Windows because the arena size
 	// is small, but the address space is still 48 bits, and
 	// there's a high cost to having a large L2.
-	arenaL1Bits = 6 * (_64bit * sys.GoosWindows)
-
+	//
+	// We use the L1 map on aix/ppc64 to keep the same L2 value
+	// as on Linux.
+	arenaL1Bits = 6*(_64bit*sys.GoosWindows) + 12*sys.GoosAix
 	// arenaL2Bits is the number of bits of the arena number
 	// covered by the second level arena index.
 	//
@@ -296,27 +300,27 @@ var physPageSize uintptr
 // 注意: sysAlloc 返回的是操作系统排布的内存，但堆分配器可能使用更大的布局。
 // 因此调用方必须谨慎的重排从 sysAlloc 获得的内存。
 //
-// SysUnused notifies the operating system that the contents
+// sysUnused notifies the operating system that the contents
 // of the memory region are no longer needed and can be reused
 // for other purposes.
-// SysUsed notifies the operating system that the contents
+// sysUsed notifies the operating system that the contents
 // of the memory region are needed again.
 //
-// SysFree returns it unconditionally; this is only used if
+// sysFree returns it unconditionally; this is only used if
 // an out-of-memory error has been detected midway through
-// an allocation. It is okay if SysFree is a no-op.
+// an allocation. It is okay if sysFree is a no-op.
 //
-// SysReserve reserves address space without allocating memory.
+// sysReserve reserves address space without allocating memory.
 // If the pointer passed to it is non-nil, the caller wants the
-// reservation there, but SysReserve can still choose another
+// reservation there, but sysReserve can still choose another
 // location if that one is unavailable.
-// NOTE: SysReserve returns OS-aligned memory, but the heap allocator
+// NOTE: sysReserve returns OS-aligned memory, but the heap allocator
 // may use larger alignment, so the caller must be careful to realign the
 // memory obtained by sysAlloc.
 //
-// SysMap maps previously reserved address space for use.
+// sysMap maps previously reserved address space for use.
 //
-// SysFault marks a (already sysAlloc'd) region to fault
+// sysFault marks a (already sysAlloc'd) region to fault
 // if accessed. Used only for debugging the runtime.
 
 func mallocinit() {
@@ -379,6 +383,8 @@ func mallocinit() {
 		// 但是，在 arm64 中，当使用 4K 大小具有三级的转换缓冲区的页（page）时，用户地址空间
 		// 被限制在了 39 bit，因此我们忽略了上面所有的建议并强制分配在 0x40 << 32 上。
 		// 在 darwin/arm64 中，地址空间甚至更小。
+		// On AIX, mmaps starts at 0x0A00000000000000 for 64-bit.
+		// processes.
 		//
 		// 从 0xc000000000 开始设置保留地址
 		// 如果失败，则尝试 0x1c000000000 ~ 0x7fc000000000
@@ -389,6 +395,13 @@ func mallocinit() {
 				p = uintptr(i)<<40 | uintptrMask&(0x0013<<28)
 			case GOARCH == "arm64":
 				p = uintptr(i)<<40 | uintptrMask&(0x0040<<32)
+			case GOOS == "aix":
+				if i == 0 {
+					// We don't use addresses directly after 0x0A00000000000000
+					// to avoid collisions with others mmaps done by non-go programs.
+					continue
+				}
+				p = uintptr(i)<<40 | uintptrMask&(0xa0<<52)
 			case raceenabled:
 				// TSAN 运行时需要堆地址在 [0x00c000000000, 0x00e000000000) 范围内
 				p = uintptr(i)<<32 | uintptrMask&(0x00c0<<32)
@@ -420,7 +433,7 @@ func mallocinit() {
 		// 3. We try to stake out a reasonably large initial
 		// heap reservation.
 
-		const arenaMetaSize = unsafe.Sizeof([1 << arenaBits]heapArena{})
+		const arenaMetaSize = (1 << arenaBits) * unsafe.Sizeof(heapArena{})
 		meta := uintptr(sysReserve(nil, arenaMetaSize))
 		if meta != 0 {
 			mheap_.heapArenaAlloc.init(meta, arenaMetaSize)
@@ -603,6 +616,27 @@ mapped:
 			}
 		}
 
+		// Add the arena to the arenas list.
+		if len(h.allArenas) == cap(h.allArenas) {
+			size := 2 * uintptr(cap(h.allArenas)) * sys.PtrSize
+			if size == 0 {
+				size = physPageSize
+			}
+			newArray := (*notInHeap)(persistentalloc(size, sys.PtrSize, &memstats.gc_sys))
+			if newArray == nil {
+				throw("out of memory allocating allArenas")
+			}
+			oldSlice := h.allArenas
+			*(*notInHeapSlice)(unsafe.Pointer(&h.allArenas)) = notInHeapSlice{newArray, len(h.allArenas), int(size / sys.PtrSize)}
+			copy(h.allArenas, oldSlice)
+			// Do not free the old backing array because
+			// there may be concurrent readers. Since we
+			// double the array each time, this can lead
+			// to at most 2x waste.
+		}
+		h.allArenas = h.allArenas[:len(h.allArenas)+1]
+		h.allArenas[len(h.allArenas)-1] = ri
+
 		// Store atomically just in case an object from the
 		// new heap arena becomes visible before the heap lock
 		// is released (which shouldn't happen, but there's
@@ -695,6 +729,9 @@ func nextFreeFast(s *mspan) gclinkptr {
 // weight allocation. If it is a heavy weight allocation the caller must
 // determine whether a new GC cycle needs to be started or if the GC is active
 // whether this goroutine needs to assist the GC.
+//
+// Must run in a non-preemptible context since otherwise the owner of
+// c could change.
 func (c *mcache) nextFree(spc spanClass) (v gclinkptr, s *mspan, shouldhelpgc bool) {
 	s = c.alloc[spc]
 	shouldhelpgc = false
@@ -705,9 +742,7 @@ func (c *mcache) nextFree(spc spanClass) (v gclinkptr, s *mspan, shouldhelpgc bo
 			println("runtime: s.allocCount=", s.allocCount, "s.nelems=", s.nelems)
 			throw("s.allocCount != s.nelems && freeIndex == s.nelems")
 		}
-		systemstack(func() {
-			c.refill(spc)
-		})
+		c.refill(spc)
 		shouldhelpgc = true
 		s = c.alloc[spc]
 
@@ -929,7 +964,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	}
 
 	if rate := MemProfileRate; rate > 0 {
-		if size < uintptr(rate) && int32(size) < c.next_sample {
+		if rate != 1 && int32(size) < c.next_sample {
 			c.next_sample -= int32(size)
 		} else {
 			mp := acquirem()
@@ -946,7 +981,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 
 	if shouldhelpgc {
 		if t := (gcTrigger{kind: gcTriggerHeap}); t.test() {
-			gcStart(gcBackgroundMode, t)
+			gcStart(t)
 		}
 	}
 
@@ -993,10 +1028,11 @@ func newarray(typ *_type, n int) unsafe.Pointer {
 	if n == 1 {
 		return mallocgc(typ.size, typ, true)
 	}
-	if n < 0 || uintptr(n) > maxSliceCap(typ.size) {
+	mem, overflow := math.MulUintptr(typ.size, uintptr(n))
+	if overflow || mem > maxAlloc || n < 0 {
 		panic(plainError("runtime: allocation size out of range"))
 	}
-	return mallocgc(typ.size*uintptr(n), typ, true)
+	return mallocgc(mem, typ, true)
 }
 
 //go:linkname reflect_unsafe_NewArray reflect.unsafe_NewArray
@@ -1078,6 +1114,15 @@ var globalAlloc struct {
 	persistentAlloc
 }
 
+// persistentChunkSize is the number of bytes we allocate when we grow
+// a persistentAlloc.
+const persistentChunkSize = 256 << 10
+
+// persistentChunks is a list of all the persistent chunks we have
+// allocated. The list is maintained through the first word in the
+// persistent chunk. This is updated atomically.
+var persistentChunks *notInHeap
+
 // sysAlloc 的一层封装，能够分配小的 chunk
 // 没有释放操作
 // 用于 函数、类型、调试相关的持久型数据分配。
@@ -1097,7 +1142,6 @@ func persistentalloc(size, align uintptr, sysStat *uint64) unsafe.Pointer {
 //go:systemstack
 func persistentalloc1(size, align uintptr, sysStat *uint64) *notInHeap {
 	const (
-		chunk    = 256 << 10
 		maxBlock = 64 << 10 // VM reservation granularity is 64K on windows
 	)
 
@@ -1135,15 +1179,24 @@ func persistentalloc1(size, align uintptr, sysStat *uint64) *notInHeap {
 	}
 	// 四舍五入 off 到 align 的倍数
 	persistent.off = round(persistent.off, align)
-	if persistent.off+size > chunk || persistent.base == nil {
-		persistent.base = (*notInHeap)(sysAlloc(chunk, &memstats.other_sys))
+	if persistent.off+size > persistentChunkSize || persistent.base == nil {
+		persistent.base = (*notInHeap)(sysAlloc(persistentChunkSize, &memstats.other_sys))
 		if persistent.base == nil {
 			if persistent == &globalAlloc.persistentAlloc {
 				unlock(&globalAlloc.mutex)
 			}
 			throw("runtime: cannot allocate memory")
 		}
-		persistent.off = 0
+
+		// Add the new chunk to the persistentChunks list.
+		for {
+			chunks := uintptr(unsafe.Pointer(persistentChunks))
+			*(*uintptr)(unsafe.Pointer(persistent.base)) = chunks
+			if atomic.Casuintptr((*uintptr)(unsafe.Pointer(&persistentChunks)), chunks, uintptr(unsafe.Pointer(persistent.base))) {
+				break
+			}
+		}
+		persistent.off = sys.PtrSize
 	}
 	p := persistent.base.add(persistent.off)
 	persistent.off += size
@@ -1157,6 +1210,21 @@ func persistentalloc1(size, align uintptr, sysStat *uint64) *notInHeap {
 		mSysStatDec(&memstats.other_sys, size)
 	}
 	return p
+}
+
+// inPersistentAlloc reports whether p points to memory allocated by
+// persistentalloc. This must be nosplit because it is called by the
+// cgo checker code, which is called by the write barrier code.
+//go:nosplit
+func inPersistentAlloc(p uintptr) bool {
+	chunk := atomic.Loaduintptr((*uintptr)(unsafe.Pointer(&persistentChunks)))
+	for chunk != 0 {
+		if p >= chunk && p < chunk+persistentChunkSize {
+			return true
+		}
+		chunk = *(*uintptr)(unsafe.Pointer(chunk))
+	}
+	return false
 }
 
 // linearAlloc 是一个简单的线性分配器，提前储备了内存的一块区域并在需要时指向该区域。
