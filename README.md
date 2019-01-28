@@ -2,7 +2,7 @@
 
 # Go under the hood
 
-Go 源码研究 | 当前基于 `go1.11.5`
+Go 源码研究 | 当前基于 `go1.12beta2`
 
 ## 目录
 

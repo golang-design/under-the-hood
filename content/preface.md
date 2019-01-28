@@ -60,9 +60,9 @@ _图 : 比较了 cgo/go/c 之间在 read/write 系统调用时的性能差异_
 
 ```bash
 → go version
-go version go1.11.5 darwin/amd64
+go version go1.12beta2 darwin/amd64
 → uname -a
-Darwin changkun-mini 18.2.0 Darwin Kernel Version 18.2.0: Fri Oct  5 19:41:49 PDT 2018; root:xnu-4903.221.2~2/RELEASE_X86_64 x86_64
+Darwin changkun-mini 18.2.0 Darwin Kernel Version 18.2.0: Mon Nov 12 20:24:46 PST 2018; root:xnu-4903.231.4~2/RELEASE_X86_64 x86_64
 ```
 
 ## 许可
