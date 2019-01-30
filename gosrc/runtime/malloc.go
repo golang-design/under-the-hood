@@ -702,10 +702,10 @@ retry:
 // 适用于所有的 0 字节分配的基地址
 var zerobase uintptr
 
-// nextFreeFast returns the next free object if one is quickly available.
-// Otherwise it returns 0.
+// nextFreeFast 在快速有效的情况下返回了存在的空闲对象
+// 否则返回 0
 func nextFreeFast(s *mspan) gclinkptr {
-	theBit := sys.Ctz64(s.allocCache) // Is there a free object in the allocCache?
+	theBit := sys.Ctz64(s.allocCache) // allocCache 中是否有空闲对象?
 	if theBit < 64 {
 		result := s.freeindex + uintptr(theBit)
 		if result < s.nelems {
@@ -821,7 +821,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	noscan := typ == nil || typ.kind&kindNoPointers != 0
 	if size <= maxSmallSize {
 		if noscan && size < maxTinySize {
-			// 微型分配器 (tiny)
+			// 微型分配器 (tiny allocator)
 			//
 			// 微型分配器结合了多个的微型分配请求，并将其合并到一个单一的内存块中。
 			// 微型分配器将几个微小的分配请求组合到一个内存块中。
@@ -843,8 +843,10 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 			//
 			// 微型分配器的主要目标是小字符串和独立的逃逸变量。
 			// 在 json 性能测试中，分配器将分配次数减少了大约 12％，并将堆大小占用减少了大约 20％。
+
+			// 偏移量
 			off := c.tinyoffset
-			// Align tiny pointer for required (conservative) alignment.
+			// 将微型指针对齐以进行所需（保守）对齐。
 			if size&7 == 0 {
 				off = round(off, 8)
 			} else if size&3 == 0 {
@@ -852,16 +854,21 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 			} else if size&1 == 0 {
 				off = round(off, 2)
 			}
+
 			if off+size <= maxTinySize && c.tiny != 0 {
-				// The object fits into existing tiny block.
+				// 能直接被当前的内存块容纳
 				x = unsafe.Pointer(c.tiny + off)
+				// 增加 offset
 				c.tinyoffset = off + size
+				// 统计数量
 				c.local_tinyallocs++
+				// 完成分配，释放 m
 				mp.mallocing = 0
 				releasem(mp)
 				return x
 			}
-			// Allocate a new maxTinySize block.
+			// 根据 tinySpan 的大小等级获得对应的 span 链表
+			// 从而用于分配一个新的 maxTinySize 块
 			span := c.alloc[tinySpanClass]
 			v := nextFreeFast(span)
 			if v == 0 {
@@ -870,8 +877,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 			x = unsafe.Pointer(v)
 			(*[2]uint64)(x)[0] = 0
 			(*[2]uint64)(x)[1] = 0
-			// See if we need to replace the existing tiny block with the new one
-			// based on amount of remaining free space.
+			// 看看我们是否需要根据剩余可用空间量替换现有的小块
 			if size < c.tinyoffset || c.tiny == 0 {
 				c.tiny = uintptr(x)
 				c.tinyoffset = size

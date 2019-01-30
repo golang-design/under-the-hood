@@ -26,10 +26,10 @@
 | 栈         |                | Stack               |           |      |
 | 写屏障     |                | Write Barrier       | WB/wb     |      |
 | 工作线程   |                | Worker Thread       |           |      |
-|            |                |                     |           |      |
-|            |                |                     |           |      |
-|            |                |                     |           |      |
-|            |                |                     |           |      |
+| 微对象     |                | Tiny Object         |           |      |
+| 小对象     |                | Small Object        |           |      |
+| 大对象     |                | Large Object        |           |      |
+| 微型分配器 |                | Tiny Allocator      |           |      |
 |            |                |                     |           |      |
 |            |                |                     |           |      |
 |            |                |                     |           |      |
