@@ -114,7 +114,7 @@ type m struct {
 	freeWait      uint32 // if == 0, safe to free g0 and delete m (atomic)
 	fastrand      [2]uint32
 	needextram    bool
-	traceback     uint8
+	(...)
 	ncgocall      uint64      // 总共的 cgo 调用数
 	ncgo          int32       // 正在进行的 cgo 调用数
 	cgoCallersUse uint32      // 如果非零，则表示 cgoCaller 正在临时使用
@@ -136,18 +136,7 @@ type m struct {
 	syscalltick   uint32
 	thread        uintptr // 线程处理
 	freelink      *m      // 在 sched.freem 上
-
-	// 下面这些字段因为它们太大而不能放在低级的 NOSPLIT 函数的堆栈上。
-	libcall   libcall
-	libcallpc uintptr // 用于 cpu profiler
-	libcallsp uintptr
-	libcallg  guintptr
-	syscall   libcall // 存储 windows 上系统调用的参数
-
-	vdsoSP uintptr // SP 用于 VDSO 调用的回溯 (如果没有产生调用则为 0)
-	vdsoPC uintptr // PC 用于 VDSO 调用的回溯
-
-	mOS
+	(...)
 }
 ```
 

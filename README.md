@@ -6,76 +6,142 @@ Go 源码研究 | 当前基于 `go1.12beta2`
 
 ## 目录
 
-[引言](content/preface.md)
+#### [引言](book/preface.md)
 
-1. [程序引导](content/1-boot.md)
-2. [初始化概览](content/2-init.md)
-3. [主 goroutine 生命周期](content/3-main.md)
-4. 调度器: sched
-    - [基本知识](content/4-sched/basic.md)
-    - [初始化](content/4-sched/init.md)
-    - [调度循环](content/4-sched/exec.md)
-    - [系统监控](content/4-sched/sysmon.md)
-    - [协作与抢占](content/4-sched/preemptive.md)
-    - [调度理论](content/4-sched/theory.md)
-5. 内存分配器: alloc
-    - [基本知识](content/5-mem/basic.md)
-    - [分配器组件](content/5-mem/component.md)
-    - [初始化](content/5-mem/init.md)
-    - [分配过程](content/5-mem/alloc.md)
-6. 垃圾回收器：GC
-    - [基本知识](content/6-GC/basic.md)
-    - [初始化](content/6-GC/init.md)
-    - [内存屏障](content/6-GC/barrier.md)
-    - [三色标记](content/6-GC/mark.md)
-    - [并发](content/6-GC/concurrent.md)
-7. 关键字
-    - [`go`](content/7-lang/go.md)
-    - [`defer`](content/7-lang/defer.md)
-    - [`panic` 与 `recover`](content/7-lang/panic.md)
-    - [`map`](content/7-lang/map.md)
-    - [`chan` 与 `select`](content/7-lang/chan.md)
-    - [`interface`](content/7-lang/interface.md)
-8. 运行时组件
-    - [参与运行时的系统调用: darwin](content/8-runtime/syscall-darwin.md)
-    - [参与运行时的系统调用: linux](content/8-runtime/syscall-linux.md)
-    - [`LockOSThread/UnlockOSThread` 与运行时线程管理](content/8-runtime/lockosthread.md)
-    - [`note` 与 `mutex`](content/8-runtime/note.md)
-    - [`SetFinalizer` 与 `KeepAlive`](content/8-runtime/finalizer.md)
-    - [信号量 sema 机制](content/8-runtime/sema.md)
-    - [系统信号处理](content/8-runtime/signal.md)
-9. [`unsafe`](content/9-unsafe.md)
-10. [`cgo`](content/10-cgo.md)
-11. 依赖运行时的标准库
-    - [`sync.Pool`](content/11-pkg/sync/pool.md)
-    - [`sync.Once`](content/11-pkg/sync/once.md)
-    - [`sync.Map`](content/11-pkg/sync/map.md)
-    - [`sync.WaitGroup`](content/11-pkg/sync/waitgroup.md)
-    - [`sync.Mutex`](content/11-pkg/sync/mutex.md)
-    - [`sync.Cond`](content/11-pkg/sync/cond.md)
-    - [`atomic.*`](content/11-pkg/atomic/atomic.md)
-    - [`syscall.*`](content/11-pkg/syscall/syscall.md)
-    - [`reflect`](content/11-pkg/reflect/reflect.md)
-    - [`net`](content/11-pkg/net/net.md)
-    - [`time`](content/11-pkg/time/time.md)
-12. [WebAssembly](content/12-wasm.md)
-13. [race 竞争检测](content/13-race.md)
-14. [trace 运行时调试](content/14-trace.md)
-15. Go 模块链接器
-    - [初始化](content/15-linker/init.md)
-    - [模块链接](content/15-linker/link.md)
-16. Go 编译器: gc
-    - [词法与文法](content/16-compile/parse.md)
-    - [类型系统](content/16-compile/type.md)
-    - [编译后端 SSA](content/16-compile/ssa.md)
-17. 附录
-    - [源码索引](content/appendix/index.md)
-    - [术语表](content/appendix/glossary.md)
-    - [Plan 9 汇编介绍](content/appendix/asm.md)
-    - [基于工作窃取的多线程计算调度](papers/sched/work-steal-sched.md)
-    - [Go 运行时编程](gosrc/runtime/README.md)
+### 第一部分: 基础理论
 
-[结束语](content/finalwords.md)
+#### 第一章 保留
+
+<!-- 内存布局？ -->
+
+TODO:
+
+#### 第二章 排队与调度理论
+
+TODO:
+
+<!-- - [2.1 排队理论引导]()
+- [2.2 工作窃取调度](papers/sched/work-steal-sched.md)
+- [调度理论](book/4-sched/theory.md) -->
+
+#### 第三章 并行与并发
+
+TODO:
+
+<!-- - [3.1 并发] -->
+
+#### 第四章 保留
+
+TODO:
+
+<!-- CPU 架构与操作系统? -->
+
+<!-- - [Linux 系统调用]
+- [Plan 9 汇编](book/appendix/asm.md) -->
+
+#### 第五章 Go 程序生命周期
+
+- [程序引导](book/part1basic/ch05boot/boot.md)
+- [初始化概览](book/part1basic/ch05boot/init.md)
+- [主 goroutine 生命周期](book/part1basic/ch05boot/main.md)
+
+### 第二部分：运行时机制
+
+#### 第六章 调度器
+
+- [基本结构](book/part2runtime/ch06sched/basic.md)
+- [调度器初始化](book/part2runtime/ch06sched/init.md)
+- [调度循环](book/part2runtime/ch06sched/exec.md)
+- [系统监控](book/part2runtime/ch06sched/sysmon.md)
+- [协作与抢占](book/part2runtime/ch06sched/preemptive.md)
+- [线程管理](book/part2runtime/ch06sched/lockosthread.md)
+- [`note` 与 `mutex`](book/part2runtime/ch06sched/note.md)
+- [系统信号处理](book/part2runtime/ch06sched/signal.md)
+- [过去、现在与未来](book/part2runtime/ch06sched/history.md)
+
+#### 第七章 内存分配器
+
+- [基本知识](book/part2runtime/ch07mem/basic.md)
+- [分配器组件](book/part2runtime/ch07mem/component.md)
+- [初始化](book/part2runtime/ch07mem/init.md)
+- [分配过程](book/part2runtime/ch07mem/alloc.md)
+- [过去、现在与未来](book/part2runtime/ch07mem/history.md)
+
+#### 第八章 垃圾回收器
+
+- [基本知识](book/part2runtime/ch08GC/basic.md)
+- [垃圾回收初始化](book/part2runtime/ch08GC/init.md)
+- [混合写屏障](book/part2runtime/ch08GC/barrier.md)
+- [三色标记](book/part2runtime/ch08GC/mark.md)
+- [并发回收](book/part2runtime/ch08GC/concurrent.md)
+- [`SetFinalizer` 与 `KeepAlive`](book/part2runtime/ch08GC/finalizer.md)
+- [过去、现在与未来](book/part2runtime/ch08GC/history.md)
+
+#### 第九章 调试
+
+- [race 竞争检测](book/part2runtime/ch09debug/race.md)
+- [trace 运行时调试](book/part2runtime/ch09debug/trace.md)
+
+#### 第十章 兼容与契约
+
+<!-- - [运行时编程综述](gosrc/runtime/README.md) -->
+
+- [参与运行时的系统调用: Linux](book/part2runtime/ch10abi/syscall-linux.md)
+- [参与运行时的系统调用: Darwin](book/part2runtime/ch10abi/syscall-darwin.md)
+- [cgo](book/part2runtime/ch10abi/cgo.md)
+- [WebAssembly](book/part2runtime/ch10abi/wasm.md)
+
+### 第三部分：编译系统
+
+#### 第十一章 关键字
+
+- [`go`](book/part3compile/ch11keyword/go.md)
+- [`defer`](book/part3compile/ch11keyword/defer.md)
+- [`panic` 与 `recover`](book/part3compile/ch11keyword/panic.md)
+- [`map`](book/part3compile/ch11keyword/map.md)
+- [`chan` 与 `select`](book/part3compile/ch11keyword/chan.md)
+- [`interface`](book/part3compile/ch11keyword/interface.md)
+
+#### 第十二章 模块链接器
+
+- [初始化](book/part3compile/ch12link/init.md)
+- [模块链接](book/part3compile/ch12link/link.md)
+
+#### 第十三章 编译器
+
+- [`unsafe`](book/part3compile/ch13gc/9-unsafe.md)
+- [词法与文法](book/part3compile/ch13gc/parse.md)
+- [类型系统](book/part3compile/ch13gc/type.md)
+- [编译后端 SSA](book/part3compile/ch13gc/ssa.md)
+- [过去、现在与未来]
+
+### 第四部分：标准库
+
+#### 第十四章 sync 与 atomic 包
+
+- [信号量 sema 机制](book/part4lib/ch14sync/sema.md)
+- [`sync.Pool`](book/part4lib/ch14sync/pool.md)
+- [`sync.Once`](book/part4lib/ch14sync/once.md)
+- [`sync.Map`](book/part4lib/ch14sync/map.md)
+- [`sync.WaitGroup`](book/part4lib/ch14sync/waitgroup.md)
+- [`sync.Mutex`](book/part4lib/ch14sync/mutex.md)
+- [`sync.Cond`](book/part4lib/ch14sync/cond.md)
+- [`sync/atomic.*`](book/part4lib/ch14sync/atomic.md)
+
+#### 第十五章 其他
+
+- [`syscall.*`](book/part4lib/ch15other/syscall.md)
+- [`reflect`](book/part4lib/ch15other/reflect.md)
+- [`net`](book/part4lib/ch15other/net.md)
+- [`time`](book/part4lib/ch15other/time.md)
+
+#### [结束语](book/finalwords.md)
+
+#### 附录
+
+- [附录A: 源码索引](book/appendix/index.md)
+- [附录B: 术语表](book/appendix/glossary.md)
+
 
 ## 捐助
 

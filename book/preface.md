@@ -49,7 +49,7 @@ _图 : 比较了 cgo/go/c 之间在 read/write 系统调用时的性能差异_
 
 本仓库组织了一下几部分内容：
 
-- [`content`](../content): 源码的研究；
+- [`content`](../book): 源码的研究；
 - [`demo`](../demo): 研究源码产生的相关的实例代码；
 - [`gosrc`](../gosrc): 无修改的、正式发布的 go 源码，与最新发布的 go 版本同步，在[这里](https://github.com/changkun/go/tree/go-under-the-hood)追踪官方的更新；
 - [`images`](../images): 仓库中依赖的相关图片；
