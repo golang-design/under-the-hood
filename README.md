@@ -68,8 +68,8 @@ TODO:
 - [分配器组件](book/part2runtime/ch07mem/component.md)
 - [初始化](book/part2runtime/ch07mem/init.md)
 - [大对象分配](book/part2runtime/ch07mem/largealloc.md)
-- [微对象分配](book/part2runtime/ch07mem/tinyalloc.md)
 - [小对象分配](book/part2runtime/ch07mem/smallalloc.md)
+- [微对象分配](book/part2runtime/ch07mem/tinyalloc.md)
 - [过去、现在与未来](book/part2runtime/ch07mem/history.md)
 
 #### 第八章 垃圾回收器
