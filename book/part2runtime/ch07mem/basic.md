@@ -16,7 +16,7 @@ Go 的内存分配器基于 Thread-Cache Malloc (tcmalloc) [1]，tcmalloc 为每
 进而减少与操作系统沟通造成的开销，进而提高程序的运行性能。
 支持内存管理另一个优势就是能够更好的支持垃圾回收，这一点我们留到垃圾回收器一节中进行讨论。
 
-## 内存分配器的主要结构
+## 主要结构
 
 Go 的内存分配器主要包含以下几个核心组件：
 
@@ -170,6 +170,155 @@ type mheap struct {
 ```
 
 ## 分配概览
+
+在分析具体的分配过程之前，我们需要搞清楚究竟什么时候会发生分配。
+
+Go 程序的执行是基于 goroutine 的，goroutine 和传统意义上的程序一样，也有栈和堆的概念。只不过
+Go 的运行时帮我们屏蔽掉了这两个概念，只在运行时内部区分并分别对应：goroutine 执行栈以及 Go 堆。
+
+goroutine 的执行栈与传统意义上的栈一样，当函数返回时，在栈就会被回收，栈中的对象都会被回收，从而
+无需 GC 的标记；而堆则麻烦一些，由于 Go 支持垃圾回收，只要对象生存在堆上，Go 的运行时 GC 就会在
+后台将对应的内存进行标记从而能够在垃圾回收的时候将对应的内存回收，进而增加了开销。
+
+下面这个程序给出了四种情况：
+
+```go
+package main
+
+type smallobj struct {
+	arr [1 << 10]byte
+}
+
+type largeobj struct {
+	arr [1 << 26]byte
+}
+
+func f1() int {
+	x := 1
+	return x
+}
+
+func f2() *int {
+	y := 2
+	return &y
+}
+
+func f3() {
+	large := largeobj{}
+	println(&large)
+}
+
+func f4() {
+	small := smallobj{}
+	print(&small)
+}
+
+func main() {
+	x := f1()
+	y := f2()
+	f3()
+	f4()
+	println(x, y)
+}
+```
+
+我们使用 `-gcflags "-N -l -m"` 编译这段代码能够禁用编译器与内联优化并进行逃逸分析：
+
+```bash
+# alloc.go
+# go build -gcflags "-N -l -m" -ldflags=-compressdwarf=false -o alloc.out alloc.go
+# command-line-arguments
+./alloc.go:18:9: &y escapes to heap
+./alloc.go:17:2: moved to heap: y
+./alloc.go:22:2: moved to heap: large
+./alloc.go:23:10: f3 &large does not escape
+./alloc.go:28:8: f4 &small does not escape
+```
+
+- 情况1: `f1` 中 `x` 的变量被返回，没有发生逃逸；
+- 情况2: `f2` 中 `y` 的指针被返回，进而发生了逃逸；
+- 情况3: `f3` 中 `large` 无法被一个执行栈装下，即便没有返回，也会直接在堆上分配；
+- 情况4: `f4` 中 `small` 对象能够被一个执行栈装下，变量没有返回到栈外，进而没有发生逃逸。
+
+如果我们再仔细检查一下他们的汇编：
+
+```asm
+TEXT main.f2(SB) /Users/changkun/dev/go-under-the-hood/demo/4-mem/alloc/alloc.go
+  (...)
+  alloc.go:17		0x104e086		488d05939f0000		LEAQ type.*+40256(SB), AX		
+  alloc.go:17		0x104e08d		48890424		MOVQ AX, 0(SP)				
+  alloc.go:17		0x104e091		e8cabffbff		CALL runtime.newobject(SB)		
+  alloc.go:17		0x104e096		488b442408		MOVQ 0x8(SP), AX			
+  alloc.go:17		0x104e09b		4889442410		MOVQ AX, 0x10(SP)			
+  alloc.go:17		0x104e0a0		48c70002000000		MOVQ $0x2, 0(AX)			
+  (...)
+
+TEXT main.f3(SB) /Users/changkun/dev/go-under-the-hood/demo/4-mem/alloc/alloc.go
+  (...)
+  alloc.go:22		0x104e0ed		488d05ecf60000		LEAQ type.*+62720(SB), AX		
+  alloc.go:22		0x104e0f4		48890424		MOVQ AX, 0(SP)				
+  alloc.go:22		0x104e0f8		e863bffbff		CALL runtime.newobject(SB)		
+  alloc.go:22		0x104e0fd		488b7c2408		MOVQ 0x8(SP), DI			
+  alloc.go:22		0x104e102		48897c2418		MOVQ DI, 0x18(SP)			
+  alloc.go:22		0x104e107		b900008000		MOVL $0x800000, CX			
+  alloc.go:22		0x104e10c		31c0			XORL AX, AX				
+  alloc.go:22		0x104e10e		f348ab			REP; STOSQ AX, ES:0(DI)			
+  (...)
+```
+
+就会发现，对于产生在 Go 堆上分配对象的情况，均调用了运行时的 `runtime.newobject` 方法。
+当然，关键字 `new` 同样也会被编译器翻译为此函数，这个我们已经在实践知道了。
+所以 `runtime.newobject` 就是内存分配的核心入口了。
+
+### 分配入口
+
+单看 `runtime.newobject` 其实非常简单，他只是简单的调用了 `mallocgc`：
+
+```go
+// 创建一个新的对象
+func newobject(typ *_type) unsafe.Pointer {
+	return mallocgc(typ.size, typ, true) // true 内存清零
+}
+```
+
+其中 `_type` 为 Go 类型的实现，通过其 `size` 属性能够获得该类型所需要的大小。
+
+```go
+func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
+	(...)
+	// 创建大小为零的对象，例如空结构体
+	if size == 0 {
+		return unsafe.Pointer(&zerobase)
+	}
+	(...)
+	mp := acquirem()
+	(...)
+	mp.mallocing = 1
+	(...)
+	// 获取当前 g 所在 M 所绑定 P 的 mcache
+	c := gomcache()
+	var x unsafe.Pointer
+	noscan := typ == nil || typ.kind&kindNoPointers != 0
+	if size <= maxSmallSize {
+		if noscan && size < maxTinySize {
+			// 微对象分配
+			(...)
+		} else {
+			// 小对象分配
+			(...)
+		}
+	} else {
+		// 大对象分配
+		(...)
+	}
+	(...)
+	mp.mallocing = 0
+	releasem(mp)
+	(...)
+	return x
+```
+
+在分配过程中，我们会发现需要持有 M 才可进行分配，这是因为分配不仅可能涉及 mcache，还需要将正在分配的 M 标记为 `mallocing`，用于记录当前 M 的分配状态。
 
 ### 小对象分配
 

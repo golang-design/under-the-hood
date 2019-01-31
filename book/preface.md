@@ -16,7 +16,7 @@
 使用了 cgo。后来当笔者逐渐发现 cgo 带来的性能问题，如图所示：
 
 <p align="center">
-  <img src="../images/cgo-go-c.png" width="500">
+  <img src="images/cgo-go-c.png" width="500">
 </p>
 
 _图 : 比较了 cgo/go/c 之间在 read/write 系统调用时的性能差异_

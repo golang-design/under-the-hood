@@ -1,12 +1,14 @@
-<img src="images/cover.png" alt="logo" height="550" align="right" />
+<img src="book/images/cover.png" alt="logo" height="550" align="right" />
 
 # Go under the hood
 
 Go 源码研究 | 当前基于 `go1.12beta2`
 
+[TOC]
+
 ## 目录
 
-#### [引言](book/preface.md)
+### [引言](book/preface.md)
 
 ### 第一部分: 基础理论
 
@@ -65,7 +67,9 @@ TODO:
 - [基本知识](book/part2runtime/ch07mem/basic.md)
 - [分配器组件](book/part2runtime/ch07mem/component.md)
 - [初始化](book/part2runtime/ch07mem/init.md)
-- [分配过程](book/part2runtime/ch07mem/alloc.md)
+- [大对象分配](book/part2runtime/ch07mem/largealloc.md)
+- [微对象分配](book/part2runtime/ch07mem/tinyalloc.md)
+- [小对象分配](book/part2runtime/ch07mem/smallalloc.md)
 - [过去、现在与未来](book/part2runtime/ch07mem/history.md)
 
 #### 第八章 垃圾回收器
@@ -136,9 +140,9 @@ TODO:
 - [`net`](book/part4lib/ch15other/net.md)
 - [`time`](book/part4lib/ch15other/time.md)
 
-#### [结束语](book/finalwords.md)
+### [结束语](book/finalwords.md)
 
-#### 附录
+### 附录
 
 - [附录A: 源码索引](book/appendix/index.md)
 - [附录B: 术语表](book/appendix/glossary.md)

@@ -1,6 +1,8 @@
 # 内存管理: 分配器组件
 
-本节循序渐进地独立讨论内存分配器中的几个组件：`fixalloc`、`linearAlloc`、`mcache`。
+[TOC]
+
+本节独立地讨论内存分配器中的几个组件：`fixalloc`、`linearAlloc`、`mcache`。
 
 ## fixalloc
 
