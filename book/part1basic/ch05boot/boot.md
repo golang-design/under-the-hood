@@ -1,4 +1,4 @@
-# 1 程序引导
+# 程序引导
 
 本节讨论程序引导流程。
 
@@ -195,7 +195,7 @@ GLOBL	runtime·mainPC(SB),RODATA,$8
 从上面的汇编代码我们可以看出，整个准备过程按照如下顺序进行：
 
 `runtime.g0`、`runtime.m0` 是一组全局变量，在程序运行之初就已经存在。
-除了程序参数外，会首先将 m0 与 g0 互相关联（在[4 调度器：基本知识](4-sched/basic.md)中讨论 M 与 G 之间的关系）。
+除了程序参数外，会首先将 m0 与 g0 互相关联（在[调度器：基本结构](../../part2runtime/ch06sched/basic.md)中讨论 M 与 G 之间的关系）。
 
 ### 步骤1：runtime.check
 
@@ -476,12 +476,12 @@ Mach 是 NeXTSTEP 遗留下来的产物，BSD 层本质上是堆 Mach 内核的�
 可以直接访问 Mach 调用，但出于通用性的考虑，这里的物理页大小获取的方式是通过 POSIX `sysctl` 这个系统调用进行获取 [9, 10]。
 
 至于 `darwin` 下的系统调用如何参与到 Go 程序中去，这里不再做深入讨论，我们留到
-[8 参与运行时的系统调用: darwin](./8-runtime/syscall-darwin.md) 中再讨论。
+[参与运行时的系统调用: darwin](../../part2runtime/ch10abi/syscall-darwin.md) 中再讨论。
 
 ### 步骤4：runtime.schedinit
 
 `runtime.schedinit` 来进行各种初始化工作，这包括我们的内存分配器、垃圾回收与调度器的初始化，
-我们在 [2 初始化概览](2-init.md) 中进行详细讨论。
+我们在 [初始化概览](./init.md) 中进行详细讨论。
 
 ### 步骤5：runtime.newproc
 
@@ -491,14 +491,14 @@ Mach 是 NeXTSTEP 遗留下来的产物，BSD 层本质上是堆 Mach 内核的�
 DATA	runtime·mainPC+0(SB)/8,$runtime·main(SB)
 ```
 
-其具体过程我们放在 [3 主 goroutine 生命周期](3-main.md) 中详细讨论。
+其具体过程我们放在 [主 goroutine 生命周期](./main.md) 中详细讨论。
 
 简单来说，`runtime.newproc` 则负责根据主 goroutine 入口地址创建 G 并放至 G 队列中，
-这一过程我们在 [4 调度器：初始化](4-sched/init.md) 中详细讨论。
+这一过程我们在 [调度器：初始化](../../part2runtime/ch06sched/init.md) 中详细讨论。
 
 ### 步骤6：runtime.mstart
 
-`runtime.mstart` 开始启动调度循环，我们在 [4 调度器：执行调度](4-sched/exec.md) 中详细讨论。
+`runtime.mstart` 开始启动调度循环，我们在 [调度器：调度循环](../../part2runtime/ch06sched/exec.md) 中详细讨论。
 
 `runtime.abort` 这个使用 INT 指令执行中断，最终退出程序，loop 后的无限循环永远不会被执行。
   

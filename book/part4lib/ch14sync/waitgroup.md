@@ -1,4 +1,4 @@
-# 11 标准库：sync.WaitGroup
+# sync 包: WaitGroup
 
 sync.WaitGroup 可以达到并发 goroutine 的执行屏障的效果，等待多个 goroutine 执行完毕。
 
@@ -262,7 +262,7 @@ wg.Wait()
 这时将等待器也清零，并调用与等待器技术相同次数（此处为 1 次）的 `runtime_Semrelease`，这导致存储原语的值变为 1，计数器和等待器均为零。
 这时，`runtime_Semacquire` 在存储原语大于零后被唤醒，这时检查计数器和等待器是否为零（如果不为零则说明 Add 与 Wait 产生并发调用，直接 panic），这时他们为 0，因此进入下一个循环，当再次读取计数器时，发现计数器已经清理，于是退出 `wg.Wait()` 调用，结束阻塞。
 
-至于 `runtime_Semrelease` 和 `runtime_Semacquire`，我们已经在 [8 运行时组件: 信号量机制](../../8-runtime/sema.md) 中讨论过了。
+至于 `runtime_Semrelease` 和 `runtime_Semacquire`，我们已经在 [运行时组件: 信号量机制](./sema.md) 中讨论过了。
 
 ## 许可
 

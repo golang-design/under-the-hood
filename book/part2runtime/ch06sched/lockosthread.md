@@ -1,4 +1,4 @@
-# 8 运行时组件: LockOSThread/UnlockOSThread 与运行时线程管理
+# 8 运行时线程管理
 
 Go 语言既然专门将线程进一步抽象为 goroutine，自然也就不希望我们对线程做过多的操作，事实也是如此，
 大部分的用户代码并不需要线程级的操作。但某些情况下，当需要
@@ -8,7 +8,7 @@ Go 语言既然专门将线程进一步抽象为 goroutine，自然也就不希�
 尤其是当用户态代码通过系统调用将 OS 线程所在的 Linux namespace 进行修改、把线程私有化时（系统调用
 `unshare` 和标志位 `CLONE_NEWNS`），
 其他 goroutine 已经不再适合在此 OS 线程上执行。这时候不得不将 M 永久的从运行时中移出，
-通过[对调度器调度循环的分析](../4-sched/exec.md)，得知了 `LockOSThread/UnlockOSThread`
+通过[对调度器调度循环的分析](./exec.md)，得知了 `LockOSThread/UnlockOSThread`
 也是目前唯一一个能够让 M 退出的做法（将 goroutine 锁在 OS 线程上，且在 goroutine 死亡退出时不调用 Unlock 方法）。
 本节便进一步研究 Go 语言对用户态线程操作的支持和与之相关的运行时线程的管理。
 

@@ -55,6 +55,7 @@ TODO:
 - [系统监控](book/part2runtime/ch06sched/sysmon.md)
 - [协作与抢占](book/part2runtime/ch06sched/preemptive.md)
 - [线程管理](book/part2runtime/ch06sched/lockosthread.md)
+- [执行栈管理](book/part2runtime/ch06sched/stack.md)
 - [`note` 与 `mutex`](book/part2runtime/ch06sched/note.md)
 - [系统信号处理](book/part2runtime/ch06sched/signal.md)
 - [过去、现在与未来](book/part2runtime/ch06sched/history.md)

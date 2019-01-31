@@ -1,4 +1,4 @@
-# 5 内存管理: 初始化
+# 内存管理: 初始化
 
 [TOC]
 
@@ -146,7 +146,7 @@ func (h *mheap) init() {
 ```
 
 在这个过程中还包含对 mcache 初始化 `allocmcache()`，这个 mcache 会在 `procresize` 中将 mcache
-转移到 P 的门下，而并非属于 M，这个我们在 [5 内存管理: 分配器组件](../5-mem/component.md) 中会讨论。
+转移到 P 的门下，而并非属于 M，这个我们在 [内存管理: 分配器组件](./component.md) 中会讨论。
 
 TODO:
 

@@ -1,4 +1,4 @@
-# 8 运行时组件: SetFinalizer 与 KeepAlive
+# SetFinalizer 与 KeepAlive
 
 TODO:
 

@@ -1,4 +1,4 @@
-# 8 运行时组件: note 与 (rw)mutex
+# note 与 (rw)mutex
 
 
 `note` 和 `mutex` 分别是 Go 运行时实现的一次性通知机制和互斥锁机制，其实现是操作系统特定的，

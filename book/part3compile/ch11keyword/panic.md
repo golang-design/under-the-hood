@@ -1,4 +1,4 @@
-# 7 关键字: panic 与 recover
+# 关键字: panic 与 recover
 
 panic 能中断一个程序的执行，同时也能在一定情况下进行恢复。本节我们就来看一看 panic 和 recover 这对关键字
 的实现机制。根据我们对 Go 的实践，可以预见的是，他们的实现跟调度器和 defer 关键字也紧密相关。
@@ -202,7 +202,7 @@ type _panic struct {
 
 这个循环说明了很多问题。首先，当 panic 发生时，如果错误是可恢复的错误，那么
 会逐一遍历该 goroutine 对应 defer 链表中的 defer 函数链表，直到 defer 遍历完毕、
-或者再次[进入调度循环](../4-sched/exec.md)（recover 的 mcall 调用）
+或者再次进入[调度循环](../../part2runtime/ch06sched/exec.md)（recover 的 mcall 调用）
 后才会停止。
 
 defer 并非简单的遍历，每个在 panic 和 recover 之间的 defer 都会在这里通过 `reflectcall` 执行。

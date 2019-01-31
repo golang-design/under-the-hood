@@ -1,10 +1,10 @@
-# 4 调度器: 调度循环
+# 调度器: 调度循环
 
 所有的初始化工作都已经完成了，是时候启动运行时调度器了。
 
 ## 执行前的准备
 
-在 [1 引导](../1-boot.md) 中我们已经看到了当所有准备工作都完成后，最后一个开始执行的引导调用就是 `runtime.mstart` 了。
+在 [程序引导](../../part1basic/ch05boot/boot.md) 中我们已经看到了当所有准备工作都完成后，最后一个开始执行的引导调用就是 `runtime.mstart` 了。
 现在我们来研究一下它在干什么。
 
 ### `mstart` 与 `mstart1`
@@ -54,7 +54,7 @@ func mstart() {
 }
 ```
 
-在启动前，我们在 [4 调度器: 初始化](init.md) 中已经了解到 g 的栈边界是还没有初始化的。
+在启动前，我们在 [调度器: 初始化](./init.md) 中已经了解到 g 的栈边界是还没有初始化的。
 因此我们得在开始前计算栈边界，因此在 `mstart1` 之前，就是一些确定执行栈边界的工作。
 
 当 `mstart1` 结束后，会执行 `mexit` 退出 m。
@@ -117,7 +117,7 @@ TEXT runtime·asminit(SB),NOSPLIT,$0-0
 	RET
 ```
 
-关于运行时信号处理，以及 note 通知机制，我们分别在 [8 运行时组件: 信号处理](../8-runtime/signal.md) 和 [8 运行时组件: note 与 (rw)mutex](../8-runtime/note.md) 详细分析。
+关于运行时信号处理，以及 note 通知机制，我们分别在 [信号处理](./signal.md) 和 [note 与 (rw)mutex](./note.md) 详细分析。
 
 ### M/P 的绑定
 
@@ -417,7 +417,7 @@ TEXT runtime·gogo(SB), NOSPLIT, $16-8
 ```
 
 这个 `gogo` 的实现真实非常巧妙。初次阅读时，看到 `JMP BX` 开始执行 goroutine 函数体
-后就没了，简直一脸疑惑，就这么没了？后续调用怎么回到调度器呢？事实上我们已经在 [4 调度器：初始化](init.md) 一节中
+后就没了，简直一脸疑惑，就这么没了？后续调用怎么回到调度器呢？事实上我们已经在 [调度器：初始化](./init.md) 一节中
 看到过相关操作了：
 
 ```go
@@ -1154,7 +1154,7 @@ func mget() *m {
 
 M 是通过 `newm` 来创生的，一般情况下，能够非常简单的创建，
 某些特殊情况（线程状态被污染），M 的创建需要一个叫做模板线程的功能加以配合，
-我们在 [8 运行时组件: LockOSThread/UnlockOSThread 与运行时线程管理](../8-runtime/lockosthread.md)
+我们在 [运行时线程管理](./lockosthread.md)
 中详细讨论：
 
 ```go
@@ -1287,7 +1287,7 @@ func newm1(mp *m) {
 
 当 m 被创建时，会转去运行 `mstart`：
 
-- 如果当前程序为 cgo 程序，则会通过 `asmcgocall` 来创建线程并调用 `mstart`（我们在 [10 cgo](../10-cgo.md)）
+- 如果当前程序为 cgo 程序，则会通过 `asmcgocall` 来创建线程并调用 `mstart`（我们在 [cgo](../../part2runtime/ch10abi/cgo.md)）
 - 否则会调用 `newosproc` 来创建线程，从而调用 `mstart`。
 
 既然是 `newosproc` ，我们此刻仍在 Go 的空间中，那么实现就是操作系统特定的了，
@@ -1341,7 +1341,7 @@ func newosproc(mp *m) {
 }
 ```
 
-`pthread_create` 就是系统调用了，我们在 [8 运行时组件: 参与运行时的系统调用（darwin）](../8-runtime/syscall-darwin.md) 中讨论。
+`pthread_create` 就是系统调用了，我们在 [参与运行时的系统调用（darwin）](../../part2runtime/ch10abi/syscall-darwin.md) 中讨论。
 
 ##### `runtime/os_linux.go`
 
@@ -1377,7 +1377,7 @@ func newosproc(mp *m) {
 
 ```
 
-`clone` 同是系统调用，我们在 [8 运行时组件: 参与运行时的系统调用（linux）](../8-runtime/syscall-linux.md) 中讨论。
+`clone` 同是系统调用，我们在 [参与运行时的系统调用（linux）](../../part2runtime/ch10abi/syscall-linux.md) 中讨论。
 
 #### M/G 解绑
 
@@ -1707,7 +1707,7 @@ TEXT runtime·exitThread(SB),NOSPLIT,$0-8
 1. `findRunnableGCWorker` 在干什么？
 2. 调度循环看似合理，但如果 G 执行时间过长，难道要等到 G 执行完后再调度其他的 G？显然不符合实际情况，那么到底会发生什么事情？
 
-本节篇幅已经相当长了，让我们留到[4 调度器: 系统监控](sysmon.md)和[6 垃圾回收器: 三色标记法](../6-GC/mark.md)中进行讨论。
+本节篇幅已经相当长了，让我们留到[调度器: 系统监控](./sysmon.md)和[垃圾回收器: 三色标记法](../../part2runtime/ch08GC/mark.md)中进行讨论。
 
 ## 进一步阅读的参考文献
 

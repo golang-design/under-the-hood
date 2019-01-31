@@ -1,4 +1,4 @@
-# 7 关键字: chan 与 select
+# 关键字: chan 与 select
 
 TODO:
 

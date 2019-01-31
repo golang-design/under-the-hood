@@ -1,4 +1,4 @@
-# 2 初始化概览
+# 初始化概览
 
 本节简单讨论程序初始化工作，即 `runtime.schedinit`。
 
@@ -508,7 +508,7 @@ var algarray = [alg_max]typeAlg{
 
 其中 `algarray` 是一个用于保存 hash 函数的数组。
 
-否则在 Linux 上，会根据 [1 程序引导](./1-init.md) 一节中提到的辅助向量提供的随机数据来初始化 hashkey：
+否则在 Linux 上，会根据 [程序引导](./init.md) 一节中提到的辅助向量提供的随机数据来初始化 hashkey：
 
 ```go
 func getRandomData(r []byte) {
@@ -547,7 +547,7 @@ func aeshash64(p unsafe.Pointer, h uintptr) uintptr
 func aeshashstr(p unsafe.Pointer, h uintptr) uintptr
 ```
 
-我们留到 [7 关键字：map](./7-lang/map.md) 一节中进行讨论。
+我们留到 [关键字：map](../../part3compile/ch11keyword/map.md) 一节中进行讨论。
 
 ### 模块链接初始化
 
@@ -560,8 +560,8 @@ Go 程序支持通过插件的方式将各个编译好的包进行链接。模�
 因此此方法的调用必须在 CPU 和哈希算法初始化之后调用。
 并最后通过 `itabsinit` 将各模块间用于缓存运行时类型转换的接口表初始化到运行时中。
 
-这部分机制相对本文篇幅而言相对复杂，我们在 [15 链接器](./15-linker) 一章中详细对 Go 的模块链接与插件机制进行讨论。
-而 `itabsinit` 则会在 [7 关键字: interface](./7-lang/interface.md) 一节中进行讨论。
+这部分机制相对本文篇幅而言相对复杂，我们在 [链接器](../../part3compile/ch12link) 一章中详细对 Go 的模块链接与插件机制进行讨论。
+而 `itabsinit` 则会在 [关键字: interface](../../part3compile/ch11keyword/interface.md) 一节中进行讨论。
 
 ### 信号处理的初始化
 
@@ -649,21 +649,21 @@ initSigmask = _g_.m.sigmask
 
 用于当新创建 m 时（`runtime.newm`），将 m 的 sigmask 进行设置。
 
-对于具体的运行时信号处理机制，我们在 [8 运行时组件: runtime.signal](./8-runtime/signal.md) 中讨论。
+对于具体的运行时信号处理机制，我们在 [运行时组件: runtime.signal](../../part2runtime/ch06sched/signal.md) 中讨论。
 
 ### 内存分配器的初始化
 
 首先 `sched` 会获取 G，通过 `stackinit` 初始化程序栈、`mallocinit` 初始化
-内存分配器。这部分内容我们在 [5 内存分配器: 初始化](./5-mem/init.md) 中讨论。
+内存分配器。这部分内容我们在 [内存分配器: 初始化](../../part2runtime/ch07mem/init.md) 中讨论。
 
 ### 垃圾回收期的初始化
 
-再通过 `gcinit` 初始化垃圾回收器涉及的数据。我们在 [6 垃圾回收期：初始化](./6-GC/init.md) 中详细讨论。
+再通过 `gcinit` 初始化垃圾回收器涉及的数据。我们在 [垃圾回收器：初始化](../../part2runtime/ch08GC/init.md) 中详细讨论。
 
 ### 调度器 M、P 与网络轮询器的初始化
 
 通过 `mcommoninit` 对 M 进行初步的初始化（真正的初始化会在 M 开始运行时进行，
-在 [4 调度器：初始化](4-sched/init.md) 讨论）。
+在 [调度器：初始化](../../part2runtime/ch06sched/init.md) 讨论）。
 
 调度器除了负责 goroutine 的调度，还会负责网络的轮询，轮训器会根据上次轮询的时间来判断是否应该再次进行轮询。
 在初始化的阶段初始化了假想的上次轮询的时间：
@@ -674,7 +674,7 @@ sched.lastpoll = uint64(nanotime())
 
 根据 CPU 的参数信息，初始化对应的 P 数，再调用 
 `procresize` 来动态的调整 P 的个数，只不过这个时候（引导阶段）所有的 P 都是新建的。
-我们在 [4 调度器: 初始化](./4-sched/init.md) 中详细讨论。
+我们在 [调度器: 初始化](../../part2runtime/ch06sched/init.md) 中详细讨论。
 
 ## 总结
 

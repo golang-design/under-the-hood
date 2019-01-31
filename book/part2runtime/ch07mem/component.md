@@ -1,4 +1,4 @@
-# 5 内存管理: 分配器组件
+# 内存管理: 分配器组件
 
 本节循序渐进地独立讨论内存分配器中的几个组件：`fixalloc`、`linearAlloc`、`mcache`。
 
@@ -121,8 +121,8 @@ func (f *fixalloc) alloc() unsafe.Pointer {
 
 上面的代码中：
 
-- `memclrNoHeapPointers` 具体实现分析见 [4 调度器: 初始化](../4-sched/init.md)。
-- `persistentalloc` 具体实现分析见 [5 内存分配器: 全局分配](../5-mem/galloc.md)
+- `memclrNoHeapPointers` 具体实现分析见 [调度器: 初始化](../../part2runtime/ch06sched/init.md)。
+- `persistentalloc` 具体实现分析见 [内存分配器: 全局分配](../../part2runtime/ch07mem/galloc.md)
 
 ### 回收
 

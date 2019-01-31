@@ -1,4 +1,4 @@
-# 11 标准库：sync.Once
+# sync 包: Once
 
 sync.Once 用来保证绝对一次执行的对象，例如可在单例的初始化中使用。
 

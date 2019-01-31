@@ -1,4 +1,4 @@
-# 11 标准库：sync.Map
+# sync 包: Map
 
 sync.Map 宣称内部做了特殊的优化，在两种情况下由于普通的 map+mutex。在研究源码之前我们先来看看测试结果。
 在测试中，我们测试了：n 个 key 中，每个 key 产生 1 次写行为，每个 key 产生 n 次读行为。
@@ -57,7 +57,7 @@ type Map struct {
 ```
 
 在这个结构中，可以看到 `read` 和 `dirty` 分别对应两个 `map`，但 `read` 的结构比较特殊，是一个 `atomic.Value` 类型。
-先不去管它，我们直接理解为一个 map，关于它的详细讨论在 [11 atomic](../atomic/atomic.md) 中详细讨论。
+先不去管它，我们直接理解为一个 map，关于它的详细讨论在 [atomic](./atomic.md) 中详细讨论。
 
 从 `misses` 的描述中可以大致看出 sync.Map 的思路是发生足够多的读时，就将 dirty map 复制一份到 read map 上。
 从而实现在 read map 上的读操作不再需要昂贵的 Mutex 操作。
@@ -530,7 +530,7 @@ func (m *Map) LoadOrStore(key, value interface{}) (actual interface{}, loaded bo
 当存储新值时，一定发生在 dirty map 中。当读取旧值时，如果 read map 读到则直接返回，如果没有读到，则尝试加锁去 dirty map 中取。
 这也就是官方宣称的 sync.Map 适用于一次写入多次读取的情景。
 
-值得一提的是，sync.Map 中大量运用了 `atomic.CompareAndSwap`，其上下文情景中具有 for 循环，这实质上是 CAS 算法，我们在 [11 atomic](../atomic/atomic.md) 中详细讨论。
+值得一提的是，sync.Map 中大量运用了 `atomic.CompareAndSwap`，其上下文情景中具有 for 循环，这实质上是 CAS 算法，我们在 [atomic](./atomic.md) 中详细讨论。
 
 ## 许可
 

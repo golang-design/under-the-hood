@@ -1,6 +1,6 @@
-# 4 调度器: 初始化
+# 调度器: 初始化
 
-我们已经在 [2 初始化概览](../2-init.md) 中粗略看过了 `schedinit` 函数，现在我们来仔细看看里面真正关于调度器的初始化步骤。
+我们已经在 [初始化概览](../../part1basic/ch05boot/init.md) 中粗略看过了 `schedinit` 函数，现在我们来仔细看看里面真正关于调度器的初始化步骤。
 M/P/G 彼此的初始化顺序遵循：`mcommoninit` --> `procresize` --> `newproc`。
 
 ## M 初始化
@@ -435,7 +435,7 @@ runtime.GOMAXPROCS(runtime.GOMAXPROCS(0))
 
 ## G 初始化
 
-运行完 `runtime.procresize` 之后，我们已经在 [1 引导](1-boot.md) 和 [3 主 goroutine 生命周期](3-main.md) 中已经看到，
+运行完 `runtime.procresize` 之后，我们已经在 [程序引导](../../part1basic/ch05book/boot.md) 和 [主 goroutine 生命周期](../../part1basic/ch05book/main.md) 中已经看到，
 主 goroutine 会以被调度器调度的方式进行运行，这将由 `runtime.newproc` 来完成主 goroutine 的初始化工作。
 
 在看 `runtime.newproc` 之前，我们先大致浏览一下 G 的各个状态。
@@ -500,7 +500,7 @@ func newproc(siz int32, fn *funcval) {
 }
 ```
 
-详细的参数获取过程需要编译器的配合，我们在 [7 关键字: go](../7-lang/go.md) 中讨论，现在我们只需要
+详细的参数获取过程需要编译器的配合，我们在 [关键字: go](../../part3compile/ch11keyword/go.md) 中讨论，现在我们只需要
 知道 `newproc` 会获取需要执行的 goroutine 要执行的函数体的地址、参数起始地址、参数长度、以及 goroutine 的调用地址。
 然后在 g0 系统栈上通过 `newproc1` 创建并初始化新的 goroutine ，下面我们来看 `newproc1`。
 

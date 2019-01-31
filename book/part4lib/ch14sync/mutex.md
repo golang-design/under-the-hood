@@ -1,4 +1,4 @@
-# 11 标准库：sync.Mutex 与 sync.RWMutex
+# sync 包: Mutex 与 RWMutex
 
 TODO:
 

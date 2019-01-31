@@ -1,4 +1,4 @@
-# 11 atomic
+# sync 包: atomic
 
 `atomic` 包中包含了很多原子型操作。它们均基于运行时中 `runtime/internal/atomic` 的实现。
 
