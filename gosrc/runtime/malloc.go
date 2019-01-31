@@ -722,29 +722,29 @@ func nextFreeFast(s *mspan) gclinkptr {
 	return 0
 }
 
-// nextFree returns the next free object from the cached span if one is available.
-// Otherwise it refills the cache with a span with an available object and
-// returns that object along with a flag indicating that this was a heavy
-// weight allocation. If it is a heavy weight allocation the caller must
-// determine whether a new GC cycle needs to be started or if the GC is active
-// whether this goroutine needs to assist the GC.
+// 如果可能的话，nextFree 从缓存的 span 中返回下一个空闲对象。
+// 否则，它会使用带有可用对象的 span 来重新填充缓存
+// 返回该对象以及一个标志，表明这是一个有重开销的分配。
+// 如果是是重开销分配，调用方必须确定是否需要启动新的 GC 循环或 GC 是否处于活跃状态
+// 这个 goroutine 是否需要协助 GC。
 //
-// Must run in a non-preemptible context since otherwise the owner of
-// c could change.
+// 必须在不可抢占的上下文中运行，因为否则是其所有者 c 可能会改变。
 func (c *mcache) nextFree(spc spanClass) (v gclinkptr, s *mspan, shouldhelpgc bool) {
 	s = c.alloc[spc]
 	shouldhelpgc = false
+	// 获得 s.freeindex 中或之后 s 中下一个空闲对象的索引
 	freeIndex := s.nextFreeIndex()
 	if freeIndex == s.nelems {
-		// The span is full.
+		// span 已满，进行填充
 		if uintptr(s.allocCount) != s.nelems {
 			println("runtime: s.allocCount=", s.allocCount, "s.nelems=", s.nelems)
 			throw("s.allocCount != s.nelems && freeIndex == s.nelems")
 		}
 		c.refill(spc)
 		shouldhelpgc = true
-		s = c.alloc[spc]
 
+		// 再次获取 freeIndex
+		s = c.alloc[spc]
 		freeIndex = s.nextFreeIndex()
 	}
 
@@ -753,7 +753,7 @@ func (c *mcache) nextFree(spc spanClass) (v gclinkptr, s *mspan, shouldhelpgc bo
 	}
 
 	v = gclinkptr(freeIndex*s.elemsize + s.base())
-	s.allocCount++
+	s.allocCount++ // 分配计数
 	if uintptr(s.allocCount) > s.nelems {
 		println("s.allocCount=", s.allocCount, "s.nelems=", s.nelems)
 		throw("s.allocCount > s.nelems")

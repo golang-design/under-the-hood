@@ -106,11 +106,9 @@ func freemcache(c *mcache) {
 	})
 }
 
-// refill acquires a new span of span class spc for c. This span will
-// have at least one free object. The current span in c must be full.
-//
-// Must run in a non-preemptible context since otherwise the owner of
-// c could change.
+// refill为 c 获取 span class spc 的新 span。此 span 将至少有一个自由对象。
+// c 中的当前 span 必须已满。
+// 必须在非可抢占的上下文中运行，否则 c 的所有者可能会更改。
 func (c *mcache) refill(spc spanClass) {
 	_g_ := getg()
 

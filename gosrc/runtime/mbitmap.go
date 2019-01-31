@@ -190,10 +190,8 @@ func (s *mspan) refillAllocCache(whichByte uintptr) {
 	s.allocCache = ^aCache
 }
 
-// nextFreeIndex returns the index of the next free object in s at
-// or after s.freeindex.
-// There are hardware instructions that can be used to make this
-// faster if profiling warrants it.
+// nextFreeIndex 返回 s.freeindex 中或之后 s 中下一个空闲对象的索引。
+// 如果分析需要，可以使用硬件指令来加快速度。
 func (s *mspan) nextFreeIndex() uintptr {
 	sfreeindex := s.freeindex
 	snelems := s.nelems
