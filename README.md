@@ -10,38 +10,30 @@ Go 源码研究 | 当前基于 `go1.12beta2`
 
 ### [引言](book/preface.md)
 
-### 第一部分: 基础
+### [第一部分: 基础](book/part1basic/)
 
-#### 第一章 保留
+#### [第一章 程序基础](book/part1basic/ch01proc)
 
 <!-- 内存布局？ -->
 
-TODO:
+#### [第二章 并行与并发计算](book/part1basic/ch02parallel)
 
-#### 第二章 排队与调度理论
+<!-- - [3.1 并发] -->
 
-TODO:
+#### [第三章 排队与调度理论](book/part1basic/ch03scheduling)
 
 <!-- - [2.1 排队理论引导]()
 - [2.2 工作窃取调度](papers/sched/work-steal-sched.md)
 - [调度理论](book/4-sched/theory.md) -->
 
-#### 第三章 并行与并发
-
-TODO:
-
-<!-- - [3.1 并发] -->
-
-#### 第四章 保留
-
-TODO:
+#### [第四章 内存管理工程](book/part1basic/ch04memory)
 
 <!-- CPU 架构与操作系统? -->
 
 <!-- - [Linux 系统调用]
 - [Plan 9 汇编](book/appendix/asm.md) -->
 
-#### 第五章 Go 程序生命周期
+#### [第五章 Go 程序生命周期](book/part1basic/ch05boot)
 
 - [程序引导](book/part1basic/ch05boot/boot.md)
 - [初始化概览](book/part1basic/ch05boot/init.md)
@@ -73,7 +65,7 @@ TODO:
 - [内存统计](book/part2runtime/ch07alloc/mstats.md)
 - [过去、现在与未来](book/part2runtime/ch07alloc/history.md)
 
-#### 第八章 垃圾回收器
+#### [第八章 垃圾回收器](book/part2runtime/ch08GC)
 
 - [基本知识](book/part2runtime/ch08GC/basic.md)
 - [垃圾回收初始化](book/part2runtime/ch08GC/init.md)
@@ -97,7 +89,7 @@ TODO:
 - [cgo](book/part2runtime/ch10abi/cgo.md)
 - [WebAssembly](book/part2runtime/ch10abi/wasm.md)
 
-### 第三部分：编译系统
+### [第三部分：编译系统](book/part3compile)
 
 #### 第十一章 关键字
 
@@ -121,9 +113,9 @@ TODO:
 - [编译后端 SSA](book/part3compile/ch13gc/ssa.md)
 - [过去、现在与未来]
 
-### 第四部分：标准库
+### [第四部分：标准库](book/part4lib)
 
-#### 第十四章 sync 与 atomic 包
+#### [第十四章 sync 与 atomic 包]()
 
 - [信号量 sema 机制](book/part4lib/ch14sync/sema.md)
 - [`sync.Pool`](book/part4lib/ch14sync/pool.md)
@@ -143,15 +135,16 @@ TODO:
 
 ### [结束语](book/finalwords.md)
 
+### [参考文献](book/bibliography.md)
+
 ### 附录
 
 - [附录A: 源码索引](book/appendix/index.md)
 - [附录B: 术语表](book/appendix/glossary.md)
 
-
 ## 捐助
 
-您的捐助将用于赞助我购买一台 [MacBook Pro](https://www.apple.com/de/macbook-pro/)：
+您的捐助将用于帮助我购买一台 [MacBook Pro](https://www.apple.com/de/macbook-pro/)：
 
 [![](https://img.shields.io/badge/%E6%8D%90%E5%8A%A9-PayPal-104098.svg?style=popout-square&logo=PayPal)](https://www.paypal.me/ouchangkun/4.99eur)
 
