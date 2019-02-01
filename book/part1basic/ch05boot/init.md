@@ -654,7 +654,7 @@ initSigmask = _g_.m.sigmask
 ### 内存分配器的初始化
 
 首先 `sched` 会获取 G，通过 `stackinit` 初始化程序栈、`mallocinit` 初始化
-内存分配器。这部分内容我们在 [内存分配器: 初始化](../../part2runtime/ch07mem/init.md) 中讨论。
+内存分配器。这部分内容我们在 [内存分配器: 初始化](../../part2runtime/ch07alloc/init.md) 中讨论。
 
 ### 垃圾回收期的初始化
 

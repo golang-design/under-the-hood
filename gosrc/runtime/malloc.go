@@ -314,9 +314,8 @@ var physPageSize uintptr
 // If the pointer passed to it is non-nil, the caller wants the
 // reservation there, but sysReserve can still choose another
 // location if that one is unavailable.
-// NOTE: sysReserve returns OS-aligned memory, but the heap allocator
-// may use larger alignment, so the caller must be careful to realign the
-// memory obtained by sysAlloc.
+// 注意: sysReserve 返回的是操作系统排布的内存，但堆分配器可能使用更大的布局。
+// 因此调用方必须谨慎的重排从 sysReserve 获得的内存。
 //
 // sysMap maps previously reserved address space for use.
 //
@@ -587,7 +586,7 @@ func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) {
 		throw("misrounded allocation in sysAlloc")
 	}
 
-	// Back the reservation.
+	// 正式开始使用保留的内存
 	sysMap(v, size, &memstats.heap_sys)
 
 mapped:
@@ -1150,7 +1149,7 @@ func persistentalloc(size, align uintptr, sysStat *uint64) unsafe.Pointer {
 	return unsafe.Pointer(p)
 }
 
-// 必须在系统栈上执行，因为栈增长可以（再）调用它。见 issue 9174
+// 必须在系统栈上执行，因为栈增长可以（再）调用它。见 issues/9174
 //go:systemstack
 func persistentalloc1(size, align uintptr, sysStat *uint64) *notInHeap {
 	const (

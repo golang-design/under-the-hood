@@ -738,47 +738,7 @@ func allgadd(gp *g) {
 }
 ```
 
-清理 g 的运行现场：
-
-```go
-// memclrNoHeapPointers 清除从 ptr 开始的 n 个字节
-//
-// 通常情况下你应该使用 typedmemclr，而 memclrNoHeapPointers 应该仅在调用方知道 *ptr
-// 不包含堆指针的情况下使用，因为 *ptr 只能是下面两种情况：
-//
-// 1. *ptr 是初始化过的内存，且其类型不是指针。
-//
-// 2. *ptr 是未初始化的内存（例如刚被新分配时使用的内存），则指包含 "junk" 垃圾内存
-//
-// 见 memclr_*.s
-//
-//go:noescape
-func memclrNoHeapPointers(ptr unsafe.Pointer, n uintptr)
-```
-
-清理过程是汇编实现的，就是一些内存的归零工作，简单浏览一下：
-
-```asm
-TEXT runtime·memclrNoHeapPointers(SB), NOSPLIT, $0-8
-	MOVL	ptr+0(FP), DI
-	MOVL	n+4(FP), BX
-	XORL	AX, AX
-
-	// MOVOU 好像总是比 REP STOSL 快
-tail:
-	(...)
-
-loop:
-	MOVOU	X0, 0(DI)
-	MOVOU	X0, 16(DI)
-	MOVOU	X0, 32(DI)
-	MOVOU	X0, 48(DI)
-	MOVOU	X0, 64(DI)
-	MOVOU	X0, 80(DI)
-	MOVOU	X0, 96(DI)
-	(...)
-```
-
+清理 g 的运行现场调用了 `memclrNoHeapPointers`，它的作用是将该段内存清零，我们会在内存分配器中讨论它的具体实现。
 然后就是保存 g 的运行入口 `gostartcallfn`：
 
 ```go

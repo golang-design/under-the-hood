@@ -1,4 +1,4 @@
-# 内存管理: 基本知识
+# 内存分配器: 基本知识
 
 [TOC]
 
@@ -168,6 +168,9 @@ type mheap struct {
 	(...)
 }
 ```
+
+<!-- TODO: L1/L2 arena purpose -->
+<!-- https://github.com/golang/go/commit/ec25210564562571aeb39cdfd6e02270d7f3fb1d -->
 
 ## 分配概览
 

@@ -1,8 +1,10 @@
-# 内存管理: 大对象分配
+# 内存分配器: 大对象分配
 
 [TOC]
 
 大对象（large object）（>32kb）直接从 Go 堆上进行分配，不涉及 mcache/mcentral/mheap 之间的三级过程，也就相对简单。
+
+## 从堆上分配
 
 ```go
 // 大对象分配
@@ -199,6 +201,10 @@ func (h *mheap) pickFreeSpan(npage uintptr) *mspan {
 }
 ```
 
+free 和 scav 均为树堆，其数据结构的性质我们已经很熟悉了。
+
+## 从操作系统申请
+
 而对栈进行增长则需要向操作系统申请：
 
 ```go
@@ -287,7 +293,7 @@ func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) {
 	// 检查不能使用的指针
 	(...)
 
-	// 归还保留的内存
+	// 正式开始使用保留的内存
 	sysMap(v, size, &memstats.heap_sys)
 
 mapped:
@@ -315,7 +321,7 @@ mapped:
 			}
 		}
 
-		// Add the arena to the arenas list.
+		// 将 arena 添加到 arena 列表中
 		if len(h.allArenas) == cap(h.allArenas) {
 			size := 2 * uintptr(cap(h.allArenas)) * sys.PtrSize
 			if size == 0 {
@@ -341,19 +347,13 @@ mapped:
 }
 ```
 
-这个过程涉及关于内存分配的系统调用就是 `mmap`：
+这个过程略显复杂：
 
-```go
-func sysReserve(v unsafe.Pointer, n uintptr) unsafe.Pointer {
-	flags := int32(_MAP_ANON | _MAP_PRIVATE)
-	(...)
-	p, err := mmap(v, n, _PROT_NONE, flags, -1, 0)
-	if err != 0 {
-		return nil
-	}
-	return p
-}
-```
+1. 首先会通过现有的 arena 中获得已经保留的内存区域，如果能获取到，则直接对 arena 进行初始化；
+2. 如果没有，则会通过 `sysReserve` 为 arena 保留新的内存区域，并通过 `sysReserveAligned` 对操作系统对齐的区域进行重排，而后使用 `sysMap` 正式使用所在区块的内存。
+3. 在 arena 初始化阶段，本质上是为 arena 创建 metadata，这部分内存属于堆外内存，即不会被 GC 所追踪的内存，因而通过 persistentalloc 进行分配。
+
+`persistentalloc` 是 `sysAlloc` 之上的一层封装，它分配到的内存用于不能被释放。
 
 ```go
 func persistentalloc(size, align uintptr, sysStat *uint64) unsafe.Pointer {
@@ -431,25 +431,20 @@ func persistentalloc1(size, align uintptr, sysStat *uint64) *notInHeap {
 	(...)
 	return p
 }
-//go:nosplit
-func sysAlloc(n uintptr, sysStat *uint64) unsafe.Pointer {
-	v, err := mmap(nil, n, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_PRIVATE, -1, 0)
-	if err != 0 {
-		return nil
-	}
-	mSysStatInc(sysStat, n)
-	return v
-}
 ```
 
-Linux 下内存分配调用有多个：
+可以看到，这里申请到的内存会被记录到 `globalAlloc` 中：
 
-- brk: 可以让进程的堆指针增长，从逻辑上消耗一块虚拟地址空间
-- mmap: 可以让进程的虚拟地址空间切分出一块指定大小的虚拟地址空间，mmap 映射返回的地址也是从逻辑上被消耗的，需要通过 unmap 进行回收。
-
-熟悉 C 语言的读者应该知道 malloc，它只是 C 语言的标准库函数，本质上是通过上述两个系统调用完成，
-当分配内存较小时调用 brk，反之则会调用 mmap。不过 Go 运行时并没有使用 brk，目的很明显，是为了能够更加灵活
-的控制虚拟地址空间。
+```go
+var globalAlloc struct {
+	mutex
+	persistentAlloc
+}
+type persistentAlloc struct {
+	base *notInHeap // 空结构，内存首地址
+	off  uintptr    // 偏移量
+}
+```
 
 ## 许可
 

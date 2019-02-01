@@ -10,7 +10,7 @@ Go 源码研究 | 当前基于 `go1.12beta2`
 
 ### [引言](book/preface.md)
 
-### 第一部分: 基础理论
+### 第一部分: 基础
 
 #### 第一章 保留
 
@@ -47,9 +47,9 @@ TODO:
 - [初始化概览](book/part1basic/ch05boot/init.md)
 - [主 goroutine 生命周期](book/part1basic/ch05boot/main.md)
 
-### 第二部分：运行时机制
+### [第二部分：运行时机制](book/part2runtime)
 
-#### 第六章 调度器
+#### [第六章 调度器](book/part2runtime/ch06sched)
 
 - [基本结构](book/part2runtime/ch06sched/basic.md)
 - [调度器初始化](book/part2runtime/ch06sched/init.md)
@@ -62,15 +62,16 @@ TODO:
 - [系统信号处理](book/part2runtime/ch06sched/signal.md)
 - [过去、现在与未来](book/part2runtime/ch06sched/history.md)
 
-#### 第七章 内存分配器
+#### [第七章 内存分配器](book/part2runtime/ch07alloc)
 
-- [基本知识](book/part2runtime/ch07mem/basic.md)
-- [分配器组件](book/part2runtime/ch07mem/component.md)
-- [初始化](book/part2runtime/ch07mem/init.md)
-- [大对象分配](book/part2runtime/ch07mem/largealloc.md)
-- [小对象分配](book/part2runtime/ch07mem/smallalloc.md)
-- [微对象分配](book/part2runtime/ch07mem/tinyalloc.md)
-- [过去、现在与未来](book/part2runtime/ch07mem/history.md)
+- [基本知识](book/part2runtime/ch07alloc/basic.md)
+- [组件](book/part2runtime/ch07alloc/component.md)
+- [初始化](book/part2runtime/ch07alloc/init.md)
+- [大对象分配](book/part2runtime/ch07alloc/largealloc.md)
+- [小对象分配](book/part2runtime/ch07alloc/smallalloc.md)
+- [微对象分配](book/part2runtime/ch07alloc/tinyalloc.md)
+- [内存统计](book/part2runtime/ch07alloc/mstats.md)
+- [过去、现在与未来](book/part2runtime/ch07alloc/history.md)
 
 #### 第八章 垃圾回收器
 

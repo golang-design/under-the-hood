@@ -1,4 +1,4 @@
-# 内存管理: 分配器组件
+# 内存分配器: 组件
 
 [TOC]
 
@@ -121,10 +121,7 @@ func (f *fixalloc) alloc() unsafe.Pointer {
 }
 ```
 
-上面的代码中：
-
-- `memclrNoHeapPointers` 具体实现分析见 [调度器: 初始化](../../part2runtime/ch06sched/init.md)。
-- `persistentalloc` 具体实现分析见 [内存分配器: 全局分配](../../part2runtime/ch07mem/galloc.md)
+我们在稍后讨论 `memclrNoHeapPointers` 和 `persistentalloc`。
 
 ### 回收
 
@@ -306,7 +303,7 @@ func freemcache(c *mcache) {
 
 ### per-P? per-M?
 
-mcache 其实早在 [4 调度器: 调度循环](../4-sched/exec.md) 中与 mcache 打过照面了。
+mcache 其实早在 [调度器: 调度循环](../../part2runtime/ch06sched/exec.md) 中与 mcache 打过照面了。
 
 首先，mcache 是一个 per-P 的 mcache，我们很自然的疑问就是，这个 mcache 在 p/m 这两个结构体上都有成员：
 
@@ -368,6 +365,127 @@ func procresize(nprocs int32) *p {
 - mcache 会被 P 持有，当 M 和 P 绑定时，M 同样会保留 mcache 的指针
 - mcache 直接向操作系统申请内存，且常驻运行时
 - P 通过 make 命令进行分配，会分配在 Go 堆上
+
+## 其他
+
+### memclrNoHeapPointers
+
+`memclrNoHeapPointers` 用于清理不包含堆指针的内存区块：
+
+```go
+// memclrNoHeapPointers 清除从 ptr 开始的 n 个字节
+// 通常情况下你应该使用 typedmemclr，而 memclrNoHeapPointers 应该仅在调用方知道 *ptr
+// 不包含堆指针的情况下使用，因为 *ptr 只能是下面两种情况：
+// 1. *ptr 是初始化过的内存，且其类型不是指针。
+// 2. *ptr 是未初始化的内存（例如刚被新分配时使用的内存），则指包含 "junk" 垃圾内存
+// 见 memclr_*.s
+//
+//go:noescape
+func memclrNoHeapPointers(ptr unsafe.Pointer, n uintptr)
+```
+
+清理过程是汇编实现的，就是一些内存的归零工作，简单浏览一下：
+
+```asm
+TEXT runtime·memclrNoHeapPointers(SB), NOSPLIT, $0-8
+	MOVL	ptr+0(FP), DI
+	MOVL	n+4(FP), BX
+	XORL	AX, AX
+
+	// MOVOU 好像总是比 REP STOSL 快
+tail:
+	(...)
+
+loop:
+	MOVOU	X0, 0(DI)
+	MOVOU	X0, 16(DI)
+	MOVOU	X0, 32(DI)
+	MOVOU	X0, 48(DI)
+	MOVOU	X0, 64(DI)
+	MOVOU	X0, 80(DI)
+	MOVOU	X0, 96(DI)
+	(...)
+```
+
+## 系统级内存管理调用
+
+系统级的内存管理调用是平台相关的，这里以 Linux 为例，运行时的 `sysAlloc`、`sysUnused`、`sysUsed`、`sysFree`、`sysReserve`、`sysMap` 和 `sysFault` 都是系统级的调用。
+
+其中 `sysAlloc`、`sysReserve` 和 `sysMap` 都是向操作系统申请内存的操作，他们均涉及关于内存分配的系统调用就是 `mmap`，区别在于：
+
+- `sysAlloc` 是从操作系统上申请清零后的内存，调用参数是 `_PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_PRIVATE`；
+- `sysReserve` 是从操作系统中保留内存的地址空间，并未直接分配内存，调用参数是 `_PROT_NONE, _MAP_ANON|_MAP_PRIVATE`，；
+- `sysMap` 则是用于通知操作系统使用先前已经保留好的空间，参数是 `_PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_FIXED|_MAP_PRIVATE`。
+
+不过 `sysAlloc` 和 `sysReserve` 都是操作系统对齐的内存，但堆分配器可能使用更大的对齐方式，因此这部分获得的内存都需要额外进行一些重排的工作。
+
+```go
+// runtime/mem_linux.go
+
+//go:nosplit
+func sysAlloc(n uintptr, sysStat *uint64) unsafe.Pointer {
+	p, err := mmap(nil, n, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_PRIVATE, -1, 0)
+	if err != 0 {
+		if err == _EACCES {
+			print("runtime: mmap: access denied\n")
+			exit(2)
+		}
+		if err == _EAGAIN {
+			print("runtime: mmap: too much locked memory (check 'ulimit -l').\n")
+			exit(2)
+		}
+		return nil
+	}
+	(...)
+	return p
+}
+func sysReserve(v unsafe.Pointer, n uintptr) unsafe.Pointer {
+	p, err := mmap(v, n, _PROT_NONE, _MAP_ANON|_MAP_PRIVATE, -1, 0)
+	if err != 0 {
+		return nil
+	}
+	return p
+}
+func sysMap(v unsafe.Pointer, n uintptr, sysStat *uint64) {
+	(...)
+	p, err := mmap(v, n, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_FIXED|_MAP_PRIVATE, -1, 0)
+	if err == _ENOMEM {
+		throw("runtime: out of memory")
+	}
+	if p != v || err != 0 {
+		throw("runtime: cannot map pages in arena address space")
+	}
+}
+```
+
+Linux 下内存分配调用有多个：
+
+- brk: 可以让进程的堆指针增长，从逻辑上消耗一块虚拟地址空间
+- mmap: 可以让进程的虚拟地址空间切分出一块指定大小的虚拟地址空间，mmap 映射返回的地址也是从逻辑上被消耗的，需要通过 unmap 进行回收。
+
+熟悉 C 语言的读者应该知道 malloc，它只是 C 语言的标准库函数，本质上是通过上述两个系统调用完成，
+当分配内存较小时调用 brk，反之则会调用 mmap。不过 64 位系统上的 Go 运行时并没有使用 brk，目的很明显，
+是为了能够更加灵活的控制虚拟地址空间。
+
+而对于 unmap 操作，它被封装在了 `sysFree` 中：
+
+```go
+//go:nosplit
+func sysFree(v unsafe.Pointer, n uintptr, sysStat *uint64) {
+	(...)
+	munmap(v, n)
+}
+```
+
+`sysUnused`、`sysUsed` 是 `madvice` 的封装，我们知道 `madvice` 用于向操作系统通知某段内存区域是否被应用所使用。`sysFault` 用于将 `sysAlloc` 获得的内存区域标记为故障，只用于运行时调试。
+
+最后我们来理一下这些系统级调用的关系：
+
+1. 当开始保留内存地址时，调用 `sysReserve`；
+2. 当需要使用或不适用保留的内存区域时通知操作系统，调用 `sysUnused`、`sysUsed`；
+3. 正式使用保留的地址，使用 `sysMap`；
+4. 释放时使用 `sysFree` 以及调试时使用 `sysFault`；
+5. 非用户态的调试、堆外内存则使用 `sysAlloc` 直接向操作系统获得清零的内存。
 
 ## 许可
 

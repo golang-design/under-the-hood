@@ -34,7 +34,7 @@ func (c *mcentral) init(spc spanClass) {
 	c.empty.init()
 }
 
-// Allocate a span to use in an mcache.
+// 分配一个在 mspan 中使用的 span
 func (c *mcentral) cacheSpan() *mspan {
 	// Deduct credit for this span allocation and sweep if necessary.
 	spanBytes := uintptr(class_to_allocnpages[c.spanclass.sizeclass()]) * _PageSize
