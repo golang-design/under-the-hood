@@ -49,7 +49,7 @@ StackSmall 字节。具有大帧的函数不会影响检查，总是调用 mores
 从而可能会触发 morestack 调用。该序列需要适应栈的底部的区域。
 在 amd64 上，morestack 的帧为 40 个字节，deferproc 的帧是 56 个字节。
 这非常适合 StackGuard - StackSmall 字节。
-链接器会探测涉及不可拆分函数的所有可能的调用轨迹，以确保不会违反此限制。
+链接器会探测涉及不可分段函数的所有可能的调用轨迹，以确保不会违反此限制。
 */
 
 const (
@@ -303,7 +303,7 @@ func stackcache_clear(c *mcache) {
 
 // stackalloc 分配一个 n 字节的栈。
 //
-// stackalloc 必须在系统栈上运行，因为它使用 per-P 资源，不得拆分堆栈。
+// stackalloc 必须在系统栈上运行，因为它使用 per-P 资源，不允许栈分段。
 //
 //go:systemstack
 func stackalloc(n uint32) stack {

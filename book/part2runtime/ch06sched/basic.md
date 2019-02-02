@@ -284,7 +284,7 @@ type g struct {
 	preemptscan    bool       // 为 gc 进行 scan 的被强占的 g
 	gcscandone     bool       // g 执行栈已经 scan 了；此此段受 _Gscan 位保护
 	gcscanvalid    bool       // 在 gc 周期开始时为 false；当 G 从上次 scan 后就没有运行时为 true TODO: remove?
-	throwsplit     bool       // 必须不能进行栈拆分
+	throwsplit     bool       // 必须不能进行栈分段
 	raceignore     int8       // 忽略 race 检查事件
 	sysblocktraced bool       // StartTrace 已经出发了此 goroutine 的 EvGoInSyscall
 	sysexitticks   int64      // 当 syscall 返回时的 cputicks（用于跟踪）

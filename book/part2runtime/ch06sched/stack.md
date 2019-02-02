@@ -1,6 +1,8 @@
 # 调度器: goroutine 执行栈管理
 
-### 栈初始化
+## 栈结构
+
+## 初始化
 
 ```go
 // runtime/internal/sys/stubs.go
@@ -54,7 +56,9 @@ func (list *mSpanList) init() {
 }
 ```
 
-TODO:
+## 从分段栈到连续栈
+
+## 栈扩张与栈伸缩
 
 ## 许可
 

@@ -1171,7 +1171,7 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 
 // 启动 M
 //
-// 该函数不能拆分栈，因为我们甚至还没有设置栈的边界
+// 该函数不允许分段栈，因为我们甚至还没有设置栈的边界
 //
 // 它可能会在 STW 阶段运行（因为它还没有 P），所以 write barrier 也是不允许的
 //
@@ -2844,13 +2844,13 @@ func save(pc, sp uintptr) {
 // goroutine g 即将进入系统调用。记录它不再使用 cpu 了。
 // 此函数只能从 go syscall 库和 cgocall 调用，而不是从运行时使用的低级系统调用中调用。
 //
-// Entersyscall无法拆分栈：gosave必须使得 g.sched 指的是调用者的栈段，
+// Entersyscall不允许分段栈：gosave必须使得 g.sched 指的是调用者的栈段，
 // 因为 enteryscall 将在之后立即返回。
 //
-// 没有任何 enteryscall 调用可以拆分堆栈。
+// 没有任何 enteryscall 调用可以对栈分段。
 // 在对 syscall 的活动调用期间，我们无法安全地移动栈，因为我们不知道哪个 uintptr 参数
 // 确实是指针（返回栈）。
-// 在实践中，这意味着我们使 fast path 通过 enteryscall 执行无拆分事务，而 slow path
+// 在实践中，这意味着我们使 fast path 通过 enteryscall 执行无分段事务，而 slow path
 // 必须使用 systemstack 在系统堆栈上运行更大的东西。
 //
 // reentersyscall 是 cgo 回调使用的入口点，其中显式保存的 SP 和 PC 已恢复。
@@ -3319,7 +3319,7 @@ func malg(stacksize int32) *g {
 // 创建一个 G 运行函数 fn，参数大小为 biz 字节
 // 将其放至 G 队列等待运行
 // 编译器会将 go 语句转化为该调用。
-// 这时不能将栈进行拆分，因为它假设了参数在 &fn 之后顺序有效；如果 stack 进行了拆分
+// 这时不能将栈进行分段，因为它假设了参数在 &fn 之后顺序有效；如果 stack 进行了分段
 // 则他们不无法被拷贝
 //go:nosplit
 func newproc(siz int32, fn *funcval) {
@@ -4260,7 +4260,7 @@ func acquirep(_p_ *p) {
 }
 
 // wirep 为 acquirep 的实际获取 p 的第一步，它关联了当前的 M 到 P 上。
-// 之所以进行拆分是因为我们可以为这个部分驳回 write barrier
+// 之所以不允许分段是因为我们可以为这个部分驳回 write barrier
 //go:nowritebarrierrec
 //go:nosplit
 func wirep(_p_ *p) {

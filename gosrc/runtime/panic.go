@@ -327,7 +327,7 @@ func freedeferfn() {
 // 这将跳转到被延迟的函数，使得它看起来像是在调用 deferreturn 之前由 deferreturn 的调用者调用。
 // 产生的结果就是反复地调用 deferreturn，直到没有更多的 defer 函数为止。
 //
-// 无法拆分栈，因为我们复用了调用方栈帧来调用被 defer 的函数。
+// 不允许分段栈，因为我们复用了调用方栈帧来调用被 defer 的函数。
 //
 // 这个单独的参数没有被使用：它只是采用了它的地址，因此它可以与随后的延迟匹配。
 //go:nosplit
@@ -577,7 +577,7 @@ func getargp(x int) uintptr {
 }
 
 // 执行预先声明的函数 recover。
-// 无法拆分栈，因为它需要可靠地找到其调用者的栈段。
+// 不允许分段栈，因为它需要可靠地找到其调用者的栈段。
 //
 // TODO(rsc): Once we commit to CopyStackAlways,
 // this doesn't need to be nosplit.

@@ -4,28 +4,28 @@
 
 ```
     ├── cmd
-    │   └── cgo                            10-cgo.md
+    │   └── cgo
     ├── net
     ├── reflect
     ├── runtime
     │   ├── README.md
 
-    // boot                                1-init.md
+    // boot
     │   ├── rt0_darwin_amd64.s
     │   ├── rt0_js_wasm.s
     │   ├── rt0_linux_amd64.s
     │   ├── runtime1.go
-    │   ├── os_darwin.go                8-runtime/syscall-darwin.md
-    │   ├── os_linux.go                 8-runtime/syscall-linux.md
+    │   ├── os_darwin.go 
+    │   ├── os_linux.go
     │   ├── go_tls.h
 
-    // sched                            4-sched/*.md
+    // sched
     │   ├── runtime.go
     │   ├── runtime2.go
     │   ├── proc.go
     │   ├── stack.go
 
-    // mem                                5-mem/*.md
+    // mem
     │   ├── malloc.go
     │   ├── mcache.go
     │   ├── mcentral.go
@@ -50,7 +50,7 @@
     │   ├── msan0.go
     │   ├── msan_amd64.s
 
-    // GC                                 6-GC/*.md
+    // GC
     │   ├── mgc.go
     │   ├── mgclarge.go
     │   ├── mgcmark.go
@@ -113,8 +113,8 @@
     │   ├── netpoll_kqueue.go
     │   ├── netpoll_stub.go
 
-    // cgo                                     10-cgo.md
-    │   ├── cgo                    
+    // cgo
+    │   ├── cgo
     │   ├── cgo.go
     │   ├── cgo_mmap.go
     │   ├── cgo_sigaction.go
@@ -131,7 +131,7 @@
     // extern
     │   ├── extern.go
     │   ├── symtab.go
-    │   ├── mfinal.go              8-runtime/finalizer.md
+    │   ├── mfinal.go
 
     // signal
     │   ├── os_linux_generic.go
@@ -185,21 +185,21 @@
     │   ├── vdso_linux_amd64.go
 
     │   └── internal
-    │       ├── atomic              11-pkg/sync/atomic.md
-    │       └── sys                 11-pkg/syscall/syscall.md
+    │       ├── atomic   
+    │       └── sys      
     ├── sync
-    │   ├── atomic                11-pkg/atomic/atomic.md
-    │   ├── cond.go               11-pkg/sync/cond.md
-    │   ├── map.go                11-pkg/sync/map.md
-    │   ├── mutex.go              11-pkg/sync/mutex.md
-    │   ├── once.go               11-pkg/sync/once.md
-    │   ├── pool.go               11-pkg/sync/pool.md
+    │   ├── atomic       
+    │   ├── cond.go      
+    │   ├── map.go       
+    │   ├── mutex.go     
+    │   ├── once.go      
+    │   ├── pool.go      
     │   ├── runtime.go
-    │   ├── rwmutex.go            11-pkg/sync/mutex.md
-    │   └── waitgroup.go          11-pkg/sync/waitgroup.md
+    │   ├── rwmutex.go   
+    │   └── waitgroup.go 
     │
     ├── syscall
-    └── unsafe                      9-unsafe.md
+    └── unsafe           
 ```
 
 ## 许可

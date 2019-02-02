@@ -68,7 +68,7 @@ CALL runtime.newproc(SB)      // 调用 newproc
 // 创建一个 G 运行函数 fn，参数大小为 biz 字节
 // 将其放至 G 队列等待运行
 // 编译器会将 go 语句转化为该调用。
-// 这时不能将栈进行拆分，因为它假设了参数在 &fn 之后顺序有效；如果 stack 进行了拆分
+// 这时不能将栈进行分段，因为它假设了参数在 &fn 之后顺序有效；如果栈进行了分段
 // 则他们不无法被拷贝
 //go:nosplit
 func newproc(siz int32, fn *funcval) {

@@ -13,6 +13,7 @@
 | 垃圾回收   |                | Garbage  Collection | GC        |      |
 | 全局断言   |                | Global Predicates   |           |      |
 | Goroutine  |                | Goroutine           | G/g       |      |
+| 大对象     |                | Large Object        |           |      |
 | 堆         |                | Heap                |           |      |
 | Machine    |                | Machine             | M/m       |      |
 | 非自旋     |                | Non-spinning        |           |      |
@@ -22,14 +23,13 @@
 | 调度器     |                | Scheduler           | sched     |      |
 | 大小等级   |                | Size Class          |           |      |
 | 慢速路径   |                | Slow Path           |           |      |
+| 小对象     |                | Small Object        |           |      |
 | 自旋       |                | Spinning            |           |      |
 | 栈         |                | Stack               |           |      |
+| 微型分配器 |                | Tiny Allocator      |           |      |
+| 微对象     |                | Tiny Object         |           |      |
 | 写屏障     |                | Write Barrier       | WB/wb     |      |
 | 工作线程   |                | Worker Thread       |           |      |
-| 微对象     |                | Tiny Object         |           |      |
-| 小对象     |                | Small Object        |           |      |
-| 大对象     |                | Large Object        |           |      |
-| 微型分配器 |                | Tiny Allocator      |           |      |
 |            |                |                     |           |      |
 |            |                |                     |           |      |
 |            |                |                     |           |      |

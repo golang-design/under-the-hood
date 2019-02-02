@@ -222,7 +222,7 @@ func reflectcall(argtype *_type, fn, arg unsafe.Pointer, argsize uint32, retoffs
 
 ```go
 // 执行预先声明的函数 recover。
-// 无法拆分栈，因为它需要可靠地找到其调用者的栈段。
+// 不允许分段栈，因为它需要可靠地找到其调用者的栈段。
 //
 // TODO(rsc): Once we commit to CopyStackAlways,
 // this doesn't need to be nosplit.

@@ -12,7 +12,7 @@
 ```go
 // 启动 M
 //
-// 该函数不能拆分栈，因为我们甚至还没有设置栈的边界
+// 该函数不能进行栈分段，因为我们甚至还没有设置栈的边界
 //
 // 它可能会在 STW 阶段运行（因为它还没有 P），所以 write barrier 也是不允许的
 //
@@ -145,7 +145,7 @@ func acquirep(_p_ *p) {
 	}
 }
 // wirep 为 acquirep 的实际获取 p 的第一步，它关联了当前的 M 到 P 上。
-// 之所以进行拆分是因为我们可以为这个部分驳回 write barrier
+// 之所以进行分段是因为我们可以为这个部分驳回 write barrier
 //go:nowritebarrierrec
 //go:nosplit
 func wirep(_p_ *p) {
