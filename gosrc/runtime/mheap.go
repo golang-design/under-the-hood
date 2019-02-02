@@ -98,6 +98,14 @@ type mheap struct {
 	// This is accessed atomically.
 	reclaimCredit uintptr
 
+	// scavengeCredit is spare credit for extra bytes scavenged.
+	// Since the scavenging mechanisms operate on spans, it may
+	// scavenge more than requested. Any spare pages released
+	// go to this credit pool.
+	//
+	// This is protected by the mheap lock.
+	scavengeCredit uintptr
+
 	// 内存分配统计
 	largealloc  uint64                  // 分配给大对象的总字节数
 	nlargealloc uint64                  // 进行大对象分配的次数
@@ -152,7 +160,7 @@ type mheap struct {
 	// simply blocking GC (by disabling preemption).
 	sweepArenas []arenaIdx
 
-	_ uint32 // ensure 64-bit alignment of central
+	// _ uint32 // ensure 64-bit alignment of central
 
 	// 用于大小较小的类的 central free lists
 	// pad 保证了 mcentrals 的间隔为 CacheLinePadSize 字节，从而便于每个 mcentral.lock 获得自己的缓存行。
@@ -1162,6 +1170,16 @@ HaveSpan:
 		// heap_released since we already did so earlier.
 		sysUsed(unsafe.Pointer(s.base()), s.npages<<_PageShift)
 		s.scavenged = false
+
+		// Since we allocated out of a scavenged span, we just
+		// grew the RSS. Mitigate this by scavenging enough free
+		// space to make up for it.
+		//
+		// Also, scavengeLargest may cause coalescing, so prevent
+		// coalescing with s by temporarily changing its state.
+		s.state = mSpanManual
+		h.scavengeLargest(s.npages * pageSize)
+		s.state = mSpanFree
 	}
 	s.unusedsince = 0
 
@@ -1311,6 +1329,15 @@ func (h *mheap) freeSpanLocked(s *mspan, acctinuse, acctidle bool, unusedsince i
 // starting from the largest span and working down. It then takes those spans
 // and places them in scav. h must be locked.
 func (h *mheap) scavengeLargest(nbytes uintptr) {
+	// Use up scavenge credit if there's any available.
+	if nbytes > h.scavengeCredit {
+		nbytes -= h.scavengeCredit
+		h.scavengeCredit = 0
+	} else {
+		h.scavengeCredit -= nbytes
+		return
+	}
+
 	// Iterate over the treap backwards (from largest to smallest) scavenging spans
 	// until we've reached our quota of nbytes.
 	released := uintptr(0)
@@ -1338,6 +1365,11 @@ func (h *mheap) scavengeLargest(nbytes uintptr) {
 		t = n
 		h.scav.insert(s)
 		released += r
+	}
+
+	// If we over-scavenged, turn that extra amount into credit.
+	if released > nbytes {
+		h.scavengeCredit += released - nbytes
 	}
 }
 

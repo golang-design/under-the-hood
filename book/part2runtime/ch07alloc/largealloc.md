@@ -170,6 +170,9 @@ HaveSpan:
 	if s.scavenged {
 		sysUsed(unsafe.Pointer(s.base()), s.npages<<_PageShift)
 		s.scavenged = false
+		s.state = mSpanManual
+		h.scavengeLargest(s.npages * pageSize)
+		s.state = mSpanFree
 	}
 	s.unusedsince = 0
 

@@ -58,6 +58,8 @@ func (list *mSpanList) init() {
 
 ## 从分段栈到连续栈
 
+<!-- https://github.com/golang/go/blob/20ac64a2dd1f7993101d7e069eab3b84ab2c0bd2/src/cmd/internal/obj/x86/obj6.go#L1023 -->
+
 ## 栈扩张与栈伸缩
 
 ## 许可
