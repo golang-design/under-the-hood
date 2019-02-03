@@ -133,9 +133,105 @@ TODO:
 
 ### 被动弃权：阻塞监控
 
-TODO:
+在[系统监控](./sysmon.md)一节中，我们提到了系统监控会将发生阻塞的 goroutine 抢占，
+解绑 P 与 M，从而让其他的线程能够获得 P 继续执行其他的 goroutine。
+这得益于 `sysmon` 中调用的 `retake` 方法。这个方法处理了两种抢占情况，一是抢占阻塞在系统调用上的 P，
+二是抢占运行时间过长的 G。
+
+```go
+func retake(now int64) uint32 {
+	n := 0
+	// 防止 allp 数组发生变化，除非我们已经 STW，此锁将完全没有人竞争
+	lock(&allpLock)
+	// 不能使用 range 循环，因为 range 可能临时性的放弃 allpLock。
+	// 所以每轮循环中都需要重新获取 allp
+	for i := 0; i < len(allp); i++ {
+		_p_ := allp[i]
+		if _p_ == nil {
+			// 这是可能的，如果 procresize 已经增长 allp 但还没有创建新的 P
+			continue
+		}
+		pd := &_p_.sysmontick
+		s := _p_.status
+
+		// 对阻塞在系统调用上的 P 进行抢占
+		if s == _Psyscall {
+			// 如果已经超过了一个系统监控的 tick（20us），则从系统调用中抢占 P
+			t := int64(_p_.syscalltick)
+			if int64(pd.syscalltick) != t {
+				pd.syscalltick = uint32(t)
+				pd.syscallwhen = now
+				continue
+			}
+			// 一方面，在没有其他 work 的情况下，我们不希望抢夺 P
+			// 另一方面，因为它可能阻止 sysmon 线程从深度睡眠中唤醒，所以最终我们仍希望抢夺 P
+			if runqempty(_p_) && atomic.Load(&sched.nmspinning)+atomic.Load(&sched.npidle) > 0 && pd.syscallwhen+10*1000*1000 > now {
+				continue
+			}
+			// 解除 allpLock，从而可以获取 sched.lock
+			unlock(&allpLock)
+			// 在 CAS 之前需要减少空闲 M 的数量（假装某个还在运行）
+			// 否则发生抢夺的 M 可能退出 syscall 然后再增加 nmidle ，进而发生死锁
+			// 这个过程发生在 stoplockedm 中
+			incidlelocked(-1)
+			if atomic.Cas(&_p_.status, s, _Pidle) { // 将 P 设为 idle，从而交于其他 M 使用
+				(...)
+				n++
+				_p_.syscalltick++
+				handoffp(_p_)
+			}
+			incidlelocked(1)
+			lock(&allpLock)
+
+		} else if s == _Prunning { // 对正在运行的 P 进行抢占
+			// 如果运行时间太长，则抢占 G
+			t := int64(_p_.schedtick)
+			if int64(pd.schedtick) != t {
+				pd.schedtick = uint32(t)
+				pd.schedwhen = now
+				continue
+			}
+			if pd.schedwhen+forcePreemptNS > now {
+				continue
+			}
+			preemptone(_p_)
+		}
+	}
+	unlock(&allpLock)
+	return uint32(n)
+}
+```
+
+在抢占 P 的过程中，有两个非常小心的处理方式：
+
+1. 如果此时队列为空，那么完全没有必要进行抢占，这时候似乎可以继续遍历其他的 P，
+但必须在调度器中自旋的 M 和 空闲的 P 同时存在时、且系统调用阻塞时间非常长的情况下才能这么做。
+否则，这个 retake 过程可能返回 0，进而系统监控可能看起来像是什么事情也没做的情况下调整自己的步调进入深度睡眠。
+2. 在将 P 设置为空闲状态前，必须先将 M 的数量减少，否则当 M 退出系统调用时，
+会在 `exitsyscall0` 中调用 `stoplockedm` 从而增加空闲 M 的数量，进而发生死锁。
+
+而在抢占 G 的过程中，也只是使用与前面提到的抢占标记的方式调用 `preemptone` 尽力而为，
+仍然有可能无法进行抢占。
 
 ## 抢占式调度
+
+从上面提到的三种协作式抢占逻辑我们可以看出，Go 运行时的抢占逻辑其实是有很大问题的。
+比如：
+
+```go
+func main() {
+	go func() {
+		for {
+		}
+	}()
+	println("dead")
+}
+```
+
+这段代码中处于死循环的 goroutine 永远无法被抢占，它既没有主动让权、也没有调用其他函数，
+如果此时主 goroutine 恰好排在此 goroutine 之后执行，那么程序永远无法退出。
+
+Go 官方其实很早就已经意识到了这个问题，终于在 Go 1.12 发布前后，开始着手解决此问题 [1]。
 
 TODO: go1.12
 

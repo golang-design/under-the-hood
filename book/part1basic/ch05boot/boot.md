@@ -86,45 +86,8 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	MOVL	$0, AX
 	CPUID
 	MOVL	AX, SI
-	CMPL	AX, $0
-	JE	nocpuinfo
-
-	// 处理如何序列化 RDTSC。
-	// 在 intel 处理器上，LFENCE 足够了。 AMD 则需要 MFENCE。
-	// 其他处理器的情况不清楚，所以让用 MFENCE。
-	CMPL	BX, $0x756E6547  // "Genu"
-	JNE	notintel
-	CMPL	DX, $0x49656E69  // "ineI"
-	JNE	notintel
-	CMPL	CX, $0x6C65746E  // "ntel"
-	JNE	notintel
-	MOVB	$1, runtime·isIntel(SB)
-	MOVB	$1, runtime·lfenceBeforeRdtsc(SB)
-notintel:
-
-	// 加载 EAX=1 cpuid 标记
-	MOVL	$1, AX
-	CPUID
-	MOVL	AX, runtime·processorVersionInfo(SB)
-
-nocpuinfo:
-	// 如果存在 _cgo_init, 调用
-	MOVQ	_cgo_init(SB), AX
-	TESTQ	AX, AX
-	JZ	needtls
-	// g0 已经存在 DI 中
-	MOVQ	DI, CX	// Win64 使用 CX 来表示第一个参数
-	MOVQ	$setg_gcc<>(SB), SI
-	CALL	AX
-
-	// _cgo_init 后更新 stackguard
-	MOVQ	$runtime·g0(SB), CX
-	MOVQ	(g_stack+stack_lo)(CX), AX
-	ADDQ	$const__StackGuard, AX
-	MOVQ	AX, g_stackguard0(CX)
-	MOVQ	AX, g_stackguard1(CX)
-
-	// 系统特定，不是我们的关注点
+	
+	// CPU 相关的一些检测
 	(...)
 
 #ifdef GOOS_darwin
@@ -180,8 +143,7 @@ ok:
 	CALL	runtime·abort(SB)	// mstart 应该永不返回
 	RET
 
-	// 防止 debugger 调用 debugCallV1 的 dead-code elimination
-	MOVQ	$runtime·debugCallV1(SB), AX
+	(...)
 	RET
 
 DATA	runtime·mainPC+0(SB)/8,$runtime·main(SB)
@@ -247,13 +209,12 @@ func args(c int32, v **byte) {
 > 位于 `runtime/os_darwin.go`
 
 ```go
-// nosplit 用于 linux 中启动阶段的 sysargs
-// 其实也用于 darwin
 //go:nosplit
 func argv_index(argv **byte, i int32) *byte {
 	return *(**byte)(add(unsafe.Pointer(argv), uintptr(i)*sys.PtrSize))
 }
 
+// 链接到 os 包
 //go:linkname executablePath os.executablePath
 var executablePath string
 
@@ -275,7 +236,8 @@ func sysargs(argc int32, argv **byte) {
 
 这个参数用于设置 `os` 包中的 `executablePath` 变量。
 
-而在 Linux 平台中，这个过程就变得复杂起来了。与 darwin 使用 `mach-o` 不同，Linux 使用 ELF 格式 [4, 6]。
+而在 Linux 平台中，这个过程就变得复杂起来了。
+与 darwin 使用 `mach-o` 不同，Linux 使用 ELF 格式 [4, 6]。
 
 ELF 除了 argc, argv, envp 之外，会携带辅助向量（auxiliary vector）将某些内核级的信息
 传递给用户进程。具体结构如图 1 所示。
@@ -319,8 +281,6 @@ position            content                     size (bytes) + comment
 ```go
 // physPageSize 是操作系统的物理页字节大小。内存页的映射和反映射操作必须以
 // physPageSize 的整数倍完成
-//
-// 它必须在操作系统初始化代码中、mallocinit 之前进行设置（通常在 osinit）
 var physPageSize uintptr
 
 func sysargs(argc int32, argv **byte) {
@@ -353,6 +313,7 @@ func sysargs(argc int32, argv **byte) {
 		// mincore 会在地址不是系统页大小的倍数时返回 EINVAL。
 		const size = 256 << 10 // 需要分配的内存大小
 
+		// 此时内存管理尚未启动，直接走系统调用
 		// 使用 mmap 系统调用分配内存
 		p, err := mmap(nil, size, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_PRIVATE, -1, 0)
 		if err != 0 {
@@ -428,8 +389,7 @@ func vdsoauxv(tag, val uintptr) {
 			return
 		}
 		var info vdsoInfo
-		// TODO(rsc): I don't understand why the compiler thinks info escapes
-		// when passed to the three functions below.
+		// 此处可能存在编译器 BUG，这里调用 noescape 的目的仅仅只是让编译器认为此处 info 不是逃逸
 		info1 := (*vdsoInfo)(noescape(unsafe.Pointer(&info)))
 		vdsoInitFromSysinfoEhdr(info1, (*elfEhdr)(unsafe.Pointer(val)))
 		vdsoParseSymbols(info1, vdsoFindVersion(info1, &vdsoLinuxVersion))
@@ -473,10 +433,11 @@ func getPageSize() uintptr {
 `darwin` 从操作系统发展来看，是从 NeXTSTEP 和 FreeBSD 2.x 发展而来的后代，
 macOS 系统调用的特殊之处在于它提供了两套调用接口，一个是 Mach 调用，另一个则是 POSIX 调用。
 Mach 是 NeXTSTEP 遗留下来的产物，BSD 层本质上是堆 Mach 内核的一层封装。尽管用户态进程
-可以直接访问 Mach 调用，但出于通用性的考虑，这里的物理页大小获取的方式是通过 POSIX `sysctl` 这个系统调用进行获取 [9, 10]。
+可以直接访问 Mach 调用，但出于通用性的考虑，
+这里的物理页大小获取的方式是通过 POSIX `sysctl` 这个系统调用进行获取 [9, 10]。
 
-至于 `darwin` 下的系统调用如何参与到 Go 程序中去，这里不再做深入讨论，我们留到
-[参与运行时的系统调用: darwin](../../part2runtime/ch10abi/syscall-darwin.md) 中再讨论。
+事实上 `linux` 与 `darwin` 下的系统调用如何参与到 Go 程序中去稍有不同，我们暂时不做深入讨论，留到
+[参与运行时的系统调用: darwin](../../part2runtime/ch10abi/syscall-darwin.md) 中再统一分析。
 
 ### 步骤4：runtime.schedinit
 

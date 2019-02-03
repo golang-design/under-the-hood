@@ -10,7 +10,7 @@
 ```go
 // 系统监控在一个独立的 m 上运行
 //
-// 总是在没有 P 的情况下运行，因此 write barrier 是不允许的
+// 总是在没有 P 的情况下运行，因此不能出现写屏障
 //go:nowritebarrierrec
 func sysmon() {
 	lock(&sched.lock)
@@ -24,12 +24,7 @@ func sysmon() {
 	// 则回收交于操作系统
 	scavengelimit := int64(5 * 60 * 1e9)
 
-	// 调试相关
-	if debug.scavenge > 0 {
-		// Scavenge-a-lot for testing.
-		forcegcperiod = 10 * 1e6
-		scavengelimit = 20 * 1e6
-	}
+	(...)
 
 	lastscavenge := nanotime()
 	nscavenge := 0
@@ -129,11 +124,7 @@ func sysmon() {
 			nscavenge++
 		}
 
-		// trace 相关
-		if debug.schedtrace > 0 && lasttrace+int64(debug.schedtrace)*1000000 <= now {
-			lasttrace = now
-			schedtrace(debug.scheddetail > 0)
-		}
+		(...)
 	}
 }
 ```
@@ -160,83 +151,10 @@ func sysmon() {
 总的来说系统监控的本职工作还是比较明确的，它负责处理网络数据、抢占 P/G、触发 GC、清理堆 span。
 对于这些职责，我们需要确定一些细节工作：
 
-1. 如何抢占 P/G？
+1. 如何抢占 P/G？在 [协作与抢占](./preemptive.md) 一节中详细讨论。
 2. 如何触发 GC？
 3. 如何清理堆 span？
 4. 如何 poll 网络数据？
-
-本节我们先关注与调度器相关的第一个问题：如何抢占 P/G？
-
-## 超时 P/G 抢占
-
-```go
-func retake(now int64) uint32 {
-	n := 0
-	// Prevent allp slice changes. This lock will be completely
-	// uncontended unless we're already stopping the world.
-	lock(&allpLock)
-	// We can't use a range loop over allp because we may
-	// temporarily drop the allpLock. Hence, we need to re-fetch
-	// allp each time around the loop.
-	for i := 0; i < len(allp); i++ {
-		_p_ := allp[i]
-		if _p_ == nil {
-			// This can happen if procresize has grown
-			// allp but not yet created new Ps.
-			continue
-		}
-		pd := &_p_.sysmontick
-		s := _p_.status
-		if s == _Psyscall {
-			// Retake P from syscall if it's there for more than 1 sysmon tick (at least 20us).
-			t := int64(_p_.syscalltick)
-			if int64(pd.syscalltick) != t {
-				pd.syscalltick = uint32(t)
-				pd.syscallwhen = now
-				continue
-			}
-			// On the one hand we don't want to retake Ps if there is no other work to do,
-			// but on the other hand we want to retake them eventually
-			// because they can prevent the sysmon thread from deep sleep.
-			if runqempty(_p_) && atomic.Load(&sched.nmspinning)+atomic.Load(&sched.npidle) > 0 && pd.syscallwhen+10*1000*1000 > now {
-				continue
-			}
-			// Drop allpLock so we can take sched.lock.
-			unlock(&allpLock)
-			// Need to decrement number of idle locked M's
-			// (pretending that one more is running) before the CAS.
-			// Otherwise the M from which we retake can exit the syscall,
-			// increment nmidle and report deadlock.
-			incidlelocked(-1)
-			if atomic.Cas(&_p_.status, s, _Pidle) {
-				if trace.enabled {
-					traceGoSysBlock(_p_)
-					traceProcStop(_p_)
-				}
-				n++
-				_p_.syscalltick++
-				handoffp(_p_)
-			}
-			incidlelocked(1)
-			lock(&allpLock)
-		} else if s == _Prunning {
-			// Preempt G if it's running for too long.
-			t := int64(_p_.schedtick)
-			if int64(pd.schedtick) != t {
-				pd.schedtick = uint32(t)
-				pd.schedwhen = now
-				continue
-			}
-			if pd.schedwhen+forcePreemptNS > now {
-				continue
-			}
-			preemptone(_p_)
-		}
-	}
-	unlock(&allpLock)
-	return uint32(n)
-}
-```
 
 ## 总结
 

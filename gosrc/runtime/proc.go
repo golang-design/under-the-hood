@@ -4557,43 +4557,40 @@ const forcePreemptNS = 10 * 1000 * 1000 // 10ms
 
 func retake(now int64) uint32 {
 	n := 0
-	// Prevent allp slice changes. This lock will be completely
-	// uncontended unless we're already stopping the world.
+	// 防止 allp 数组发生变化，除非我们已经 STW，此锁将完全没有人竞争
 	lock(&allpLock)
-	// We can't use a range loop over allp because we may
-	// temporarily drop the allpLock. Hence, we need to re-fetch
-	// allp each time around the loop.
+	// 不能使用 range 循环，因为 range 可能临时性的放弃 allpLock。
+	// 所以每轮循环中都需要重新获取 allp
 	for i := 0; i < len(allp); i++ {
 		_p_ := allp[i]
 		if _p_ == nil {
-			// This can happen if procresize has grown
-			// allp but not yet created new Ps.
+			// 这是可能的，如果 procresize 已经增长 allp 但还没有创建新的 P
 			continue
 		}
 		pd := &_p_.sysmontick
 		s := _p_.status
+
+		// 对阻塞在系统调用上的 P 进行抢占
 		if s == _Psyscall {
-			// Retake P from syscall if it's there for more than 1 sysmon tick (at least 20us).
+			// 如果已经超过了一个系统监控的 tick（20us），则从系统调用中抢占 P
 			t := int64(_p_.syscalltick)
 			if int64(pd.syscalltick) != t {
 				pd.syscalltick = uint32(t)
 				pd.syscallwhen = now
 				continue
 			}
-			// On the one hand we don't want to retake Ps if there is no other work to do,
-			// but on the other hand we want to retake them eventually
-			// because they can prevent the sysmon thread from deep sleep.
+			// 一方面，在没有其他 work 的情况下，我们不希望抢夺 P
+			// 另一方面，因为它可能阻止 sysmon 线程从深度睡眠中唤醒，所以最终我们仍希望抢夺 P
 			if runqempty(_p_) && atomic.Load(&sched.nmspinning)+atomic.Load(&sched.npidle) > 0 && pd.syscallwhen+10*1000*1000 > now {
 				continue
 			}
-			// Drop allpLock so we can take sched.lock.
+			// 解除 allpLock，从而可以获取 sched.lock
 			unlock(&allpLock)
-			// Need to decrement number of idle locked M's
-			// (pretending that one more is running) before the CAS.
-			// Otherwise the M from which we retake can exit the syscall,
-			// increment nmidle and report deadlock.
+			// 在 CAS 之前需要减少空闲 M 的数量（假装某个还在运行）
+			// 否则发生抢夺的 M 可能退出 syscall 然后再增加 nmidle ，进而发生死锁
+			// 这个过程发生在 stoplockedm 中
 			incidlelocked(-1)
-			if atomic.Cas(&_p_.status, s, _Pidle) {
+			if atomic.Cas(&_p_.status, s, _Pidle) { // 将 P 设为 idle，从而交于其他 M 使用
 				if trace.enabled {
 					traceGoSysBlock(_p_)
 					traceProcStop(_p_)
@@ -4604,8 +4601,9 @@ func retake(now int64) uint32 {
 			}
 			incidlelocked(1)
 			lock(&allpLock)
-		} else if s == _Prunning {
-			// Preempt G if it's running for too long.
+
+		} else if s == _Prunning { // 对正在运行的 P 进行抢占
+			// 如果运行时间太长，则抢占 G
 			t := int64(_p_.schedtick)
 			if int64(pd.schedtick) != t {
 				pd.schedtick = uint32(t)
@@ -4640,16 +4638,12 @@ func preemptall() bool {
 	return res
 }
 
-// Tell the goroutine running on processor P to stop.
-// This function is purely best-effort. It can incorrectly fail to inform the
-// goroutine. It can send inform the wrong goroutine. Even if it informs the
-// correct goroutine, that goroutine might ignore the request if it is
-// simultaneously executing newstack.
-// No lock needs to be held.
-// Returns true if preemption request was issued.
-// The actual preemption will happen at some point in the future
-// and will be indicated by the gp->status no longer being
-// Grunning
+// 通知运行 goroutine 的 P 停止
+// 该函数仅仅只是尽力而为。他完全有可能通知到错误的 goroutine 上。
+// 即使它通知到了正确的 goroutine，这个 goroutine 也可能无视这个请求，如果它此时正在执行 newstack。
+// 不需要持有锁
+// 如果抢占请发送成功，则返回真
+// 实际抢占会发生在未来发生，并通过 gp.status 来指明不再为 Grunning 状态
 func preemptone(_p_ *p) bool {
 	mp := _p_.m.ptr()
 	if mp == nil || mp == getg().m {
@@ -4660,12 +4654,12 @@ func preemptone(_p_ *p) bool {
 		return false
 	}
 
+	// 设置抢占标记
 	gp.preempt = true
 
-	// Every call in a go routine checks for stack overflow by
-	// comparing the current stack pointer to gp->stackguard0.
-	// Setting gp->stackguard0 to StackPreempt folds
-	// preemption into the normal stack overflow check.
+	// 一个 goroutine 中的每个调用都会通过比较当前栈指针和 gp.stackgard0
+	// 来检查栈是否溢出。
+	// 设置 gp.stackgard0 为 StackPreempt 来将抢占转换为正常的栈溢出检查。
 	gp.stackguard0 = stackPreempt
 	return true
 }
