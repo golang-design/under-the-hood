@@ -3,11 +3,11 @@
 // license that can be found in the LICENSE file.
 
 // 此文件实现了写屏障缓存（write barrier buffer）。
-// write barrier 自身为 gcWriteBarrier，并在汇编中实现。
+// 写屏障自身为 gcWriteBarrier，并在汇编中实现。
 //
-// 关于 write barrier 算法的细节信息，请参考 mbarrier.go，此文件仅处理其 buffer。
+// 关于写屏障算法的细节信息，请参考 mbarrier.go，此文件仅处理其 buffer。
 //
-// write barrier 具有 fast path 和 slow path。fast path 简单的入队到一个 per-P 的
+// 写屏障具有 fast path 和 slow path。fast path 简单的入队到一个 per-P 的
 // write barrier buffer 中。由汇编写成，不会破坏任何通用寄存器，因此它没有通常的 Go 调用开销。
 //
 // 当 buffer 被填满时，write barrier 调用 slow path （wbBufFlush）将缓冲区刷新到 GC 工作队列。
@@ -27,13 +27,9 @@ import (
 // barrier flushing.
 const testSmallBuf = false
 
-// wbBuf is a per-P buffer of pointers queued by the write barrier.
-// This buffer is flushed to the GC workbufs when it fills up and on
-// various GC transitions.
+// wbBuf 是一个由写屏障入队的指针的 per-P 缓存。这个缓存由 GC workbufs 当在多个 GC 转换填满时候刷新。
 //
-// This is closely related to a "sequential store buffer" (SSB),
-// except that SSBs are usually used for maintaining remembered sets,
-// while this is used for marking.
+// 这与"顺序存储缓冲区"（SSB）密切相关，除了SSB通常用于维护记忆集，而这用于标记。
 type wbBuf struct {
 	// next 指向 buf 中的下一个 slot. 它不能是一个指针类型，因为它可以指向 buf 的末端，
 	// 并且必须在没有 write barrier 的情况下进行更新。

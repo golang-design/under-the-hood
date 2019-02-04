@@ -26,3 +26,5 @@
 - Bradley C. Kuszmaul. 2015. SuperMalloc: a super fast multithreaded malloc for 64-bit machines. SIGPLAN Not. 50, 11 (June 2015), 41-55.
 
 ## garbage collector
+
+- Bacon, David F., Perry Cheng, and V. T. Rajan. "A unified theory of garbage collection." ACM SIGPLAN Notices 39.10 (2004): 50-68.

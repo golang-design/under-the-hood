@@ -113,10 +113,10 @@ const (
 const (
 	uintptrMask = 1<<(8*sys.PtrSize) - 1
 
-	// Goroutine preemption request.
-	// Stored into g->stackguard0 to cause split stack check failure.
-	// Must be greater than any real sp.
-	// 0xfffffade in hex.
+	// Goroutine 抢占请求
+	// 存储到 g.stackguard0 来导致栈分段检查失败
+	// 必须必任何实际的 SP 都要大
+	// 十六进制为：0xfffffade
 	stackPreempt = uintptrMask & -1314
 
 	// Thread is forking.

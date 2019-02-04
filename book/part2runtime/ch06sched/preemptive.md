@@ -125,15 +125,100 @@ func goschedImpl(gp *g) {
 ```
 
 当然，尽管具有主动弃权的能力，但它对 Go 语言的用户要求比较高，因为用户在编写并发逻辑的时候
-需要自行甄别是否需要让出时间片，这并非用户友好的。
+需要自行甄别是否需要让出时间片，这并非用户友好的，
+而且很多 Go 的新用户并不会了解到这个问题的存在，我们在随后的抢占式调度中再进一步展开讨论。
 
 ### 主动弃权：栈扩张与抢占标记
 
-TODO:
+另一种主动放弃的方式是通过抢占标记的方式实现的。基本想法是在每个函数调用的序言（函数调用的最前方）插入
+抢占检测指令，当检测到当前 goroutine 被标记为被应该被抢占时，则主动中断执行，让出执行权利。
+表面上看起来想法很简单，但实施起来就比较复杂了。
+
+在 [goroutine 执行栈管理](./stack.md) 一节中我们已经了解到，函数调用的序言部分会检查 SP 寄存器与 `stackguard0`
+之间的大小，如果 SP 小于 `stackguard0` 则会触发 `morestack_noctxt`，触发栈分段操作。换言之，如果抢占标记
+将 `stackgard0` 设为比所有可能的 SP 都要大（即 `stackPreempt`），则会触发 `morestack`，进而调用 `newstack`：
+
+```go
+const (
+	uintptrMask = 1<<(8*sys.PtrSize) - 1
+
+	// Goroutine 抢占请求
+	// 存储到 g.stackguard0 来导致栈分段检查失败
+	// 必须必任何实际的 SP 都要大
+	// 十六进制为：0xfffffade
+	stackPreempt = uintptrMask & -1314
+)
+```
+
+从抢占调度的角度来看，这种发生在函数序言部分的抢占的一个重要目的就是能够简单且安全的记录执行现场（随后的抢占式调度我们会看到
+记录执行现场给采用信号方式中断线程执行的调度带来多大的困难）。事实也是如此，在 `morestack` 调用中：
+
+```asm
+TEXT runtime·morestack(SB),NOSPLIT,$0-0
+	(...)
+	MOVQ	0(SP), AX // f's PC
+	MOVQ	AX, (g_sched+gobuf_pc)(SI)
+	MOVQ	SI, (g_sched+gobuf_g)(SI)
+	LEAQ	8(SP), AX // f's SP
+	MOVQ	AX, (g_sched+gobuf_sp)(SI)
+	MOVQ	BP, (g_sched+gobuf_bp)(SI)
+	MOVQ	DX, (g_sched+gobuf_ctxt)(SI)
+	(...)
+	CALL	runtime·newstack(SB)
+```
+
+是有记录 goroutine 的 PC 和 SP 寄存器，而后才开始调用 `newstack` 的。在 `newstack` 中：
+
+```go
+func newstack() {
+	thisg := getg()
+	(...)
+
+	gp := thisg.m.curg
+
+	(...)
+
+	morebuf := thisg.m.morebuf
+	thisg.m.morebuf.pc = 0
+	thisg.m.morebuf.lr = 0
+	thisg.m.morebuf.sp = 0
+	thisg.m.morebuf.g = 0
+
+	// 如果是发起的抢占请求而非真正的栈分段
+	preempt := atomic.Loaduintptr(&gp.stackguard0) == stackPreempt
+
+	// 保守的对用户态代码进行抢占，而非抢占运行时代码
+	// 如果正持有锁、分配内存或抢占被禁用，则不发生抢占
+	if preempt {
+		if thisg.m.locks != 0 || thisg.m.mallocing != 0 || thisg.m.preemptoff != "" || thisg.m.p.ptr().status != _Prunning {
+			// 不发生抢占，继续调度
+			gp.stackguard0 = gp.stack.lo + _StackGuard
+			gogo(&gp.sched) // 重新进入调度循环
+		}
+	}
+	(...)
+	if preempt {
+		(...)
+		casgstatus(gp, _Grunning, _Gwaiting)
+		(...)
+		// 表现得像是调用了 runtime.Gosched，主动让权
+		casgstatus(gp, _Gwaiting, _Grunning)
+		gopreempt_m(gp) // 重新进入调度循环
+	}
+	(...)
+}
+```
+
+保守的对是否抢占进行估计，因为运行时优先级更高，不应该轻易发生抢占，
+但同时有需要对用户态代码进行抢占，于是先作出一次不需要抢占的判断（快速路径），
+再判断是否真的要进行抢占，调用 `gopreempt_m`。
+
+值得一提的是 `newstack` 函数的作用非常多，除了抢占、栈扩张外，
+其第二个 `preempt` 其实省略了它的第三个功能，帮助 GC 对栈进行扫描，这个我们等到垃圾回收一章中才来回顾。
 
 ### 被动弃权：阻塞监控
 
-在[系统监控](./sysmon.md)一节中，我们提到了系统监控会将发生阻塞的 goroutine 抢占，
+第三种协作式调度与我们在[系统监控](./sysmon.md)一节中提到的系统监控有关，监控循环会将发生阻塞的 goroutine 抢占，
 解绑 P 与 M，从而让其他的线程能够获得 P 继续执行其他的 goroutine。
 这得益于 `sysmon` 中调用的 `retake` 方法。这个方法处理了两种抢占情况，一是抢占阻塞在系统调用上的 P，
 二是抢占运行时间过长的 G。
@@ -215,8 +300,8 @@ func retake(now int64) uint32 {
 
 ## 抢占式调度
 
-从上面提到的三种协作式抢占逻辑我们可以看出，Go 运行时的抢占逻辑其实是有很大问题的。
-比如：
+从上面提到的三种协作式抢占逻辑我们可以看出，Go 运行时的抢占逻辑其实是有很大问题的：调度器只能在某些特定的点
+切换并发执行的 goroutine。这么当然有好处（能够确保 GC 在安全点精准回收，见垃圾回收器一章），但也有坏处比如这个最简单的情况：
 
 ```go
 func main() {
@@ -229,15 +314,36 @@ func main() {
 ```
 
 这段代码中处于死循环的 goroutine 永远无法被抢占，它既没有主动让权、也没有调用其他函数，
-如果此时主 goroutine 恰好排在此 goroutine 之后执行，那么程序永远无法退出。
+如果此时主 goroutine 恰好排在此 goroutine 之后执行，那么程序永远无法退出
+（各种类似的例子非常多，诸如 #17831, #19241, #543, #12553, #13546, #14561, #15442, #17174, #20793, #21053）。
 
-Go 官方其实很早就已经意识到了这个问题，终于在 Go 1.12 发布前后，开始着手解决此问题 [1]。
+Go 官方其实很早（1.0 以前）就已经意识到了这个问题，但在 Go 1.2 时增加了上文提到的在函数序言部分增加抢占标记后，
+此问题便被搁置，直到越来越多的用户提交并报告此问题，在 Go 1.5 前后，
+Go 团队希望仅解决这种由密集循环导致的无法抢占的问题 [2]，于是尝试通过协作式 loop 循环抢占，通过编译器辅助的方式，插入抢占检查指令，
+与流程图回边（指节点被访问过但其子节点尚未访问完毕）安全点（GC root 状态均已知且堆中对象是一致的）的方式进行解决，
+尽管此举能为抢占带来显著的提升，但是在一个循环中引入分支显然会降低性能。
+尽管随后官方对这个方法进行了改进，仅在插入了一条 TESTB 指令 [3]，在完全没有分支以及寄存器压力的情况下，
+仍然造成了几何平均 7.8% 的性能损失。
 
-TODO: go1.12
+终于在 Go 1.10 后 [1]，官方进一步提出的解决方案，希望使用每个指令与执行栈和寄存器的映射，
+通过记录足够多的 metadata 来从协作式调度正式变更为到抢占调度。
+
+我们知道现代操作系统的调度器多为抢占式调度，其实现方式通过硬件终端来支持线程的切换，进而能安全的保存运行上下文。
+在 Go 运行时实现抢占式调度同样也可以使用类似的方式，通过向线程发送系统信号的方式来中断 M 的执行，进而达到抢占的目的。
+但与操作系统的不同之处在于，由于垃圾回收器的存在，运行时还必须能够在 goroutine 被停止时，获得存活指针的信息。
+这就给中断信号带来了麻烦，如果中断信号恰好发生在写屏障（一种保证 GC 完备性的机制，见垃圾回收一章）期间，则
+无法保证 GC 的正确性，甚至会导致内存泄漏。
+
+TODO: go1.12, go1.13，解释初期提案的基本想法是通过给执行栈映射补充寄存器映射及其缺点
+
+不过 Go 1.12 忙着进一步改进 GC 以及查找 GC 的 Bug，Go 团队并没有按时完成这一提案，我们只能等到 Go 1.13
+时候再来细说了。
 
 ## 进一步阅读的参考文献
 
 1. [Proposal: Non-cooperative goroutine preemption](https://github.com/golang/proposal/blob/master/design/24543-non-cooperative-preemption.md)
+2. [runtime: tight loops should be preemptible](https://github.com/golang/go/issues/10958)
+3. [cmd/compile: loop preemption with "fault branch" on amd64](https://go-review.googlesource.com/c/go/+/43050/)
 
 ## 许可
 

@@ -73,7 +73,9 @@ Go 的 GC 与 mutator 线程同时运行，并允许多个 GC 线程并行运行
 | GC 尚未启动   | 
 ```
 
-TODO:
+TODO: 混合屏障栈重扫
+
+TODO: go1.12 mark2 stw
 
 ## 进一步阅读的参考文献
 
