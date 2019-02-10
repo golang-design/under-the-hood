@@ -37,7 +37,7 @@ Go 源码研究 | 当前基于 `go1.12beta2`
 
 - [程序引导](book/part1basic/ch05boot/boot.md)
 - [初始化概览](book/part1basic/ch05boot/init.md)
-- [主 goroutine 生命周期](book/part1basic/ch05boot/main.md)
+- [主 goroutine](book/part1basic/ch05boot/main.md)
 
 ### [第二部分：运行时机制](book/part2runtime)
 
@@ -48,10 +48,10 @@ Go 源码研究 | 当前基于 `go1.12beta2`
 - [调度循环](book/part2runtime/ch06sched/exec.md)
 - [系统监控](book/part2runtime/ch06sched/sysmon.md)
 - [线程管理](book/part2runtime/ch06sched/lockosthread.md)
+- [信号处理](book/part2runtime/ch06sched/signal.md)
 - [执行栈管理](book/part2runtime/ch06sched/stack.md)
 - [协作与抢占](book/part2runtime/ch06sched/preemptive.md)
 - [`note` 与 `mutex`](book/part2runtime/ch06sched/note.md)
-- [系统信号处理](book/part2runtime/ch06sched/signal.md)
 - [过去、现在与未来](book/part2runtime/ch06sched/history.md)
 
 #### [第七章 内存分配器](book/part2runtime/ch07alloc)
@@ -68,11 +68,13 @@ Go 源码研究 | 当前基于 `go1.12beta2`
 #### [第八章 垃圾回收器](book/part2runtime/ch08GC)
 
 - [基本知识](book/part2runtime/ch08GC/basic.md)
-- [垃圾回收初始化](book/part2runtime/ch08GC/init.md)
-- [混合写屏障](book/part2runtime/ch08GC/barrier.md)
-- [三色标记](book/part2runtime/ch08GC/mark.md)
+- [初始化](book/part2runtime/ch08GC/init.md)
+- [屏障](book/part2runtime/ch08GC/barrier.md)
+- [三色标记](book/part2runtime/ch08GC/tricolor.md)
 - [并发回收](book/part2runtime/ch08GC/concurrent.md)
-- [`SetFinalizer` 与 `KeepAlive`](book/part2runtime/ch08GC/finalizer.md)
+- [标记过程](book/part2runtime/ch08GC/mark.md)
+- [清扫过程](book/part2runtime/ch08GC/sweep.md)
+- [存活与终结](book/part2runtime/ch08GC/finalizer.md)
 - [过去、现在与未来](book/part2runtime/ch08GC/history.md)
 
 #### 第九章 调试

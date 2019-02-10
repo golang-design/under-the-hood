@@ -4,7 +4,13 @@ TODO:
 
 ## 内存模型
 
-语言的内存模型定义了并行状态下拥有确定读取和写入的时序的条件。Go 的 goroutine 采取并发的形式运行在多个并行的线程上，Go 的内存模型就明确了 goroutine 在一个变量被写入后一定能够被读取到的条件。在 Go 的内存模型中有事件时序的概念，并定义了 happens before：表示了在 Go 程序中执行内存操作的偏序关系。如果事件 e1 happens before 事件 e2，则 e2 happens after e1。同样，如果 e1 没有 happen before e2 且没有 happen after e2，则 e1 与 e2 happen concurrently。在单个 goroutine 中，happens-before 顺序即程序定义的顺序。
+语言的内存模型定义了并行状态下拥有确定读取和写入的时序的条件。
+Go 的 goroutine 采取并发的形式运行在多个并行的线程上，
+Go 的内存模型就明确了 goroutine 在一个变量被写入后一定能够被读取到的条件。
+在 Go 的内存模型中有事件时序的概念，并定义了 happens before：表示了在 Go 程序中执行内存操作的偏序关系。
+如果事件 e1 happens before 事件 e2，则 e2 happens after e1。
+同样，如果 e1 没有 happen before e2 且没有 happen after e2，则 e1 与 e2 happen concurrently。
+在单个 goroutine 中，happens-before 顺序即程序定义的顺序。
 
 我们稍微学院派的描述一下偏序的概念。（非严格）偏序在数学上是一个二元关系，它满足自反、反对称和传递性。
 happens before 既然被称之为偏序，那么自然也就满足这三个性质：
@@ -13,12 +19,15 @@ happens before 既然被称之为偏序，那么自然也就满足这三个性�
 2. 对于任意的事件 e1 和 e2，如果 e1 happens before e2，e2 happens before e1 则 e1 e2 happens concurrently；
 3. 对于任意的事件 e1 e2 和 e3，如果 e1 happens before e2，e2 happens before e3，则 e1 happens before e3。
 
-可能我们会认为这种事件的发生时序的偏序关系仅仅只是在探讨并发模型，跟内存无关。但实际上，它们既然被称之为内存模型，就是因为它们与内存有着密切关系。并发时序的条件，本质上来说，是定义了内存操作的可见性。
+可能我们会认为这种事件的发生时序的偏序关系仅仅只是在探讨并发模型，跟内存无关。
+但实际上，它们既然被称之为内存模型，就是因为它们与内存有着密切关系。
+并发时序的条件，本质上来说，是定义了内存操作的可见性。
 
 编译器和 CPU 通常会产生各种优化来影响程序原本定义的执行顺序，这包括：编译器的指令重排、 CPU 的乱序执行。
-除此之外，由于缓存的关系，多核 CPU 下，一个 CPU 核心的写结果仅发生在该核心最近的缓存下，要想被另一个 CPU 读到则必须等待内存被置换回低级缓存再置换到另一个核心后才能被读到。
+除此之外，由于缓存的关系，多核 CPU 下，一个 CPU 核心的写结果仅发生在该核心最近的缓存下，
+要想被另一个 CPU 读到则必须等待内存被置换回低级缓存再置换到另一个核心后才能被读到。
 
-Go 中的 happends before 有以下保证：
+Go 中的 happens before 有以下保证：
 
 1. 初始化：`main.main` happens after `main.init`
 2. goroutine 创建：`go` statement happens before `goroutine's execution begins`
@@ -52,8 +61,6 @@ Go 中的 happends before 有以下保证：
 ## 进一步阅读的参考文献
 
 1. [The Go Memory Model](https://golang.org/ref/mem)
-2. [Getting to Go: The Journey of Go's Garbage Collector](https://blog.golang.org/ismmkeynote)
-3. [Eliminate STW stack re-scanning](https://github.com/golang/proposal/blob/master/design/17503-eliminate-rescan.md)
 
 ## 许可
 

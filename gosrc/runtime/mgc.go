@@ -185,7 +185,7 @@ func gcenable() {
 	c := make(chan int, 1)
 	go bgsweep(c)
 	<-c
-	memstats.enablegc = true // now that runtime is initialized, GC is okay
+	memstats.enablegc = true // 现在运行时已经初始化完毕了，GC 已就绪
 }
 
 //go:linkname setGCPercent runtime/debug.setGCPercent
@@ -197,12 +197,11 @@ func setGCPercent(in int32) (out int32) {
 	}
 	gcpercent = in
 	heapminimum = defaultHeapMinimum * uint64(gcpercent) / 100
-	// Update pacing in response to gcpercent change.
+	// 更新步调来响应 gcpercent 变化
 	gcSetTriggerRatio(memstats.triggerRatio)
 	unlock(&mheap_.lock)
 
-	// If we just disabled GC, wait for any concurrent GC mark to
-	// finish so we always return with no GC running.
+	// 如果我们刚好禁用了 GC，则等待任何并发 GC 标记完成，从而我们总是能够在没有 GC 的情况下返回
 	if in < 0 {
 		gcWaitOnMark(atomic.Load(&work.cycles))
 	}
