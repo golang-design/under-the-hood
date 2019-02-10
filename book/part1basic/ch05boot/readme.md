@@ -2,7 +2,7 @@
 
 - [程序引导](./boot.md)
 - [初始化概览](./init.md)
-- [主 goroutine 生命周期](./main.md)
+- [主 goroutine](./main.md)
 
 ## 许可
 

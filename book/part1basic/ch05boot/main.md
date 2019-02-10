@@ -1,4 +1,4 @@
-# 主 goroutine 生命周期
+# Go 程序生命周期：主 goroutine
 
 `runtime·schedinit` 完成初始化工作后并不会立即执行 `runtime·main`（即主 goroutine 运行的地方）。
 相反，会在后续的 `runtime·mstart` 调用中被调度器调度执行。
@@ -28,8 +28,7 @@
 func main() {
 	g := getg()
 
-	// race 检测有关
-	g.m.g0.racectx = 0
+	(...)
 
 	// 执行栈最大限制：1GB（64位系统）或者 250MB（32位系统）
 	// 这里使用十进制而非二进制的 GB 和 MB 因为在栈溢出失败消息中好看一些
@@ -58,16 +57,12 @@ func main() {
 	// 来强制将一些特殊的需要主 OS 线程的调用锁在主 OS 线程下执行初始化
 	lockOSThread()
 
-	if g.m != &m0 {
-		throw("runtime.main not on m0")
-	}
+	(...)
 
 	// 执行 runtime.init
 	// 运行时包中有多个 init 函数，编译器会将他们链接起来。
 	runtime_init() // defer 必须在此调用结束后才能使用
-	if nanotime() == 0 {
-		throw("nanotime returning zero")
-	}
+	(...)
 
 	// defer unlock，从而在 init 期间 runtime.Goexit 来 unlock
 	needUnlock := true
@@ -85,20 +80,7 @@ func main() {
 
 	main_init_done = make(chan bool)
 	if iscgo {
-		if _cgo_thread_start == nil {
-			throw("_cgo_thread_start missing")
-		}
-		if GOOS != "windows" {
-			if _cgo_setenv == nil {
-				throw("_cgo_setenv missing")
-			}
-			if _cgo_unsetenv == nil {
-				throw("_cgo_unsetenv missing")
-			}
-		}
-		if _cgo_notify_runtime_init_done == nil {
-			throw("_cgo_notify_runtime_init_done missing")
-		}
+		(...)
 		// Start the template thread in case we enter Go from
 		// a C-created thread and need to create a new thread.
 		// 启动模板线程来处理从 C 创建的线程进入 Go 时需要创建一个新的线程。

@@ -1,4 +1,4 @@
-# 初始化概览
+# Go 程序生命周期：初始化概览
 
 本节简单讨论程序初始化工作，即 `runtime.schedinit`。
 
@@ -18,18 +18,11 @@
 func schedinit() {
 	_g_ := getg()
 
-	// race 检查有关
-	// raceinit 必须受限调用竞争检查器 race detector
-	// 特别的，它必须在 mallocinit 下面的 racemapshadow 之前完成。
-	if raceenabled {
-		_g_.racectx, raceprocctx0 = raceinit()
-	}
-
+	(...)
 	// 最大系统线程数量（即 M），参考标准库 runtime/debug.SetMaxThreads
 	sched.maxmcount = 10000
 
-	// 与 trace 有关
-	tracebackinit()
+	(...)
 
 	// 模块数据验证
 	moduledataverify()
@@ -649,7 +642,7 @@ initSigmask = _g_.m.sigmask
 
 用于当新创建 m 时（`runtime.newm`），将 m 的 sigmask 进行设置。
 
-对于具体的运行时信号处理机制，我们在 [运行时组件: runtime.signal](../../part2runtime/ch06sched/signal.md) 中讨论。
+对于具体的运行时信号处理机制，我们在 [调度器：信号处理](../../part2runtime/ch06sched/signal.md) 中讨论。
 
 ### 内存分配器的初始化
 
