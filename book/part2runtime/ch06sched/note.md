@@ -1,5 +1,9 @@
 # note 与 (rw)mutex
 
+[TOC]
+
+
+
 
 `note` 和 `mutex` 分别是 Go 运行时实现的一次性通知机制和互斥锁机制，其实现是操作系统特定的，
 这里讨论 darwin 和 linux 的分别基于 semaphore 和 futex 的实现，wasm 的实现我们放到其章节中专门讨论。

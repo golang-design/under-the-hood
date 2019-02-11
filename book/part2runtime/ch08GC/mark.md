@@ -1,5 +1,7 @@
 # 垃圾回收器：标记
 
+[TOC]
+
 ```go
 func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	if gcphase == _GCmarktermination {

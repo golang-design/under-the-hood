@@ -10,25 +10,25 @@ Go 源码研究 | 当前基于 `go1.12beta2`
 
 ### [引言](book/preface.md)
 
-### [第一部分: 基础](book/part1basic/)
+### 第一部分: 基础
 
-#### [第一章 程序基础](book/part1basic/ch01proc)
+#### 第一章 程序基础
 
 <!-- 内存布局？ -->
 
-#### [第二章 并行与并发计算](book/part1basic/ch02parallel)
+#### 第二章 并行与并发计算
 
 <!-- - [3.1 并发] -->
 
-#### [第三章 排队与调度理论](book/part1basic/ch03scheduling)
+#### 第三章 排队与调度理论
 
 <!-- - [2.1 排队理论引导]()
 - [2.2 工作窃取调度](papers/sched/work-steal-sched.md)
 - [调度理论](book/4-sched/theory.md) -->
 
-#### [第四章 内存管理工程](book/part1basic/ch04memory)
+#### 第四章 内存管理工程
 
-- [垃圾回收统一理论](book/part1basic/ch04memory/unifiedgc.md)
+- 垃圾回收统一理论
 
 <!-- CPU 架构与操作系统? -->
 

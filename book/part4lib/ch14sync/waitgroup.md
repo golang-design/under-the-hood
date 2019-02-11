@@ -1,5 +1,7 @@
 # sync 包: WaitGroup
 
+[TOC]
+
 sync.WaitGroup 可以达到并发 goroutine 的执行屏障的效果，等待多个 goroutine 执行完毕。
 
 ## 结构

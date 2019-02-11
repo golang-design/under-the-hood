@@ -1,5 +1,7 @@
 # 调度器: 初始化
 
+[TOC]
+
 我们已经在 [初始化概览](../../part1basic/ch05boot/init.md) 中粗略看过了 `schedinit` 函数，现在我们来仔细看看里面真正关于调度器的初始化步骤。
 M/P/G 彼此的初始化顺序遵循：`mcommoninit` --> `procresize` --> `newproc`。
 

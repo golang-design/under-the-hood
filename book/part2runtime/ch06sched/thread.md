@@ -1,5 +1,7 @@
 # 调度器：线程管理
 
+[TOC]
+
 Go 语言既然专门将线程进一步抽象为 goroutine，自然也就不希望我们对线程做过多的操作，事实也是如此，
 大部分的用户代码并不需要线程级的操作。但某些情况下，当需要
 使用 cgo 调用 C 端图形库（如 GLib）时，甚至需要将某个 goroutine 用户态代码一直在主线程上执行。
@@ -12,7 +14,7 @@ Go 语言既然专门将线程进一步抽象为 goroutine，自然也就不希�
 也是目前唯一一个能够让 M 退出的做法（将 goroutine 锁在 OS 线程上，且在 goroutine 死亡退出时不调用 Unlock 方法）。
 本节便进一步研究 Go 语言对用户态线程操作的支持和与之相关的运行时线程的管理。
 
-### LockOSThread
+## LockOSThread
 
 LockOSThread 和 UnlockOSThread 在运行时包中分别提供了私有和公开的方法。
 运行时私有的 lockOSThread 非常简单：
@@ -65,7 +67,7 @@ func LockOSThread() {
 }
 ```
 
-### UnlockOSThread
+## UnlockOSThread
 
 Unlock 的部分非常简单，减少计数，再实际 dounlock：
 

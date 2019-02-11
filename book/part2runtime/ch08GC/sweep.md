@@ -1,5 +1,7 @@
 # 垃圾回收器：清扫
 
+[TOC]
+
 ```go
 var sweep sweepdata
 

@@ -1,5 +1,7 @@
 # 调度器: 基本知识
 
+[TOC]
+
 在详细进入代码之前，我们了解一下调度器的设计原则及一些基本概念来建立较为宏观的认识。
 运行时调度器的任务是给不同的工作线程 (worker thread) 分发 ready-to-run goroutine。
 
@@ -366,7 +368,7 @@ type sudog struct {
 }
 ```
 
-## 调度器 `sched` 结构
+### 调度器 `sched` 结构
 
 调度器，所有 goroutine 被调度的核心。
 

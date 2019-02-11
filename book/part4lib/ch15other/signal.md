@@ -1,5 +1,7 @@
 # os/signal.*
 
+[TOC]
+
 在[调度器: 信号处理](../../part2runtime/ch06sched/signal.md)中，
 我们已经看到了用户注册的信号会被 `sigsend` 进行发送，这就是我们使用 `os/signal` 包的核心。
 

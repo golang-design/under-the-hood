@@ -1,5 +1,7 @@
 # sync 包: 信号量机制
 
+[TOC]
+
 TODO:
 
 ## `runtime_Semacquire` 与 `runtime_Semrelease`

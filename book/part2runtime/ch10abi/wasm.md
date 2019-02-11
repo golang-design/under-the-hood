@@ -1,4 +1,6 @@
-# 12 WebAssembly
+# 兼容与契约：WebAssembly
+
+[TOC]
 
 TODO:
 

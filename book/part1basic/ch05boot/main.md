@@ -1,5 +1,7 @@
 # Go 程序生命周期：主 goroutine
 
+[TOC]
+
 `runtime·schedinit` 完成初始化工作后并不会立即执行 `runtime·main`（即主 goroutine 运行的地方）。
 相反，会在后续的 `runtime·mstart` 调用中被调度器调度执行。
 

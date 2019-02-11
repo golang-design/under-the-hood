@@ -1,8 +1,8 @@
 # Go 程序生命周期：初始化概览
 
-本节简单讨论程序初始化工作，即 `runtime.schedinit`。
+[TOC]
 
-## 概览
+本节简单讨论程序初始化工作，即 `runtime.schedinit`。
 
 ```go
 // runtime/proc.go
@@ -85,7 +85,7 @@ func schedinit() {
 
 我们在下面的小节中一一讨论整个过程。
 
-### CPU 相关信息的初始化
+## CPU 相关信息的初始化
 
 初始化过程中，会根据当前运行程序的 CPU 初始化一些与 CPU 相关的值，
 获取 CPU 指令集相关支持，并支持对 CPU 指令集的调试，例如禁用部分指令集。
@@ -359,7 +359,7 @@ field:
 }
 ```
 
-### 运行时算法初始化
+## 运行时算法初始化
 
 初始化过程中的，`alginit` 来根据 `cpuinit` 解析得到的 CPU 指令集的支持情况，
 进而初始化合适的 hash 算法，用于对 Go 的 `map` 结构进行支持。
@@ -466,7 +466,7 @@ func aeshashstr(p unsafe.Pointer, h uintptr) uintptr
 
 我们留到 [关键字：map](../../part3compile/ch11keyword/map.md) 一节中进行讨论。
 
-### 模块链接初始化
+## 模块链接初始化
 
 Go 程序支持通过插件的方式将各个编译好的包进行链接。模块提供了这方面的支持。
 
@@ -480,7 +480,7 @@ Go 程序支持通过插件的方式将各个编译好的包进行链接。模�
 这部分机制相对本文篇幅而言相对复杂，我们在 [链接器](../../part3compile/ch12link) 一章中详细对 Go 的模块链接与插件机制进行讨论。
 而 `itabsinit` 则会在 [关键字: interface](../../part3compile/ch11keyword/interface.md) 一节中进行讨论。
 
-### 核心组件的初始化
+## 核心组件的初始化
 
 - 信号处理的初始化 `msigsave`，参见 [调度器：信号处理与 os/signal](../../part2runtime/ch06sched/signal.md)。
 - 执行栈初始化 `stackinit`，参见 [调度器：goroutine 执行栈管理](../../part2runtime/ch06sched/stack.md)。
