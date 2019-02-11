@@ -4,8 +4,8 @@
 
 ## 执行前的准备
 
-在 [程序引导](../../part1basic/ch05boot/boot.md) 中我们已经看到了当所有准备工作都完成后，最后一个开始执行的引导调用就是 `runtime.mstart` 了。
-现在我们来研究一下它在干什么。
+在 [Go 程序生命周期：程序引导](../../part1basic/ch05boot/boot.md) 中我们已经看到了当所有准备工作都完成后，
+最后一个开始执行的引导调用就是 `runtime.mstart` 了。现在我们来研究一下它在干什么。
 
 ### `mstart` 与 `mstart1`
 
@@ -102,11 +102,11 @@ func mstart1() {
 
 1. `mstart` 除了在程序引导阶段会被运行之外，也可能在每个 m 被创建时运行（本节稍后讨论）；
 2. `mstart` 进入 `mstart1` 之后，会初始化自身用于信号处理的 g，在 `mstartfn` 指定时将其执行；
-3. `mstart` 可能在 GC STW 阶段被运行，如果此时需要 `helpgc` （`helpgc` 将在 Go 1.12 中被移除），则会在进入调度前被 park，进入 spinning 状态；
-4. 调度循环 `schedule` 无法返回，因此最后一个 `mexit` 目前还不会被执行，因此当下所有的 Go 程序会创建的线程都无法被释放（只有一个特例，当使用 `runtime.LockOSThread` 锁住的 G 退出时会使用 `gogo` 退出 M，在本节稍后讨论）。
+3. 调度循环 `schedule` 无法返回，因此最后一个 `mexit` 目前还不会被执行，因此当下所有的 Go 程序会创建的线程都无法被释放
+（只有一个特例，当使用 `runtime.LockOSThread` 锁住的 G 退出时会使用 `gogo` 退出 M，在本节稍后讨论）。
 
 我们可能会问一个问题：为什么不在创建 G 的时候就完成执行栈边界的计算？
-原因在于 `mstart1` 会在每一个进程被创建时被执行，只有当线程被创建后，才能计算 g 执行栈的边界。
+原因在于 `mstart1` 会在每一个线程被创建时被执行，只有当线程被创建后，才能计算 g 执行栈的边界。
 
 除以上过程之外，在这个过程中有一个 `asminit`，不过这不是我们关注的重点。它用于初始化 386 平台上的浮点数精度类型为扩展式浮点精度，
 在其他平台（amd64）上不做任何处理：
@@ -117,7 +117,7 @@ TEXT runtime·asminit(SB),NOSPLIT,$0-0
 	RET
 ```
 
-关于运行时信号处理，以及 note 通知机制，我们分别在 [信号处理](./signal.md) 和 [note 与 (rw)mutex](./note.md) 详细分析。
+关于运行时信号处理，以及 note 通知机制，我们分别在 [信号处理与 os/signal](./signal.md) 和 [note 与 (rw)mutex](./note.md) 详细分析。
 
 ### M/P 的绑定
 
@@ -1179,9 +1179,6 @@ func newm(fn func(), _p_ *p) {
 		// 相反，请求一个已知状态良好的线程来创建给我们的线程。
 		//
 		// 在 plan9 上禁用，见 golang.org/issue/22227
-		//
-		// TODO: This may be unnecessary on Windows, which
-		// doesn't model thread creation off fork.
 		lock(&newmHandoff.lock)
 		if newmHandoff.haveTemplateThread == 0 {
 			throw("on a locked thread with no template thread")
@@ -1287,11 +1284,10 @@ func newm1(mp *m) {
 
 当 m 被创建时，会转去运行 `mstart`：
 
-- 如果当前程序为 cgo 程序，则会通过 `asmcgocall` 来创建线程并调用 `mstart`（我们在 [cgo](../../part2runtime/ch10abi/cgo.md)）
+- 如果当前程序为 cgo 程序，则会通过 `asmcgocall` 来创建线程并调用 `mstart`（在 [cgo](../../part2runtime/ch10abi/cgo.md) 中讨论）
 - 否则会调用 `newosproc` 来创建线程，从而调用 `mstart`。
 
 既然是 `newosproc` ，我们此刻仍在 Go 的空间中，那么实现就是操作系统特定的了，
-因为 WebAssembly 平台目前尚无线程支持，我们就只讨论 darwin 和 linux 了。
 
 ##### `runtime/os_darwin.go`
 
@@ -1336,7 +1332,7 @@ func newosproc(mp *m) {
 }
 ```
 
-`pthread_create` 就是系统调用了，我们在 [参与运行时的系统调用（darwin）](../../part2runtime/ch10abi/syscall-darwin.md) 中讨论。
+`pthread_create` 在 [参与运行时的系统调用（darwin）](../../part2runtime/ch10abi/syscall-darwin.md) 中讨论。
 
 ##### `runtime/os_linux.go`
 
@@ -1361,7 +1357,7 @@ func newosproc(mp *m) {
 
 ```
 
-`clone` 同是系统调用，我们在 [参与运行时的系统调用（linux）](../../part2runtime/ch10abi/syscall-linux.md) 中讨论
+`clone` 是系统调用，我们在 [参与运行时的系统调用（linux）](../../part2runtime/ch10abi/syscall-linux.md) 中讨论
 这些系统调用在 Go 中的实现方式。
 
 #### M/G 解绑
@@ -1624,18 +1620,18 @@ TEXT runtime·exitThread(SB),NOSPLIT,$0-8
 我们已经看过了整个调度器的设计，下图纵观了整个过程：
 
 ```
-          mstart --> mstart1  - - - - - - - - - - - - - - - - - - - - --> mexit
+          mstart --> mstart1  -   -   -   -   -   -   -   -   -   -   --> mexit
                         |                                                  ^
                         v  yes                                             |
                        m0? ---> mstartm0 --> newextram --> initsig         |
                      no |                                     |            |
                         v                                     |            |
 在这里保存 mstart 运行现场  save <-------------------------------+            | 从而在这里可以跳转到 mexit
-                        |           服务 cgo 或 windows                     |
+                        |                                                  |
                         v                                                  |
                      asminit                                               |
                         |                                                  |
-                      minit ----> minitSignalStack --> minitSignalMask     |
+                      minit                                                |
                         |                                                  |
                         v      yes                                         |
                      mstartfn? ---> mstartfn                               |
@@ -1692,13 +1688,13 @@ TEXT runtime·exitThread(SB),NOSPLIT,$0-8
 1. `findRunnableGCWorker` 在干什么？
 2. 调度循环看似合理，但如果 G 执行时间过长，难道要等到 G 执行完后再调度其他的 G？显然不符合实际情况，那么到底会发生什么事情？
 
-本节篇幅已经相当长了，让我们留到[调度器: 系统监控](./sysmon.md)和[垃圾回收器: 三色标记法](../../part2runtime/ch08GC/mark.md)中进行讨论。
+本节篇幅已经相当长了，让我们在后面的章节中进行讨论。
 
 ## 进一步阅读的参考文献
 
-- [Terminate locked OS thread if its goroutine exits](https://github.com/golang/go/issues/20395)
-- [Let idle OS threads exit](https://github.com/golang/go/issues/14592)
-- [Scheduler is slow when goroutines are frequently woken](https://github.com/golang/go/issues/18237)
+- [runtime: terminate locked OS thread if its goroutine exits](https://github.com/golang/go/issues/20395)
+- [runtime: let idle OS threads exit](https://github.com/golang/go/issues/14592)
+- [runtime: scheduler is slow when goroutines are frequently woken](https://github.com/golang/go/issues/18237)
 
 ## 许可
 

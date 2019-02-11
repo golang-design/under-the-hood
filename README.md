@@ -28,6 +28,8 @@ Go 源码研究 | 当前基于 `go1.12beta2`
 
 #### [第四章 内存管理工程](book/part1basic/ch04memory)
 
+- [垃圾回收统一理论](book/part1basic/ch04memory/unifiedgc.md)
+
 <!-- CPU 架构与操作系统? -->
 
 <!-- - [Linux 系统调用]
@@ -47,8 +49,8 @@ Go 源码研究 | 当前基于 `go1.12beta2`
 - [调度器初始化](book/part2runtime/ch06sched/init.md)
 - [调度循环](book/part2runtime/ch06sched/exec.md)
 - [系统监控](book/part2runtime/ch06sched/sysmon.md)
-- [线程管理](book/part2runtime/ch06sched/lockosthread.md)
-- [信号处理](book/part2runtime/ch06sched/signal.md)
+- [线程管理](book/part2runtime/ch06sched/thread.md)
+- [信号处理与 `os/signal`](book/part2runtime/ch06sched/signal.md)
 - [执行栈管理](book/part2runtime/ch06sched/stack.md)
 - [协作与抢占](book/part2runtime/ch06sched/preemptive.md)
 - [`note` 与 `mutex`](book/part2runtime/ch06sched/note.md)

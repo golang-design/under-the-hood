@@ -1,4 +1,4 @@
-# 信号处理与 os/signal
+# 调度器：信号处理与 os/signal
 
 我们已经知道了 Go 运行时调度已 goroutine 的方式调度了所有用户态代码。
 每个 goroutine 都有可能在不同的线程上重新被执行。那么如果用户态的某个
@@ -903,11 +903,11 @@ func oneNewExtraM() {
 
 ## 进一步阅读的参考文献
 
-1. [Using a Separate Signal Stack](https://www.gnu.org/software/libc/manual/html_node/Signal-Stack.html)
-2. [SIGALTSTACK(2)](http://man7.org/linux/man-pages/man2/sigaltstack.2.html)
-3. [Unix 信号](https://en.wikipedia.org/wiki/Signal_(IPC))
+3. [Signal(Unix)](https://en.wikipedia.org/wiki/Signal_(IPC))
+2. [sigaltstack - Linux man page](http://man7.org/linux/man-pages/man2/sigaltstack.2.html)
 4. [sigprocmask - Linux man page](https://linux.die.net/man/2/rt_sigprocmask)
 5. [pthread_sigmask - Linux man page](https://linux.die.net/man/3/pthread_sigmask)
+6. Stevens, W. Richard, and Stephen A. Rago. Advanced programming in the UNIX environment. Addison-Wesley, 2013.
 
 ## 许可
 
