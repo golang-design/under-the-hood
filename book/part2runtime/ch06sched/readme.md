@@ -5,7 +5,7 @@
 - [调度循环](./exec.md)
 - [系统监控](./sysmon.md)
 - [线程管理](./thread.md)
-- [信号处理与 `os/signal`](./signal.md)
+- [信号处理机制](./signal.md)
 - [执行栈管理](./stack.md)
 - [协作与抢占](./preemptive.md)
 - [`note` 与 `mutex`](./note.md)

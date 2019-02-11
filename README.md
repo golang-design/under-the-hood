@@ -50,7 +50,7 @@ Go 源码研究 | 当前基于 `go1.12beta2`
 - [调度循环](book/part2runtime/ch06sched/exec.md)
 - [系统监控](book/part2runtime/ch06sched/sysmon.md)
 - [线程管理](book/part2runtime/ch06sched/thread.md)
-- [信号处理与 `os/signal`](book/part2runtime/ch06sched/signal.md)
+- [信号处理机制](book/part2runtime/ch06sched/signal.md)
 - [执行栈管理](book/part2runtime/ch06sched/stack.md)
 - [协作与抢占](book/part2runtime/ch06sched/preemptive.md)
 - [`note` 与 `mutex`](book/part2runtime/ch06sched/note.md)
@@ -119,7 +119,7 @@ Go 源码研究 | 当前基于 `go1.12beta2`
 
 ### [第四部分：标准库](book/part4lib)
 
-#### [第十四章 sync 与 atomic 包]()
+#### [第十四章 sync 与 atomic 包](book/part4lib/ch14sync)
 
 - [信号量 sema 机制](book/part4lib/ch14sync/sema.md)
 - [`sync.Pool`](book/part4lib/ch14sync/pool.md)
@@ -130,12 +130,13 @@ Go 源码研究 | 当前基于 `go1.12beta2`
 - [`sync.Cond`](book/part4lib/ch14sync/cond.md)
 - [`sync/atomic.*`](book/part4lib/ch14sync/atomic.md)
 
-#### 第十五章 其他
+#### [第十五章 其他](book/part4lib/ch15other)
 
 - [`syscall.*`](book/part4lib/ch15other/syscall.md)
-- [`reflect`](book/part4lib/ch15other/reflect.md)
-- [`net`](book/part4lib/ch15other/net.md)
-- [`time`](book/part4lib/ch15other/time.md)
+- [`os/signal.*`](book/part4lib/ch15other/signal.md)
+- [`reflect.*`](book/part4lib/ch15other/reflect.md)
+- [`net.*`](book/part4lib/ch15other/net.md)
+- [`time.*`](book/part4lib/ch15other/time.md)
 
 ### [结束语](book/finalwords.md)
 
