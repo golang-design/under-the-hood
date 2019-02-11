@@ -1300,9 +1300,7 @@ func newm1(mp *m) {
 //go:nowritebarrierrec
 func newosproc(mp *m) {
 	stk := unsafe.Pointer(mp.g0.stack.hi)
-	if false {
-		print("newosproc stk=", stk, " m=", mp, " g=", mp.g0, " id=", mp.id, " ostk=", &mp, "\n")
-	}
+	(...)
 
 	// 初始化 attribute 对象
 	var attr pthreadattr
@@ -1314,13 +1312,11 @@ func newosproc(mp *m) {
 	}
 
 	// 设置想要使用的栈大小。目前为 64KB
-	// TODO: just use OS default size?
 	const stackSize = 1 << 16
 	if pthread_attr_setstacksize(&attr, stackSize) != 0 {
 		write(2, unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
 		exit(1)
 	}
-	//mSysStatInc(&memstats.stacks_sys, stackSize) //TODO: do this?
 
 	// 通知 pthread 库不会 join 这个线程。
 	if pthread_attr_setdetachstate(&attr, _PTHREAD_CREATE_DETACHED) != 0 {
@@ -1328,8 +1324,7 @@ func newosproc(mp *m) {
 		exit(1)
 	}
 
-	// Finally, create the thread. It starts at mstart_stub, which does some low-level
-	// setup and then calls mstart.
+	// 最后创建线程，在 mstart_stub 开始，进行底层设置并调用 mstart
 	var oset sigset
 	sigprocmask(_SIG_SETMASK, &sigset_all, &oset)
 	err = pthread_create(&attr, funcPC(mstart_stub), unsafe.Pointer(mp))
@@ -1352,32 +1347,22 @@ func newosproc(mp *m) {
 //go:nowritebarrier
 func newosproc(mp *m) {
 	stk := unsafe.Pointer(mp.g0.stack.hi)
-	/*
-	 * note: strace gets confused if we use CLONE_PTRACE here.
-	 */
-	if false {
-		print("newosproc stk=", stk, " m=", mp, " g=", mp.g0, " clone=", funcPC(clone), " id=", mp.id, " ostk=", &mp, "\n")
-	}
+	(...)
 
-	// Disable signals during clone, so that the new thread starts
-	// with signals disabled. It will enable them in minit.
+	// 在 clone 期间禁用信号，以便新线程启动时信号被禁止。
+	// 他们会在 minit 中重新启用。
 	var oset sigset
 	sigprocmask(_SIG_SETMASK, &sigset_all, &oset)
 	ret := clone(cloneFlags, stk, unsafe.Pointer(mp), unsafe.Pointer(mp.g0), unsafe.Pointer(funcPC(mstart)))
 	sigprocmask(_SIG_SETMASK, &oset, nil)
 
-	if ret < 0 {
-		print("runtime: failed to create new OS thread (have ", mcount(), " already; errno=", -ret, ")\n")
-		if ret == -_EAGAIN {
-			println("runtime: may need to increase max user processes (ulimit -u)")
-		}
-		throw("newosproc")
-	}
+	(...)
 }
 
 ```
 
-`clone` 同是系统调用，我们在 [参与运行时的系统调用（linux）](../../part2runtime/ch10abi/syscall-linux.md) 中讨论。
+`clone` 同是系统调用，我们在 [参与运行时的系统调用（linux）](../../part2runtime/ch10abi/syscall-linux.md) 中讨论
+这些系统调用在 Go 中的实现方式。
 
 #### M/G 解绑
 

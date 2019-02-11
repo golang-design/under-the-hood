@@ -41,6 +41,7 @@ func mcommoninit(mp *m) {
 
 	// 初始化 gsignal
 	mpreinit(mp)
+	// gsignal 的运行栈边界处理
 	if mp.gsignal != nil {
 		mp.gsignal.stackguard1 = mp.gsignal.stack.lo + _StackGuard
 	}

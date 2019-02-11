@@ -82,6 +82,7 @@ func initsig(preinit bool) {
 		signalsOK = true
 	}
 
+	// 库直接返回
 	// For c-archive/c-shared this is called by libpreinit with
 	// preinit == true.
 	if (isarchive || islibrary) && !preinit {
@@ -94,13 +95,11 @@ func initsig(preinit bool) {
 			continue
 		}
 
-		// We don't need to use atomic operations here because
-		// there shouldn't be any other goroutines running yet.
+		// 此时不需要原子操作，因为此时没有其他运行的 goroutine
 		fwdSig[i] = getsig(i)
 
 		if !sigInstallGoHandler(i) {
-			// Even if we are not installing a signal handler,
-			// set SA_ONSTACK if necessary.
+			// 即使不设置 signal handler，在必要时设置 SA_ONSTACK
 			if fwdSig[i] != _SIG_DFL && fwdSig[i] != _SIG_IGN {
 				setsigstack(i)
 			} else if fwdSig[i] == _SIG_IGN {
@@ -715,27 +714,23 @@ func minitSignals() {
 	minitSignalMask()
 }
 
-// minitSignalStack is called when initializing a new m to set the
-// alternate signal stack. If the alternate signal stack is not set
-// for the thread (the normal case) then set the alternate signal
-// stack to the gsignal stack. If the alternate signal stack is set
-// for the thread (the case when a non-Go thread sets the alternate
-// signal stack and then calls a Go function) then set the gsignal
-// stack to the alternate signal stack. Record which choice was made
-// in newSigstack, so that it can be undone in unminit.
-// 初始化新 m 以设置备用信号堆栈时调用 minitSignalStack。
-// 如果没有为线程设置备用信号堆栈（正常情况），则将备用信号堆栈设置为 gsignal 堆栈。
-// 如果为线程设置了备用信号堆栈（非 Go 线程设置备用信号堆栈然后调用 Go 函数的情况），
-// 则将 gsignal 堆栈设置为备用信号堆栈。记录在 newSigstack 中做出的选择，
+// 初始化新 m 以设置备用信号栈时调用 minitSignalStack。
+// 如果没有为线程设置备用信号栈（正常情况），则将备用信号栈设置为 gsignal 栈。
+// 如果为线程设置了备用信号栈（非 Go 线程设置备用信号栈然后调用 Go 函数的情况），
+// 则将 gsignal 栈设置为备用信号栈。记录在 newSigstack 中做出的选择，
 // 以便可以在 unminit 中撤消。
 func minitSignalStack() {
 	_g_ := getg()
+	// 获取现有的信号栈
 	var st stackt
 	sigaltstack(nil, &st)
 	if st.ss_flags&_SS_DISABLE != 0 {
+		// 如果禁用了当前的信号栈
+		// 则将 gsignal 的执行栈设置为备用信号栈
 		signalstack(&_g_.m.gsignal.stack)
 		_g_.m.newSigstack = true
 	} else {
+		// 否则将 m 的 gsignal 栈设置为从 sigaltstack 返回的备用信号栈
 		setGsignalStack(&st, &_g_.m.goSigStack)
 		_g_.m.newSigstack = false
 	}
@@ -749,6 +744,12 @@ func minitSignalStack() {
 // removes all essential signals from the mask, thus causing those
 // signals to not be blocked. Then it sets the thread's signal mask.
 // After this is called the thread can receive signals.
+// 初始化新的 m 以设置时，将调用 minitSignalMask 线程的信号屏蔽字。
+// 当这被称为所有信号时阻止线程。 这从 m.sigmask 开始，已设置
+// 从 initSigmask 获取新创建的线程或通过调用
+// msigsave 如果这是一个调用 Go 函数的非 Go 线程。
+// 它从掩模中移除所有基本信号，从而导致这些信号信号不被阻止。 然后它设置线程的信号屏蔽字。
+// 调用此线程后，线程可以接收信号。
 func minitSignalMask() {
 	nmask := getg().m.sigmask
 	for i := range sigtable {
@@ -805,11 +806,9 @@ type gsignalStack struct {
 	stktopsp    uintptr
 }
 
-// setGsignalStack sets the gsignal stack of the current m to an
-// alternate signal stack returned from the sigaltstack system call.
-// It saves the old values in *old for use by restoreGsignalStack.
-// This is used when handling a signal if non-Go code has set the
-// alternate signal stack.
+// setGsignalStack 将当前 m 的 gsignal 栈设置为从 sigaltstack 系统调用返回的备用信号堆栈。
+// 它将旧值保存在 *old 中以供 restoreGsignalStack 使用。
+// 如果非 Go 代码设置了，则在处理信号时使用备用栈。
 //go:nosplit
 //go:nowritebarrierrec
 func setGsignalStack(st *stackt, old *gsignalStack) {
@@ -839,7 +838,7 @@ func restoreGsignalStack(st *gsignalStack) {
 	gp.stktopsp = st.stktopsp
 }
 
-// signalstack sets the current thread's alternate signal stack to s.
+// signalstack 设置当前线程的额外信号栈 G
 //go:nosplit
 func signalstack(s *stack) {
 	st := stackt{ss_size: s.hi - s.lo}

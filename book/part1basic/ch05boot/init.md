@@ -4,17 +4,8 @@
 
 ## 概览
 
-> 位于 runtime/proc.go
-
 ```go
-// 启动顺序
-//
-//	调用 osinit
-//	调用 schedinit
-//	make & queue new G
-//	调用 runtime·mstart
-//
-// 创建 G 的调用 runtime·main.
+// runtime/proc.go
 func schedinit() {
 	_g_ := getg()
 
@@ -44,6 +35,7 @@ func schedinit() {
 	typelinksinit() // 使用 maps, activeModules
 	itabsinit()     // 初始化 interface table，使用 activeModules
 
+	// 信号屏蔽字初始化
 	msigsave(_g_.m)
 	initSigmask = _g_.m.sigmask
 
@@ -174,39 +166,18 @@ const (
 	// ecx bits
 	cpuid_SSE3      = 1 << 0
 	cpuid_PCLMULQDQ = 1 << 1
-	cpuid_SSSE3     = 1 << 9
-	cpuid_FMA       = 1 << 12
-	cpuid_SSE41     = 1 << 19
-	cpuid_SSE42     = 1 << 20
-	cpuid_POPCNT    = 1 << 23
-	cpuid_AES       = 1 << 25
-	cpuid_OSXSAVE   = 1 << 27
-	cpuid_AVX       = 1 << 28
+	(...)
 
 	// ebx bits
 	cpuid_BMI1 = 1 << 3
-	cpuid_AVX2 = 1 << 5
-	cpuid_BMI2 = 1 << 8
-	cpuid_ERMS = 1 << 9
-	cpuid_ADX  = 1 << 19
+	(...)
 )
 
 func doinit() {
 	options = []option{
 		{Name: "adx", Feature: &X86.HasADX},
 		{Name: "aes", Feature: &X86.HasAES},
-		{Name: "avx", Feature: &X86.HasAVX},
-		{Name: "avx2", Feature: &X86.HasAVX2},
-		{Name: "bmi1", Feature: &X86.HasBMI1},
-		{Name: "bmi2", Feature: &X86.HasBMI2},
-		{Name: "erms", Feature: &X86.HasERMS},
-		{Name: "fma", Feature: &X86.HasFMA},
-		{Name: "pclmulqdq", Feature: &X86.HasPCLMULQDQ},
-		{Name: "popcnt", Feature: &X86.HasPOPCNT},
-		{Name: "sse3", Feature: &X86.HasSSE3},
-		{Name: "sse41", Feature: &X86.HasSSE41},
-		{Name: "sse41", Feature: &X86.HasSSE41},
-		{Name: "ssse3", Feature: &X86.HasSSSE3},
+		(...)
 
 		// 下面这些特性必须总是在 amd64(p32) 上启用
 		{Name: "sse2", Feature: &X86.HasSSE2, Required: GOARCH == "amd64" || GOARCH == "amd64p32"},
@@ -222,14 +193,7 @@ func doinit() {
 	X86.HasSSE2 = isSet(edx1, cpuid_SSE2)
 
 	X86.HasSSE3 = isSet(ecx1, cpuid_SSE3)
-	X86.HasPCLMULQDQ = isSet(ecx1, cpuid_PCLMULQDQ)
-	X86.HasSSSE3 = isSet(ecx1, cpuid_SSSE3)
-	X86.HasFMA = isSet(ecx1, cpuid_FMA)
-	X86.HasSSE41 = isSet(ecx1, cpuid_SSE41)
-	X86.HasSSE42 = isSet(ecx1, cpuid_SSE42)
-	X86.HasPOPCNT = isSet(ecx1, cpuid_POPCNT)
-	X86.HasAES = isSet(ecx1, cpuid_AES)
-	X86.HasOSXSAVE = isSet(ecx1, cpuid_OSXSAVE)
+	(...)
 
 	osSupportsAVX := false
 	// 对于 XGETBV，OSXSAVE 位是必需且足够的。
@@ -248,9 +212,7 @@ func doinit() {
 	_, ebx7, _, _ := cpuid(7, 0)
 	X86.HasBMI1 = isSet(ebx7, cpuid_BMI1)
 	X86.HasAVX2 = isSet(ebx7, cpuid_AVX2) && osSupportsAVX
-	X86.HasBMI2 = isSet(ebx7, cpuid_BMI2)
-	X86.HasERMS = isSet(ebx7, cpuid_ERMS)
-	X86.HasADX = isSet(ebx7, cpuid_ADX)
+	(...)
 }
 
 func isSet(hwc uint32, value uint32) bool {
@@ -276,20 +238,7 @@ var CacheLineSize uintptr = CacheLinePadSize
 type x86 struct {
 	_            CacheLinePad
 	HasAES       bool
-	HasADX       bool
-	HasAVX       bool
-	HasAVX2      bool
-	HasBMI1      bool
-	HasBMI2      bool
-	HasERMS      bool
-	HasFMA       bool
-	HasOSXSAVE   bool
-	HasPCLMULQDQ bool
-	HasPOPCNT    bool
-	HasSSE2      bool
-	HasSSE3      bool
-	HasSSSE3     bool
-	HasSSE41     bool
+	(...)
 	HasSSE42     bool
 	_            CacheLinePad
 }
@@ -298,7 +247,6 @@ type x86 struct {
 而 `cpu.cpuid` 和 `cpu.xgetbv` 的实现则由汇编完成：
 
 ```go
-// cpuid 在 cpu_x86.s 中实现
 func cpuid(eaxArg, ecxArg uint32) (eax, ebx, ecx, edx uint32)
 
 func xgetbv() (eax, edx uint32)
@@ -306,9 +254,8 @@ func xgetbv() (eax, edx uint32)
 
 本质上就是去调用 CPUID 和 XGETBV 这两个指令：
 
-> 位于 `internal/cpu/cpu_x86.s`
-
 ```c
+// internal/cpu/cpu_x86.s
 // func cpuid(eaxArg, ecxArg uint32) (eax, ebx, ecx, edx uint32)
 TEXT ·cpuid(SB), NOSPLIT, $0-24
 	MOVL eaxArg+0(FP), AX
@@ -466,36 +413,13 @@ type typeAlg struct {
 const (
 	alg_NOEQ = iota
 	alg_MEM0
-	alg_MEM8
-	alg_MEM16
-	alg_MEM32
-	alg_MEM64
-	alg_MEM128
-	alg_STRING
-	alg_INTER
-	alg_NILINTER
-	alg_FLOAT32
-	alg_FLOAT64
-	alg_CPLX64
-	alg_CPLX128
-	alg_max
+	(...)
 )
 
 var algarray = [alg_max]typeAlg{
 	alg_NOEQ:     {nil, nil},
 	alg_MEM0:     {memhash0, memequal0},
-	alg_MEM8:     {memhash8, memequal8},
-	alg_MEM16:    {memhash16, memequal16},
-	alg_MEM32:    {memhash32, memequal32},
-	alg_MEM64:    {memhash64, memequal64},
-	alg_MEM128:   {memhash128, memequal128},
-	alg_STRING:   {strhash, strequal},
-	alg_INTER:    {interhash, interequal},
-	alg_NILINTER: {nilinterhash, nilinterequal},
-	alg_FLOAT32:  {f32hash, f32equal},
-	alg_FLOAT64:  {f64hash, f64equal},
-	alg_CPLX64:   {c64hash, c64equal},
-	alg_CPLX128:  {c128hash, c128equal},
+	(...)
 }
 ```
 
@@ -556,124 +480,28 @@ Go 程序支持通过插件的方式将各个编译好的包进行链接。模�
 这部分机制相对本文篇幅而言相对复杂，我们在 [链接器](../../part3compile/ch12link) 一章中详细对 Go 的模块链接与插件机制进行讨论。
 而 `itabsinit` 则会在 [关键字: interface](../../part3compile/ch11keyword/interface.md) 一节中进行讨论。
 
-### 信号处理的初始化
+### 核心组件的初始化
 
-我们知道，Go 程序会将一段代码（goroutine）在不同的线程上进行调度，那么传统的 `pthread_sigmask` 机制
-（每个线程具有不同的信号掩码）便不再适用于 Go 程序的运行时，因此 Go 运行时还实现了自己的信号处理机制。
+- 信号处理的初始化 `msigsave`，参见 [调度器：信号处理与 os/signal](../../part2runtime/ch06sched/signal.md)。
+- 执行栈初始化 `stackinit`，参见 [调度器：goroutine 执行栈管理](../../part2runtime/ch06sched/stack.md)。
+- 内存分配器的初始化 `mallocinit`，参见 [内存分配器: 初始化](../../part2runtime/ch07alloc/init.md)。
+- 垃圾回收器初始化 `gcinit`，参见 [垃圾回收器：初始化](../../part2runtime/ch08GC/init.md)。
+- 调度器 M 初始化 `mcommoninit`，参见 [调度器：初始化](../../part2runtime/ch06sched/init.md)。
+- 网络轮询器的初始化还会负责网络的轮询，轮训器会根据上次轮询的时间来判断是否应该再次进行轮询。
+	在初始化的阶段初始化了假想的上次轮询的时间：
 
-在初始化的阶段，在 g0 所指向的 m0 上保存信号掩码 `sigmask`：
-
-```go
-const _SIG_SETMASK = 3
-
-// msigsave 将当前线程的 signal mask 保存到 mp.sigmask。
-// 当一个非 Go 线程调用 Go 函数时，用于保留非 Go signal mask。
-// 这个函数是 nosplit 和 nowritebarrierrec 的，因为它由 needm 调用，即
-// 在一个非 Go 线程上调用时候，没有 G。
-//go:nosplit
-//go:nowritebarrierrec
-func msigsave(mp *m) {
-	sigprocmask(_SIG_SETMASK, nil, &mp.sigmask)
-}
-
-//go:nosplit
-//go:nowritebarrierrec
-func sigprocmask(how int32, new, old *sigset) {
-	rtsigprocmask(how, new, old, int32(unsafe.Sizeof(*new)))
-}
-
-//go:noescape
-func rtsigprocmask(how int32, new, old *sigset, size int32)
-```
-
-`rtsigprocmask` 在 Linux 上由汇编直接封装 `rt_sigprocmask` 系统调用 [1]：
-
-```c
-TEXT runtime·rtsigprocmask(SB),NOSPLIT,$0-28
-	MOVL	how+0(FP), DI
-	MOVQ	new+8(FP), SI
-	MOVQ	old+16(FP), DX
-	MOVL	size+24(FP), R10
-	MOVL	$SYS_rt_sigprocmask, AX
-	SYSCALL
-	CMPQ	AX, $0xfffffffffffff001
-	JLS	2(PC)
-	MOVL	$0xf1, 0xf1  // crash
-	RET
-```
-
-注意，`rt_sigprocmask` 只适用于单个线程的调用，多线程上的调用时未定义行为，好在初始化阶段
-的此时还未创建其他线程，因此此调用时安全的。
-
-在 Darwin 上则是通过 `pthread_sigmask` [2] 来完成：
-
-```go
-//go:nosplit
-//go:cgo_unsafe_args
-func sigprocmask(how uint32, new *sigset, old *sigset) {
-	libcCall(unsafe.Pointer(funcPC(sigprocmask_trampoline)), unsafe.Pointer(&how))
-}
-func sigprocmask_trampoline()
-```
-
-```c
-TEXT runtime·sigprocmask_trampoline(SB),NOSPLIT,$0
-	PUSHQ	BP
-	MOVQ	SP, BP
-	MOVQ	8(DI), SI	// arg 2 new
-	MOVQ	16(DI), DX	// arg 3 old
-	MOVL	0(DI), DI	// arg 1 how
-	CALL	libc_pthread_sigmask(SB)
-	TESTL	AX, AX
-	JEQ	2(PC)
-	MOVL	$0xf1, 0xf1  // crash
-	POPQ	BP
-	RET
-```
-
-最后保存到 `initSigmask` 这一全局变量中：
-
-```go
-// 用于新创建的 M 的信号掩码 signal mask 的值。
-var initSigmask sigset
-
-initSigmask = _g_.m.sigmask
-```
-
-用于当新创建 m 时（`runtime.newm`），将 m 的 sigmask 进行设置。
-
-对于具体的运行时信号处理机制，我们在 [调度器：信号处理](../../part2runtime/ch06sched/signal.md) 中讨论。
-
-### 内存分配器的初始化
-
-首先 `sched` 会获取 G，通过 `stackinit` 初始化程序栈、`mallocinit` 初始化
-内存分配器。这部分内容我们在 [内存分配器: 初始化](../../part2runtime/ch07alloc/init.md) 中讨论。
-
-### 垃圾回收期的初始化
-
-再通过 `gcinit` 初始化垃圾回收器涉及的数据。我们在 [垃圾回收器：初始化](../../part2runtime/ch08GC/init.md) 中详细讨论。
-
-### 调度器 M、P 与网络轮询器的初始化
-
-通过 `mcommoninit` 对 M 进行初步的初始化（真正的初始化会在 M 开始运行时进行，
-在 [调度器：初始化](../../part2runtime/ch06sched/init.md) 讨论）。
-
-调度器除了负责 goroutine 的调度，还会负责网络的轮询，轮训器会根据上次轮询的时间来判断是否应该再次进行轮询。
-在初始化的阶段初始化了假想的上次轮询的时间：
-
-```go
-sched.lastpoll = uint64(nanotime())
-```
-
-根据 CPU 的参数信息，初始化对应的 P 数，再调用 
+	```go
+	sched.lastpoll = uint64(nanotime())
+	```
+- 调度器 P 初始化 `procresize` 根据 CPU 的参数信息，初始化对应的 P 数，再调用 
 `procresize` 来动态的调整 P 的个数，只不过这个时候（引导阶段）所有的 P 都是新建的。
-我们在 [调度器: 初始化](../../part2runtime/ch06sched/init.md) 中详细讨论。
+参见 [调度器: 初始化](../../part2runtime/ch06sched/init.md) 中详细讨论。
 
 ## 总结
 
 我们最感兴趣的三大运行时组件调用包括：
 
-- 栈初始化 `stackinit()`
+- goroutine 执行栈初始化 `stackinit()`
 - 内存分配器初始化 `mallocinit()`
 - M 初始化 `mcommoninit()`
 - 垃圾回收器初始化 `gcinit()`
@@ -685,12 +513,6 @@ sched.lastpoll = uint64(nanotime())
 
 初始化工作是整个运行时最关键的基础步骤之一。在 `schedinit` 这个函数中，我们已经看到了它
 将完成栈、内存分配器、调度器、垃圾回收器、链接模块加载、运行时哈希算法等初始化工作。
-
-## 进一步阅读的参考文献
-
-1. [sigprocmask - Linux man page](https://linux.die.net/man/2/rt_sigprocmask)
-2. [pthread_sigmask - Linux man page](https://linux.die.net/man/3/pthread_sigmask)
-3. [Unix 信号](https://en.wikipedia.org/wiki/Signal_(IPC))
 
 ## 许可
 

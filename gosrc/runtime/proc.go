@@ -649,7 +649,7 @@ func mcommoninit(mp *m) {
 	// 初始化 gsignal，用于处理 m 上的信号。
 	mpreinit(mp)
 
-	// 初始化 gsignal 的运行栈
+	// gsignal 的运行栈边界处理
 	if mp.gsignal != nil {
 		mp.gsignal.stackguard1 = mp.gsignal.stack.lo + _StackGuard
 	}

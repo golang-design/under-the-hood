@@ -294,8 +294,8 @@ func setsig(i uint32, fn uintptr) {
 	sigaction(i, &sa, nil)
 }
 
-// sigtramp is the callback from libc when a signal is received.
-// It is called with the C calling convention.
+// sigtramp 是当接收到信号后从 lib 的回调
+// 它由 C 的调用约定进行调用
 func sigtramp()
 func cgoSigtramp()
 

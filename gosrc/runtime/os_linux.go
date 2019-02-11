@@ -140,7 +140,7 @@ const (
 //go:noescape
 func clone(flags int32, stk, mp, gp, fn unsafe.Pointer) int32
 
-// May run with m.p==nil, so write barriers are not allowed.
+// 可能在 m.p==nil 下运行，因此不允许写屏障
 //go:nowritebarrier
 func newosproc(mp *m) {
 	stk := unsafe.Pointer(mp.g0.stack.hi)
@@ -151,8 +151,8 @@ func newosproc(mp *m) {
 		print("newosproc stk=", stk, " m=", mp, " g=", mp.g0, " clone=", funcPC(clone), " id=", mp.id, " ostk=", &mp, "\n")
 	}
 
-	// Disable signals during clone, so that the new thread starts
-	// with signals disabled. It will enable them in minit.
+	// 在 clone 期间禁用信号，以便新线程启动时信号被禁止。
+	// 他们会在 minit 中重新启用。
 	var oset sigset
 	sigprocmask(_SIG_SETMASK, &sigset_all, &oset)
 	ret := clone(cloneFlags, stk, unsafe.Pointer(mp), unsafe.Pointer(mp.g0), unsafe.Pointer(funcPC(mstart)))

@@ -28,12 +28,18 @@ var testSigtrap func(info *siginfo, ctxt *sigctxt, gp *g) bool
 //
 // The garbage collector may have stopped the world, so write barriers
 // are not allowed.
+// 信号发生时调用 sighandler。 全局 g 将是设置为 gsignal goroutine，
+// 并运行在备用信号栈上。参数 g 将是全局 g 在产生信号时的值。
+// sig, info 和 ctxt 参数是来自系统信号处理程序：它们是传递的参数
+// SA 被传递给 sigaction 系统调用。
+// 垃圾回收器可能已经 STW，因此不允许写屏障。
 //
 //go:nowritebarrierrec
 func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 	_g_ := getg()
 	c := &sigctxt{info, ctxt}
 
+	// profile 时钟超时
 	if sig == _SIGPROF {
 		sigprof(c.sigpc(), c.sigsp(), c.siglr(), gp, _g_.m)
 		return
@@ -48,17 +54,15 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 		flags = sigtable[sig].flags
 	}
 	if flags&_SigPanic != 0 && gp.throwsplit {
-		// We can't safely sigpanic because it may grow the
-		// stack. Abort in the signal handler instead.
+		// 我们无法安全的 sigpanic 因为它可能造成栈的增长，因此忽略它
 		flags = (flags &^ _SigPanic) | _SigThrow
 	}
 	if isAbortPC(c.sigpc()) {
-		// On many architectures, the abort function just
-		// causes a memory fault. Don't turn that into a panic.
+		// 很多架构中，abort 函数会导致内存段错误，不将其作为 panic
 		flags = _SigThrow
 	}
 	if c.sigcode() != _SI_USER && flags&_SigPanic != 0 {
-		// The signal is going to cause a panic.
+		// 产生 panic 的信号
 		// Arrange the stack so that it looks like the point
 		// where the signal occurred made a call to the
 		// function sigpanic. Then set the PC to sigpanic.
@@ -75,20 +79,24 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 		return
 	}
 
+	// 转发用户信号
 	if c.sigcode() == _SI_USER || flags&_SigNotify != 0 {
 		if sigsend(sig) {
 			return
 		}
 	}
 
+	// 设置为可忽略的用户信号
 	if c.sigcode() == _SI_USER && signal_ignored(sig) {
 		return
 	}
 
+	// 处理 KILL 信号
 	if flags&_SigKill != 0 {
 		dieFromSignal(sig)
 	}
 
+	// 非 THROW， 返回
 	if flags&_SigThrow == 0 {
 		return
 	}
