@@ -7,6 +7,7 @@
     │   └── cgo
     ├── net
     ├── reflect
+    ├── os/signal
     ├── runtime
     │   ├── README.md
 
@@ -24,6 +25,16 @@
     │   ├── runtime2.go
     │   ├── proc.go
     │   ├── stack.go
+    // signal
+    │   ├── os_linux_generic.go
+    │   ├── sigaction.go
+    │   ├── signal_amd64x.go
+    │   ├── signal_darwin.go
+    │   ├── signal_darwin_amd64.go
+    │   ├── signal_linux_amd64.go
+    │   ├── signal_unix.go
+    │   ├── sigqueue.go
+    │   ├── sigtab_linux_generic.go
 
     // mem
     │   ├── malloc.go
@@ -46,9 +57,6 @@
     │   ├── memclr_wasm.s
     │   ├── memmove_amd64.s
     │   ├── memmove_wasm.s
-    │   ├── msan.go
-    │   ├── msan0.go
-    │   ├── msan_amd64.s
 
     // GC
     │   ├── mgc.go
@@ -62,12 +70,12 @@
     │   ├── mbitmap.go
     │   ├── lfstack.go
     │   ├── lfstack_64bit.go
+    │   ├── mfinal.go
 
     // common
     │   ├── asm.s
     │   ├── asm_amd64.s
     │   ├── asm_wasm.s
-    │   ├── atomic_pointer.go
 
     // types/keywords
     │   ├── type.go
@@ -128,28 +136,12 @@
     │   ├── defs_darwin_amd64.go
     │   ├── plugin.go
 
-    // extern
-    │   ├── extern.go
-    │   ├── symtab.go
-    │   ├── mfinal.go
-
-    // signal
-    │   ├── os_linux_generic.go
-    │   ├── sigaction.go
-    │   ├── signal_amd64x.go
-    │   ├── signal_darwin.go
-    │   ├── signal_darwin_amd64.go
-    │   ├── signal_linux_amd64.go
-    │   ├── signal_unix.go
-    │   ├── sigqueue.go
-    │   ├── sigtab_linux_generic.go
-
     // time
     │   ├── time.go
     │   ├── timestub.go
     │   ├── timestub2.go
 
-    // race/trace/pprof
+    // race/trace/pprof/msan
     │   ├── profbuf.go
     │   ├── proflabel.go
     |   ├── race.go
@@ -159,8 +151,13 @@
     |   ├── traceback.go
     │   ├── debug.go
     │   ├── debugcall.go
+    │   ├── msan.go
+    │   ├── msan0.go
+    │   ├── msan_amd64.s
 
     // call utils
+    │   ├── extern.go
+    │   ├── symtab.go
     │   ├── cpuflags_amd64.go
     │   ├── cputicks.go
     │   ├── env_posix.go
@@ -184,22 +181,27 @@
     │   ├── vdso_elf64.go
     │   ├── vdso_linux_amd64.go
 
+
+    // sync&atomic
+    │   ├── atomic_pointer.go
     │   └── internal
-    │       ├── atomic   
-    │       └── sys      
+    │       ├── atomic
+    │       └── sys
     ├── sync
-    │   ├── atomic       
-    │   ├── cond.go      
-    │   ├── map.go       
-    │   ├── mutex.go     
-    │   ├── once.go      
-    │   ├── pool.go      
+    │   ├── atomic
+    │   ├── cond.go
+    │   ├── map.go
+    │   ├── mutex.go
+    │   ├── once.go
+    │   ├── pool.go
     │   ├── runtime.go
-    │   ├── rwmutex.go   
-    │   └── waitgroup.go 
+    │   ├── rwmutex.go
+    │   └── waitgroup.go
     │
+
+    // syscall
     ├── syscall
-    └── unsafe           
+    └── unsafe
 ```
 
 ## 许可

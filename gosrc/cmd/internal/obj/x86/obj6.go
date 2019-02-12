@@ -1016,10 +1016,9 @@ func load_g_cx(ctxt *obj.Link, p *obj.Prog, newprog obj.ProgAlloc) *obj.Prog {
 	return p
 }
 
-// Append code to p to check for stack split.
-// Appends to (does not overwrite) p.
-// Assumes g is in CX.
-// Returns last new instruction.
+// 将代码拼接到 p 的后面来进行栈分段检查
+// 假设 g 位于 CX.
+// 返回补充添加后的指令
 func stacksplit(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog, newprog obj.ProgAlloc, framesize int32, textarg int32) *obj.Prog {
 	cmp := ACMPQ
 	lea := ALEAQ

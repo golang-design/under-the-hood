@@ -114,7 +114,7 @@ func main() {
 		maxstacksize = 250000000
 	}
 
-	// 允许 newproc 启动新的 m，见 [4 调度器: 初始化]
+	// 允许 newproc 启动新的 m，见 [调度器: 初始化]
 	mainStarted = true
 
 	if GOARCH != "wasm" { // 1.11 新引入的 web assembly, 目前 wasm 不支持线程，无系统监控
@@ -3302,15 +3302,10 @@ func malg(stacksize int32) *g {
 		// 将 stacksize 舍入为 2 的指数
 		stacksize = round2(_StackSystem + stacksize)
 
-		// 从内存分配器中分配栈
 		systemstack(func() {
 			newg.stack = stackalloc(uint32(stacksize))
 		})
-
-		// 计算栈的低位边界
 		newg.stackguard0 = newg.stack.lo + _StackGuard
-
-		// 不指定高位边界
 		newg.stackguard1 = ^uintptr(0)
 	}
 	return newg

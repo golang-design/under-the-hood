@@ -53,13 +53,12 @@ StackSmall 字节。具有大帧的函数不会影响检查，总是调用 mores
 */
 
 const (
-	// StackSystem is a number of additional bytes to add
-	// to each stack below the usual guard area for OS-specific
-	// purposes like signal handling. Used on Windows, Plan 9,
-	// and iOS because they do not use a separate stack.
+	// StackSystem 是要添加的一些额外字节
+	// 每个堆栈低于通常的保护区域，用于特定于操作系统的目的，如信号处理。
+	// 在 Windows，Plan 9 和 iOS 上使用，因为它们不使用单独的栈。
 	_StackSystem = sys.GoosWindows*512*sys.PtrSize + sys.GoosPlan9*512 + sys.GoosDarwin*sys.GoarchArm*1024 + sys.GoosDarwin*sys.GoarchArm64*1024
 
-	// The minimum size of stack used by Go code
+	// Go 代码使用的最小的栈大小
 	_StackMin = 2048
 
 	// The minimum stack size to allocate.
@@ -163,8 +162,7 @@ func stacklog2(n uintptr) int {
 	return log2
 }
 
-// Allocates a stack from the free pool. Must be called with
-// stackpoolmu held.
+// 从空闲池中分配一个栈，必须在持有 stackpoolmu 下调用
 func stackpoolalloc(order uint8) gclinkptr {
 	list := &stackpool[order]
 	s := list.first
@@ -345,10 +343,8 @@ func stackalloc(n uint32) stack {
 		var x gclinkptr
 		c := thisg.m.mcache
 		if stackNoCache != 0 || c == nil || thisg.m.preemptoff != "" {
-			// c == nil can happen in the guts of exitsyscall or
-			// procresize. Just get a stack from the global pool.
-			// Also don't touch stackcache during gc
-			// as it's flushed concurrently.
+			// c == nil 可能发生在 exitsyscall 或 procresize 的内部。
+			// 只需从全局池中获取一个堆栈。在 gc 期间也不要接触 stackcache，因为它会并发的 flush。
 			lock(&stackpoolmu)
 			x = stackpoolalloc(order)
 			unlock(&stackpoolmu)
@@ -370,7 +366,7 @@ func stackalloc(n uint32) stack {
 		npage := uintptr(n) >> _PageShift
 		log2npage := stacklog2(npage)
 
-		// Try to get a stack from the large stack cache.
+		// 尝试从 stackLarge 缓存中获取堆栈。
 		lock(&stackLarge.lock)
 		if !stackLarge.free[log2npage].isEmpty() {
 			s = stackLarge.free[log2npage].first

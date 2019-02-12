@@ -48,7 +48,7 @@ Linux 上的线程以独立进程进行实现，通过 clone 调用来共享资�
 所以 Linux 上也存在不可靠信号和可靠信号的概念，不可靠信号可能丢失，多次发送相同的信号只能收到一次，取值从 1 至 31；
 可靠信号则可以进行排队，取值从 32 至 64。
 
-这便是运行时信号处理基本的核心原理。
+这便是运行时信号处理的基本原理。
 
 ## 初始化
 
@@ -72,7 +72,9 @@ Linux 上的线程以独立进程进行实现，通过 clone 调用来共享资�
 	newm --> allocm --> mcommoninit --> mpreinit --> newm1 --> newosproc --> mstart
 	```
 
-在 `mpreinit` 中，会为一个 M 创建 `gsignal`，是一个在 M 上用于处理信号的 goroutine：
+在 `mpreinit` 中，会为一个 M 创建 `gsignal`，是一个在 M 上用于处理信号的 goroutine
+（因此，除了 g0 外，其实第一个创建的 g 应该是它，但是它并没有设置 goid，因此我们总能观察到
+主 goroutine 的 goid 为 1）：
 
 ```go
 func mcommoninit(mp *m) {

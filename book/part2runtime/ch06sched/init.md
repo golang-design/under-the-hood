@@ -7,8 +7,8 @@ M/P/G 彼此的初始化顺序遵循：`mcommoninit` --> `procresize` --> `newpr
 
 ## M 初始化
 
-M 其实就是 OS 线程，它只有两个状态：spinning 或 unspinning。
-在调度器初始化阶段，只有一个 M，那就是主 OS 线程，因此这里的 common init 仅仅只是将对 M 进行一个初步的初始化，
+M 其实就是 OS 线程，它只有两个状态：spinning 或 unpinning。
+在调度器初始化阶段，只有一个 M，那就是主 OS 线程，因此这里的 commoninit 仅仅只是将对 M 进行一个初步的初始化，
 该初始化进包含对 M 及用于处理 M 信号的 G 的相关运算操作，未涉及工作线程的 park/unpark。
 
 ```go
@@ -23,10 +23,7 @@ func mcommoninit(mp *m) {
 
 	// 锁住调度器
 	lock(&sched.lock)
-	// 确保线程数量不会太多而溢出
-	if sched.mnext+1 < sched.mnext {
-		throw("runtime: thread ID overflow")
-	}
+	(...)
 	// mnext 表示当前 m 的数量，还表示下一个 m 的 id
 	mp.id = sched.mnext
 	// 增加 m 的数量
@@ -42,11 +39,7 @@ func mcommoninit(mp *m) {
 	}
 
 	// 初始化 gsignal
-	mpreinit(mp)
-	// gsignal 的运行栈边界处理
-	if mp.gsignal != nil {
-		mp.gsignal.stackguard1 = mp.gsignal.stack.lo + _StackGuard
-	}
+	(...)
 
 	// 添加到 allm 中，从而当它刚保存到寄存器或本地线程存储时候 GC 不会释放 g->m
 	mp.alllink = allm
@@ -55,44 +48,11 @@ func mcommoninit(mp *m) {
 	atomicstorep(unsafe.Pointer(&allm), unsafe.Pointer(mp))
 	unlock(&sched.lock)
 
-	// 分配内存来保存当 cgo 调用崩溃时候的回溯
-	if iscgo || GOOS == "solaris" || GOOS == "windows" {
-		mp.cgoCallers = new(cgoCallers)
-	}
+	(...)
 }
 ```
 
-其中，`mpreinit` 会初始化分配一个用于信号处理的 `gsignal`（因此，除了 g0 外，其实第一个创建的 g 应该是它，但是它并没有设置 goid）。
-
-```go
-// 调用此方法来初始化一个新的 m (包含引导 m)
-// 从一个父线程上进行调用（引导时为主线程），可以分配内存
-func mpreinit(mp *m) {
-	mp.gsignal = malg(32 * 1024) // OS X 需要 >= 8K，此处创建处理 singnal 的 g
-	mp.gsignal.m = mp            // 指定 gsignal 拥有的 m
-}
-
-// 分配一个新的 g 结构, 包含一个 stacksize 字节的的栈
-func malg(stacksize int32) *g {
-	newg := new(g)
-	if stacksize >= 0 {
-		// 将 stacksize 舍入为 2 的指数
-		stacksize = round2(_StackSystem + stacksize)
-
-		// 从内存分配器中分配栈
-		systemstack(func() {
-			newg.stack = stackalloc(uint32(stacksize))
-		})
-
-		// 计算栈的低位边界
-		newg.stackguard0 = newg.stack.lo + _StackGuard
-
-		// 不指定高位边界
-		newg.stackguard1 = ^uintptr(0)
-	}
-	return newg
-}
-```
+这里省略了比较重要的 `gsignal` 的初始化过程，参见 [调度器: 信号处理机制](signal.md)。
 
 ## P 初始化
 

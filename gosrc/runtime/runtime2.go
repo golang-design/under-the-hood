@@ -225,16 +225,11 @@ func setMNoWB(mp **m, new *m) {
 type gobuf struct {
 	// sp, pc 和 g 偏移量均在 libmach 中写死
 	//
-	// ctxt is unusual with respect to GC: it may be a
-	// heap-allocated funcval, so GC needs to track it, but it
-	// needs to be set and cleared from assembly, where it's
-	// difficult to have write barriers. However, ctxt is really a
-	// saved, live register, and we only ever exchange it between
-	// the real register and the gobuf. Hence, we treat it as a
-	// root during stack scanning, which means assembly that saves
-	// and restores it doesn't need write barriers. It's still
-	// typed as a pointer so that any other writes from Go get
-	// write barriers.
+	// ctxt 对于 GC 非常特殊，它可能是一个在堆上分配的 funcval，因此 GC 需要追踪它
+	// 但是它需要从汇编中设置和清除，因此很难使用写屏障。然而 ctxt 是一个实时保存的、
+	// 存活的寄存器，且我们只在真实的寄存器和 gobuf 之间进行交换。
+	// 因此我们将其视为栈扫描时的一个 root，从而汇编中保存或恢复它不需要写屏障。
+	// 它仍然作为指针键入，以便来自Go的任何其他写入获得写入障碍。
 	sp   uintptr
 	pc   uintptr
 	g    guintptr
