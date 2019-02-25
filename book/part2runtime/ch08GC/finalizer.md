@@ -291,16 +291,41 @@ func addfinalizer(p unsafe.Pointer, f *funcval, nret uintptr, fint *_type, ot *p
 
 ## KeepAlive
 
+KeepAlive 会将某个参数标记为可达，从而能够保证某个对象在
+调用 KeepAlive 之前都不会被垃圾回收所释放（因为被引用），进而这个对象设置的
+Finalizer 也不会被运行，考虑下面的例子：
+
+```go
+type File struct {d int}
+
+d, err := syscall.Open("/file/path", syscall.O_RDONLY, 0)
+
+// ...
+
+p := &File{d}
+runtime.SetFinalizer(p, func(p *File) {
+	syscall.Close(p.d)
+})
+var buf [10]byte
+n, err := syscall.Read(p.d, buf[:])
+
+// 确保在 Read 返回之前， p 都不会被 finalize 掉
+runtime.KeepAlive(p)
+// 此后不再使用 p
+```
+
+KeepAlive 的源码非常简单：
+
 ```go
 func KeepAlive(x interface{}) {
-	// Introduce a use of x that the compiler can't eliminate.
-	// This makes sure x is alive on entry. We need x to be alive
-	// on entry for "defer runtime.KeepAlive(x)"; see issue 21402.
 	if cgoAlwaysFalse {
 		println(x)
 	}
 }
 ```
+
+保留一个引用只需要产生一个参数传递，而这里针对 cgo 做了特殊处理，即
+产生了一个 `println` 调用来保证编译器不会将其优化掉。
 
 ## 许可
 

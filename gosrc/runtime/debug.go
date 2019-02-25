@@ -40,11 +40,9 @@ func GOMAXPROCS(n int) int {
 	return ret
 }
 
-// NumCPU returns the number of logical CPUs usable by the current process.
+// NumCPU 返回用于并发处理的逻辑 CPU 的数量
 //
-// The set of available CPUs is checked by querying the operating system
-// at process startup. Changes to operating system CPU allocation after
-// process startup are not reflected.
+// 有效的 CPU 集合是在启动阶段从操作系统查询得来。启动后的系统 CPU 分配不会表现出来。
 func NumCPU() int {
 	return int(ncpu)
 }

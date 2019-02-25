@@ -10,7 +10,7 @@ import (
 	"unsafe"
 )
 
-// Public race detection API, present iff build with -race.
+// 公共竞争检查 API，当且仅当 -race 构建才提供
 
 func RaceRead(addr unsafe.Pointer)
 func RaceWrite(addr unsafe.Pointer)
@@ -298,8 +298,7 @@ func racereadrangepc1(uintptr, uintptr, uintptr)
 func racewriterangepc1(uintptr, uintptr, uintptr)
 func racecallbackthunk(uintptr)
 
-// racecall allows calling an arbitrary function f from C race runtime
-// with up to 4 uintptr arguments.
+// racecall 允许从 C race runtime 调用一个任意函数 f，并传递四个参数
 func racecall(*byte, uintptr, uintptr, uintptr, uintptr)
 
 // checks if the address has shadow (i.e. heap or data/bss)

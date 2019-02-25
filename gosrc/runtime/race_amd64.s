@@ -9,23 +9,22 @@
 #include "funcdata.h"
 #include "textflag.h"
 
-// The following thunks allow calling the gcc-compiled race runtime directly
-// from Go code without going all the way through cgo.
-// First, it's much faster (up to 50% speedup for real Go programs).
-// Second, it eliminates race-related special cases from cgocall and scheduler.
-// Third, in long-term it will allow to remove cyclic runtime/race dependency on cmd/go.
+// 下面的 thunk 能够调用 gcc 直接将 Go 代码在没有 cgo 的情况下编译具有 race 的运行时。
+// 首先，它更快（比实际的 Go 程序快 50%）
+// 第二，它消除了 race 相关的 cgocall 和 调度器这种周期性调用的特殊情况.
+// 第三，从长远来看，它消除了从 cmd/go 上对 runtime/race 的循环依赖。
 
-// A brief recap of the amd64 calling convention.
-// Arguments are passed in DI, SI, DX, CX, R8, R9, the rest is on stack.
-// Callee-saved registers are: BX, BP, R12-R15.
-// SP must be 16-byte aligned.
-// On Windows:
-// Arguments are passed in CX, DX, R8, R9, the rest is on stack.
-// Callee-saved registers are: BX, BP, DI, SI, R12-R15.
-// SP must be 16-byte aligned. Windows also requires "stack-backing" for the 4 register arguments:
+// 简要回顾 amd64 调用约定
+// 参数在 DI，SI，DX，CX，R8，R9 中传递，其余的在堆栈中。
+// 被调用者保存的寄存器是：BX，BP，R12-R15。
+// SP 必须是 16 字节对齐。
+// 在 Windows 上：
+// 参数在 CX，DX，R8，R9 中传递，其余的在堆栈中。
+// 被调用者保存的寄存器是：BX，BP，DI，SI，R12-R15。
+// SP 必须是 16 字节对齐的。 Windows 还需要对 4 个寄存器参数进行 “堆栈支持”：
 // https://msdn.microsoft.com/en-us/library/ms235286.aspx
-// We do not do this, because it seems to be intended for vararg/unprototyped functions.
-// Gcc-compiled race runtime does not try to use that space.
+// 我们不这样做，因为它似乎是针对 vararg/unprototyped 函数。
+// gcc 编译的 race runtime 不会尝试使用该空间。
 
 #ifdef GOOS_windows
 #define RARG0 CX
