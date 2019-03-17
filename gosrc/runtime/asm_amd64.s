@@ -802,7 +802,7 @@ havem:
 	RET
 
 // func setg(gg *g)
-// set g. for use by needm.
+// 设置 g. 供 needm 使用
 TEXT runtime·setg(SB), NOSPLIT, $0-8
 	MOVQ	gg+0(FP), BX
 #ifdef GOOS_windows
@@ -1340,67 +1340,57 @@ TEXT runtime·addmoduledata(SB),NOSPLIT,$0-0
 	POPQ	R15
 	RET
 
-// gcWriteBarrier performs a heap pointer write and informs the GC.
+// gcWriteBarrier 执行一个堆指针的写入并通知 GC。
 //
-// gcWriteBarrier does NOT follow the Go ABI. It takes two arguments:
-// - DI is the destination of the write
-// - AX is the value being written at DI
-// It clobbers FLAGS. It does not clobber any general-purpose registers,
-// but may clobber others (e.g., SSE registers).
+// gcWriteBarrier 不遵循 Go ABI，它接受两个参数：
+// - DI 是写操作的目标地址
+// - AX 是需要写入 DI 的值
+// 它会 clobber FLAGS。但不会 clobber 其他通用寄存器，但会 clobber 其他寄存器（比如 SSE 寄存器）
 TEXT runtime·gcWriteBarrier(SB),NOSPLIT,$120
-	// Save the registers clobbered by the fast path. This is slightly
-	// faster than having the caller spill these.
+	// 通过快速路径保存被 clobber 的寄存器。
+	// 它比调用方 spill 这些寄存器稍快一些
 	MOVQ	R14, 104(SP)
 	MOVQ	R13, 112(SP)
-	// TODO: Consider passing g.m.p in as an argument so they can be shared
-	// across a sequence of write barriers.
+	// TODO: 考虑传递 g.m.p 作为参数，从而可以他们可以在写屏障的一个序列之间进行共享
 	get_tls(R13)
 	MOVQ	g(R13), R13
 	MOVQ	g_m(R13), R13
 	MOVQ	m_p(R13), R13
 	MOVQ	(p_wbBuf+wbBuf_next)(R13), R14
-	// Increment wbBuf.next position.
+	// 增加 wbBuf.next 的位置.
 	LEAQ	16(R14), R14
 	MOVQ	R14, (p_wbBuf+wbBuf_next)(R13)
 	CMPQ	R14, (p_wbBuf+wbBuf_end)(R13)
-	// Record the write.
-	MOVQ	AX, -16(R14)	// Record value
-	// Note: This turns bad pointer writes into bad
-	// pointer reads, which could be confusing. We could avoid
-	// reading from obviously bad pointers, which would
-	// take care of the vast majority of these. We could
-	// patch this up in the signal handler, or use XCHG to
-	// combine the read and the write.
+	// 记录写操作
+	MOVQ	AX, -16(R14)	// 记录值
+	// 注意：这会将错误的指针写入错误的指针读取，从而可能会令人困惑。
+	// 我们可以避免从明显不好的指针中读取，这些指针会照顾绝大多数指针。
+	// 我们还可以在信号处理程序中对其进行修补，或者使用 XCHG 来组合读取和写入。
 	MOVQ	(DI), R13
-	MOVQ	R13, -8(R14)	// Record *slot
-	// Is the buffer full? (flags set in CMPQ above)
+	MOVQ	R13, -8(R14)	// 记录 *slot
+	// 缓存是否已满? (上面的 CMPQ 设置了 flags)
 	JEQ	flush
 ret:
 	MOVQ	104(SP), R14
 	MOVQ	112(SP), R13
-	// Do the write.
+	// 执行写入
 	MOVQ	AX, (DI)
 	RET
 
 flush:
-	// Save all general purpose registers since these could be
-	// clobbered by wbBufFlush and were not saved by the caller.
-	// It is possible for wbBufFlush to clobber other registers
-	// (e.g., SSE registers), but the compiler takes care of saving
-	// those in the caller if necessary. This strikes a balance
-	// with registers that are likely to be used.
+	// 保存所有通用寄存器，因为这些寄存器可能会被 wbBufFlush 破坏，并且不会被调用者保存。
+	// wbBufFlush 可能会破坏其他寄存器（例如，SSE寄存器），但编译器会在必要时负责保存调用者中的那些寄存器。
+	// 这与可能使用的寄存器达成了平衡。
 	//
-	// We don't have type information for these, but all code under
-	// here is NOSPLIT, so nothing will observe these.
+	// 我们不保存这些的类型信息，但这里的所有代码都是 NOSPLIT 的，因此不会有人观察到这些变化
 	//
-	// TODO: We could strike a different balance; e.g., saving X0
-	// and not saving GP registers that are less likely to be used.
-	MOVQ	DI, 0(SP)	// Also first argument to wbBufFlush
-	MOVQ	AX, 8(SP)	// Also second argument to wbBufFlush
+	// TODO: 我们可能 strike 一个不同的平衡，例如，保存 X0 而不保存不太可能使用的通用寄存器。
+	MOVQ	DI, 0(SP)	// 也是 wbBufFlush 的第一个参数
+	MOVQ	AX, 8(SP)	// 也是 wbBufFlush 的第二个参数
 	MOVQ	BX, 16(SP)
 	MOVQ	CX, 24(SP)
 	MOVQ	DX, 32(SP)
-	// DI already saved
+	// DI 已经保存了
 	MOVQ	SI, 40(SP)
 	MOVQ	BP, 48(SP)
 	MOVQ	R8, 56(SP)
@@ -1408,11 +1398,11 @@ flush:
 	MOVQ	R10, 72(SP)
 	MOVQ	R11, 80(SP)
 	MOVQ	R12, 88(SP)
-	// R13 already saved
-	// R14 already saved
+	// R13 已经保存了
+	// R14 已经保存了
 	MOVQ	R15, 96(SP)
 
-	// This takes arguments DI and AX
+	// 它接受 DI 和 AX 作为参数
 	CALL	runtime·wbBufFlush(SB)
 
 	MOVQ	0(SP), DI

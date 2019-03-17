@@ -50,20 +50,16 @@ import (
 //
 // 处理内存顺序:
 //
-// Both the Yuasa and Dijkstra barriers can be made conditional on the
-// color of the object containing the slot. We chose not to make these
-// conditional because the cost of ensuring that the object holding
-// the slot doesn't concurrently change color without the mutator
-// noticing seems prohibitive.
+// Yuasa和Dijkstra屏障都可以以包含槽的对象的颜色为条件。
+// 我们选择不进行这些条件化，因为确保持有槽的对象不会在没有 mutator 注意的情况下
+// 同时改变颜色的成本似乎过高。
 //
-// Consider the following example where the mutator writes into
-// a slot and then loads the slot's mark bit while the GC thread
-// writes to the slot's mark bit and then as part of scanning reads
-// the slot.
+// 考虑以下示例，其中 mutator 写入插槽然后加载插槽的标记位，
+// 而 GC 线程写入插槽的标记位，然后作为扫描的一部分读取插槽。
 //
-// Initially both [slot] and [slotmark] are 0 (nil)
-// Mutator thread          GC thread
-// st [slot], ptr          st [slotmark], 1
+// 初始状态下 [slot] 和 [slotmark] 均为 0 (nil)
+// Mutator 线程          GC 线程
+// st [slot], ptr       st [slotmark], 1
 //
 // ld r1, [slotmark]       ld r2, [slot]
 //
@@ -89,7 +85,7 @@ import (
 // value of mheap_.arena_used. (See issue #9984.)
 //
 //
-// Stack writes:
+// 栈写入(stack writes):
 //
 // The compiler omits write barriers for writes to the current frame,
 // but if a stack pointer has been passed down the call stack, the
@@ -113,24 +109,20 @@ import (
 // global during mark termination.
 //
 //
-// Publication ordering:
+// 公开顺序(publication ordering):
 //
 // The write barrier is *pre-publication*, meaning that the write
 // barrier happens prior to the *slot = ptr write that may make ptr
 // reachable by some goroutine that currently cannot reach it.
 //
 //
-// Signal handler pointer writes:
+// 信号处理指针写入:
 //
-// In general, the signal handler cannot safely invoke the write
-// barrier because it may run without a P or even during the write
-// barrier.
+// 通常，信号处理程序无法安全地调用写屏障，因为它可以在没有 P 的情况下运行，甚至在写屏障期间也可以运行。
 //
-// There is exactly one exception: profbuf.go omits a barrier during
-// signal handler profile logging. That's safe only because of the
-// deletion barrier. See profbuf.go for a detailed argument. If we
-// remove the deletion barrier, we'll have to work out a new way to
-// handle the profile logging.
+// 只有一个例外：profbuf.go 在信号处理程序配置文件记录期间省略了一个障碍。
+// 这只是因为删除障碍而安全。有关详细参数，请参阅 profbuf.go。
+// 如果我们移除删除障碍，我们将必须找到一种新方法来处理配置文件记录。
 
 // typedmemmove copies a value of type t to dst from src.
 // Must be nosplit, see #16026.
