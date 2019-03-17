@@ -29,7 +29,7 @@ var buildVersion = sys.TheVersion
 // 我们需要在保持足够的运行 worker thread 来利用有效硬件并发资源，和 park 运行
 // 过多的 worker thread 来节约 CPU 能耗之间进行权衡。这个权衡并不简单，有以下两点原因：
 // 1. 调度器状态是有意分布的（具体而言，是一个 per-P 的 work 队列），因此在快速路径
-// （fast path）计算出全局断言 (global predicates) 是不可能的。【这是什么？】
+// （fast path）计算出全局谓词 (global predicates) 是不可能的。
 // 2. 为了获得最佳的线程管理，我们必须知道未来的情况（当一个新的 goroutine 会
 // 在不久的将来 ready，不再 park 一个 worker thread）
 //

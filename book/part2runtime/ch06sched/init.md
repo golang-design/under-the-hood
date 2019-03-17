@@ -2,14 +2,15 @@
 
 [TOC]
 
-我们已经在 [初始化概览](../../part1basic/ch05boot/init.md) 中粗略看过了 `schedinit` 函数，现在我们来仔细看看里面真正关于调度器的初始化步骤。
+我们已经在 [初始化概览](../../part1basic/ch05boot/init.md) 中粗略了解到 `schedinit` 函数，
+现在我们来仔细分析里面真正关于调度器的初始化步骤。
 M/P/G 彼此的初始化顺序遵循：`mcommoninit` --> `procresize` --> `newproc`。
 
 ## M 初始化
 
-M 其实就是 OS 线程，它只有两个状态：spinning 或 unpinning。
-在调度器初始化阶段，只有一个 M，那就是主 OS 线程，因此这里的 commoninit 仅仅只是将对 M 进行一个初步的初始化，
-该初始化进包含对 M 及用于处理 M 信号的 G 的相关运算操作，未涉及工作线程的 park/unpark。
+M 其实就是 OS 线程，它只有两个状态：自旋、非自旋。
+在调度器初始化阶段，只有一个 M，那就是主 OS 线程，因此这里的 `commoninit` 仅仅只是将对 M 进行一个初步的初始化，
+该初始化进包含对 M 及用于处理 M 信号的 G 的相关运算操作，未涉及工作线程的暂止和复始。
 
 ```go
 func mcommoninit(mp *m) {
@@ -99,11 +100,12 @@ _Pdead
 随着 P 的初始化（`runtime.procresize`），会被置于 `_Pidle`（马上讨论）。
 
 当 M 需要运行时，会 `runtime.acquirep`，并通过 `runtime.releasep` 来释放。
-当 G 执行时需要进入系统调用时，P 会被设置为 `_Psyscall`，如果这个时候被系统监控抢夺（`runtime.retake`），则 P 会被重新修改为 `_Pidle`。
-如果在程序运行中发生 GC，则 P 会被设置为 `_Pgcstop`，并在 `runtime.startTheWorld` 时重新调整为 `_Pidle` 或者 `_Prunning`。
+当 G 执行时需要进入系统调用时，P 会被设置为 `_Psyscall`，
+如果这个时候被系统监控抢夺（`runtime.retake`），则 P 会被重新修改为 `_Pidle`。
+如果在程序运行中发生 GC，则 P 会被设置为 `_Pgcstop`，
+并在 `runtime.startTheWorld` 时重新调整为 `_Pidle` 或者 `_Prunning`。
 
 这里我们还在讨论初始化过程，我们先只关注 `runtime.procresize` 这个函数：
-
 
 ```go
 // 修改 P 的数量，此时所有工作均被停止 STW，sched 被锁定
@@ -116,10 +118,7 @@ func procresize(nprocs int32) *p {
 	if old < 0 || nprocs <= 0 {
 		throw("procresize: invalid arg")
 	}
-	// trace 相关
-	if trace.enabled {
-		traceGomaxprocs(nprocs)
-	}
+	(...)
 
 	// 更新统计信息，记录此次修改 gomaxprocs 的时间
 	now := nanotime()
@@ -185,28 +184,14 @@ func procresize(nprocs int32) *p {
 			}
 		}
 
-		// race 检测相关
-		if raceenabled && pp.racectx == 0 {
-			if old == 0 && i == 0 {
-				pp.racectx = raceprocctx0
-				raceprocctx0 = 0
-			} else {
-				pp.racectx = raceproccreate()
-			}
-		}
+		(...)
 	}
 
 	// 释放未使用的 P，一般情况下不会执行这段代码
 	for i := nprocs; i < old; i++ {
 		p := allp[i]
 
-		// trace 相关
-		if trace.enabled && p == getg().m.p.ptr() {
-			// moving to p[0], pretend that we were descheduled
-			// and then scheduled again to keep the trace sane.
-			traceGoSched()
-			traceProcStop(p)
-		}
+		(...)
 
 		// 将所有 runnable goroutine 移动至全局队列
 		for p.runqhead != p.runqtail {
@@ -220,19 +205,15 @@ func procresize(nprocs int32) *p {
 			globrunqputhead(p.runnext.ptr())
 			p.runnext = 0
 		}
-		// if there's a background worker, make it runnable and put
-		// it on the global queue so it can clean itself up
+		// 如果存在 gc 后台 worker，则让其 runnable 并将其放到全局队列中从而可以让其对自身进行清理
 		if gp := p.gcBgMarkWorker.ptr(); gp != nil {
 			casgstatus(gp, _Gwaiting, _Grunnable)
-			if trace.enabled {
-				traceGoUnpark(gp, 0)
-			}
+			(...)
 			globrunqput(gp)
-			// This assignment doesn't race because the
-			// world is stopped.
+			// 此赋值不会发生竞争，因为此时已经 STW
 			p.gcBgMarkWorker.set(nil)
 		}
-		// Flush p's write barrier buffer.
+		// 刷新 p 的写屏障缓存
 		if gcphase != _GCoff {
 			wbBufFlush1(p)
 			p.gcw.dispose()
@@ -253,11 +234,7 @@ func procresize(nprocs int32) *p {
 
 		// 将当前 P 的 G 复链转移到全局
 		gfpurge(p)
-		traceProcFree(p)
-		if raceenabled {
-			raceprocdestroy(p.racectx)
-			p.racectx = 0
-		}
+		(...)
 		p.gcAssistTime = 0
 		p.status = _Pdead
 		// 这里不能释放 P，因为它可能被一个正在系统调用中的 M 引用
@@ -290,10 +267,7 @@ func procresize(nprocs int32) *p {
 		p.status = _Pidle
 		acquirep(p) // 直接将 allp[0] 绑定到当前的 M
 
-		// trace 相关
-		if trace.enabled {
-			traceGoStart()
-		}
+		(...)
 	}
 
 	// 将没有本地任务的 P 放到空闲链表中
@@ -473,22 +447,13 @@ func newproc(siz int32, fn *funcval) {
 func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintptr) {
 	_g_ := getg() // 因为是在系统栈运行所以此时的 g 为 g0
 
-	if fn == nil {
-		_g_.m.throwing = -1 // do not dump full stacks
-		throw("go of nil func value")
-	}
+	(...)
 
 	_g_.m.locks++ // 禁止这时 g 的 m 被抢占因为它可以在一个局部变量中保存 p
 	siz := narg
 	siz = (siz + 7) &^ 7
 
-	// 必要时，可以分配并初始化一个更大的栈
-	// 不值得：这几乎总是一个错误
-	// 4*sizeof(uintreg): 在下方增加的额外空间
-	// sizeof(uintreg): 调用者 LR (非 x86) 返回的地址 (x86 在 gostartcall 中)
-	if siz >= _StackMin-4*sys.RegSize-sys.RegSize {
-		throw("newproc: function arguments too large for new goroutine")
-	}
+	(...)
 
 	// 获得 p
 	_p_ := _g_.m.p.ptr()
@@ -522,13 +487,7 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	sp := newg.stack.hi - totalSize
 	spArg := sp
 
-	// 非 x86 架构，不关心（见 traceback.go）
-	if usesLR {
-		// 调用方的 LR 寄存器
-		*(*uintptr)(unsafe.Pointer(sp)) = 0
-		prepGoExitFrame(sp)
-		spArg += sys.MinFrameSize
-	}
+	(...)
 
 	// 处理参数，当有参数时，将参数拷贝到 goroutine 的执行栈中
 	if narg > 0 {
@@ -586,13 +545,7 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	newg.goid = int64(_p_.goidcache)
 	_p_.goidcache++
 
-	// race / trace 相关
-	if raceenabled {
-		newg.racectx = racegostart(callerpc)
-	}
-	if trace.enabled {
-		traceGoCreate(newg, newg.startpc)
-	}
+	(...)
 
 	// 将这里新创建的 g 放入 p 的本地队列或直接放入全局队列
 	// true 表示放入执行队列的下一个，false 表示放入队尾
@@ -619,6 +572,10 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 5. 将调用方、要执行的函数的入口 PC 进行保存，并将 g 的状态更改为 `_Grunnable`
 6. 给 goroutine 分配 id，并将其放入 P 本地队列的队头或全局队列（初始化阶段队列肯定不是满的，因此不可能放入全局队列）
 7. 检查空闲的 P，将其唤醒，准备执行 G，但我们目前处于初始化阶段，主 goroutine 尚未开始执行，因此这里不会唤醒 P。
+
+值得一提的是，`newproc` 是由 `go:nosplit` 修饰的函数（见 [调度器: 协作与抢占](./preemptive.md)），
+因此这个函数在执行过程中不会发生扩张和抢占，这个函数中的每一行代码都是深思熟虑过、确保能够在有限的栈空间内
+完成执行。
 
 ### 细节
 
@@ -663,14 +620,8 @@ retry:
 		})
 		// 计算栈边界
 		gp.stackguard0 = gp.stack.lo + _StackGuard
-	} else {
-		if raceenabled {
-			racemalloc(unsafe.Pointer(gp.stack.lo), gp.stack.hi-gp.stack.lo)
-		}
-		if msanenabled {
-			msanmalloc(unsafe.Pointer(gp.stack.lo), gp.stack.hi-gp.stack.lo)
-		}
 	}
+	(...)
 	return gp
 }
 ```
@@ -858,6 +809,8 @@ func globrunqputbatch(ghead *g, gtail *g, n int32) {
 最后通过 `newproc` 创建包含可以运行要执行函数的执行栈、运行现场的 G，并将创建的 G
 放入刚创建好的 P 的本地可运行队列（第一个入队的 G，也就是主 goroutine 要执行的函数体），
 完成 G 的创建。
+
+[返回目录](./readme.md) | [上一节](./basic.md) | [下一节 调度循环](./exec.md)
 
 ## 许可
 

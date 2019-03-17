@@ -16,7 +16,7 @@ Go 源码研究 | 当前基于 `go1.12`
 
 <!-- 内存布局？ -->
 
-#### 第二章 并行与并发计算
+#### 第二章 并发与分布式计算
 
 <!-- - [3.1 并发] -->
 
@@ -45,16 +45,16 @@ Go 源码研究 | 当前基于 `go1.12`
 
 #### [第六章 调度器](book/part2runtime/ch06sched)
 
-- [基本结构](book/part2runtime/ch06sched/basic.md)
-- [调度器初始化](book/part2runtime/ch06sched/init.md)
-- [调度循环](book/part2runtime/ch06sched/exec.md)
-- [系统监控](book/part2runtime/ch06sched/sysmon.md)
-- [线程管理](book/part2runtime/ch06sched/thread.md)
-- [信号处理机制](book/part2runtime/ch06sched/signal.md)
-- [执行栈管理](book/part2runtime/ch06sched/stack.md)
-- [协作与抢占](book/part2runtime/ch06sched/preemptive.md)
-- [`note` 与 `mutex`](book/part2runtime/ch06sched/note.md)
-- [过去、现在与未来](book/part2runtime/ch06sched/history.md)
+- [6.1 基本结构](book/part2runtime/ch06sched/basic.md)
+- [6.2 调度器初始化](book/part2runtime/ch06sched/init.md)
+- [6.3 调度循环](book/part2runtime/ch06sched/exec.md)
+- [6.4 系统监控](book/part2runtime/ch06sched/sysmon.md)
+- [6.5 线程管理](book/part2runtime/ch06sched/thread.md)
+- [6.6 信号处理机制](book/part2runtime/ch06sched/signal.md)
+- [6.7 执行栈管理](book/part2runtime/ch06sched/stack.md)
+- [6.8 协作与抢占](book/part2runtime/ch06sched/preemptive.md)
+- [6.9 其他杂项](book/part2runtime/ch06sched/note.md)
+- [6.10 过去、现在与未来](book/part2runtime/ch06sched/history.md)
 
 #### [第七章 内存分配器](book/part2runtime/ch07alloc)
 

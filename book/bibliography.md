@@ -2,6 +2,7 @@
 
 ## scheduler
 
+- Robert Cooper and Keith Marzullo. 1991. Consistent detection of global predicates. In Proceedings of the 1991 ACM/ONR workshop on Parallel and distributed debugging (PADD '91). ACM, New York, NY, USA, 167-174.
 - Adve, Sarita V., and Hans-J. Boehm. "Memory models: a case for rethinking parallel languages and hardware." Communications of the ACM 53.8 (2010): 90-101.
 - Arora, Nimar S., Robert D. Blumofe, and C. Greg Plaxton. "Thread scheduling for multiprogrammed multiprocessors." Theory of Computing Systems 34.2 (2001): 115-144.
 - Blelloch, Guy E., Phillip B. Gibbons, and Yossi Matias. "Provably efficient scheduling for languages with fine-grained parallelism." Journal of the ACM (JACM) 46.2 (1999): 281-321.

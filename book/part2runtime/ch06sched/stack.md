@@ -508,6 +508,12 @@ TEXT runtime·morestack(SB),NOSPLIT,$0-0
 
 TODO:
 
+## 总结
+
+TODO:
+
+[返回目录](./readme.md) | [上一节](./signal.md) | [下一节 协作与抢占](./preemptive.md)
+
 ## 许可
 
 [Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

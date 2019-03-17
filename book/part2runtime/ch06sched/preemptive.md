@@ -342,6 +342,13 @@ TODO: 中断信号 SIGURG, go1.13，解释初期提案的基本想法是通过�
 不过 Go 1.12 忙着进一步改进 GC 以及查找 GC 的 Bug，Go 团队并没有按时完成这一提案，我们只能等到 Go 1.13
 时候再来细说了。
 
+## 总结
+
+TODO:
+
+
+[返回目录](./readme.md) | [上一节](./stack.md) | [下一节 其他杂项](./note.md)
+
 ## 进一步阅读的参考文献
 
 1. [Proposal: Non-cooperative goroutine preemption](https://github.com/golang/proposal/blob/master/design/24543-non-cooperative-preemption.md)

@@ -327,6 +327,8 @@ LockOSThread 并不是什么优秀的特性，相反它却给 Go 运行时调度
 它的存在仅仅只是需要提供对上个世纪 C 编写的诸多遗产提供必要支持，倘若 Go 的基础库能够更加丰富，
 这项特性可能不复存在。
 
+[返回目录](./readme.md) | [上一节](./sysmon.md) | [下一节 信号处理机制](./signal.md)
+
 ## 进一步阅读的参考文献
 
 1. [runtime: big performance penalty with runtime.LockOSThread](https://github.com/golang/go/issues/21827)

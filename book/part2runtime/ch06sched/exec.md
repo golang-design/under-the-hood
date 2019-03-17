@@ -143,9 +143,7 @@ func acquirep(_p_ *p) {
 	// 在 P 可以从一个潜在设置的 mcache 分配前执行偏好的 mcache flush
 	_p_.mcache.prepareForSweep()
 
-	if trace.enabled {
-		traceProcStart()
-	}
+	(...)
 }
 // wirep 为 acquirep 的实际获取 p 的第一步，它关联了当前的 M 到 P 上。
 // 之所以进行分段是因为我们可以为这个部分驳回 write barrier
@@ -265,14 +263,7 @@ top:
 	var gp *g
 	var inheritTime bool
 
-	// trace 相关
-	if trace.enabled || trace.shutdown {
-		gp = traceReader()
-		if gp != nil {
-			casgstatus(gp, _Gwaiting, _Grunnable)
-			traceGoUnpark(gp, 0)
-		}
-	}
+	(...)
 
 	// 正在 gc，去找 gc 的 g
 	if gp == nil && gcBlackenEnabled != 0 {
@@ -377,15 +368,7 @@ func execute(gp *g, inheritTime bool) {
 		setThreadCPUProfiler(hz)
 	}
 
-	// trace 相关
-	if trace.enabled {
-		// GoSysExit has to happen when we have a P, but before GoStart.
-		// So we emit it here.
-		if gp.syscallsp != 0 && gp.sysblocktraced {
-			traceGoSysExit(gp.sysexitticks)
-		}
-		traceGoStart()
-	}
+	(...)
 
 	// 终于开始执行了
 	gogo(&gp.sched)
@@ -558,13 +541,7 @@ TEXT runtime·goexit(SB),NOSPLIT,$0-0
 // 完成当前 goroutine 的执行
 func goexit1() {
 
-	// race 和 trace 相关
-	if raceenabled {
-		racegoend()
-	}
-	if trace.enabled {
-		traceGoEnd()
-	}
+	(...)
 
 	// 开始收尾工作
 	mcall(goexit0)
@@ -656,10 +633,7 @@ func goexit0(gp *g) {
 		schedule() // 永不返回
 	}
 
-	if _g_.m.lockedInt != 0 {
-		print("invalid m->lockedInt = ", _g_.m.lockedInt, "\n")
-		throw("internal lockOSThread error")
-	}
+	(...) // lockOSThread 顺序不能出错
 
 	// 将 g 扔进 gfree 链表中等待复用
 	gfput(_g_.m.p.ptr(), gp)
@@ -838,9 +812,7 @@ top:
 			gp := list.pop()
 			injectglist(gp.schedlink.ptr())
 			casgstatus(gp, _Gwaiting, _Grunnable)
-			if trace.enabled {
-				traceGoUnpark(gp, 0)
-			}
+			(...)
 			return gp, false
 		}
 	}
@@ -890,9 +862,7 @@ stop:
 		_p_.gcMarkWorkerMode = gcMarkWorkerIdleMode
 		gp := _p_.gcBgMarkWorker.ptr()
 		casgstatus(gp, _Gwaiting, _Grunnable)
-		if trace.enabled {
-			traceGoUnpark(gp, 0)
-		}
+		(...)
 		return gp, false
 	}
 
@@ -1024,9 +994,7 @@ stop:
 				acquirep(_p_)
 				injectglist(gp.schedlink.ptr())
 				casgstatus(gp, _Gwaiting, _Grunnable)
-				if trace.enabled {
-					traceGoUnpark(gp, 0)
-				}
+				(...)
 				return gp, false
 			}
 			injectglist(gp)
@@ -1692,6 +1660,8 @@ TEXT runtime·exitThread(SB),NOSPLIT,$0-8
 2. 调度循环看似合理，但如果 G 执行时间过长，难道要等到 G 执行完后再调度其他的 G？显然不符合实际情况，那么到底会发生什么事情？
 
 本节篇幅已经相当长了，让我们在后面的章节中进行讨论。
+
+[返回目录](./readme.md) | [上一节](./init.md) | [下一节 系统监控](./sysmon.md)
 
 ## 进一步阅读的参考文献
 

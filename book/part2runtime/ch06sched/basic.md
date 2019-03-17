@@ -2,79 +2,122 @@
 
 [TOC]
 
-在详细进入代码之前，我们了解一下调度器的设计原则及一些基本概念来建立较为宏观的认识。
-运行时调度器的任务是给不同的工作线程 (worker thread) 分发 ready-to-run goroutine。
+在详细进入代码之前，我们需要提前了解一下调度器的设计原则及一些基本概念来建立对调度器较为宏观的认识。
 
 理解调度器涉及的主要概念包括以下三个：
 
-- G: goroutine。
-- M: worker thread, 或 machine。
-- P: processor，是一种执行 Go 代码被要求资源。M 必须关联一个 P 才能执行 Go 代码，但它可以被阻塞或在一个系统调用中没有关联的 P。
+- G: **G**oroutine，即我们在 Go 程序中使用 `go` 关键字创建的执行体；
+- M: worker thread, 或 **M**achine，即传统意义上进程的线程；
+- P: **P**rocessor，即一种人为抽象的、用于执行 Go 代码被要求资源。只有当 M 关联一个 P 后才能执行 Go 代码，
+但它可以被阻塞或在一个系统调用中没有关联的 P。
 
-## 工作线程的 park/unpark
+运行时调度器的任务是给不同的工作线程 (worker thread) 分发可供运行的（ready-to-run）goroutine。
+我们不妨设每个工作线程总是贪心的执行所有存在的 goroutine，那么当运行进程中存在 n 个线程（M），且
+每个 M 在某个时刻有且只能调度一个 G，则可以证明这两条性质：
 
-调度器的设计需要在保持足够的运行 worker thread 来利用有效硬件并发资源、和 park 运行
-过多的 worker thread 来节约 CPU 能耗之间进行权衡。但是这个权衡并不简单，有以下两点原因：
+1. 当用户态代码创建了 m (m > n) 个 G 时，则必定存在 m-n 个 G 尚未被 M 调度执行；
+2. 当用户态代码创建的 m (m < n) 时，则必定存在 n-m 个 M 不存在正在调度的 G。
 
-1. 调度器状态是有意分布的（具体而言，是一个 per-P 的 work 队列），因此在快速路径
-（fast path）计算出全局断言 (global predicates) 是不可能的。
-2. 为了获得最佳的线程管理，我们必须知晓未来的情况（当一个新的 goroutine 会
-在不久的将来 ready，则不再 park 一个 worker thread）
+这两条性质分别决定了工作线程的暂止（park）和 复始（unpark）。
 
-以下的三种方法不被采纳：
+## 工作线程的暂止和复始
 
-1. 集中式管理所有调度器状态（会将限制可扩展性）
-2. 直接切换 goroutine。也就是说，当我们 ready 一个新的 goroutine 时，让出一个 P，
-   unpark 一个线程并切换到这个线程运行 goroutine。因为 ready 的 goroutine 线程可能
-   在下一个瞬间 out of work，从而导致线程 thrashing（当计算机虚拟内存饱和时会发生
-   thrashing，最终导致分页调度状态不再变化。这个状态会一直持续，知道用户关闭一些运行的
-   应用或者活跃进程释放一些虚拟内存资源），因此我们需要 park 这个线程。同样，我们
-   希望在相同的线程内保存维护 goroutine，这种方式还会摧毁计算的局部性原理。
-3. 任何时候 ready 一个 goroutine 时也存在一个空闲的 P 时，都 unpark 一个额外的线程，
-   但不进行切换。因为额外线程会在没有检查任何 work 的情况下立即 park ，最终导致大量线程的
-   parking/unparking。
+不难发现，调度器的设计需要在不同的方面进行权衡，即既要保持足够的运行工作线程来利用有效硬件并发资源，
+又要暂止过多的工作线程来节约 CPU 能耗。
+如果我们把调度器想象成一个系统，则寻找这个权衡的最优解意味着我们必须求解调度器系统中
+每个 M 的状态，即系统的全局状态。这是非常困难的，考虑以下两个难点：
 
-目前的调度器实现方式为：
+**难点 1**: 调度器状态是一个 per-P 的局部工作队列，在快速路径（fast path）计算出
+全局谓词 (global predicates) 是不可能的。
 
-如果存在一个空闲的 P 并且没有 spinning 状态的工作线程，当 ready 一个 goroutine 时，
-就 unpark 一个额外的线程。如果一个工作线程的本地队列里没有 work ，且在全局运行队列或 netpoller
-中也没有 work，则称一个工作线程被称之为 **spinning** ；spinning 状态由 `sched.nmspinning` 和
-`m.spinning` 表示。
+我们都知道计算的局部性原理，为了利用这一原理，调度器所需调度的 G 都会被放在每个 M 自身对应的本地队列中。
+换句话说，每个 M 都无法直接观察到其他的 M 所具有的 G 的状态。这本质上是一个分布式系统。
+显然，每个 M 都能够连续的获取自身的状态，但当它需要获取整个系统的全局状态时却不容易。
+原因在于我们没有一个能够让所有线程都同步的时钟，换句话说，我们需要依赖屏障来保证多个 M 之间的全局状态同步。
+更进一步，在不使用屏障的情况下，
+利用每个 M 在不同时间中记录的本地状态中计算出调度器的全局状态呢（即快速路径下计算进程集的全局谓词），
+是不可能的。
 
-这种方式下被 unpark 的线程同样也成为 spinning，我们也不对这种线程进行 goroutine 切换，
-因此这类线程最初就是没有 work 的状态。spinning 线程会在 park 前，从 per-P 中运行队列中寻找 work。
-如果一个 spinning 进程发现 work，就会将自身切换出 spinning 状态，并且开始执行。
 
-如果它没有发现 work 则会将自己带 spinning 转状态然后进行 park。
+**难点 2**: 为了获得最佳的线程管理，我们必须获得未来的信息，即当一个新的 G 即将就绪（ready）时，
+则不再暂止一个工作线程。
 
-如果至少有一个 spinning 进程（`sched.nmspinning>1`），则 ready 一个 goroutine 时，
-不会去 unpark 一个新的线程。作为补偿，如果最后一个 spinning 线程发现 work 并且停止 spinning，
-则必须 unpark 一个新的 spinning 线程。这个方法消除了不合理的线程 unpark 峰值，
-且同时保证最终的最大 CPU 并行度利用率。
+举例来说，目前我们的调度器存在 4 个 M，并其中有 3 个 M 正在调度 G，则其中有 1 个 M 处于空闲状态。
+这时为了节约 CPU 能耗，我们希望对这个空闲的 M 进行暂止操作。但是，正当我们完成了对此 M 的暂止操作后，
+用户态代码正好执行到了需要调度一个新的 G 时，我们有不得不将刚刚暂止的 M 重新启动，这无疑增加了开销。
+我们当然有理由希望，如果我们能知晓一个程序生命周期中所有的调度信息，提前知晓什么时候适合对 M 进行暂止自然再好不过了。
+尽管我们能够对程序代码进行静态分析，但这显然是不可能的：考虑一个简单的 Web 服务端程序，每个用户请求
+到达后会创建一个新的 G 交于调度器进行调度。但请求到达是一个随机过程，我们只能预测在给定置信区间下
+可能到达的请求数，而不能完整知晓所有的调度需求。
 
-主要的实现复杂性表现为当进行 spinning->non-spinning 线程转换时必须非常小心。这种转换在提交一个
-新的 goroutine ，并且任何一个部分都需要取消另一个工作线程会发生竞争。如果双方均失败，则会以半静态
-CPU 利用不足而结束。
+那么我们又应该如何设计一个通用型调度器呢？我们很容易想到三种平凡的做法：
 
-ready 一个 goroutine 的通用范式为：
+**设计 1**: 集中式管理所有状态
 
-- 提交一个 goroutine 到 per-P 的局部 work 队列
-- `#StoreLoad-style` write barrier
-- 检查 `sched.nmspinning`
+这种做法自然是不可取的，这将限制调度器的可扩展性。
 
-从 spinning->non-spinning 转换的一般模式为：
+**设计 2**: 每当需要就绪一个 G1 时，都让出一个 P，直接切换出 G2，再复始一个 M 来执行 G2。
 
-- 减少 `nmspinning`
-- `#StoreLoad-style` write barrier
-- 在所有 per-P 任务队列检查新的 work
+因为复始的 M 可能在下一个瞬间又没有调度任务，则会发生线程颠簸（thrashing），进而我们又需要暂止这个线程。
+另一方面，我们希望在相同的线程内保存维护 G，这种方式还会破坏计算的局部性原理。
 
-注意，此种复杂性并不适用于全局任务队列，因为我们不会蠢到当给一个全局队列提交 work 时进行线程 unpark。
+**设计 3**: 任何时候当就绪一个 G、也存在一个空闲的 P 时，都复始一个额外的线程，不进行切换。
+
+因为这个额外线程会在没有检查任何工作的情况下立即进行暂止，最终导致大量 M 的暂止和复始行为，产生大量开销。
+
+基于以上考虑，目前的 Go 的调度器实现方式可以被简单的概括为：
+**如果存在一个空闲的 P 并且没有自旋状态的工作线程 M 时候，当就绪一个 G 时，就复始一个额外的线程 M。**
+
+这句话的信息量较多，我们先来解释一些概念：
+
+一个**自旋（spinning）**工作线程在实现上，自旋状态由 `sched.nmspinning` 和 `m.spinning` 表示。
+
+1. 如果一个工作线程的本地队列、全局运行队列或 netpoller 中均没有工作，则该线程成为自旋线程；
+2. 满足该条件的、被复始的线程也被称为自旋线程。我们也不对这种线程进行 G 切换，因此这类线程最初就是没有工作的状态。
+
+我们可以通过下图来直观理解工作线程的状态转换：
+
+```
+  如果存在空闲的 P，且存在暂止的 M，并就绪 G
+          +------+
+          v      |
+执行 --> 自旋 --> 暂止
+ ^        |
+ +--------+
+  如果发现工作
+```
+
+概括来说，自旋线程会在暂止前，从 per-P 中运行队列中寻找工作。
+如果一个自旋进程发现工作，就会将自身切换出自旋状态，并且开始执行。
+如果它没有发现工作则会将自己进行暂止，带出自旋状态。
+如果至少有一个自旋进程（`sched.nmspinning>1`），则就绪一个 G 时，
+不会去暂止一个新的线程。作为补偿，如果最后一个自旋线程发现工作并且停止自旋时，
+则必须复始一个新的自旋线程。这个方法消除了不合理的线程复始峰值，且同时保证最终的最大 CPU 并行度利用率。
+
+这种设计的实现复杂性表现在进行自旋与费自选线程状态转换时必须非常小心。
+这种转换在提交一个新的 G 时发生竞争，最终导致任何一个工作线程都需要暂止对方。
+如果双方均发生失败，则会以半静态 CPU 利用不足而结束调度。
+
+因此，就绪一个 G 的通用流程为：
+
+- 提交一个 G 到 per-P 的本地工作队列
+- 执行 StoreLoad 风格的写屏障
+- 检查 `sched.nmspinning` 数量
+
+而从自旋到非自旋转换的一般流程为：
+
+- 减少 `nmspinning` 的数量
+- 执行 StoreLoad 风格的写屏障
+- 在所有 per-P 本地任务队列检查新的工作
+
+当然，此种复杂性在全局任务队列是不存在的，因为我们不会笨到当给一个全局队列提交工作时进行线程的复始操作。
 
 ## 主要结构
 
-这里仅仅只是对 M/P/G 以及调度器结构的一个简单陈列，初次阅读此结构会感觉虚无缥缈，不知道在看什么。
+我们这个部分简单来浏览一遍 M/P/G 的结构，初次阅读此结构会感觉虚无缥缈，不知道在看什么。
 事实上，我们更应该直接深入调度器相关的代码来逐个理解每个字段的实际用途。
-这里仅在每个结构后简单讨论其宏观作用，用作后文参考。
+因此这里仅在每个结构后简单讨论其宏观作用，用作后文参考。
+读者可以简单浏览各个字段，为其留下一个初步的印象即可。
 
 ### M 的结构
 
@@ -86,9 +129,9 @@ M 是 OS 线程的实体。
 type m struct {
 	g0      *g     // 用于执行调度指令的 goroutine
 	morebuf gobuf  // morestack 的 gobuf 参数
-	divmod  uint32 // div/mod denominator for arm - known to liblink
+	(...)
 
-	// debugger 不知道的字段
+	// debugger 无法观察到的字段
 	procid        uint64       // 用于 debugger，偏移量不是写死的
 	gsignal       *g           // 处理 signal 的 g
 	goSigStack    gsignalStack // Go 分配的 signal handling 栈
@@ -154,7 +197,7 @@ type m struct {
 
 ### P 的结构
 
-P 只是处理器的抽象，而非处理器本身，它存在的意义在于实现 work-stealing 算法。
+P 只是处理器的抽象，而非处理器本身，它存在的意义在于实现工作窃取（work stealing）算法。
 简单来说，每个 P 持有一个 G 的本地队列。
 
 在没有 P 的情况下，所有的 G 只能放在一个全局的队列中。
@@ -234,8 +277,6 @@ type p struct {
 	gcw gcWork
 
 	// wbBuf 是当前 P 的 GC 的 write barrier 缓存
-	//
-	// TODO: Consider caching this in the running G.
 	wbBuf wbBuf
 
 	runSafePointFn uint32 // 如果为 1, 则在下一个 safe-point 运行 sched.safePointFn
@@ -246,8 +287,8 @@ type p struct {
 
 所以整个结构除去 P 的本地 G 队列外，就是一些统计、调试、GC 辅助的字段了。
 
-此外，P 既然是处理器的抽象，因此在 P 的数组中是绝对不允许发生 false sharing 的，
-这也就是 P 最后有一个 cache line pad 的原因。
+此外，P 既然是处理器的抽象，因此在 P 的数组中是绝对不允许发生假共享（false sharing）的，
+这也就是 P 最后有一个缓存行填充的原因。
 
 ### G 的结构
 
@@ -276,7 +317,7 @@ type g struct {
 	stktopsp       uintptr        // 期望 sp 位于栈顶，用于回溯检查
 	param          unsafe.Pointer // wakeup 唤醒时候传递的参数
 	atomicstatus   uint32
-	stackLock      uint32 // sigprof/scang 锁; TODO: fold in to atomicstatus
+	stackLock      uint32 // sigprof/scang 锁;
 	goid           int64
 	schedlink      guintptr
 	waitsince      int64      // g 阻塞的时间
@@ -285,7 +326,7 @@ type g struct {
 	paniconfault   bool       // 发生 fault panic （不崩溃）的地址
 	preemptscan    bool       // 为 gc 进行 scan 的被强占的 g
 	gcscandone     bool       // g 执行栈已经 scan 了；此此段受 _Gscan 位保护
-	gcscanvalid    bool       // 在 gc 周期开始时为 false；当 G 从上次 scan 后就没有运行时为 true TODO: remove?
+	gcscanvalid    bool       // 在 gc 周期开始时为 false；当 G 从上次 scan 后就没有运行时为 true
 	throwsplit     bool       // 必须不能进行栈分段
 	raceignore     int8       // 忽略 race 检查事件
 	sysblocktraced bool       // StartTrace 已经出发了此 goroutine 的 EvGoInSyscall
@@ -451,7 +492,7 @@ type schedt struct {
 
 在这个结构里，调度器：
 
-- 管理了能够将 G 和 M 进行绑定的 M 链表（队列）
+- 管理了能够将 G 和 M 进行绑定的 M 队列
 - 管理了空闲的 P 链表（队列）
 - 管理了 runnable G 的全局队列
 - 管理了即将进入 runnable 状态的（dead 状态的） G 的队列
@@ -461,8 +502,8 @@ type schedt struct {
 - 管理了需要在 safe point 时执行的函数
 - 统计了(极少发生的)动态调整 P 所花的时间
 
-其中 `muintptr` 本质上就是 `uintptr`，在 [9 unsafe 范式](../9-unsafe) 中我们知道，
-因为栈会发生移动，uintptr 在 safe point 之外是不能被局部持有的，所以 `muintptr` 的使用必须非常小心：
+其中 `muintptr` 本质上就是 `uintptr`，因为 goroutine 栈会发生移动，
+uintptr 在 safe point 之外是不能被局部持有的，所以 `muintptr` 的使用必须非常小心：
 
 ```go
 // muintptr 是一个 *m 指针，不受 GC 的追踪
@@ -485,39 +526,13 @@ goroutine 本身也不是什么黑魔法，运行时只是将其作为一个需�
 同时对调用的参数进行了一份拷贝。
 我们说 P 是处理器自身的抽象，但 P 只是一个纯粹的概念。相反，M 才是运行代码的真身。
 
-值得一提的是，目前的调度器设计总是假设 M 到 P 的访问速度是一样的，即不同的 CPU 核心访问多级缓存、内存的速度一致。
-但真实情况是，假设我们有一个田字形排布的四个物理核心：
-
-```
-           L2 ------------+
-           |              |
-        +--+--+           |
-       L1     L1          |
-       |       |          |
-    +------+------+       |
-    | CPU1 | CPU2 |       |
-    +------+------+       L3
-    | CPU3 | CPU4 |       |
-    +------+------+       |
-       |       |          |
-      L1      L1          |
-        +--+--+           |
-           |              |
-           L2-------------+
-```
-
-
-那么左上角 CPU1 访问 CPU 2 的 L1 缓存，要远比访问 CPU3 或 CPU 4 的 L1 缓存，**在物理上**，快得多。
-这也就是我们所说的 NUMA（non-uniform memory access，非均匀访存）架构。
-
-针对这一点，Go 官方已经提出了具体的调度器设计，但由于工作量巨大，甚至没有提上日程。
+[返回目录](./readme.md) | 上一节 | [下一节 调度器初始化](./init.md)
 
 ## 进一步阅读的参考文献
 
 1. [Scalable Go Scheduler Design Doc](https://golang.org/s/go11sched)
 2. [Go Preemptive Scheduler Design Doc](https://docs.google.com/document/d/1ETuA2IOmnaQ4j81AtTGT40Y4_Jr6_IDASEKg0t0dBR8/edit#heading=h.3pilqarbrc9h)
-3. [NUMA-aware scheduler for Go](https://docs.google.com/document/u/0/d/1d3iI2QWURgDIsSR6G2275vMeQ_X7w-qxM2Vp7iGwwuM/pub)
-4. [Scheduling Multithreaded Computations by Work Stealing](papers/steal.pdf)
+3. [Scheduling Multithreaded Computations by Work Stealing](papers/steal.pdf)
 
 ## 许可
 

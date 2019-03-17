@@ -11,7 +11,7 @@
 | 快速路径   |                | Fast Path             |           |      |
 | 自由表     |                | Free List             |           |      |
 | 垃圾回收   |                | Garbage  Collection   | GC        |      |
-| 全局断言   |                | Global Predicates     |           |      |
+| 全局谓词   |                | Global Predicates     |           |      |
 | Goroutine  |                | Goroutine             | G/g       |      |
 | 大对象     |                | Large Object          |           |      |
 | 堆         |                | Heap                  |           |      |
@@ -45,8 +45,8 @@
 | 三色抽象   |                | Tricolour Abstraction |           |      |
 | 序言       |                | Prologue              |           |      |
 | 收尾       |                | Epilogue              |           |      |
-|            |                |                       |           |      |
-|            |                |                       |           |      |
+| 自旋       |                | Spinning              |           |      |
+| 非自旋     |                | Non-spinning          |           |      |
 |            |                |                       |           |      |
 |            |                |                       |           |      |
 |            |                |                       |           |      |

@@ -736,6 +736,8 @@ func oneNewExtraM() {
 当然，信号处理的功能远不止如此，利用此信号机制还可能实现抢占式调度，我们在 [调度器: 协作与抢占](preemptive.md)
 中再来讨论这一机制。
 
+[返回目录](./readme.md) | [上一节](./thread.md) | [下一节 执行栈管理](./stack.md)
+
 ## 进一步阅读的参考文献
 
 3. [Signal(Unix)](https://en.wikipedia.org/wiki/Signal_(IPC))
