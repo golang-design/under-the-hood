@@ -719,7 +719,13 @@ func scanstack(gp *g, gcw *gcWork) {
 	}
 	gentraceback(^uintptr(0), ^uintptr(0), 0, gp, 0, nil, 0x7fffffff, scanframe, nil, 0)
 	tracebackdefers(gp, scanframe, nil)
-
+	for d := gp._defer; d != nil; d = d.link {
+		// tracebackdefers above does not scan the func value, which could
+		// be a stack allocated closure. See issue 30453.
+		if d.fn != nil {
+			scanblock(uintptr(unsafe.Pointer(&d.fn)), sys.PtrSize, &oneptrmask[0], gcw, &state)
+		}
+	}
 	// Find and scan all reachable stack objects.
 	state.buildIndex()
 	for {
