@@ -321,13 +321,13 @@ func main() {
 
 Go 官方其实很早（1.0 以前）就已经意识到了这个问题，但在 Go 1.2 时增加了上文提到的在函数序言部分增加抢占标记后，
 此问题便被搁置，直到越来越多的用户提交并报告此问题，在 Go 1.5 前后，
-Go 团队希望仅解决这种由密集循环导致的无法抢占的问题 [2]，于是尝试通过协作式 loop 循环抢占，通过编译器辅助的方式，插入抢占检查指令，
+Go 团队希望仅解决这种由密集循环导致的无法抢占的问题 [CELMENTS, 2015]，于是尝试通过协作式 loop 循环抢占，通过编译器辅助的方式，插入抢占检查指令，
 与流程图回边（指节点被访问过但其子节点尚未访问完毕）安全点（GC root 状态均已知且堆中对象是一致的）的方式进行解决，
 尽管此举能为抢占带来显著的提升，但是在一个循环中引入分支显然会降低性能。
-尽管随后官方对这个方法进行了改进，仅在插入了一条 TESTB 指令 [3]，在完全没有分支以及寄存器压力的情况下，
+尽管随后官方对这个方法进行了改进，仅在插入了一条 TESTB 指令 [CHASE et al., 2017]，在完全没有分支以及寄存器压力的情况下，
 仍然造成了几何平均 7.8% 的性能损失。
 
-终于在 Go 1.10 后 [1]，官方进一步提出的解决方案，希望使用每个指令与执行栈和寄存器的映射，
+终于在 Go 1.10 后 [CELMENTS, 2019]，官方进一步提出的解决方案，希望使用每个指令与执行栈和寄存器的映射，
 通过记录足够多的 metadata 来从协作式调度正式变更为到抢占调度。
 
 我们知道现代操作系统的调度器多为抢占式调度，其实现方式通过硬件终端来支持线程的切换，进而能安全的保存运行上下文。
@@ -351,9 +351,9 @@ TODO:
 
 ## 进一步阅读的参考文献
 
-1. [Proposal: Non-cooperative goroutine preemption](https://github.com/golang/proposal/blob/master/design/24543-non-cooperative-preemption.md)
-2. [runtime: tight loops should be preemptible](https://github.com/golang/go/issues/10958)
-3. [cmd/compile: loop preemption with "fault branch" on amd64](https://go-review.googlesource.com/c/go/+/43050/)
+- [CELMENTS, 2019] [Proposal: Non-cooperative goroutine preemption](https://github.com/golang/proposal/blob/master/design/24543-non-cooperative-preemption.md)
+- [CELMENTS, 2015] [runtime: tight loops should be preemptible](https://github.com/golang/go/issues/10958)
+- [CHASE et al., 2017] [cmd/compile: loop preemption with "fault branch" on amd64](https://go-review.googlesource.com/c/go/+/43050/)
 
 ## 许可
 

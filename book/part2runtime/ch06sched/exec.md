@@ -1665,9 +1665,9 @@ TEXT runtime·exitThread(SB),NOSPLIT,$0-8
 
 ## 进一步阅读的参考文献
 
-- [runtime: terminate locked OS thread if its goroutine exits](https://github.com/golang/go/issues/20395)
-- [runtime: let idle OS threads exit](https://github.com/golang/go/issues/14592)
-- [runtime: scheduler is slow when goroutines are frequently woken](https://github.com/golang/go/issues/18237)
+- [RGOOCH et al., 2017] [runtime: terminate locked OS thread if its goroutine exits](https://github.com/golang/go/issues/20395)
+- [BRINAMARIO et al., 2016] [runtime: let idle OS threads exit](https://github.com/golang/go/issues/14592)
+- [PHILHOFER et al., 2016] [runtime: scheduler is slow when goroutines are frequently woken](https://github.com/golang/go/issues/18237)
 
 ## 许可
 

@@ -421,9 +421,6 @@ okarg:
 	})
 }
 
-// Mark KeepAlive as noinline so that it is easily detectable as an intrinsic.
-//go:noinline
-
 // KeepAlive 将其参数标记为当前可达。
 // 这保证了对象在调用 KeepAlive 之前不会被释放，且它的 finalizer 不会运行，
 //

@@ -45,7 +45,7 @@ TODO:
 
 ## 进一步阅读的参考文献
 
-1. [NUMA-aware scheduler for Go](https://docs.google.com/document/u/0/d/1d3iI2QWURgDIsSR6G2275vMeQ_X7w-qxM2Vp7iGwwuM/pub)
+- [VYUKOV, 2014] [Vyukov, Dmitry. NUMA-aware scheduler for Go. 2014](https://docs.google.com/document/u/0/d/1d3iI2QWURgDIsSR6G2275vMeQ_X7w-qxM2Vp7iGwwuM/pub)
 
 ## 许可
 

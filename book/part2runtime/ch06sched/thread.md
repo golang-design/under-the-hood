@@ -30,7 +30,7 @@ func lockOSThread() {
 因为整个运行时只有在 `runtime.main` 调用 `main.init` 、和 cgo 的 C 调用 Go 时候才会使用，
 其中 `main.init` 其实也是为了 cgo 里 Go 调用某些 C 图形库时需要主线程支持才使用的。
 因此不需要做过多复杂的处理，直接在 m 上进行计数
-（计数的原因在于安全性和始终上的一些处理，防止用户态代码误用，例如只调用了 Unlock 而没有先调用 Lock [3]），
+（计数的原因在于安全性和始终上的一些处理，防止用户态代码误用，例如只调用了 Unlock 而没有先调用 Lock [MILLS et al., 2017]），
 而后调用 `dolockOSThread` 将 g 与 m 互相锁定：
 
 ```go
@@ -331,11 +331,11 @@ LockOSThread 并不是什么优秀的特性，相反它却给 Go 运行时调度
 
 ## 进一步阅读的参考文献
 
-1. [runtime: big performance penalty with runtime.LockOSThread](https://github.com/golang/go/issues/21827)
-2. [runtime: unexpectedly large slowdown with runtime.LockOSThread](https://github.com/golang/go/issues/18023)
-3. [proposal: runtime: pair LockOSThread, UnlockOSThread calls](https://github.com/golang/go/issues/20458)
-4. [runtime: terminate locked OS thread if its goroutine exits](https://github.com/golang/go/issues/20395)
-5. [runtime: let idle OS threads exit](https://github.com/golang/go/issues/14592)
+- [LOPEZ et al., 2016] [runtime: let idle OS threads exit](https://github.com/golang/go/issues/14592)
+- [MILLS et al., 2017] [proposal: runtime: pair LockOSThread, UnlockOSThread calls](https://github.com/golang/go/issues/20458)
+- [NAVYTUX et al., 2017] [runtime: big performance penalty with runtime.LockOSThread](https://github.com/golang/go/issues/21827)
+- [RGOOCH et al., 2017] [runtime: terminate locked OS thread if its goroutine exits](https://github.com/golang/go/issues/20395)
+- [TAYLOR et al., 2016] [runtime: unexpectedly large slowdown with runtime.LockOSThread](https://github.com/golang/go/issues/18023)
 
 ## 许可
 

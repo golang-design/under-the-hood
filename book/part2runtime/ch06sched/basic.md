@@ -530,9 +530,9 @@ goroutine 本身也不是什么黑魔法，运行时只是将其作为一个需�
 
 ## 进一步阅读的参考文献
 
-1. [Scalable Go Scheduler Design Doc](https://golang.org/s/go11sched)
-2. [Go Preemptive Scheduler Design Doc](https://docs.google.com/document/d/1ETuA2IOmnaQ4j81AtTGT40Y4_Jr6_IDASEKg0t0dBR8/edit#heading=h.3pilqarbrc9h)
-3. [Scheduling Multithreaded Computations by Work Stealing](papers/steal.pdf)
+- [VYUKOV, 2012] [Vyukov, Dmitry. Scalable Go Scheduler Design Doc, 2012](https://golang.org/s/go11sched)
+- [VYUKOV, 2013] [Vyukov, Dmitry. Go Preemptive Scheduler Design Doc, 2013](https://docs.google.com/document/d/1ETuA2IOmnaQ4j81AtTGT40Y4_Jr6_IDASEKg0t0dBR8/edit#heading=h.3pilqarbrc9h)
+- [ROBERT et al., 1999] [Robert D. Blumofe and Charles E. Leiserson. 1999. Scheduling multithreaded computations by work stealing. J. ACM 46, 5 (September 1999), 720-748.](https://dl.acm.org/citation.cfm?id=324234)
 
 ## 许可
 
