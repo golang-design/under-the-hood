@@ -347,7 +347,7 @@ TODO: 中断信号 SIGURG, go1.13，解释初期提案的基本想法是通过�
 TODO:
 
 
-[返回目录](./readme.md) | [上一节](./stack.md) | [下一节 其他杂项](./note.md)
+[返回目录](./readme.md) | [上一节](./stack.md) | [下一节 同步机制](./sync.md)
 
 ## 进一步阅读的参考文献
 

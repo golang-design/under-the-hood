@@ -1,4 +1,4 @@
-# note 与 (rw)mutex
+# 调度器：同步机制
 
 [TOC]
 

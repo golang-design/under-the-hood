@@ -8,7 +8,7 @@
 - [6.6 信号处理机制](./signal.md)
 - [6.7 执行栈管理](./stack.md)
 - [6.8 协作与抢占](./preemptive.md)
-- [6.9 其他杂项](./note.md)
+- [6.9 同步机制](./sync.md)
 - [6.10 过去、现在与未来](./history.md)
 
 > _Simplicity is complicated._ 

@@ -53,7 +53,7 @@ Go 源码研究 | 当前基于 `go1.12`
 - [6.6 信号处理机制](book/part2runtime/ch06sched/signal.md)
 - [6.7 执行栈管理](book/part2runtime/ch06sched/stack.md)
 - [6.8 协作与抢占](book/part2runtime/ch06sched/preemptive.md)
-- [6.9 其他杂项](book/part2runtime/ch06sched/note.md)
+- [6.9 同步机制](book/part2runtime/ch06sched/sync.md)
 - [6.10 过去、现在与未来](book/part2runtime/ch06sched/history.md)
 
 #### [第七章 内存分配器](book/part2runtime/ch07alloc)
@@ -88,10 +88,10 @@ Go 源码研究 | 当前基于 `go1.12`
 
 <!-- - [运行时编程综述](gosrc/runtime/README.md) -->
 
-- [参与运行时的系统调用: Linux](book/part2runtime/ch10abi/syscall-linux.md)
-- [参与运行时的系统调用: Darwin](book/part2runtime/ch10abi/syscall-darwin.md)
+- [参与运行时的系统调用（Linux 篇）](book/part2runtime/ch10abi/syscall-linux.md)
+- [参与运行时的系统调用（Darwin 篇）](book/part2runtime/ch10abi/syscall-darwin.md)
+- [参与运行时的系统调用（WebAssembly 篇）](book/part2runtime/ch10abi/syscall-wasm.md)
 - [cgo](book/part2runtime/ch10abi/cgo.md)
-- [WebAssembly](book/part2runtime/ch10abi/wasm.md)
 
 ### [第三部分：编译系统](book/part3compile)
 

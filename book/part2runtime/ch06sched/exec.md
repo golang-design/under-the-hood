@@ -120,7 +120,7 @@ TEXT runtime·asminit(SB),NOSPLIT,$0-0
 	RET
 ```
 
-关于运行时信号处理，以及 note 通知机制，我们分别在 [信号处理与 os/signal](./signal.md) 和 [note 与 (rw)mutex](./note.md) 详细分析。
+关于运行时信号处理，以及 note 同步机制，我们分别在 [信号处理与 os/signal](./signal.md) 和 [同步机制](./sync.md) 详细分析。
 
 ### M/P 的绑定
 
