@@ -802,8 +802,8 @@ func syncadjustsudogs(gp *g, used uintptr, adjinfo *adjustinfo) uintptr {
 	return sgsize
 }
 
-// Copies gp's stack to a new stack of a different size.
-// Caller must have changed gp status to Gcopystack.
+// 复制 gp 的执行栈到一个新的具有不同大小的栈上
+// 调用方必须将 gp 的状态切换到 Gcopystack 上
 //
 // If sync is true, this is a self-triggered stack growth and, in
 // particular, no other G may be writing to gp's stack (e.g., via a
@@ -819,7 +819,7 @@ func copystack(gp *g, newsize uintptr, sync bool) {
 	}
 	used := old.hi - gp.sched.sp
 
-	// allocate new stack
+	// 分配新的栈
 	new := stackalloc(uint32(newsize))
 	if stackPoisonCopy != 0 {
 		fillstack(new, 0xfd)
@@ -828,12 +828,12 @@ func copystack(gp *g, newsize uintptr, sync bool) {
 		print("copystack gp=", gp, " [", hex(old.lo), " ", hex(old.hi-used), " ", hex(old.hi), "]", " -> [", hex(new.lo), " ", hex(new.hi-used), " ", hex(new.hi), "]/", newsize, "\n")
 	}
 
-	// Compute adjustment.
+	// 计算调整的幅度
 	var adjinfo adjustinfo
 	adjinfo.old = old
 	adjinfo.delta = new.hi - old.hi
 
-	// Adjust sudogs, synchronizing with channel ops if necessary.
+	// 调整 sudogs, 必要时与 channel 操作同步
 	ncopy := used
 	if sync {
 		adjustsudogs(gp, &adjinfo)
@@ -851,7 +851,7 @@ func copystack(gp *g, newsize uintptr, sync bool) {
 		ncopy -= syncadjustsudogs(gp, used, &adjinfo)
 	}
 
-	// Copy the stack (or the rest of it) to the new location
+	// 将原来的栈的内容复制到新的位置
 	memmove(unsafe.Pointer(new.hi-ncopy), unsafe.Pointer(old.hi-ncopy), ncopy)
 
 	// Adjust remaining structures that have pointers into stacks.
@@ -864,16 +864,16 @@ func copystack(gp *g, newsize uintptr, sync bool) {
 		adjinfo.sghi += adjinfo.delta
 	}
 
-	// Swap out old stack for new one
+	// 为新栈置换出旧栈
 	gp.stack = new
-	gp.stackguard0 = new.lo + _StackGuard // NOTE: might clobber a preempt request
+	gp.stackguard0 = new.lo + _StackGuard // 注意: 可能覆盖（clobber）一个抢占请求
 	gp.sched.sp = new.hi - used
 	gp.stktopsp += adjinfo.delta
 
-	// Adjust pointers in the new stack.
+	// 在新栈重调整指针
 	gentraceback(^uintptr(0), ^uintptr(0), 0, gp, 0, nil, 0x7fffffff, adjustframe, noescape(unsafe.Pointer(&adjinfo)), 0)
 
-	// free old stack
+	// 释放旧栈
 	if stackPoisonCopy != 0 {
 		fillstack(old, 0xfc)
 	}
@@ -889,7 +889,7 @@ func round2(x int32) int32 {
 	return 1 << s
 }
 
-// Called from runtime·morestack when more stack is needed.
+// 在需要更多栈时候从 runtime·morestack 调用。
 // Allocate larger stack and relocate to new stack.
 // Stack growth is multiplicative, for constant amortized cost.
 //
@@ -974,7 +974,7 @@ func newstack() {
 	}
 	sp := gp.sched.sp
 	if sys.ArchFamily == sys.AMD64 || sys.ArchFamily == sys.I386 || sys.ArchFamily == sys.WASM {
-		// The call to morestack cost a word.
+		// 到 morestack 的调用会消耗一个字
 		sp -= sys.PtrSize
 	}
 	if stackDebug >= 1 || sp < gp.stack.lo {
@@ -1018,34 +1018,33 @@ func newstack() {
 			// This clears gcscanvalid.
 			casgstatus(gp, _Gwaiting, _Grunning)
 			gp.stackguard0 = gp.stack.lo + _StackGuard
-			gogo(&gp.sched) // never return
+			gogo(&gp.sched) // 用不返回
 		}
 
 		// Act like goroutine called runtime.Gosched.
 		casgstatus(gp, _Gwaiting, _Grunning)
-		gopreempt_m(gp) // never return
+		gopreempt_m(gp) // 永不返回
 	}
 
-	// Allocate a bigger segment and move the stack.
+	// 分配一个更大的段，并对栈进行移动
 	oldsize := gp.stack.hi - gp.stack.lo
-	newsize := oldsize * 2
+	newsize := oldsize * 2 // 两倍于原来的大小
 	if newsize > maxstacksize {
 		print("runtime: goroutine stack exceeds ", maxstacksize, "-byte limit\n")
 		throw("stack overflow")
 	}
 
-	// The goroutine must be executing in order to call newstack,
-	// so it must be Grunning (or Gscanrunning).
+	// goroutine 必须是正在执行过程中才来调用 newstack
+	// 所以这个状态一定是 Grunning 或 Gscanrunning
 	casgstatus(gp, _Grunning, _Gcopystack)
 
-	// The concurrent GC will not scan the stack while we are doing the copy since
-	// the gp is in a Gcopystack status.
+	// 因为 gp 处于 Gcopystack 状态，当我们对栈进行复制时并发 GC 不会扫描此栈
 	copystack(gp, newsize, true)
 	if stackDebug >= 1 {
 		print("stack grow done\n")
 	}
 	casgstatus(gp, _Gcopystack, _Grunning)
-	gogo(&gp.sched)
+	gogo(&gp.sched) // 继续执行
 }
 
 //go:nosplit

@@ -483,7 +483,7 @@ type schedt struct {
 	safePointWait int32
 	safePointNote note
 
-	profilehz int32 // cpu profiling rate
+	(...)
 
 	procresizetime int64 // 上一次修改 gomaxprocs 的时间 nanotime()
 	totaltime      int64 // ∫gomaxprocs dt 在 procresizetime 的积分（总和）
@@ -506,12 +506,9 @@ type schedt struct {
 uintptr 在 safe point 之外是不能被局部持有的，所以 `muintptr` 的使用必须非常小心：
 
 ```go
-// muintptr 是一个 *m 指针，不受 GC 的追踪
-//
+// muintptr 是一个不受 GC 的追踪的 *m 指针
 // 因为我们要释放 M，所以有一些在 muintptr 上的额外限制
-//
 // 1. 永不在 safe point 之外局部持有一个 muintptr
-//
 // 2. 任何堆上的 muintptr 必须被 M 自身持有，进而保证它不会在最后一个 *m 指针被释放时使用
 type muintptr uintptr
 ```
@@ -530,9 +527,9 @@ goroutine 本身也不是什么黑魔法，运行时只是将其作为一个需�
 
 ## 进一步阅读的参考文献
 
+- [ROBERT et al., 1999] [Robert D. Blumofe and Charles E. Leiserson. 1999. Scheduling multithreaded computations by work stealing. J. ACM 46, 5 (September 1999), 720-748.](https://dl.acm.org/citation.cfm?id=324234)
 - [VYUKOV, 2012] [Vyukov, Dmitry. Scalable Go Scheduler Design Doc, 2012](https://golang.org/s/go11sched)
 - [VYUKOV, 2013] [Vyukov, Dmitry. Go Preemptive Scheduler Design Doc, 2013](https://docs.google.com/document/d/1ETuA2IOmnaQ4j81AtTGT40Y4_Jr6_IDASEKg0t0dBR8/edit#heading=h.3pilqarbrc9h)
-- [ROBERT et al., 1999] [Robert D. Blumofe and Charles E. Leiserson. 1999. Scheduling multithreaded computations by work stealing. J. ACM 46, 5 (September 1999), 720-748.](https://dl.acm.org/citation.cfm?id=324234)
 
 ## 许可
 

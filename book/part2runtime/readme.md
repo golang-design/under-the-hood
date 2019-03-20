@@ -6,6 +6,8 @@
 - [第九章 调试](./ch09debug)
 - [第十章 兼容与契约](./ch10abi)
 
+[返回目录](../../readme.md) | [阅读本部分](./ch06sched)
+
 ## 许可
 
 [Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

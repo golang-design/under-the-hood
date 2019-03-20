@@ -11,11 +11,13 @@
 
 ### `mstart` 与 `mstart1`
 
+在启动前，我们在 [调度器: 初始化](./init.md) 中已经了解到 g 的栈边界是还没有初始化的。
+因此我们得在开始前计算栈边界，因此在 `mstart1` 之前，就是一些确定执行栈边界的工作。
+
+当 `mstart1` 结束后，会执行 `mexit` 退出 m。
+
 ```go
-// 启动 M
-//
 // 该函数不能进行栈分段，因为我们甚至还没有设置栈的边界
-//
 // 它可能会在 STW 阶段运行（因为它还没有 P），所以 write barrier 也是不允许的
 //
 //go:nosplit
@@ -55,11 +57,6 @@ func mstart() {
 	mexit(osStack)
 }
 ```
-
-在启动前，我们在 [调度器: 初始化](./init.md) 中已经了解到 g 的栈边界是还没有初始化的。
-因此我们得在开始前计算栈边界，因此在 `mstart1` 之前，就是一些确定执行栈边界的工作。
-
-当 `mstart1` 结束后，会执行 `mexit` 退出 m。
 
 再来看 `mstart1`。
 
@@ -128,11 +125,8 @@ m 与 p 的绑定过程只是简单的将 p 链表中的 p ，保存到 m 中的
 绑定前，P 的状态一定是 `_Pidle`，绑定后 P 的状态为 `_Prunning`。
 
 ```go
-// 将 p 关联到当前的 m
-//
 // 因为该函数会立即 acquire P，因此即使调用方不允许 write barrier，
 // 此函数仍然允许 write barrier。
-//
 //go:yeswritebarrierrec
 func acquirep(_p_ *p) {
 	// 此处不允许 write barrier
@@ -182,11 +176,11 @@ func (pp *puintptr) set(p *p) { *pp = puintptr(unsafe.Pointer(p)) }
 func (mp *muintptr) set(m *m) { *mp = muintptr(unsafe.Pointer(m)) }
 ```
 
-### M 的 park/unpark
+### M 的暂止和复始
 
-无论出于什么原因，当 m 需要被 park 时，可能（因为还有其他 park M 的方法）会执行该调用。
-此调用会将 m 进行 park，并阻塞到它被 unpark 时。
-这一过程就是工作线程的 park/unpark。
+无论出于什么原因，当 m 需要被暂止时，可能（因为还有其他暂止 M 的方法）会执行该调用。
+此调用会将 m 进行暂止，并阻塞到它被复始时。
+这一过程就是工作线程的暂止和复始。
 
 ```go
 // 停止当前 m 的执行，直到新的 work 有效
@@ -204,26 +198,26 @@ func stopm() {
 		throw("stopm spinning")
 	}
 
-	// 将 m 放回到 空闲列表中，因为我们马上就要 park 了
+	// 将 m 放回到 空闲列表中，因为我们马上就要暂止了
 	lock(&sched.lock)
 	mput(_g_.m)
 	unlock(&sched.lock)
 
-	// park 当前的 M，在此阻塞，直到被唤醒 unpark
+	// 暂止当前的 M，在此阻塞，直到被唤醒
 	notesleep(&_g_.m.park)
 
-	// 清除 unpark 的 note
+	// 清除暂止的 note
 	noteclear(&_g_.m.park)
 
-	// 此时已经被 unpark，说明有任务要执行
+	// 此时已经被复始，说明有任务要执行
 	// 立即 acquire P
 	acquirep(_g_.m.nextp.ptr())
 	_g_.m.nextp = 0
 }
 ```
 
-它的流程也非常简单，将 m 放回至空闲列表中，而后使用 note 注册一个 park 通知，
-阻塞到它重新被 unpark。
+它的流程也非常简单，将 m 放回至空闲列表中，而后使用 note 注册一个暂止通知，
+阻塞到它重新被复始。
 
 ## 核心调度
 
@@ -301,9 +295,9 @@ top:
 	// 这个时候一定取到 g 了
 
 	if _g_.m.spinning {
-		// 如果 m 是 spinning 状态，则
-		//   1. 从 spinning -> non-spinning
-		//   2. 在没有 spinning 的 m 的情况下，再多创建一个新的 spinning m
+		// 如果 m 是自旋状态，则
+		//   1. 从自旋到非自旋
+		//   2. 在没有自旋状态的 m 的情况下，再多创建一个新的自旋状态的 m
 		resetspinning()
 	}
 
@@ -753,8 +747,8 @@ func runqget(_p_ *p) (gp *g, inheritTime bool) {
 ```
 
 偷取（steal）的实现是一个非常复杂的过程。这个过程来源于我们
-需要仔细的思考什么时候对调度器进行加锁、什么时候对 m 进行 park、
-什么时候将 m 从 spinning 向 non-spinning 切换等等。
+需要仔细的思考什么时候对调度器进行加锁、什么时候对 m 进行暂止、
+什么时候将 m 从自旋向非自旋切换等等。
 
 ```go
 // 寻找一个可运行的 goroutine 来执行。
@@ -768,7 +762,7 @@ func findrunnable() (gp *g, inheritTime bool) {
 top:
 	_p_ := _g_.m.p.ptr()
 
-	// 如果在 gc，则 park 当前 m，直到被 unpark 后回到 top
+	// 如果在 gc，则暂止当前 m，直到复始后回到 top
 	if sched.gcwaiting != 0 {
 		gcstopm()
 		goto top
@@ -825,14 +819,14 @@ top:
 		// 它们均没有提交到本地运行队列，因此偷取没有任何意义。
 		goto stop
 	}
-	// 如果 spinning 状态下 m 的数量 >= busy 状态下 p 的数量，直接进入阻塞
+	// 如果自旋状态下 m 的数量 >= busy 状态下 p 的数量，直接进入阻塞
 	// 该步骤是有必要的，它用于当 GOMAXPROCS>>1 时但程序的并行机制很慢时
 	// 昂贵的 CPU 消耗。
 	if !_g_.m.spinning && 2*atomic.Load(&sched.nmspinning) >= procs-atomic.Load(&sched.npidle) {
 		goto stop
 	}
 
-	// 如果 m 是 non-spinning 状态，切换为 spinning
+	// 如果 m 是非自旋状态，切换为自旋
 	if !_g_.m.spinning {
 		_g_.m.spinning = true
 		atomic.Xadd(&sched.nmspinning, 1)
@@ -841,7 +835,7 @@ top:
 	for i := 0; i < 4; i++ {
 		// 随机偷
 		for enum := stealOrder.start(fastrand()); !enum.done(); enum.next() {
-			// 已经进入了 GC? 回到顶部，park 当前的 m
+			// 已经进入了 GC? 回到顶部，暂止当前的 m
 			if sched.gcwaiting != 0 {
 				goto top
 			}
@@ -880,7 +874,7 @@ stop:
 
 	// 准备归还 p，对调度器加锁
 	lock(&sched.lock)
-	// 进入了 gc，回到顶部 park m
+	// 进入了 gc，回到顶部暂止 m
 	if sched.gcwaiting != 0 || _p_.runSafePointFn != 0 {
 		unlock(&sched.lock)
 		goto top
@@ -906,15 +900,14 @@ stop:
 	unlock(&sched.lock)
 
 	// 这里要非常小心:
-	// 线程从 spinning 到 non-spinning 状态的转换，可能与新 goroutine 的提交同时发生。
+	// 线程从自旋到非自旋状态的转换，可能与新 goroutine 的提交同时发生。
 	// 我们必须首先丢弃 nmspinning，然后再次检查所有的 per-P 队列（并在期间伴随 #StoreLoad 内存屏障）
 	// 如果反过来，其他线程可以在我们检查了所有的队列、然后提交一个 goroutine、再丢弃了 nmspinning
-	// 进而导致无法 unpark 一个线程来运行那个 goroutine 了。
+	// 进而导致无法复始一个线程来运行那个 goroutine 了。
 	// 如果我们发现下面的新 work，我们需要恢复 m.spinning 作为重置的信号，
-	// 以取消 park 新的工作线程（因为可能有多个 starving 的 goroutine）。
+	// 以取消暂止新的工作线程（因为可能有多个 starving 的 goroutine）。
 	// 但是，如果在发现新 work 后我们也观察到没有空闲 P，可以暂停当前线程
-	// 因为系统已满载，因此不需要 spinning 线程。
-	// 请参考此文件顶部 "工作线程 parking/unparking" 的注释
+	// 因为系统已满载，因此不需要自旋线程。
 	wasSpinning := _g_.m.spinning
 	if _g_.m.spinning {
 		_g_.m.spinning = false
@@ -938,9 +931,9 @@ stop:
 				// 绑定 p
 				acquirep(_p_)
 
-				// 如果此前已经被切换为 spinning
+				// 如果此前已经被切换为自旋
 				if wasSpinning {
-					// 重新切换回 non-spinning
+					// 重新切换回非自旋
 					_g_.m.spinning = true
 					atomic.Xadd(&sched.nmspinning, 1)
 				}
@@ -1002,7 +995,7 @@ stop:
 	}
 
 	// 真的什么都没找到
-	// park 当前的 m
+	// 暂止当前的 m
 	stopm()
 	goto top
 }
@@ -1010,27 +1003,27 @@ stop:
 
 在 `findrunnable` 这个过程中，我们：
 
-- 首先检查是是否正在进行 GC，如果是则 park 当前的 m 并阻塞休眠；
+- 首先检查是是否正在进行 GC，如果是则暂止当前的 m 并阻塞休眠；
 - 尝试从本地队列中取 g，如果取到，则直接返回，否则继续从全局队列中找 g，如果找到则直接返回；
 - 检查是否存在 poll 网络的 g，如果有，则直接返回；
 - 如果此时仍然无法找到 g，则从其他 P 的本地队列中偷取；
 - 从其他 P 本地队列偷取的工作会执行四轮，在前两轮中只会查找 runnable 队列，后两轮则会优先查找 ready 队列，如果找到，则直接返回；
-- 所有的可能性都尝试过了，在准备 park m 之前，还要进行额外的检查；
+- 所有的可能性都尝试过了，在准备暂止 m 之前，还要进行额外的检查；
 - 首先检查此时是否是 GC mark 阶段，如果是，则直接返回 mark 阶段的 g；
 - 如果仍然没有，则对当前的 p 进行快照，准备对调度器进行加锁；
 - 当调度器被锁住后，我们仍然还需再次检查这段时间里是否有进入 GC，如果已经进入了 GC，则回到第一步，阻塞 m 并休眠；
 - 当调度器被锁住后，如果我们又在全局队列中发现了 g，则直接返回；
 - 当调度器被锁住后，我们彻底找不到任务了，则归还释放当前的 P，将其放入 idle 链表中，并解锁调度器；
-- 当 M/P 已经解绑后，我们需要将 m 的状态切换出 spinning 状态，并减少 nmspinning；
+- 当 M/P 已经解绑后，我们需要将 m 的状态切换出自旋状态，并减少 nmspinning；
 - 此时我们仍然需要重新检查所有的队列；
 - 如果此时我们发现有一个 P 队列不空，则立刻尝试获取一个 P，如果获取到，则回到第一步，重新执行偷取工作，如果取不到，则说明系统已经满载，无需继续进行调度；
 - 同样，我们还需要再检查是否有 GC mark 的 g 出现，如果有，获取 P 并回到第一步，重新执行偷取工作；
 - 同样，我们还需要再检查是否存在 poll 网络的 g，如果有，则直接返回；
-- 终于，我们什么也没找到，park 当前的 m 并阻塞休眠。
+- 终于，我们什么也没找到，暂止当前的 m 并阻塞休眠。
 
 #### M 的唤醒
 
-我们已经看到了 M 的 park/unpark 过程，那么 M 的 spinning 转换 non-spinning 的过程如何发生？
+我们已经看到了 M 的暂止和复始的过程，那么 M 的自旋到非自旋的过程如何发生？
 
 ```go
 func resetspinning() {
@@ -1053,7 +1046,7 @@ func resetspinning() {
 // 尝试将一个或多个 P 唤醒来执行 G
 // 当 G 可能运行时（newproc, ready）时调用该函数
 func wakep() {
-	// 对 spinning 线程保守一些，必要时只增加一个
+	// 对自旋线程保守一些，必要时只增加一个
 	// 如果失败，则立即返回
 	if !atomic.Cas(&sched.nmspinning, 0, 1) {
 		return
@@ -1158,7 +1151,7 @@ func newm(fn func(), _p_ *p) {
 		newmHandoff.newm.set(mp)
 		if newmHandoff.waiting {
 			newmHandoff.waiting = false
-			// 唤醒 m, spinning -> non-spinning
+			// 唤醒 m, 自旋到非自旋
 			notewakeup(&newmHandoff.wake)
 		}
 		unlock(&newmHandoff.lock)
@@ -1493,7 +1486,7 @@ func mexit(osStack bool) {
 		sched.nmfreed++
 		checkdead()
 		unlock(&sched.lock)
-		notesleep(&m.park) // park 主线程，在此阻塞
+		notesleep(&m.park) // 暂止主线程，在此阻塞
 		throw("locked m0 woke up")
 	}
 
@@ -1517,7 +1510,6 @@ func mexit(osStack bool) {
 	throw("m not found in allm")
 found:
 
-	// 
 	if !osStack {
 		// Delay reaping m until it's done with the stack.
 		//
@@ -1583,7 +1575,7 @@ TEXT runtime·exitThread(SB),NOSPLIT,$0-8
 	JMP	0(PC)
 ```
 
-从实现上可以看出，只有 linux 中才可能正常的退出一个栈，而 darwin 只能保持 park 了。
+从实现上可以看出，只有 linux 中才可能正常的退出一个栈，而 darwin 只能保持暂止了。
 而如果是主线程，则会始终保持 park。
 
 ## 总结

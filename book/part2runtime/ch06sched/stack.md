@@ -364,10 +364,13 @@ TODO: alloc
 
 ## 连续栈
 
-早年的 Go 运行时使用分段栈的机制，即当一个 goroutine 的执行栈溢出时，栈的扩张操作是在另一个栈上进行的，这两个栈彼此没有连续。
+早年的 Go 运行时使用分段栈的机制，即当一个 goroutine 的执行栈溢出时，
+栈的扩张操作是在另一个栈上进行的，这两个栈彼此没有连续。
 这种设计的缺陷很容易破坏缓存的局部性原理，从而降低程序的运行时性能。
-因此现在 Go 运行时开始使用连续栈机制，当一个执行栈发生溢出时，新建一个两倍于原栈大小的新栈，再将原栈整个拷贝到新栈上。
-从而整个栈总是连续的。栈的拷贝并非想象中的那样简单，因为一个栈上可能保留指向被拷贝栈的指针，从而当栈发生拷贝后，这个指针可能还指向原栈，从而造成错误。
+因此现在 Go 运行时开始使用连续栈机制，当一个执行栈发生溢出时，
+新建一个两倍于原栈大小的新栈，再将原栈整个拷贝到新栈上。
+从而整个栈总是连续的。栈的拷贝并非想象中的那样简单，因为一个栈上可能保留指向被拷贝栈的指针，
+从而当栈发生拷贝后，这个指针可能还指向原栈，从而造成错误。
 此外，goroutine 上原本的 `gobuf` 也需要被更新，这也是使用连续栈的难点之一。
 
 ### 分段标记
@@ -455,11 +458,13 @@ TEXT runtime·morestack_noctxt(SB),NOSPLIT,$0
 
 ## 栈的扩张
 
-TODO:
+用户栈的扩张发生在 morestack 处，该函数此前会检查该调用是否正确的在用户栈上调用（因此 g0 栈和信号栈
+不能发生此调用）。而后将 `morebuf` 设置为 f 的调用方，并将 G 的执行栈设置为 f 的 ctxt，
+从而在 g0 上调用 `newstack`。
 
 ```asm
 TEXT runtime·morestack(SB),NOSPLIT,$0-0
-	// Cannot grow scheduler stack (m->g0).
+	// 无法增长调度器的栈(m->g0)
 	get_tls(CX)
 	MOVQ	g(CX), BX
 	MOVQ	g_m(BX), BX
@@ -469,44 +474,98 @@ TEXT runtime·morestack(SB),NOSPLIT,$0-0
 	CALL	runtime·badmorestackg0(SB)
 	CALL	runtime·abort(SB)
 
-	// Cannot grow signal stack (m->gsignal).
+	// 无法增长信号栈 (m->gsignal)
 	MOVQ	m_gsignal(BX), SI
 	CMPQ	g(CX), SI
 	JNE	3(PC)
 	CALL	runtime·badmorestackgsignal(SB)
 	CALL	runtime·abort(SB)
 
-	// Called from f.
-	// Set m->morebuf to f's caller.
-	MOVQ	8(SP), AX	// f's caller's PC
+	// 从 f 调用
+	// 将 m->morebuf 设置为 f 的调用方
+	MOVQ	8(SP), AX	// f 的调用方 PC
 	MOVQ	AX, (m_morebuf+gobuf_pc)(BX)
-	LEAQ	16(SP), AX	// f's caller's SP
+	LEAQ	16(SP), AX	// f 的调用方 SP
 	MOVQ	AX, (m_morebuf+gobuf_sp)(BX)
 	get_tls(CX)
 	MOVQ	g(CX), SI
 	MOVQ	SI, (m_morebuf+gobuf_g)(BX)
 
-	// Set g->sched to context in f.
-	MOVQ	0(SP), AX // f's PC
+	// 将 g->sched 设置为 f 的 context
+	MOVQ	0(SP), AX // f 的 PC
 	MOVQ	AX, (g_sched+gobuf_pc)(SI)
 	MOVQ	SI, (g_sched+gobuf_g)(SI)
-	LEAQ	8(SP), AX // f's SP
+	LEAQ	8(SP), AX // f 的 SP
 	MOVQ	AX, (g_sched+gobuf_sp)(SI)
 	MOVQ	BP, (g_sched+gobuf_bp)(SI)
 	MOVQ	DX, (g_sched+gobuf_ctxt)(SI)
 
-	// Call newstack on m->g0's stack.
+	// 在 m->g0 栈上调用 newstack.
 	MOVQ	m_g0(BX), BX
 	MOVQ	BX, g(CX)
 	MOVQ	(g_sched+gobuf_sp)(BX), SP
 	CALL	runtime·newstack(SB)
-	CALL	runtime·abort(SB)	// crash if newstack returns
+	CALL	runtime·abort(SB)	// 如果 newstack 返回则崩溃
 	RET
 ```
 
-## 栈的伸缩
+`newstack` 在前半部分承担了对 goroutine 进行抢占的任务（见 [调度器：协作与抢占](./preemptive.md)），
+而在后半部分则是真正的栈扩张。
 
-TODO:
+```go
+//go:nowritebarrierrec
+func newstack() {
+	thisg := getg()
+
+	(...)
+
+	gp := thisg.m.curg
+
+	(...)
+
+	morebuf := thisg.m.morebuf
+	thisg.m.morebuf.pc = 0
+	thisg.m.morebuf.lr = 0
+	thisg.m.morebuf.sp = 0
+	thisg.m.morebuf.g = 0
+
+	(...)
+
+	sp := gp.sched.sp
+	if sys.ArchFamily == sys.AMD64 || sys.ArchFamily == sys.I386 || sys.ArchFamily == sys.WASM {
+		// 到 morestack 的调用会消耗一个字
+		sp -= sys.PtrSize
+	}
+
+	(...)
+
+	// 分配一个更大的段，并对栈进行移动
+	oldsize := gp.stack.hi - gp.stack.lo
+	newsize := oldsize * 2 // 两倍于原来的大小
+
+	// 需要的栈太大，直接溢出
+	if newsize > maxstacksize {
+		print("runtime: goroutine stack exceeds ", maxstacksize, "-byte limit\n")
+		throw("stack overflow")
+	}
+
+	// goroutine 必须是正在执行过程中才来调用 newstack
+	// 所以这个状态一定是 Grunning 或 Gscanrunning
+	casgstatus(gp, _Grunning, _Gcopystack)
+
+	// 因为 gp 处于 Gcopystack 状态，当我们对栈进行复制时并发 GC 不会扫描此栈
+	copystack(gp, newsize, true)
+	if stackDebug >= 1 {
+		print("stack grow done\n")
+	}
+	casgstatus(gp, _Gcopystack, _Grunning)
+	gogo(&gp.sched) // 继续执行
+}
+```
+
+## 栈的收缩
+
+TODO: gc
 
 ## 总结
 

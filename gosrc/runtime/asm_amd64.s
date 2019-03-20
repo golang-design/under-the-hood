@@ -376,17 +376,17 @@ bad:
 
 
 /*
- * support for morestack
+ * 支持栈扩张
  */
 
-// Called during function prolog when more stack is needed.
+// 当需要更多栈空间时候，在函数序言期间调用
 //
 // The traceback routines see morestack on a g0 as being
 // the top of a stack (for example, morestack calling newstack
 // calling the scheduler calling newm calling gc), so we must
 // record an argument size. For that purpose, it has no arguments.
 TEXT runtime·morestack(SB),NOSPLIT,$0-0
-	// Cannot grow scheduler stack (m->g0).
+	// 无法增长调度器的栈(m->g0)
 	get_tls(CX)
 	MOVQ	g(CX), BX
 	MOVQ	g_m(BX), BX
@@ -396,38 +396,38 @@ TEXT runtime·morestack(SB),NOSPLIT,$0-0
 	CALL	runtime·badmorestackg0(SB)
 	CALL	runtime·abort(SB)
 
-	// Cannot grow signal stack (m->gsignal).
+	// 无法增长信号栈 (m->gsignal)
 	MOVQ	m_gsignal(BX), SI
 	CMPQ	g(CX), SI
 	JNE	3(PC)
 	CALL	runtime·badmorestackgsignal(SB)
 	CALL	runtime·abort(SB)
 
-	// Called from f.
-	// Set m->morebuf to f's caller.
-	MOVQ	8(SP), AX	// f's caller's PC
+	// 从 f 调用
+	// 将 m->morebuf 设置为 f 的调用方
+	MOVQ	8(SP), AX	// f 的调用方 PC
 	MOVQ	AX, (m_morebuf+gobuf_pc)(BX)
-	LEAQ	16(SP), AX	// f's caller's SP
+	LEAQ	16(SP), AX	// f 的调用方 SP
 	MOVQ	AX, (m_morebuf+gobuf_sp)(BX)
 	get_tls(CX)
 	MOVQ	g(CX), SI
 	MOVQ	SI, (m_morebuf+gobuf_g)(BX)
 
-	// Set g->sched to context in f.
-	MOVQ	0(SP), AX // f's PC
+	// 将 g->sched 设置为 f 的 context
+	MOVQ	0(SP), AX // f 的 PC
 	MOVQ	AX, (g_sched+gobuf_pc)(SI)
 	MOVQ	SI, (g_sched+gobuf_g)(SI)
-	LEAQ	8(SP), AX // f's SP
+	LEAQ	8(SP), AX // f 的 SP
 	MOVQ	AX, (g_sched+gobuf_sp)(SI)
 	MOVQ	BP, (g_sched+gobuf_bp)(SI)
 	MOVQ	DX, (g_sched+gobuf_ctxt)(SI)
 
-	// Call newstack on m->g0's stack.
+	// 在 m->g0 栈上调用 newstack.
 	MOVQ	m_g0(BX), BX
 	MOVQ	BX, g(CX)
 	MOVQ	(g_sched+gobuf_sp)(BX), SP
 	CALL	runtime·newstack(SB)
-	CALL	runtime·abort(SB)	// crash if newstack returns
+	CALL	runtime·abort(SB)	// 如果 newstack 返回则崩溃
 	RET
 
 // morestack but not preserving ctxt.
