@@ -2,7 +2,7 @@
 
 - [参与运行时的系统调用（Linux 篇）](./syscall-linux.md)
 - [参与运行时的系统调用（Darwin 篇）](./syscall-darwin.md)
-- [参与运行时的系统调用（WebAssembly 篇）](./syscall-wasm.md)
+- [WebAssembly](./syscall-wasm.md)
 - [cgo](./cgo.md)
 
 ## 许可

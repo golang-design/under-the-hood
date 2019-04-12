@@ -185,33 +185,30 @@ func cgocallbackg1(ctxt uintptr) {
 	if ctxt != 0 {
 		s := append(gp.cgoCtxt, ctxt)
 
-		// Now we need to set gp.cgoCtxt = s, but we could get
-		// a SIGPROF signal while manipulating the slice, and
-		// the SIGPROF handler could pick up gp.cgoCtxt while
-		// tracing up the stack.  We need to ensure that the
-		// handler always sees a valid slice, so set the
-		// values in an order such that it always does.
+		// 现在我们需要设置 gp.cgoCtxt = s，但我们可以得到操纵切片时的 SIGPROF 信号，和
+		// SIGPROF 处理程序可以获取 gp.cgoCtxt
+		// 追踪堆栈。我们需要确保 handler 总是看到一个有效的切片，所以设置
+		// 按顺序排列的值，以便始终如此。
 		p := (*slice)(unsafe.Pointer(&gp.cgoCtxt))
 		atomicstorep(unsafe.Pointer(&p.array), unsafe.Pointer(&s[0]))
 		p.cap = cap(s)
 		p.len = len(s)
 
 		defer func(gp *g) {
-			// Decrease the length of the slice by one, safely.
+			// 安全地减少切片的长度。
 			p := (*slice)(unsafe.Pointer(&gp.cgoCtxt))
 			p.len--
 		}(gp)
 	}
 
 	if gp.m.ncgo == 0 {
-		// The C call to Go came from a thread not currently running
-		// any Go. In the case of -buildmode=c-archive or c-shared,
-		// this call may be coming in before package initialization
-		// is complete. Wait until it is.
+		// 对 Go 的 C 调用来自一个当前没有运行任何 Go 的线程。
+		// 在 -buildmode=c-archive 或 c-shared 的情况下，
+		// 此调用可能在包初始化完成之前进入，等待完成。
 		<-main_init_done
 	}
 
-	// Add entry to defer stack in case of panic.
+	// 增加 defer 栈的入口来防止 panic
 	restore := true
 	defer unwindm(&restore)
 

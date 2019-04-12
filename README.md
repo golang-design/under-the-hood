@@ -86,11 +86,9 @@ Go 源码研究 | 当前基于 `go1.12`
 
 #### 第十章 兼容与契约
 
-<!-- - [运行时编程综述](gosrc/runtime/README.md) -->
-
-- [参与运行时的系统调用（Linux 篇）](book/part2runtime/ch10abi/syscall-linux.md)
-- [参与运行时的系统调用（Darwin 篇）](book/part2runtime/ch10abi/syscall-darwin.md)
-- [参与运行时的系统调用（WebAssembly 篇）](book/part2runtime/ch10abi/syscall-wasm.md)
+- [参与运行时的系统调用: Linux 篇](book/part2runtime/ch10abi/syscall-linux.md)
+- [参与运行时的系统调用: Darwin 篇](book/part2runtime/ch10abi/syscall-darwin.md)
+- [WebAssembly](book/part2runtime/ch10abi/syscall-wasm.md)
 - [cgo](book/part2runtime/ch10abi/cgo.md)
 
 ### [第三部分：编译系统](book/part3compile/readme.md)
@@ -146,16 +144,6 @@ Go 源码研究 | 当前基于 `go1.12`
 
 - [附录A: 源码索引](book/appendix/index.md)
 - [附录B: 术语表](book/appendix/glossary.md)
-
-## 捐助
-
-您的捐助将用于帮助我购买一台 [MacBook Pro](https://www.apple.com/de/macbook-pro/)：
-
-[![](https://img.shields.io/badge/%E6%8D%90%E5%8A%A9-PayPal-104098.svg?style=popout-square&logo=PayPal)](https://www.paypal.me/ouchangkun/4.99eur)
-
-## Acknowledgement
-
-The author would like to thank [@egonelbre](https://github.com/egonelbre/gophers) for his charming gopher design.
 
 ## 许可
 

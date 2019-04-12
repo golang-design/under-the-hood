@@ -6,8 +6,7 @@ package cgo
 
 import "unsafe"
 
-// These utility functions are available to be called from code
-// compiled with gcc via crosscall2.
+// 通过 crosscall2，且在 GCC 下编译后可以使用这些工具函数
 
 // cgocallback is defined in runtime
 //go:linkname _runtime_cgocallback runtime.cgocallback
