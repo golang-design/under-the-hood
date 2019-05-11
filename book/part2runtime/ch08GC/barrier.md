@@ -42,7 +42,7 @@ Go 选择了后者，因此在 STW 期间，必须重新对栈进行扫描。垃
 
 ```go
 writePointer(slot, ptr):
-    shake(*slot)
+    shade(*slot)
     if current stack is grey:
         shade(ptr)
     *slot = ptr
