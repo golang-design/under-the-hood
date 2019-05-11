@@ -15,7 +15,7 @@ Go 1.7 使用了一个简单的 Dijkstra 写屏障，实现如下：
 
 ```go
 writePointer(slot, ptr):
-    shake(ptr)
+    shade(ptr)
     *slot = ptr
 ```
 
