@@ -6,26 +6,11 @@
 
 #### Chaper 01: Program Basics
 
-<!-- 内存布局？ -->
-
 #### Chaper 02: Parallel and Distributed Computing
-
-<!-- - [3.1 并发] -->
 
 #### Chaper 03: Queuing and Scheduling Theory
 
-<!-- - [2.1 排队理论引导]()
-- [2.2 工作窃取调度](papers/sched/work-steal-sched.md)
-- [调度理论](book/4-sched/theory.md) -->
-
 #### Chaper 04: Memory Management
-
-<!-- - 垃圾回收统一理论 -->
-
-<!-- CPU 架构与操作系统? -->
-
-<!-- - [Linux 系统调用]
-- [Plan 9 汇编](book/appendix/asm.md) -->
 
 #### [Chaper 05: Go Program Lifecycle](book/part1basic/ch05boot/readme.md)
 

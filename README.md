@@ -2,7 +2,9 @@
 
 # Go Under the Hood
 
-A source code study of Go | Based on `go1.12` | [Table of Content](TOC.md)
+[![](https://img.shields.io/badge/lang-English-blue.svg?longCache=true&style=flat-square)](TOC.en-us.md)   [![](https://img.shields.io/badge/lang-简体中文-red.svg?longCache=true&style=flat-square)](TOC.en-us.md)
+
+A source code study of Go | Based on `go1.12` 
 
 ## License
 
