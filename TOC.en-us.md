@@ -31,7 +31,7 @@
 - [6.7 Execution Stacks](book/part2runtime/ch06sched/stack.md)
 - [6.8 Corporative and Preemptive](book/part2runtime/ch06sched/preemptive.md)
 - [6.9 Synchronization](book/part2runtime/ch06sched/sync.md)
-- [6.10 Future, Present and Future](book/part2runtime/ch06sched/history.md)
+- [6.10 Past, Present and Future](book/part2runtime/ch06sched/history.md)
 
 #### [Chaper 07: Memory Allocator](book/part2runtime/ch07alloc/readme.md)
 
@@ -42,19 +42,19 @@
 - [Small Objects Allocation](book/part2runtime/ch07alloc/smallalloc.md)
 - [Tiny Objects Allocation](book/part2runtime/ch07alloc/tinyalloc.md)
 - [Statistics of Memory Usage](book/part2runtime/ch07alloc/mstats.md)
-- [Future, Present and Future](book/part2runtime/ch07alloc/history.md)
+- [Past, Present and Future](book/part2runtime/ch07alloc/history.md)
 
 #### [Chaper 08: Garbage Collector](book/part2runtime/ch08GC/readme.md)
 
-- [Basics](book/part2runtime/ch08GC/basic.md)
-- [Initialization](book/part2runtime/ch08GC/init.md)
-- [Barrier](book/part2runtime/ch08GC/barrier.md)
-- [Tricolor Algorithm](book/part2runtime/ch08GC/tricolor.md)
-- [Concurrent Reclaim](book/part2runtime/ch08GC/concurrent.md)
-- [Mark Process](book/part2runtime/ch08GC/mark.md)
-- [Sweep Process](book/part2runtime/ch08GC/sweep.md)
-- [Finalizer](book/part2runtime/ch08GC/finalizer.md)
-- [Future, Present and Future](book/part2runtime/ch08GC/history.md)
+- [8.1 Basics](book/part2runtime/ch08GC/basic.md)
+- [8.2 Initialization](book/part2runtime/ch08GC/init.md)
+- [8.3 Mark-sweep and Tricolor Algorithm](book/part2runtime/ch08GC/tricolor.md)
+- [8.4 Barriers](book/part2runtime/ch08GC/barrier.md)
+- [8.5 Concurrent Reclaim](book/part2runtime/ch08GC/concurrent.md)
+- [8.6 Mark Process](book/part2runtime/ch08GC/mark.md)
+- [8.7 Sweep Process](book/part2runtime/ch08GC/sweep.md)
+- [8.8 Finalizer](book/part2runtime/ch08GC/finalizer.md)
+- [8.9 Past, Present and Future](book/part2runtime/ch08GC/history.md)
 
 #### Chaper 09: Debugging
 
@@ -76,7 +76,7 @@
 - [`defer`](book/part3compile/ch11keyword/defer.md)
 - [`panic` 与 `recover`](book/part3compile/ch11keyword/panic.md)
 - [`map`](book/part3compile/ch11keyword/map.md)
-- [`chan` 与 `select`](book/part3compile/ch11keyword/chan.md)
+- [`chan` and `select`](book/part3compile/ch11keyword/chan.md)
 - [`interface`](book/part3compile/ch11keyword/interface.md)
 
 #### Chaper 12: Module Linker
@@ -90,7 +90,7 @@
 - [Lexical and Grammar](book/part3compile/ch13gc/parse.md)
 - [Type System](book/part3compile/ch13gc/type.md)
 - [Compiler Backend SSA](book/part3compile/ch13gc/ssa.md)
-- [Future, Present and Future]
+- [Past, Present and Future]
 
 ### [Part 4: Standard Library](book/part4lib/readme.md)
 

@@ -65,7 +65,7 @@ TODO:
 
 ## 7 结论
 
-本文分析的方法有多实用？ 我们一直积极致力于构建一种基于 C 语言的名为Cilk（发音为“silk”）的编程语言，并用于编程多线程计算（参见，例如，[Blumofe 1995]，[Blumofe et al. 1996]，[Frigo et al. 1998]，[Joerg, 1996] 和 [Randall, 1998]）。Cilk 源自 PCM（Parallel Continuation Machine）系统 [Halbherr et al. 1994]，其本身一部分受到此处研究报告的启发。 Cilk 运行时系统采用本文中描述的工作窃取算法。 由于 Cilk 采用了可证明有效的调度算法，因此 Cilk 为用户应用程序提供了有保证的性能。具体来说，我们已经凭经验发现使用模型 $T_1/P+T_\infty$􏱇 可以准确预测用 Cilk 语言编写的应用程序在具有 P 个处理器上的运行性能。
+本文分析的方法有多实用？我们一直积极致力于构建一种基于 C 语言的名为 Cilk（发音为 "silk"）的编程语言，并用于编程多线程计算（参见，例如，[Blumofe 1995]，[Blumofe et al. 1996]，[Frigo et al. 1998]，[Joerg, 1996] 和 [Randall, 1998]）。Cilk 源自 PCM（Parallel Continuation Machine）系统 [Halbherr et al. 1994]，其本身一部分受到此处研究报告的启发。Cilk 运行时系统采用本文中描述的工作窃取算法。由于 Cilk 采用了可证明有效的调度算法，因此 Cilk 为用户应用程序提供了有保证的性能。具体来说，我们已经凭经验发现使用模型 $T_1/P+T_\infty$ 可以准确预测用 Cilk 语言编写的应用程序在具有 P 个处理器上的运行性能。
 
 Cilk 系统目前运行在现代共享内存多处理器上，例如 Sun Enterprise，Silicon Graphics Origin，Intel Quad Pentium 和 DEC Alphaserver（早期版本的 Cilk 运行在 Thinking Machines CM-5 MPP，Intel Paragon MPP 和 IBM SP-2 上）。迄今为止，用 Cilk 编写的应用程序包括蛋白质折叠 [Pande et al. 1994]，图形渲染 [Stark 1998]，回溯搜索和 *􏱑Socrates 国际象棋程序 [Joerg and Kuszmaul, 1994]，它在 1995 年 ICCA 世界计算机国际象棋锦标赛中获得二等奖，该锦标赛在桑迪亚国家实验室的 1824-node Paragon上运行。我们最近的国际象棋程序 Cilkchess 赢得了 1996 年荷兰公开赛计算机国际象棋锦标赛。 Cilk 的团队编程在国际功能编程大会主办的 ICFP'98 编程竞赛中获得了一等奖（不败）。
 

@@ -61,15 +61,15 @@
 
 #### [第八章 垃圾回收器](book/part2runtime/ch08GC/readme.md)
 
-- [基本知识](book/part2runtime/ch08GC/basic.md)
-- [初始化](book/part2runtime/ch08GC/init.md)
-- [屏障](book/part2runtime/ch08GC/barrier.md)
-- [三色标记](book/part2runtime/ch08GC/tricolor.md)
-- [并发回收](book/part2runtime/ch08GC/concurrent.md)
-- [标记过程](book/part2runtime/ch08GC/mark.md)
-- [清扫过程](book/part2runtime/ch08GC/sweep.md)
-- [存活与终结](book/part2runtime/ch08GC/finalizer.md)
-- [过去、现在与未来](book/part2runtime/ch08GC/history.md)
+- [8.1 基本知识](book/part2runtime/ch08GC/basic.md)
+- [8.2 初始化](book/part2runtime/ch08GC/init.md)
+- [8.3 标记清扫与三色标记](book/part2runtime/ch08GC/tricolor.md)
+- [8.4 屏障](book/part2runtime/ch08GC/barrier.md)
+- [8.5 并发标记清扫](book/part2runtime/ch08GC/concurrent.md)
+- [8.6 标记过程](book/part2runtime/ch08GC/mark.md)
+- [8.7 清扫过程](book/part2runtime/ch08GC/sweep.md)
+- [8.8 存活与终结](book/part2runtime/ch08GC/finalizer.md)
+- [8.9 过去、现在与未来](book/part2runtime/ch08GC/history.md)
 
 #### 第九章 调试
 

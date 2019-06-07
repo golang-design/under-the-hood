@@ -29,3 +29,4 @@
 ## garbage collector
 
 - Bacon, David F., Perry Cheng, and V. T. Rajan. "A unified theory of garbage collection." ACM SIGPLAN Notices 39.10 (2004): 50-68.
+- Raul R. Wilson. 1992. Uniprocessor Garbage Collection Techniques. In Proceedings of the International Workshop on Memory Management (IWMM '92), Yves Bekkers and Jaques Cohen (Eds.). Springer-Verlag, London, UK, UK, 1-42.

@@ -64,7 +64,7 @@
 //
 // 5. 当用户进行了足够的分配工作后，重新从上面 1 开始。 请参阅下面有关 GC 频率的讨论。
 
-// Concurrent sweep.
+// 并发 sweep.
 //
 // The sweep phase proceeds concurrently with normal program execution.
 // The heap is swept span-by-span both lazily (when a goroutine needs another span)

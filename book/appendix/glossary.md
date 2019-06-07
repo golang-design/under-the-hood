@@ -7,6 +7,7 @@
 | Arena      |                | Arena                 | heapArena |      |
 | Arena Hint |                | Arena Hint            | arenaHint |      |
 | 协作式     |                | Collaborative         |           |      |
+| 回收器     |                | Collector             |           |      |
 | 逃逸分析   |                | Escape Analysis       |           |      |
 | 快速路径   |                | Fast Path             |           |      |
 | 自由表     |                | Free List             |           |      |
@@ -16,6 +17,7 @@
 | 大对象     |                | Large Object          |           |      |
 | 堆         |                | Heap                  |           |      |
 | Machine    |                | Machine               | M/m       |      |
+| 赋值器     |                | Mutator               |           |      |
 | 非自旋     |                | Non-spinning          |           |      |
 | 页         |                | Page                  |           |      |
 | 抢占式     |                | Preemptive            |           |      |
@@ -33,9 +35,7 @@
 |            |                |                       |           |      |
 | 标记清扫   |                | Mark-Sweep            |           |      |
 | 停止一切   |                | Stop the World        | STW       |      |
-| 赋值器     |                | Mutator               |           |      |
 | 回边       |                | Back Edge             |           |      |
-| 回收器     |                | Collector             |           |      |
 | 存活性     |                | Liveness              |           |      |
 | 可达性     |                | Reachability          |           |      |
 | 终结器     |                | Finalizer             |           |      |
