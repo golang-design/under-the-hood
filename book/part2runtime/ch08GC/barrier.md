@@ -55,6 +55,10 @@ writePointer(slot, ptr):
 混合写屏障等同于 IBM 实时 JAVA 实现中使用的 Metronome 中使用的双写屏障。这种情况下，垃圾回收器是增量而非并发的，
 但最终必须处理严格限制的世界时间的相同问题。
 
+## 进一步阅读的参考文献
+
+
+
 ## 许可
 
 [Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)
