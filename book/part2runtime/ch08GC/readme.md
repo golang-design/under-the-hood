@@ -5,7 +5,7 @@
 - [8.1 基本知识](basic.md)
 - [8.2 初始化](init.md)
 - [8.3 标记清扫与三色波面](tricolor.md)
-- [8.4 屏障](barrier.md)
+- [8.4 屏障技术](barrier.md)
 - [8.5 并发标记清扫](concurrent.md)
 - [8.6 并发标记过程](mark.md)
 - [8.7 并发清扫过程](sweep.md)

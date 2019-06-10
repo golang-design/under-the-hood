@@ -20,24 +20,24 @@ Go 的垃圾回收器基于标记清扫的思想，将回收过程分为两个�
 
 ```go
 func markFromRoots() {
-    worklist.init()
+    worklist.Init()
     for fld := range Roots {
         ref := *fld
         if ref != nil && !isMarked(ref) {
             setMarked(ref)
-            worklist.add(ref)
+            worklist.Add(ref)
             mark()
         }
     }
 }
 func mark() {
-    for !worklist.empty() {
-        ref := worklist.remove() // ref 已经标记过
+    for !worklist.Empty() {
+        ref := worklist.Remove() // ref 已经标记过
         for fld := range Pointers(ref) {
             child := *fld
             if child != nil && !isMarked(child) {
                 setMarked(child)
-                worlist.add(child)
+                worlist.Add(child)
             }
         }
     }
@@ -48,7 +48,7 @@ func mark() {
 
 ```go
 func sweep(start, end) {
-    for scan := start; scan < end; scan = scan.next {
+    for scan := start; scan < end; scan = scan.Next {
         if isMarked(scan) {
             unsetMarked(scan)
         } else {
@@ -68,6 +68,20 @@ func sweep(start, end) {
 
 这样三种不变量所定义的回收过程其实是一个波面（wavefront）不断前进的过程，
 这个波面同时也是黑色对象和白色对象的边界，灰色对象就是这个波面。
+
+对象的三种颜色可以这样来判断：
+
+```go
+func isWhite(ref interface{}) {
+    return !isMarked(ref)
+}
+func isGrey(ref interface{}) {
+    return worklist.Find(ref)
+}
+func isBlack(ref interface{}) {
+    return isMarked(ref) && !isGrey(ref)
+}
+```
 
 ## 进一步阅读的参考文献
 
