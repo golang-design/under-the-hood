@@ -1,4 +1,4 @@
-# 垃圾回收器：标记清扫与三色抽象波面
+# 垃圾回收器：标记清扫思想
 
 [TOC]
 
@@ -55,31 +55,6 @@ func sweep(start, end) {
             free(scan)
         }
     }
-}
-```
-
-## 三色抽象波面
-
-三色抽象规定了（回收器视角下的）三种不变量：
-
-- 白色对象：未被回收器访问到，在回收开始阶段，所有对象均为白色，当回收结束后，白色对象均不可达。
-- 灰色对象：已被回收器访问到，但回收器需要对其中的一个或多个指针进行扫描，因为他们可能还指向白色对象。
-- 黑色对象：已被回收器访问到，其中所有字段都已扫描，黑色对象中任何一个指针都不可能直接指向白色对象。
-
-这样三种不变量所定义的回收过程其实是一个波面（wavefront）不断前进的过程，
-这个波面同时也是黑色对象和白色对象的边界，灰色对象就是这个波面。
-
-对象的三种颜色可以这样来判断：
-
-```go
-func isWhite(ref interface{}) {
-    return !isMarked(ref)
-}
-func isGrey(ref interface{}) {
-    return worklist.Find(ref)
-}
-func isBlack(ref interface{}) {
-    return isMarked(ref) && !isGrey(ref)
 }
 ```
 

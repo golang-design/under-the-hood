@@ -48,8 +48,8 @@
 
 - [8.1 Basics](part2runtime/ch08GC/basic.md)
 - [8.2 Initialization](part2runtime/ch08GC/init.md)
-- [8.3 Mark-sweep and Tricolor Algorithm](part2runtime/ch08GC/tricolor.md)
-- [8.4 Barriers](part2runtime/ch08GC/barrier.md)
+- [8.3 Mark-sweep Algorithm](part2runtime/ch08GC/vanilla.md)
+- [8.4 Barrier Technique](part2runtime/ch08GC/barrier.md)
 - [8.5 Concurrent Reclaim](part2runtime/ch08GC/concurrent.md)
 - [8.6 Mark Process](part2runtime/ch08GC/mark.md)
 - [8.7 Sweep Process](part2runtime/ch08GC/sweep.md)

@@ -63,8 +63,8 @@
 
 - [8.1 基本知识](part2runtime/ch08GC/basic.md)
 - [8.2 初始化](part2runtime/ch08GC/init.md)
-- [8.3 标记清扫与三色标记](part2runtime/ch08GC/tricolor.md)
-- [8.4 屏障](part2runtime/ch08GC/barrier.md)
+- [8.3 标记清扫思想](part2runtime/ch08GC/vanilla.md)
+- [8.4 屏障技术](part2runtime/ch08GC/barrier.md)
 - [8.5 并发标记清扫](part2runtime/ch08GC/concurrent.md)
 - [8.6 标记过程](part2runtime/ch08GC/mark.md)
 - [8.7 清扫过程](part2runtime/ch08GC/sweep.md)
