@@ -32,3 +32,4 @@
 - Raul R. Wilson. 1992. Uniprocessor Garbage Collection Techniques. In Proceedings of the International Workshop on Memory Management (IWMM '92), Yves Bekkers and Jaques Cohen (Eds.). Springer-Verlag, London, UK, UK, 1-42.
 - Pekka P. Pirinen. 1998. Barrier techniques for incremental tracing. In Proceedings of the 1st international symposium on Memory management (ISMM '98). ACM, New York, NY, USA, 20-25.
 - T. Yuasa. 1990. Real-time garbage collection on general-purpose machines. J. Syst. Softw. 11, 3 (March 1990), 181-198.
+- Edsger W. Dijkstra, Leslie Lamport, A. J. Martin, C. S. Scholten, and E. F. M. Steffens. 1978. On-the-fly garbage collection: an exercise in cooperation. *Commun. ACM* 21, 11 (November 1978), 966-975.
