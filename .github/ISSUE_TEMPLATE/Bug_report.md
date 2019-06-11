@@ -6,7 +6,7 @@ about: 报告错误
 
 ## 实际描述
 
-- 文件路径：例如，book/part2runtime/ch06sched/init.md
+- 文件路径：例如，book/zh-cn/part2runtime/ch06sched/init.md
 - 原文段落：
 
 ```

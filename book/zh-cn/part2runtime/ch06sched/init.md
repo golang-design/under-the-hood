@@ -372,7 +372,7 @@ runtime.GOMAXPROCS(runtime.GOMAXPROCS(0))
 
 ## G 初始化
 
-运行完 `runtime.procresize` 之后，我们已经在 [程序引导](../../part1basic/ch05book/boot.md) 和 [主 goroutine 生命周期](../../part1basic/ch05book/main.md) 中已经看到，
+运行完 `runtime.procresize` 之后，我们已经在 [程序引导](../../part1basic/ch05boot/boot.md) 和 [主 goroutine 生命周期](../../part1basic/ch05boot/main.md) 中已经看到，
 主 goroutine 会以被调度器调度的方式进行运行，这将由 `runtime.newproc` 来完成主 goroutine 的初始化工作。
 
 在看 `runtime.newproc` 之前，我们先大致浏览一下 G 的各个状态。
