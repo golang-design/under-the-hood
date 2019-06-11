@@ -7,7 +7,7 @@ sync.Map 宣称内部做了特殊的优化，在两种情况下由于普通的 m
 
 下面是随 n 变化的性能结果
 
-![](../../images/map-syncmap.png)
+![](../../../images/map-syncmap.png)
 
 **图1：`map`+`sync.Mutex` 、`map`+`sync.RWMutex` 与 `sync.Map` 之间单次写多次读场景下的性能对比**
 

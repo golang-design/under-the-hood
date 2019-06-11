@@ -4,7 +4,7 @@
 
 map 由运行时实现，编译器辅助进行布局，其本质为哈希表。我们可以通过图 1 展示的测试结果看出使用 map 的容量（无大量碰撞）。
 
-![](../../images/map-write-performance.png)
+![](../../../images/map-write-performance.png)
 
 **图1: map[int64]int64 写入性能，其中 `key==value` 且 key 从 1 开始增长。从 218000000 个 key 后开始出现比较严重的碰撞。**
 
