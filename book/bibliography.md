@@ -30,3 +30,5 @@
 
 - Bacon, David F., Perry Cheng, and V. T. Rajan. "A unified theory of garbage collection." ACM SIGPLAN Notices 39.10 (2004): 50-68.
 - Raul R. Wilson. 1992. Uniprocessor Garbage Collection Techniques. In Proceedings of the International Workshop on Memory Management (IWMM '92), Yves Bekkers and Jaques Cohen (Eds.). Springer-Verlag, London, UK, UK, 1-42.
+- Pekka P. Pirinen. 1998. Barrier techniques for incremental tracing. In Proceedings of the 1st international symposium on Memory management (ISMM '98). ACM, New York, NY, USA, 20-25.
+- T. Yuasa. 1990. Real-time garbage collection on general-purpose machines. J. Syst. Softw. 11, 3 (March 1990), 181-198.
