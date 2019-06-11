@@ -347,7 +347,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 
 图 1 展示了所有结构的关系。
 
-![](../../images/mem-struct.png)
+![](../../../images/mem-struct.png)
 
 _图 1: Go 内存管理结构总览_
 
