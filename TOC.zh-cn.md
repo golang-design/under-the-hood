@@ -130,7 +130,7 @@
 
 ### [结束语](book/finalwords.md)
 
-### [参考文献](book/bibliography.md)
+### [参考文献](book/bibliography/list.md)
 
 ### 附录
 

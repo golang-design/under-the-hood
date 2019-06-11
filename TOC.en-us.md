@@ -115,7 +115,7 @@
 
 ### [Final Words](book/finalwords.md)
 
-### [Bibliography](book/bibliography.md)
+### [Bibliography](book/bibliography/list.md)
 
 ### Appendix
 
