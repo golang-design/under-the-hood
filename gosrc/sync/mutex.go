@@ -77,8 +77,12 @@ func (m *Mutex) Lock() {
 		}
 		return
 	}
+	// Slow path (outlined so that the fast path can be inlined)
+	m.lockSlow()
+}
 
-	// Slow path: 处理未锁住状态上锁失败、锁住状态的情况
+// Slow path: 处理未锁住状态上锁失败、锁住状态的情况
+func (m *Mutex) lockSlow() {
 	var waitStartTime int64
 	starving := false
 	awoke := false
@@ -132,7 +136,7 @@ func (m *Mutex) Lock() {
 			if waitStartTime == 0 {
 				waitStartTime = runtime_nanotime()
 			}
-			runtime_SemacquireMutex(&m.sema, queueLifo)
+			runtime_SemacquireMutex(&m.sema, queueLifo, 1)
 			starving = starving || runtime_nanotime()-waitStartTime > starvationThresholdNs
 			old = m.state
 			if old&mutexStarving != 0 {
@@ -181,6 +185,14 @@ func (m *Mutex) Unlock() {
 
 	// Fast path: drop lock bit.
 	new := atomic.AddInt32(&m.state, -mutexLocked)
+	if new != 0 {
+		// Outlined slow path to allow inlining the fast path.
+		// To hide unlockSlow during tracing we skip one extra frame when tracing GoUnblock.
+		m.unlockSlow(new)
+	}
+}
+
+func (m *Mutex) unlockSlow(new int32) {
 	if (new+mutexLocked)&mutexLocked == 0 {
 		throw("sync: unlock of unlocked mutex")
 	}
@@ -199,7 +211,7 @@ func (m *Mutex) Unlock() {
 			// Grab the right to wake someone.
 			new = (old - 1<<mutexWaiterShift) | mutexWoken
 			if atomic.CompareAndSwapInt32(&m.state, old, new) {
-				runtime_Semrelease(&m.sema, false)
+				runtime_Semrelease(&m.sema, false, 1)
 				return
 			}
 			old = m.state
@@ -209,6 +221,6 @@ func (m *Mutex) Unlock() {
 		// Note: mutexLocked is not set, the waiter will set it after wakeup.
 		// But mutex is still considered locked if mutexStarving is set,
 		// so new coming goroutines won't acquire it.
-		runtime_Semrelease(&m.sema, true)
+		runtime_Semrelease(&m.sema, true, 1)
 	}
 }

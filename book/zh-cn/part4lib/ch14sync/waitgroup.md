@@ -68,16 +68,7 @@ func (wg *WaitGroup) Add(delta int) {
 	// 首先获取状态指针和存储指针
 	statep, semap := wg.state()
 
-	// race 检查相关
-	if race.Enabled {
-		_ = *statep // trigger nil deref early
-		if delta < 0 {
-			// Synchronize decrements with Wait.
-			race.ReleaseMerge(unsafe.Pointer(wg))
-		}
-		race.Disable()
-		defer race.Enable()
-	}
+	(...)
 
 	// 将 delta 加到 statep 的前 32 位上，即加到计数器上
 	state := atomic.AddUint64(statep, uint64(delta)<<32)
@@ -87,13 +78,7 @@ func (wg *WaitGroup) Add(delta int) {
 	// 等待器的值
 	w := uint32(state)
 
-	// race 相关
-	if race.Enabled && delta > 0 && v == int32(delta) {
-		// The first increment must be synchronized with Wait.
-		// Need to model this as a read, because there can be
-		// several concurrent wg.counter transitions from 0.
-		race.Read(unsafe.Pointer(semap))
-	}
+	(...)
 
 	// 如果实际技术为负则直接 panic，因此是不允许计数为负值的
 	if v < 0 {
@@ -121,7 +106,7 @@ func (wg *WaitGroup) Add(delta int) {
 	*statep = 0
 	// 等待器大于零，减少 runtime_Semrelease 产生的阻塞
 	for ; w != 0; w-- {
-		runtime_Semrelease(semap, false)
+		runtime_Semrelease(semap, false, 0)
 	}
 }
 ```
@@ -181,11 +166,7 @@ func (wg *WaitGroup) Wait() {
 	// 先获得计数器和存储原语
 	statep, semap := wg.state()
 
-	// race 相关
-	if race.Enabled {
-		_ = *statep // trigger nil deref early
-		race.Disable()
-	}
+	(...)
 
 	// 一个简单的死循环，只有当计数器归零才会结束
 	for {
@@ -198,23 +179,13 @@ func (wg *WaitGroup) Wait() {
 
 		// 如果计数器已经归零，则直接退出循环
 		if v == 0 {
-			if race.Enabled {
-				race.Enable()
-				race.Acquire(unsafe.Pointer(wg))
-			}
+			(...)
 			return
 		}
 
 		// 增加等待计数，此处的原语会比较 statep 和 state 的值，如果相同则等待计数加 1
 		if atomic.CompareAndSwapUint64(statep, state, state+1) {
-			// race 检查
-			if race.Enabled && w == 0 {
-				// Wait must be synchronized with the first Add.
-				// Need to model this is as a write to race with the read in Add.
-				// As a consequence, can do the write only for the first waiter,
-				// otherwise concurrent Waits will race with each other.
-				race.Write(unsafe.Pointer(semap))
-			}
+			(...)
 
 			// 会阻塞到存储原语是否 > 0（即睡眠），如果 *semap > 0 则会减 1，因此最终的 semap 理论为 0
 			runtime_Semacquire(semap)
@@ -223,10 +194,7 @@ func (wg *WaitGroup) Wait() {
 			if *statep != 0 {
 				panic("sync: WaitGroup is reused before previous Wait has returned")
 			}
-			if race.Enabled {
-				race.Enable()
-				race.Acquire(unsafe.Pointer(wg))
-			}
+			(...)
 			return
 		}
 	}

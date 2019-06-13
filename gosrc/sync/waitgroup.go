@@ -98,7 +98,7 @@ func (wg *WaitGroup) Add(delta int) {
 	*statep = 0
 	// 等待器大于零，减少 runtime_Semrelease 产生的阻塞
 	for ; w != 0; w-- {
-		runtime_Semrelease(semap, false)
+		runtime_Semrelease(semap, false, 0)
 	}
 }
 

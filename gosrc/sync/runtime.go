@@ -14,12 +14,15 @@ func runtime_Semacquire(s *uint32)
 
 // SemacquireMutex is like Semacquire, but for profiling contended Mutexes.
 // If lifo is true, queue waiter at the head of wait queue.
-func runtime_SemacquireMutex(s *uint32, lifo bool)
+// skipframes is the number of frames to omit during tracing, counting from
+// runtime_SemacquireMutex's caller.
+func runtime_SemacquireMutex(s *uint32, lifo bool, skipframes int)
 
 // Semrelease 自动增加 *s 的值，如果一个等待的 goroutine 被 Semacquire 阻塞则会被通知
 // 它的目的是作为一个简单的唤醒原语，用于同步库，不应该被直接使用。
 // 如果 handoff 为真，则将计数直接传递给下一个等待的 goroutine
-func runtime_Semrelease(s *uint32, handoff bool)
+// skipframes 表示在 tracing 过程中忽略的帧的数量，从 runtime_Semrelease 调用方开始计数
+func runtime_Semrelease(s *uint32, handoff bool, skipframes int)
 
 // runtime/sema.go 中的 notifyList 的近似，大小和对齐必须一致。
 type notifyList struct {
