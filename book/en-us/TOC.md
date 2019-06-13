@@ -4,15 +4,15 @@
 
 ### Part 1: Basics
 
-#### Chaper 01: Program Basics
+#### Chapter 01: Program Basics
 
-#### Chaper 02: Parallel and Distributed Computing
+#### Chapter 02: Parallel and Distributed Computing
 
-#### Chaper 03: Queuing and Scheduling Theory
+#### Chapter 03: Queuing and Scheduling Theory
 
-#### Chaper 04: Memory Management
+#### Chapter 04: Memory Management
 
-#### [Chaper 05: Go Program Lifecycle](part1basic/ch05boot/readme.md)
+#### [Chapter 05: Go Program Lifecycle](part1basic/ch05boot/readme.md)
 
 - [5.1 Boot](part1basic/ch05boot/boot.md)
 - [5.2 Initialization](part1basic/ch05boot/init.md)
@@ -20,7 +20,7 @@
 
 ### [Part 2：Runtime](part2runtime/readme.md)
 
-#### [Chaper 06: Goroutine Scheduler](part2runtime/ch06sched/readme.md)
+#### [Chapter 06: Goroutine Scheduler](part2runtime/ch06sched/readme.md)
 
 - [6.1 Basic Structure](part2runtime/ch06sched/basic.md)
 - [6.2 Initialization](part2runtime/ch06sched/init.md)
@@ -33,7 +33,7 @@
 - [6.9 Synchronization](part2runtime/ch06sched/sync.md)
 - [6.10 Past, Present and Future](part2runtime/ch06sched/history.md)
 
-#### [Chaper 07: Memory Allocator](part2runtime/ch07alloc/readme.md)
+#### [Chapter 07: Memory Allocator](part2runtime/ch07alloc/readme.md)
 
 - [Basics](part2runtime/ch07alloc/basic.md)
 - [Components](part2runtime/ch07alloc/component.md)
@@ -44,7 +44,7 @@
 - [Statistics of Memory Usage](part2runtime/ch07alloc/mstats.md)
 - [Past, Present and Future](part2runtime/ch07alloc/history.md)
 
-#### [Chaper 08: Garbage Collector](part2runtime/ch08GC/readme.md)
+#### [Chapter 08: Garbage Collector](part2runtime/ch08GC/readme.md)
 
 - [8.1 Basics](part2runtime/ch08GC/basic.md)
 - [8.2 Initialization](part2runtime/ch08GC/init.md)
@@ -56,12 +56,12 @@
 - [8.8 Finalizer](part2runtime/ch08GC/finalizer.md)
 - [8.9 Past, Present and Future](part2runtime/ch08GC/history.md)
 
-#### Chaper 09: Debugging
+#### Chapter 09: Debugging
 
 - [Race Detection](part2runtime/ch09debug/race.md)
 - [Trace Debug](part2runtime/ch09debug/trace.md)
 
-#### Chaper 10:  Compatabilities and Calling Convention
+#### Chapter 10:  Compatabilities and Calling Convention
 
 - [System Calls: Linux](part2runtime/ch10abi/syscall-linux.md)
 - [System Calls: Darwin](part2runtime/ch10abi/syscall-darwin.md)
@@ -70,7 +70,7 @@
 
 ### [Part ３: Compile System](part3compile/readme.md)
 
-#### Chaper 11: Language Keywords
+#### Chapter 11: Language Keywords
 
 - [`go`](part3compile/ch11keyword/go.md)
 - [`defer`](part3compile/ch11keyword/defer.md)
@@ -79,12 +79,12 @@
 - [`chan` and `select`](part3compile/ch11keyword/chan.md)
 - [`interface`](part3compile/ch11keyword/interface.md)
 
-#### Chaper 12: Module Linker
+#### Chapter 12: Module Linker
 
 - [Initialization](part3compile/ch12link/init.md)
 - [Module Link](part3compile/ch12link/link.md)
 
-#### Chaper 13: Compiler
+#### Chapter 13: Compiler
 
 - [`unsafe`](part3compile/ch13gc/9-unsafe.md)
 - [Lexical and Grammar](part3compile/ch13gc/parse.md)
@@ -94,28 +94,30 @@
 
 ### [Part 4: Standard Library](part4lib/readme.md)
 
-#### [Chaper 14: Package sync and atomic](part4lib/ch14sync/readme.md)
+#### [Chapter 14: Error handling](part4lib/ch14errors/readme.md)
 
-- [Semaphore](part4lib/ch14sync/sema.md)
-- [`sync.Pool`](part4lib/ch14sync/pool.md)
-- [`sync.Once`](part4lib/ch14sync/once.md)
-- [`sync.Map`](part4lib/ch14sync/map.md)
-- [`sync.WaitGroup`](part4lib/ch14sync/waitgroup.md)
-- [`sync.Mutex`](part4lib/ch14sync/mutex.md)
-- [`sync.Cond`](part4lib/ch14sync/cond.md)
-- [`sync/atomic.*`](part4lib/ch14sync/atomic.md)
+#### [Chapter 15: Package sync and atomic](part4lib/ch15sync/readme.md)
 
-#### [Chaper 15: Miscellaneous](part4lib/ch15other/readme.md)
+- [Semaphore](part4lib/ch15sync/sema.md)
+- [`sync.Pool`](part4lib/ch15sync/pool.md)
+- [`sync.Once`](part4lib/ch15sync/once.md)
+- [`sync.Map`](part4lib/ch15sync/map.md)
+- [`sync.WaitGroup`](part4lib/ch15sync/waitgroup.md)
+- [`sync.Mutex`](part4lib/ch15sync/mutex.md)
+- [`sync.Cond`](part4lib/ch15sync/cond.md)
+- [`sync/atomic.*`](part4lib/ch15sync/atomic.md)
 
-- [`syscall.*`](part4lib/ch15other/syscall.md)
-- [`os/signal.*`](part4lib/ch15other/signal.md)
-- [`reflect.*`](part4lib/ch15other/reflect.md)
-- [`net.*`](part4lib/ch15other/net.md)
-- [`time.*`](part4lib/ch15other/time.md)
+#### [Chapter 16: Miscellaneous](part4lib/ch16other/readme.md)
+
+- [`syscall.*`](part4lib/ch16other/syscall.md)
+- [`os/signal.*`](part4lib/ch16other/signal.md)
+- [`reflect.*`](part4lib/ch16other/reflect.md)
+- [`net.*`](part4lib/ch16other/net.md)
+- [`time.*`](part4lib/ch16other/time.md)
 
 ### [Final Words](finalwords.md)
 
-### [Bibliography](bibliography/list.md)
+### [Bibliography](../bibliography/list.md)
 
 ### Appendix
 

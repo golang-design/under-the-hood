@@ -1,4 +1,4 @@
-# 第十五章 其他
+# 第十六章 其他
 
 - [`syscall.*`](syscall.md)
 - [`os/signal.*`](signal.md)

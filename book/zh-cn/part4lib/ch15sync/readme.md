@@ -1,4 +1,4 @@
-# 第十四章 sync 包与 atomic 包
+# 第十五章 sync 包与 atomic 包
 
 - [信号量 sema 机制](./sema.md)
 - [`sync.Pool`](./pool.md)

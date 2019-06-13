@@ -109,28 +109,31 @@
 
 ### [第四部分：标准库](part4lib/readme.md)
 
-#### [第十四章 sync 与 atomic 包](part4lib/ch14sync/readme.md)
+#### [第十四章 错误处理](part4lib/ch14errors/readme.md)
 
-- [信号量 sema 机制](part4lib/ch14sync/sema.md)
-- [`sync.Pool`](part4lib/ch14sync/pool.md)
-- [`sync.Once`](part4lib/ch14sync/once.md)
-- [`sync.Map`](part4lib/ch14sync/map.md)
-- [`sync.WaitGroup`](part4lib/ch14sync/waitgroup.md)
-- [`sync.Mutex`](part4lib/ch14sync/mutex.md)
-- [`sync.Cond`](part4lib/ch14sync/cond.md)
-- [`sync/atomic.*`](part4lib/ch14sync/atomic.md)
+#### [第十五章 sync 与 atomic 包](part4lib/ch15sync/readme.md)
 
-#### [第十五章 其他](part4lib/ch15other/readme.md)
+- [信号量 sema 机制](part4lib/ch15sync/sema.md)
+- [`sync.Pool`](part4lib/ch15sync/pool.md)
+- [`sync.Once`](part4lib/ch15sync/once.md)
+- [`sync.Map`](part4lib/ch15sync/map.md)
+- [`sync.WaitGroup`](part4lib/ch15sync/waitgroup.md)
+- [`sync.Mutex`](part4lib/ch15sync/mutex.md)
+- [`sync.Cond`](part4lib/ch15sync/cond.md)
+- [`sync/atomic.*`](part4lib/ch15sync/atomic.md)
 
-- [`syscall.*`](part4lib/ch15other/syscall.md)
-- [`os/signal.*`](part4lib/ch15other/signal.md)
-- [`reflect.*`](part4lib/ch15other/reflect.md)
-- [`net.*`](part4lib/ch15other/net.md)
-- [`time.*`](part4lib/ch15other/time.md)
+
+#### [第十六章 其他](part4lib/ch16other/readme.md)
+
+- [`syscall.*`](part4lib/ch16other/syscall.md)
+- [`os/signal.*`](part4lib/ch16other/signal.md)
+- [`reflect.*`](part4lib/ch16other/reflect.md)
+- [`net.*`](part4lib/ch16other/net.md)
+- [`time.*`](part4lib/ch16other/time.md)
 
 ### [结束语](finalwords.md)
 
-### [参考文献](bibliography/list.md)
+### [参考文献](../bibliography/list.md)
 
 ### 附录
 
