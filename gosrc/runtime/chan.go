@@ -17,6 +17,7 @@ package runtime
 
 import (
 	"runtime/internal/atomic"
+	"runtime/internal/math"
 	"unsafe"
 )
 
@@ -95,11 +96,9 @@ func (q *waitq) dequeue() *sudog {
 		// 因此我们不会在那之后看到它。
 		// 我们在 G 结构中使用一个标志来告诉我们其他人何时获得了这个竞争条件以告知这个 goroutine，
 		// 但是 goroutine 还没有将自己从队列中移除。
-		if sgp.isSelect { // 正在参与一个 select
-			// 如果将 g 标记为已完成失败，则说明此 sgp 已经不在队列中，继续循环并重新出队
-			if !atomic.Cas(&sgp.g.selectDone, 0, 1) {
-				continue
-			}
+		// 正在参与一个 select，如果将 g 标记为已完成失败，则说明此 sgp 已经不在队列中，继续循环并重新出队
+		if sgp.isSelect && !atomic.Cas(&sgp.g.selectDone, 0, 1) {
+			continue
 		}
 
 		return sgp
@@ -141,7 +140,7 @@ func makechan(t *chantype, size int) *hchan {
 		c = (*hchan)(mallocgc(hchanSize, nil, true))
 		// Race detector uses this location for synchronization.
 		c.buf = c.raceaddr()
-	case elem.kind&kindNoPointers != 0:
+	case elem.ptrdata == 0:
 		// Elements do not contain pointers.
 		// Allocate hchan and buf in one call.
 		c = (*hchan)(mallocgc(hchanSize+mem, nil, true))
@@ -721,6 +720,14 @@ func reflect_chanrecv(c *hchan, nb bool, elem unsafe.Pointer) (selected bool, re
 
 //go:linkname reflect_chanlen reflect.chanlen
 func reflect_chanlen(c *hchan) int {
+	if c == nil {
+		return 0
+	}
+	return int(c.qcount)
+}
+
+//go:linkname reflectlite_chanlen internal/reflectlite.chanlen
+func reflectlite_chanlen(c *hchan) int {
 	if c == nil {
 		return 0
 	}

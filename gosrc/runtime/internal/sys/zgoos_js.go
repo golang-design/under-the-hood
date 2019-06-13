@@ -13,6 +13,7 @@ const GoosDragonfly = 0
 const GoosFreebsd = 0
 const GoosAix = 0
 const GoosJs = 1
+const GoosIllumos = 0
 const GoosLinux = 0
 const GoosNacl = 0
 const GoosNetbsd = 0
