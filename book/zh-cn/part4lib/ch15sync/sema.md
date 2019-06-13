@@ -10,11 +10,11 @@ sync 包中 Mutex 的实现依赖运行时中关于 `runtime_Semacquire` 与 `ru
 ```go
 //go:linkname sync_runtime_Semacquire sync.runtime_Semacquire
 func sync_runtime_Semacquire(addr *uint32) {
-	semacquire1(addr, false, semaBlockProfile)
+	semacquire1(addr, false, semaBlockProfile, 0)
 }
 //go:linkname sync_runtime_Semrelease sync.runtime_Semrelease
-func sync_runtime_Semrelease(addr *uint32, handoff bool) {
-	semrelease1(addr, handoff)
+func sync_runtime_Semrelease(addr *uint32, handoff bool, skipframes int) {
+	semrelease1(addr, handoff, skipframes)
 }
 ```
 
@@ -23,7 +23,7 @@ func sync_runtime_Semrelease(addr *uint32, handoff bool) {
 先来看 `semacquire1`。
 
 ```go
-func semacquire1(addr *uint32, lifo bool, profile semaProfileFlags) {
+func semacquire1(addr *uint32, lifo bool, profile semaProfileFlags, skipframes int) {
 	// 获取当前 goroutine
 	// 该调用发生在 goroutine 运行时，所以有绑定的 P
 	gp := getg()
@@ -71,13 +71,13 @@ func semacquire1(addr *uint32, lifo bool, profile semaProfileFlags) {
 		// Any semrelease after the cansemacquire knows we're waiting
 		// (we set nwait above), so go to sleep.
 		root.queue(addr, s, lifo)
-		goparkunlock(&root.lock, waitReasonSemacquire, traceEvGoBlockSync, 4)
+		goparkunlock(&root.lock, waitReasonSemacquire, traceEvGoBlockSync, 4+skipframes)
 		if s.ticket != 0 || cansemacquire(addr) {
 			break
 		}
 	}
 	if s.releasetime > 0 {
-		blockevent(s.releasetime-t0, 3)
+		blockevent(s.releasetime-t0, 3+skipframes)
 	}
 	releaseSudog(s)
 }

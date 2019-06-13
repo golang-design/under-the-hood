@@ -26,9 +26,16 @@ const (
 )
 
 func lock(l *mutex) {
-	for l.key == mutex_locked {
-		mcall(gosched_m)
+	if l.key == mutex_locked {
+		// js/wasm is single-threaded so we should never
+		// observe this.
+		throw("self deadlock")
 	}
+	gp := getg()
+	if gp.m.locks < 0 {
+		throw("lock count")
+	}
+	gp.m.locks++
 	l.key = mutex_locked
 }
 
@@ -36,10 +43,15 @@ func unlock(l *mutex) {
 	if l.key == mutex_unlocked {
 		throw("unlock of unlocked lock")
 	}
+	gp := getg()
+	gp.m.locks--
+	if gp.m.locks < 0 {
+		throw("lock count")
+	}
 	l.key = mutex_unlocked
 }
 
-// 一次性通知
+// One-time notifications.
 
 type noteWithTimeout struct {
 	gp       *g
@@ -172,6 +184,7 @@ func clearTimeoutEvent(id int32)
 func handleEvent() {
 	prevReturnedEventHandler := returnedEventHandler
 	returnedEventHandler = nil
+
 	checkTimeouts()
 	eventHandler()
 
@@ -179,6 +192,7 @@ func handleEvent() {
 	gopark(nil, nil, waitReasonZero, traceEvNone, 1)
 
 	returnedEventHandler = prevReturnedEventHandler
+
 	pause(getcallersp() - 16)
 }
 

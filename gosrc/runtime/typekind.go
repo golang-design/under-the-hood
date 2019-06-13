@@ -34,7 +34,6 @@ const (
 
 	kindDirectIface = 1 << 5       // 0010 0000
 	kindGCProg      = 1 << 6       // 0100 0000
-	kindNoPointers  = 1 << 7       // 1000 0000
 	kindMask        = (1 << 5) - 1 // 0001 1111
 )
 

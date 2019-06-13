@@ -119,10 +119,7 @@ func (t *_type) name() string {
 	}
 	s := t.string()
 	i := len(s) - 1
-	for i >= 0 {
-		if s[i] == '.' {
-			break
-		}
+	for i >= 0 && s[i] != '.' {
 		i--
 	}
 	return s[i+1:]
@@ -374,7 +371,7 @@ type maptype struct {
 	bucket      *_type // internal type representing a hash bucket
 	keysize     uint8  // size of key slot
 	indirectkey bool   // store ptr to key instead of key itself
-	valuesize   uint8  // size of value slot
+	elemsize    uint8  // size of elem slot
 	bucketsize  uint16 // size of bucket
 	flags       uint32
 }
@@ -384,7 +381,7 @@ type maptype struct {
 func (mt *maptype) indirectkey() bool { // store ptr to key instead of key itself
 	return mt.flags&1 != 0
 }
-func (mt *maptype) indirectvalue() bool { // store ptr to value instead of value itself
+func (mt *maptype) indirectelem() bool { // store ptr to elem instead of elem itself
 	return mt.flags&2 != 0
 }
 func (mt *maptype) reflexivekey() bool { // true if k==k for all keys
