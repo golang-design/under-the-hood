@@ -2,6 +2,8 @@
 
 [TOC]
 
+> TODO: update content for go 1.13
+
 sync.Pool 是一个临时对象池。一句话来概括，sync.Pool 管理了一组临时对象，当需要时从池中获取，使用完毕后从再放回池中，以供他人使用。
 
 使用 sync.Pool 只需要编写对象的创建方法：
@@ -60,10 +62,7 @@ type poolLocal struct {
 // 返回的对象具有任何形式的状态.
 func (p *Pool) Get() interface{} {
 
-	// 如果启用了 race 检查，则先停用
-	if race.Enabled {
-		race.Disable()
-	}
+	(...)
 
 	// 返回 poolLocal
 	l := p.pin()
@@ -91,13 +90,7 @@ func (p *Pool) Get() interface{} {
 		}
 	}
 
-	// 恢复 race 检查
-	if race.Enabled {
-		race.Enable()
-		if x != nil {
-			race.Acquire(poolRaceAddr(x))
-		}
-	}
+	(...)
 
 	// 如果 getSlow 还是获取不到，则 New 一个
 	if x == nil && p.New != nil {
@@ -121,15 +114,7 @@ func (p *Pool) Put(x interface{}) {
 		return
 	}
 
-	// 停用 race
-	if race.Enabled {
-		if fastrand()%4 == 0 {
-			// Randomly drop x on floor.
-			return
-		}
-		race.ReleaseMerge(poolRaceAddr(x))
-		race.Disable()
-	}
+	(...)
 
 	// 获取 localPool
 	l := p.pin()
@@ -148,10 +133,7 @@ func (p *Pool) Put(x interface{}) {
 		l.Unlock()
 	}
 
-	// 恢复 race
-	if race.Enabled {
-		race.Enable()
-	}
+	(...)
 }
 ```
 
