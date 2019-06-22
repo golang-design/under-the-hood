@@ -7,10 +7,7 @@ package runtime
 import "unsafe"
 
 type mOS struct {
-	initialized bool
-	mutex       pthreadmutex
-	cond        pthreadcond
-	count       int
+	sema uintptr
 }
 
 func unimplemented(name string) {
@@ -20,66 +17,38 @@ func unimplemented(name string) {
 
 //go:nosplit
 func semacreate(mp *m) {
-	if mp.initialized {
-		return
-	}
-	mp.initialized = true
-	if err := pthread_mutex_init(&mp.mutex, nil); err != 0 {
-		throw("pthread_mutex_init")
-	}
-	if err := pthread_cond_init(&mp.cond, nil); err != 0 {
-		throw("pthread_cond_init")
+	if mp.sema == 0 {
+		mp.sema = dispatch_semaphore_create(0)
 	}
 }
 
+const (
+	_DISPATCH_TIME_NOW     = uint64(0)
+	_DISPATCH_TIME_FOREVER = ^uint64(0)
+)
+
 //go:nosplit
 func semasleep(ns int64) int32 {
-	var start int64
-	if ns >= 0 {
-		start = nanotime()
-	}
 	mp := getg().m
-	// 在持有 P 的情况下对 M 加锁
-	pthread_mutex_lock(&mp.mutex)
-	for {
-		if mp.count > 0 {
-			mp.count--
-			pthread_mutex_unlock(&mp.mutex)
-			return 0
-		}
-		if ns >= 0 {
-			spent := nanotime() - start
-			if spent >= ns {
-				pthread_mutex_unlock(&mp.mutex)
-				return -1
-			}
-			var t timespec
-			t.set_nsec(ns - spent)
-			err := pthread_cond_timedwait_relative_np(&mp.cond, &mp.mutex, &t)
-			if err == _ETIMEDOUT {
-				pthread_mutex_unlock(&mp.mutex)
-				return -1
-			}
-		} else {
-			pthread_cond_wait(&mp.cond, &mp.mutex)
-		}
+	t := _DISPATCH_TIME_FOREVER
+	if ns >= 0 {
+		t = dispatch_time(_DISPATCH_TIME_NOW, ns)
 	}
+	if dispatch_semaphore_wait(mp.sema, t) != 0 {
+		return -1
+	}
+	return 0
 }
 
 //go:nosplit
 func semawakeup(mp *m) {
-	// 唤醒 M 线程
-	pthread_mutex_lock(&mp.mutex)
-	mp.count++
-	if mp.count > 0 {
-		pthread_cond_signal(&mp.cond)
-	}
-	pthread_mutex_unlock(&mp.mutex)
+	dispatch_semaphore_signal(mp.sema)
 }
 
-// BSD 接口作线程操作
+// BSD interface for threading.
 func osinit() {
-	// pthread_create 推迟到 goenvs 末尾，从而可以先检查环境
+	// pthread_create delayed until end of goenvs so that we
+	// can look at the environment first.
 
 	ncpu = getncpu()
 	physPageSize = getPageSize()
@@ -104,7 +73,7 @@ func getncpu() int32 {
 }
 
 func getPageSize() uintptr {
-	// 使用 sysctl 来获取 hw.pagesize.
+	// Use sysctl to fetch hw.pagesize.
 	mib := [2]uint32{_CTL_HW, _HW_PAGESIZE}
 	out := uint32(0)
 	nout := unsafe.Sizeof(out)
@@ -129,7 +98,7 @@ func goenvs() {
 	goenvs_unix()
 }
 
-// 可能在 m.p==nil 情况下运行，因此不允许 write barrier
+// May run with m.p==nil, so write barriers are not allowed.
 //go:nowritebarrierrec
 func newosproc(mp *m) {
 	stk := unsafe.Pointer(mp.g0.stack.hi)
@@ -137,7 +106,7 @@ func newosproc(mp *m) {
 		print("newosproc stk=", stk, " m=", mp, " g=", mp.g0, " id=", mp.id, " ostk=", &mp, "\n")
 	}
 
-	// 初始化 attribute 对象
+	// Initialize an attribute object.
 	var attr pthreadattr
 	var err int32
 	err = pthread_attr_init(&attr)
@@ -146,16 +115,16 @@ func newosproc(mp *m) {
 		exit(1)
 	}
 
-	// 设置想要使用的栈大小。目前为 64KB
-	// TODO: just use OS default size?
-	const stackSize = 1 << 16
-	if pthread_attr_setstacksize(&attr, stackSize) != 0 {
+	// Find out OS stack size for our own stack guard.
+	var stacksize uintptr
+	if pthread_attr_getstacksize(&attr, &stacksize) != 0 {
 		write(2, unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
 		exit(1)
 	}
-	//mSysStatInc(&memstats.stacks_sys, stackSize) //TODO: do this?
+	mp.g0.stack.hi = stacksize // for mstart
+	//mSysStatInc(&memstats.stacks_sys, stacksize) //TODO: do this?
 
-	// 通知 pthread 库不会 join 这个线程。
+	// Tell the pthread library we won't join with this thread.
 	if pthread_attr_setdetachstate(&attr, _PTHREAD_CREATE_DETACHED) != 0 {
 		write(2, unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
 		exit(1)
@@ -192,11 +161,16 @@ func newosproc0(stacksize uintptr, fn uintptr) {
 		exit(1)
 	}
 
-	// Set the stack we want to use.
-	if pthread_attr_setstacksize(&attr, stacksize) != 0 {
+	// The caller passes in a suggested stack size,
+	// from when we allocated the stack and thread ourselves,
+	// without libpthread. Now that we're using libpthread,
+	// we use the OS default stack size instead of the suggestion.
+	// Find out that stack size for our own stack guard.
+	if pthread_attr_getstacksize(&attr, &stacksize) != 0 {
 		write(2, unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
 		exit(1)
 	}
+	g0.stack.hi = stacksize // for mstart
 	mSysStatInc(&memstats.stacks_sys, stacksize)
 
 	// Tell the pthread library we won't join with this thread.
@@ -229,15 +203,15 @@ func libpreinit() {
 	initsig(true)
 }
 
-// 调用此方法来初始化一个新的 m (包含引导 m)
-// 从一个父线程上进行调用（引导时为主线程），可以分配内存
+// Called to initialize a new m (including the bootstrap m).
+// Called on the parent thread (main thread in case of bootstrap), can allocate memory.
 func mpreinit(mp *m) {
-	mp.gsignal = malg(32 * 1024) // OS X 需要 >= 8K，此处创建处理 singnal 的 g
-	mp.gsignal.m = mp            // 指定 gsignal 拥有的 m
+	mp.gsignal = malg(32 * 1024) // OS X wants >= 8K
+	mp.gsignal.m = mp
 }
 
-// 初始化一个新的 m （包括引导阶段的 m）
-// 在一个新的线程上调用，不分配内存
+// Called to initialize a new m (including the bootstrap m).
+// Called on the new thread, cannot allocate memory.
 func minit() {
 	// The alternate signal stack is buggy on arm and arm64.
 	// The signal handler handles it directly.
@@ -294,8 +268,8 @@ func setsig(i uint32, fn uintptr) {
 	sigaction(i, &sa, nil)
 }
 
-// sigtramp 是当接收到信号后从 lib 的回调
-// 它由 C 的调用约定进行调用
+// sigtramp is the callback from libc when a signal is received.
+// It is called with the C calling convention.
 func sigtramp()
 func cgoSigtramp()
 
@@ -343,14 +317,14 @@ func sigdelset(mask *sigset, i int) {
 var executablePath string
 
 func sysargs(argc int32, argv **byte) {
-	// 跳过 argv, envv 与第一个字符串为路径
+	// skip over argv, envv and the first string will be the path
 	n := argc + 1
 	for argv_index(argv, n) != nil {
 		n++
 	}
 	executablePath = gostringnocopy(argv_index(argv, n+1))
 
-	// 移除 "executable_path=" 前缀（OS X 10.11 之后存在）
+	// strip "executable_path=" prefix if available, it's added after OS X 10.11.
 	const prefix = "executable_path="
 	if len(executablePath) > len(prefix) && executablePath[:len(prefix)] == prefix {
 		executablePath = executablePath[len(prefix):]

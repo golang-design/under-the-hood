@@ -13,6 +13,9 @@ import (
 
 var buildVersion = sys.TheVersion
 
+// set using cmd/go/internal/modload.ModInfoProg
+var modinfo string
+
 // Goroutine 调度器
 // 调度器的任务是给不同的工作线程 (worker thread) 分发 ready-to-run goroutine。
 //
@@ -75,11 +78,11 @@ var (
 	raceprocctx0 uintptr
 )
 
-//go:linkname runtime_init runtime.init
-func runtime_init()
+//go:linkname runtime_inittask runtime..inittask
+var runtime_inittask initTask
 
-//go:linkname main_init main.init
-func main_init()
+//go:linkname main_inittask main..inittask
+var main_inittask initTask
 
 // main_init_done is a signal used by cgocallbackg that initialization
 // has been completed. It is made before _cgo_notify_runtime_init_done,
@@ -138,7 +141,8 @@ func main() {
 	}
 
 	// 执行 runtime.init
-	runtime_init() // defer 必须在此调用结束后才能使用
+	doInit(&runtime_inittask) // defer 必须在此调用结束后才能使用
+
 	if nanotime() == 0 {
 		throw("nanotime returning zero")
 	}
@@ -178,10 +182,7 @@ func main() {
 		cgocall(_cgo_notify_runtime_init_done, nil)
 	}
 
-	// 执行用户 main 包中的 init 函数
-	// 处理为非间接调用，因为链接器在设定运行时不知道 main 包的地址
-	fn := main_init
-	fn()
+	doInit(&main_inittask)
 	close(main_init_done) // main.init 执行完毕
 
 	needUnlock = false
@@ -195,7 +196,7 @@ func main() {
 
 	// 执行用户 main 包中的 main 函数
 	// 处理为非间接调用，因为链接器在设定运行时不知道 main 包的地址
-	fn = main_main
+	fn := main_main
 	fn()
 
 	// race 相关
@@ -296,7 +297,7 @@ func gopark(unlockf func(*g, unsafe.Pointer) bool, lock unsafe.Pointer, reason w
 		throw("gopark: bad g status")
 	}
 	mp.waitlock = lock
-	mp.waitunlockf = *(*unsafe.Pointer)(unsafe.Pointer(&unlockf))
+	mp.waitunlockf = unlockf
 	gp.waitreason = reason
 	mp.waittraceev = traceEv
 	mp.waittraceskip = traceskip
@@ -483,7 +484,7 @@ func cpuinit() {
 	var env string
 
 	switch GOOS {
-	case "aix", "darwin", "dragonfly", "freebsd", "netbsd", "openbsd", "solaris", "linux":
+	case "aix", "darwin", "dragonfly", "freebsd", "netbsd", "openbsd", "illumos", "solaris", "linux":
 		cpu.DebugOptions = true
 
 		// 类似于 goenv_unix 但为 GODEBUG 直接提取了环境变量
@@ -600,6 +601,11 @@ func schedinit() {
 		// 该条件永远不会被触发，此处只是为了防止 buildVersion 被编译器优化移除掉。
 		buildVersion = "unknown"
 	}
+	if len(modinfo) == 1 {
+		// Condition should never trigger. This code just serves
+		// to ensure runtime·modinfo is kept in the resulting binary.
+		modinfo = ""
+	}
 }
 
 func dumpgstatus(gp *g) {
@@ -667,7 +673,7 @@ func mcommoninit(mp *m) {
 	unlock(&sched.lock)
 
 	// 分配内存来保存当 cgo 调用崩溃时候的回溯
-	if iscgo || GOOS == "solaris" || GOOS == "windows" {
+	if iscgo || GOOS == "solaris" || GOOS == "illumos" || GOOS == "windows" {
 		mp.cgoCallers = new(cgoCallers)
 	}
 }
@@ -682,7 +688,7 @@ func ready(gp *g, traceskip int, next bool) {
 
 	// 标记为 runnable.
 	_g_ := getg()
-	_g_.m.locks++ // 禁止抢占，因为它可以在局部变量中保存 p
+	mp := acquirem() // 禁止抢占，因为它可以在局部变量中保存 p
 	if status&^_Gscan != _Gwaiting {
 		dumpgstatus(gp)
 		throw("bad g->status in ready")
@@ -694,10 +700,7 @@ func ready(gp *g, traceskip int, next bool) {
 	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 {
 		wakep()
 	}
-	_g_.m.locks--
-	if _g_.m.locks == 0 && _g_.preempt { // 在 newstack 中已经清除它的情况下恢复抢占请求
-		_g_.stackguard0 = stackPreempt
-	}
+	releasem(mp)
 }
 
 // freezeStopWait is a large value that freezetheworld sets
@@ -730,13 +733,6 @@ func freezetheworld() {
 	usleep(1000)
 	preemptall()
 	usleep(1000)
-}
-
-func isscanstatus(status uint32) bool {
-	if status == _Gscan {
-		throw("isscanstatus: Bad status Gscan")
-	}
-	return status&_Gscan == _Gscan
 }
 
 // All reads and writes of g's status go through readgstatus, casgstatus
@@ -1109,9 +1105,7 @@ func stopTheWorldWithSema() {
 }
 
 func startTheWorldWithSema(emitTraceEvent bool) int64 {
-	_g_ := getg()
-
-	_g_.m.locks++ // disable preemption because it can be holding p in a local var
+	mp := acquirem() // disable preemption because it can be holding p in a local var
 	if netpollinited() {
 		list := netpoll(false) // non-blocking
 		injectglist(&list)
@@ -1161,15 +1155,11 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 		wakep()
 	}
 
-	_g_.m.locks--
-	if _g_.m.locks == 0 && _g_.preempt { // restore the preemption request in case we've cleared it in newstack
-		_g_.stackguard0 = stackPreempt
-	}
-
+	releasem(mp)
 	return startTime
 }
 
-// 启动 M
+// mstart is the entry-point for new Ms.
 //
 // 该函数不允许分段栈，因为我们甚至还没有设置栈的边界
 //
@@ -1194,16 +1184,19 @@ func mstart() {
 		_g_.stack.hi = uintptr(noescape(unsafe.Pointer(&size)))
 		_g_.stack.lo = _g_.stack.hi - size + 1024
 	}
-	// 初始化栈 guard，进而可以同时调用 Go 或 C 函数。
+	// Initialize stack guard so that we can start calling regular
+	// Go code.
 	_g_.stackguard0 = _g_.stack.lo + _StackGuard
+	// This is the g0, so we can also call go:systemstack
+	// functions, which check stackguard1.
 	_g_.stackguard1 = _g_.stackguard0
 
 	// 启动！
 	mstart1()
 
 	// 退出线程
-	if GOOS == "windows" || GOOS == "solaris" || GOOS == "plan9" || GOOS == "darwin" || GOOS == "aix" {
-		// 由于 windows, solaris, darwin, aix 和 plan9 总是系统分配的栈，在在 mstart 之前放进 _g_.stack 的
+	if GOOS == "windows" || GOOS == "solaris" || GOOS == "illumos" || GOOS == "plan9" || GOOS == "darwin" || GOOS == "aix" {
+		// 由于 windows, solaris, illumos, darwin, aix 和 plan9 总是系统分配的栈，在在 mstart 之前放进 _g_.stack 的
 		// 因此上面的逻辑还没有设置 osStack。
 		osStack = true
 	}
@@ -1493,7 +1486,7 @@ type cgothreadstart struct {
 //go:yeswritebarrierrec
 func allocm(_p_ *p, fn func()) *m {
 	_g_ := getg()
-	_g_.m.locks++ // disable GC because it can be called from sysmon
+	acquirem() // disable GC because it can be called from sysmon
 	if _g_.m.p == 0 {
 		acquirep(_p_) // temporarily borrow p for mallocs in this function
 	}
@@ -1522,9 +1515,9 @@ func allocm(_p_ *p, fn func()) *m {
 	mp.mstartfn = fn
 	mcommoninit(mp)
 
-	// In case of cgo or Solaris or Darwin, pthread_create will make us a stack.
+	// In case of cgo or Solaris or illumos or Darwin, pthread_create will make us a stack.
 	// Windows and Plan 9 will layout sched stack on OS stack.
-	if iscgo || GOOS == "solaris" || GOOS == "windows" || GOOS == "plan9" || GOOS == "darwin" {
+	if iscgo || GOOS == "solaris" || GOOS == "illumos" || GOOS == "windows" || GOOS == "plan9" || GOOS == "darwin" {
 		mp.g0 = malg(-1)
 	} else {
 		mp.g0 = malg(8192 * sys.StackGuardMultiplier)
@@ -1534,10 +1527,7 @@ func allocm(_p_ *p, fn func()) *m {
 	if _p_ == _g_.m.p.ptr() {
 		releasep()
 	}
-	_g_.m.locks--
-	if _g_.m.locks == 0 && _g_.preempt { // restore the preemption request in case we've cleared it in newstack
-		_g_.stackguard0 = stackPreempt
-	}
+	releasem(_g_.m)
 
 	return mp
 }
@@ -2560,18 +2550,23 @@ top:
 	var gp *g
 	var inheritTime bool
 
-	// trace 相关
+	// Normal goroutines will check for need to wakeP in ready,
+	// but GCworkers and tracereaders will not, so the check must
+	// be done here instead.
+	tryWakeP := false
 	if trace.enabled || trace.shutdown {
 		gp = traceReader()
 		if gp != nil {
 			casgstatus(gp, _Gwaiting, _Grunnable)
 			traceGoUnpark(gp, 0)
+			tryWakeP = true
 		}
 	}
 
 	// 正在 gc，去找 gc 的 g
 	if gp == nil && gcBlackenEnabled != 0 {
 		gp = gcController.findRunnableGCWorker(_g_.m.p.ptr())
+		tryWakeP = tryWakeP || gp != nil
 	}
 
 	if gp == nil {
@@ -2628,6 +2623,13 @@ top:
 		}
 	}
 
+	// If about to schedule a not-normal goroutine (a GCworker or tracereader),
+	// wake a P if there is one.
+	if tryWakeP {
+		if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 {
+			wakep()
+		}
+	}
 	if gp.lockedm != 0 {
 		// 如果 g 需要 lock 到 m 上，则会将当前的 p
 		// 给这个要 lock 的 g
@@ -2668,8 +2670,7 @@ func park_m(gp *g) {
 	casgstatus(gp, _Grunning, _Gwaiting)
 	dropg()
 
-	if _g_.m.waitunlockf != nil {
-		fn := *(*func(*g, unsafe.Pointer) bool)(unsafe.Pointer(&_g_.m.waitunlockf))
+	if fn := _g_.m.waitunlockf; fn != nil {
 		ok := fn(gp, _g_.m.waitlock)
 		_g_.m.waitunlockf = nil
 		_g_.m.waitlock = nil
@@ -2933,7 +2934,11 @@ func reentersyscall(pc, sp uintptr) {
 }
 
 // 标准系统调用入口，用于 go syscall 库以及普通的 cgo 调用
+//
+// This is exported via linkname to assembly in the syscall package.
+//
 //go:nosplit
+//go:linkname entersyscall
 func entersyscall() {
 	reentersyscall(getcallerpc(), getcallersp())
 }
@@ -3022,8 +3027,11 @@ func entersyscallblock_handoff() {
 //
 // write barrier 不被允许，因为我们的 P 可能已经被偷走了
 //
+// This is exported via linkname to assembly in the syscall package.
+//
 //go:nosplit
 //go:nowritebarrierrec
+//go:linkname exitsyscall
 func exitsyscall() {
 	_g_ := getg()
 
@@ -3341,7 +3349,7 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 		throw("go of nil func value")
 	}
 
-	_g_.m.locks++ // 禁止这时 g 的 m 被抢占因为它可以在一个局部变量中保存 p
+	acquirem() // 禁止这时 g 的 m 被抢占因为它可以在一个局部变量中保存 p
 	siz := narg
 	siz = (siz + 7) &^ 7
 
@@ -3466,10 +3474,7 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 && mainStarted {
 		wakep()
 	}
-	_g_.m.locks--
-	if _g_.m.locks == 0 && _g_.preempt { // 恢复可抢占的请求，注意我们已经在 newstack 的时候已经被清理掉了
-		_g_.stackguard0 = stackPreempt
-	}
+	releasem(_g_.m)
 }
 
 // saveAncestors 复制给定调用者 g 的先前 ancestors
@@ -3874,7 +3879,7 @@ func sigprof(pc, sp, lr uintptr, gp *g, mp *m) {
 		// Normal traceback is impossible or has failed.
 		// See if it falls into several common cases.
 		n = 0
-		if (GOOS == "windows" || GOOS == "solaris" || GOOS == "darwin") && mp.libcallg != 0 && mp.libcallpc != 0 && mp.libcallsp != 0 {
+		if (GOOS == "windows" || GOOS == "solaris" || GOOS == "illumos" || GOOS == "darwin" || GOOS == "aix") && mp.libcallg != 0 && mp.libcallpc != 0 && mp.libcallsp != 0 {
 			// Libcall, i.e. runtime syscall on windows.
 			// Collect Go stack that leads to the call.
 			n = gentraceback(mp.libcallpc, mp.libcallsp, 0, mp.libcallg.ptr(), 0, &stk[0], len(stk), nil, nil, 0)
@@ -4011,6 +4016,92 @@ func setcpuprofilerate(hz int32) {
 	_g_.m.locks--
 }
 
+// init initializes pp, which may be a freshly allocated p or a
+// previously destroyed p, and transitions it to status _Pgcstop.
+func (pp *p) init(id int32) {
+	pp.id = id
+	pp.status = _Pgcstop
+	pp.sudogcache = pp.sudogbuf[:0]
+	for i := range pp.deferpool {
+		pp.deferpool[i] = pp.deferpoolbuf[i][:0]
+	}
+	pp.wbBuf.reset()
+	if pp.mcache == nil {
+		if id == 0 {
+			if getg().m.mcache == nil {
+				throw("missing mcache?")
+			}
+			pp.mcache = getg().m.mcache // bootstrap
+		} else {
+			pp.mcache = allocmcache()
+		}
+	}
+	if raceenabled && pp.raceprocctx == 0 {
+		if id == 0 {
+			pp.raceprocctx = raceprocctx0
+			raceprocctx0 = 0 // bootstrap
+		} else {
+			pp.raceprocctx = raceproccreate()
+		}
+	}
+}
+
+// destroy releases all of the resources associated with pp and
+// transitions it to status _Pdead.
+//
+// sched.lock must be held and the world must be stopped.
+func (pp *p) destroy() {
+	// Move all runnable goroutines to the global queue
+	for pp.runqhead != pp.runqtail {
+		// Pop from tail of local queue
+		pp.runqtail--
+		gp := pp.runq[pp.runqtail%uint32(len(pp.runq))].ptr()
+		// Push onto head of global queue
+		globrunqputhead(gp)
+	}
+	if pp.runnext != 0 {
+		globrunqputhead(pp.runnext.ptr())
+		pp.runnext = 0
+	}
+	// If there's a background worker, make it runnable and put
+	// it on the global queue so it can clean itself up.
+	if gp := pp.gcBgMarkWorker.ptr(); gp != nil {
+		casgstatus(gp, _Gwaiting, _Grunnable)
+		if trace.enabled {
+			traceGoUnpark(gp, 0)
+		}
+		globrunqput(gp)
+		// This assignment doesn't race because the
+		// world is stopped.
+		pp.gcBgMarkWorker.set(nil)
+	}
+	// Flush p's write barrier buffer.
+	if gcphase != _GCoff {
+		wbBufFlush1(pp)
+		pp.gcw.dispose()
+	}
+	for i := range pp.sudogbuf {
+		pp.sudogbuf[i] = nil
+	}
+	pp.sudogcache = pp.sudogbuf[:0]
+	for i := range pp.deferpool {
+		for j := range pp.deferpoolbuf[i] {
+			pp.deferpoolbuf[i][j] = nil
+		}
+		pp.deferpool[i] = pp.deferpoolbuf[i][:0]
+	}
+	freemcache(pp.mcache)
+	pp.mcache = nil
+	gfpurge(pp)
+	traceProcFree(pp)
+	if raceenabled {
+		raceprocdestroy(pp.raceprocctx)
+		pp.raceprocctx = 0
+	}
+	pp.gcAssistTime = 0
+	pp.status = _Pdead
+}
+
 // 修改 P 的数量，此时所有工作均被停止 STW，sched 被锁定
 // gcworkbufs 既不会被 GC 修改，也不会被 write barrier 修改
 // 返回带有 local work 的 P 列表，他们需要被调用方调度
@@ -4055,124 +4146,15 @@ func procresize(nprocs int32) *p {
 	}
 
 	// 初始化新的 P
-	for i := int32(0); i < nprocs; i++ {
+	for i := old; i < nprocs; i++ {
 		pp := allp[i]
 
 		// 如果 p 是新创建的(新创建的 p 在数组中为 nil)，则申请新的 P 对象
 		if pp == nil {
 			pp = new(p)
-			// p 的 id 就是它在 allp 中的索引
-			pp.id = i
-			// 新创建的 p 处于 _Pgcstop 状态
-			pp.status = _Pgcstop
-			pp.sudogcache = pp.sudogbuf[:0]
-			for i := range pp.deferpool {
-				pp.deferpool[i] = pp.deferpoolbuf[i][:0]
-			}
-			pp.wbBuf.reset()
-
-			// 保存至 allp, allp[i] = pp
-			atomicstorep(unsafe.Pointer(&allp[i]), unsafe.Pointer(pp))
 		}
-
-		// 为 P 分配 cache 对象
-		if pp.mcache == nil {
-			// 如果 old == 0 且 i == 0 说明这是引导阶段初始化第一个 p
-			if old == 0 && i == 0 {
-				// 确认当前 g 的 m 的 mcache 分空
-				if getg().m.mcache == nil {
-					throw("missing mcache?")
-				}
-				pp.mcache = getg().m.mcache
-			} else {
-				// 创建 cache
-				pp.mcache = allocmcache()
-			}
-		}
-
-		// race 检测相关
-		if raceenabled && pp.racectx == 0 {
-			if old == 0 && i == 0 {
-				pp.racectx = raceprocctx0
-				raceprocctx0 = 0
-			} else {
-				pp.racectx = raceproccreate()
-			}
-		}
-	}
-
-	// 释放未使用的 P，一般情况下不会执行这段代码
-	for i := nprocs; i < old; i++ {
-		p := allp[i]
-
-		// trace 相关
-		if trace.enabled && p == getg().m.p.ptr() {
-			// moving to p[0], pretend that we were descheduled
-			// and then scheduled again to keep the trace sane.
-			traceGoSched()
-			traceProcStop(p)
-		}
-
-		// 将所有 runnable goroutine 移动至全局队列
-		for p.runqhead != p.runqtail {
-			// 从本地队列中 pop
-			p.runqtail--
-			gp := p.runq[p.runqtail%uint32(len(p.runq))].ptr()
-			// push 到全局队列中
-			globrunqputhead(gp)
-		}
-		if p.runnext != 0 {
-			globrunqputhead(p.runnext.ptr())
-			p.runnext = 0
-		}
-		// if there's a background worker, make it runnable and put
-		// it on the global queue so it can clean itself up
-		if gp := p.gcBgMarkWorker.ptr(); gp != nil {
-			casgstatus(gp, _Gwaiting, _Grunnable)
-			if trace.enabled {
-				traceGoUnpark(gp, 0)
-			}
-			globrunqput(gp)
-			// This assignment doesn't race because the
-			// world is stopped.
-			p.gcBgMarkWorker.set(nil)
-		}
-		// Flush p's write barrier buffer.
-		if gcphase != _GCoff {
-			wbBufFlush1(p)
-			p.gcw.dispose()
-		}
-		for i := range p.sudogbuf {
-			p.sudogbuf[i] = nil
-		}
-		p.sudogcache = p.sudogbuf[:0]
-		for i := range p.deferpool {
-			for j := range p.deferpoolbuf[i] {
-				p.deferpoolbuf[i][j] = nil
-			}
-			p.deferpool[i] = p.deferpoolbuf[i][:0]
-		}
-		// 释放当前 P 绑定的 cache
-		freemcache(p.mcache)
-		p.mcache = nil
-
-		// 将当前 P 的 G 复链转移到全局
-		gfpurge(p)
-		traceProcFree(p)
-		if raceenabled {
-			raceprocdestroy(p.racectx)
-			p.racectx = 0
-		}
-		p.gcAssistTime = 0
-		p.status = _Pdead
-		// 这里不能释放 P，因为它可能被一个正在系统调用中的 M 引用
-	}
-
-	// 清理完毕后，修剪 allp, nprocs 个数之外的所有 P
-	if int32(len(allp)) != nprocs {
-		lock(&allpLock)
-		allp = allp[:nprocs]
-		unlock(&allpLock)
+		pp.init(i)
+		atomicstorep(unsafe.Pointer(&allp[i]), unsafe.Pointer(pp))
 	}
 
 	_g_ := getg()
@@ -4183,8 +4165,19 @@ func procresize(nprocs int32) *p {
 		_g_.m.p.ptr().status = _Prunning
 		_g_.m.p.ptr().mcache.prepareForSweep()
 	} else {
-		// 释放当前 P，因为已失效
+		// release the current P and acquire allp[0].
+		//
+		// We must do this before destroying our current P
+		// because p.destroy itself has write barriers, so we
+		// need to do that from a valid P.
 		if _g_.m.p != 0 {
+			if trace.enabled {
+				// Pretend that we were descheduled
+				// and then scheduled again to keep
+				// the trace sane.
+				traceGoSched()
+				traceProcStop(_g_.m.p.ptr())
+			}
 			_g_.m.p.ptr().m = 0
 		}
 		_g_.m.p = 0
@@ -4200,6 +4193,20 @@ func procresize(nprocs int32) *p {
 		if trace.enabled {
 			traceGoStart()
 		}
+	}
+
+	// release resources from unused P's
+	for i := nprocs; i < old; i++ {
+		p := allp[i]
+		p.destroy()
+		// can't free P itself because it can be referenced by an M in syscall
+	}
+
+	// Trim allp.
+	if int32(len(allp)) != nprocs {
+		lock(&allpLock)
+		allp = allp[:nprocs]
+		unlock(&allpLock)
 	}
 
 	// 将没有本地任务的 P 放到空闲链表中
@@ -4295,7 +4302,7 @@ func releasep() *p {
 	}
 	_p_ := _g_.m.p.ptr()
 	if _p_.m.ptr() != _g_.m || _p_.mcache != _g_.m.mcache || _p_.status != _Prunning {
-		print("releasep: m=", _g_.m, " m->p=", _g_.m.p.ptr(), " p->m=", _p_.m, " m->mcache=", _g_.m.mcache, " p->mcache=", _p_.mcache, " p->status=", _p_.status, "\n")
+		print("releasep: m=", _g_.m, " m->p=", _g_.m.p.ptr(), " p->m=", hex(_p_.m), " m->mcache=", _g_.m.mcache, " p->mcache=", _p_.mcache, " p->status=", _p_.status, "\n")
 		throw("releasep: invalid p state")
 	}
 	if trace.enabled {
@@ -4342,7 +4349,12 @@ func checkdead() {
 	// for details.)
 	var run0 int32
 	if !iscgo && cgoHasExtraM {
-		run0 = 1
+		mp := lockextra(true)
+		haveExtraM := extraMCount > 0
+		unlockextra(mp)
+		if haveExtraM {
+			run0 = 1
+		}
 	}
 
 	run := mcount() - sched.nmidle - sched.nmidlelocked - sched.nmsys
@@ -4421,20 +4433,6 @@ func sysmon() {
 	checkdead()
 	unlock(&sched.lock)
 
-	// 如果一个堆 span 在 GC 超过五分钟没有被使用
-	// 则回收交于操作系统
-	scavengelimit := int64(5 * 60 * 1e9)
-
-	// 调试相关
-	if debug.scavenge > 0 {
-		// Scavenge-a-lot for testing.
-		forcegcperiod = 10 * 1e6
-		scavengelimit = 20 * 1e6
-	}
-
-	lastscavenge := nanotime()
-	nscavenge := 0
-
 	lasttrace := int64(0)
 	idle := 0 // 没有 wokeup 的周期数
 	delay := uint32(0)
@@ -4459,9 +4457,6 @@ func sysmon() {
 				unlock(&sched.lock)
 				// 确保 wake-up 周期足够小从而进行正确的采样
 				maxsleep := forcegcperiod / 2
-				if scavengelimit < forcegcperiod {
-					maxsleep = scavengelimit / 2
-				}
 				shouldRelax := true
 				if osRelaxMinNS > 0 {
 					next := timeSleepUntil()
@@ -4524,12 +4519,6 @@ func sysmon() {
 			injectglist(&list)
 			unlock(&forcegc.lock)
 		}
-		// 一段时间内清理堆
-		if lastscavenge+scavengelimit/2 < now {
-			mheap_.scavenge(int32(nscavenge), uint64(now), uint64(scavengelimit))
-			lastscavenge = now
-			nscavenge++
-		}
 
 		// trace 相关
 		if debug.schedtrace > 0 && lasttrace+int64(debug.schedtrace)*1000000 <= now {
@@ -4564,12 +4553,25 @@ func retake(now int64) uint32 {
 		}
 		pd := &_p_.sysmontick
 		s := _p_.status
-
+		sysretake := false
+		if s == _Prunning || s == _Psyscall {
+			// Preempt G if it's running for too long.
+			t := int64(_p_.schedtick)
+			if int64(pd.schedtick) != t {
+				pd.schedtick = uint32(t)
+				pd.schedwhen = now
+			} else if pd.schedwhen+forcePreemptNS <= now {
+				preemptone(_p_)
+				// In case of syscall, preemptone() doesn't
+				// work, because there is no M wired to P.
+				sysretake = true
+			}
+		}
 		// 对阻塞在系统调用上的 P 进行抢占
 		if s == _Psyscall {
 			// 如果已经超过了一个系统监控的 tick（20us），则从系统调用中抢占 P
 			t := int64(_p_.syscalltick)
-			if int64(pd.syscalltick) != t {
+			if !sysretake && int64(pd.syscalltick) != t {
 				pd.syscalltick = uint32(t)
 				pd.syscallwhen = now
 				continue
@@ -4596,19 +4598,6 @@ func retake(now int64) uint32 {
 			}
 			incidlelocked(1)
 			lock(&allpLock)
-
-		} else if s == _Prunning { // 对正在运行的 P 进行抢占
-			// 如果运行时间太长，则抢占 G
-			t := int64(_p_.schedtick)
-			if int64(pd.schedtick) != t {
-				pd.schedtick = uint32(t)
-				pd.schedwhen = now
-				continue
-			}
-			if pd.schedwhen+forcePreemptNS > now {
-				continue
-			}
-			preemptone(_p_)
 		}
 	}
 	unlock(&allpLock)
@@ -5372,4 +5361,36 @@ func gcd(a, b uint32) uint32 {
 		a, b = b, a%b
 	}
 	return a
+}
+
+// An initTask represents the set of initializations that need to be done for a package.
+type initTask struct {
+	// TODO: pack the first 3 fields more tightly?
+	state uintptr // 0 = uninitialized, 1 = in progress, 2 = done
+	ndeps uintptr
+	nfns  uintptr
+	// followed by ndeps instances of an *initTask, one per package depended on
+	// followed by nfns pcs, one per init function to run
+}
+
+func doInit(t *initTask) {
+	switch t.state {
+	case 2: // fully initialized
+		return
+	case 1: // initialization in progress
+		throw("recursive call during initialization - linker skew")
+	default: // not initialized yet
+		t.state = 1 // initialization in progress
+		for i := uintptr(0); i < t.ndeps; i++ {
+			p := add(unsafe.Pointer(t), (3+i)*sys.PtrSize)
+			t2 := *(**initTask)(p)
+			doInit(t2)
+		}
+		for i := uintptr(0); i < t.nfns; i++ {
+			p := add(unsafe.Pointer(t), (3+t.ndeps+i)*sys.PtrSize)
+			f := *(*func())(unsafe.Pointer(&p))
+			f()
+		}
+		t.state = 2 // initialization done
+	}
 }

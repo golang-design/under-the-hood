@@ -221,7 +221,7 @@ const (
 	// logHeapArenaBytes is log_2 of heapArenaBytes. For clarity,
 	// prefer using heapArenaBytes where possible (we need the
 	// constant to compute some other constants).
-	logHeapArenaBytes = (6+20)*(_64bit*(1-sys.GoosWindows)*(1-sys.GoosAix)) + (2+20)*(_64bit*sys.GoosWindows) + (2+20)*(1-_64bit) + (8+20)*sys.GoosAix
+	logHeapArenaBytes = (6+20)*(_64bit*(1-sys.GoosWindows)*(1-sys.GoosAix)*(1-sys.GoarchWasm)) + (2+20)*(_64bit*sys.GoosWindows) + (2+20)*(1-_64bit) + (8+20)*sys.GoosAix + (2+20)*sys.GoarchWasm
 
 	// heapArenaBitmapBytes 为每个 heap arena 的 bitmap 的大小
 	heapArenaBitmapBytes = heapArenaBytes / (sys.PtrSize * 8 / 2)
@@ -294,33 +294,81 @@ const (
 // 它必须在操作系统初始化代码中、mallocinit 之前进行设置（通常在 osinit）
 var physPageSize uintptr
 
-// OS-defined helpers: 操作系统级别的辅助函数
+// physHugePageSize is the size in bytes of the OS's default physical huge
+// page size whose allocation is opaque to the application.
 //
-// sysAlloc 从操作系统上获得大量清零的内存，通常大小约为 KB 或者 MB 级别.
-// 注意: sysAlloc 返回的是操作系统排布的内存，但堆分配器可能使用更大的布局。
-// 因此调用方必须谨慎的重排从 sysAlloc 获得的内存。
+// If set, this must be set by the OS init code (typically in osinit) before
+// mallocinit. However, setting it at all is optional, and leaving the default
+// value is always safe (though potentially less efficient).
+var physHugePageSize uintptr
+
+// OS memory management abstraction layer
 //
-// sysUnused notifies the operating system that the contents
-// of the memory region are no longer needed and can be reused
-// for other purposes.
-// sysUsed notifies the operating system that the contents
-// of the memory region are needed again.
+// Regions of the address space managed by the runtime may be in one of four
+// states at any given time:
+// 1) None - Unreserved and unmapped, the default state of any region.
+// 2) Reserved - Owned by the runtime, but accessing it would cause a fault.
+//               Does not count against the process' memory footprint.
+// 3) Prepared - Reserved, intended not to be backed by physical memory (though
+//               an OS may implement this lazily). Can transition efficiently to
+//               Ready. Accessing memory in such a region is undefined (may
+//               fault, may give back unexpected zeroes, etc.).
+// 4) Ready - may be accessed safely.
 //
-// sysFree returns it unconditionally; this is only used if
-// an out-of-memory error has been detected midway through
-// an allocation. It is okay if sysFree is a no-op.
+// This set of states is more than is strictly necessary to support all the
+// currently supported platforms. One could get by with just None, Reserved, and
+// Ready. However, the Prepared state gives us flexibility for performance
+// purposes. For example, on POSIX-y operating systems, Reserved is usually a
+// private anonymous mmap'd region with PROT_NONE set, and to transition
+// to Ready would require setting PROT_READ|PROT_WRITE. However the
+// underspecification of Prepared lets us use just MADV_FREE to transition from
+// Ready to Prepared. Thus with the Prepared state we can set the permission
+// bits just once early on, we can efficiently tell the OS that it's free to
+// take pages away from us when we don't strictly need them.
 //
-// sysReserve reserves address space without allocating memory.
+// For each OS there is a common set of helpers defined that transition
+// memory regions between these states. The helpers are as follows:
+//
+// sysAlloc transitions an OS-chosen region of memory from None to Ready.
+// More specifically, it obtains a large chunk of zeroed memory from the
+// operating system, typically on the order of a hundred kilobytes
+// or a megabyte. This memory is always immediately available for use.
+//
+// sysFree transitions a memory region from any state to None. Therefore, it
+// returns memory unconditionally. It is used if an out-of-memory error has been
+// detected midway through an allocation or to carve out an aligned section of
+// the address space. It is okay if sysFree is a no-op only if sysReserve always
+// returns a memory region aligned to the heap allocator's alignment
+// restrictions.
+//
+// sysReserve transitions a memory region from None to Reserved. It reserves
+// address space in such a way that it would cause a fatal fault upon access
+// (either via permissions or not committing the memory). Such a reservation is
+// thus never backed by physical memory.
 // If the pointer passed to it is non-nil, the caller wants the
 // reservation there, but sysReserve can still choose another
 // location if that one is unavailable.
 // 注意: sysReserve 返回的是操作系统排布的内存，但堆分配器可能使用更大的布局。
 // 因此调用方必须谨慎的重排从 sysReserve 获得的内存。
 //
-// sysMap maps previously reserved address space for use.
+// sysMap transitions a memory region from Reserved to Prepared. It ensures the
+// memory region can be efficiently transitioned to Ready.
 //
-// sysFault marks a (already sysAlloc'd) region to fault
-// if accessed. Used only for debugging the runtime.
+// sysUsed transitions a memory region from Prepared to Ready. It notifies the
+// operating system that the memory region is needed and ensures that the region
+// may be safely accessed. This is typically a no-op on systems that don't have
+// an explicit commit step and hard over-commit limits, but is critical on
+// Windows, for example.
+//
+// sysUnused transitions a memory region from Ready to Prepared. It notifies the
+// operating system that the physical pages backing this memory region are no
+// longer needed and can be reused for other purposes. The contents of a
+// sysUnused memory region are considered forfeit and the region must not be
+// accessed again until sysUsed is called.
+//
+// sysFault transitions a memory region from Ready or Prepared to Reserved. It
+// marks a region such that it will always fault if accessed. Used only for
+// debugging the runtime.
 
 func mallocinit() {
 	if class_to_size[_TinySizeClass] != _TinySize {
@@ -362,7 +410,7 @@ func mallocinit() {
 	_g_.m.mcache = allocmcache()
 
 	// 创建初始的 arena 增长 hint
-	if sys.PtrSize == 8 && GOARCH != "wasm" {
+	if sys.PtrSize == 8 {
 		// 64 位机器上，我们选取下面的 hint，因为：
 		//
 		// 1.从地址空间的中间开始，可以更容易地扩展连续范围，而无需进入其他映射。
@@ -488,6 +536,9 @@ func mallocinit() {
 // heapArenaBytes. sysAlloc returns nil on failure.
 // There is no corresponding free function.
 //
+// sysAlloc returns a memory region in the Prepared state. This region must
+// be transitioned to Ready before use.
+//
 // h must be locked.
 func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) {
 	n = round(n, heapArenaBytes)
@@ -529,7 +580,7 @@ func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) {
 		// TODO: This would be cleaner if sysReserve could be
 		// told to only return the requested address. In
 		// particular, this is already how Windows behaves, so
-		// it would simply things there.
+		// it would simplify things there.
 		if v != nil {
 			sysFree(v, n, nil)
 		}
@@ -586,7 +637,7 @@ func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) {
 		throw("misrounded allocation in sysAlloc")
 	}
 
-	// 正式开始使用保留的内存
+	// Transition from Reserved to Prepared.
 	sysMap(v, size, &memstats.heap_sys)
 
 mapped:
@@ -817,7 +868,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	// 获取 mcache
 	c := gomcache()
 	var x unsafe.Pointer
-	noscan := typ == nil || typ.kind&kindNoPointers != 0
+	noscan := typ == nil || typ.ptrdata == 0
 	if size <= maxSmallSize {
 		if noscan && size < maxTinySize {
 			// 微型分配器 (tiny allocator)
@@ -1034,6 +1085,11 @@ func reflect_unsafe_New(typ *_type) unsafe.Pointer {
 	return mallocgc(typ.size, typ, true)
 }
 
+//go:linkname reflectlite_unsafe_New internal/reflectlite.unsafe_New
+func reflectlite_unsafe_New(typ *_type) unsafe.Pointer {
+	return mallocgc(typ.size, typ, true)
+}
+
 // newarray allocates an array of n elements of type typ.
 func newarray(typ *_type, n int) unsafe.Pointer {
 	if n == 1 {
@@ -1207,7 +1263,7 @@ func persistentalloc1(size, align uintptr, sysStat *uint64) *notInHeap {
 				break
 			}
 		}
-		persistent.off = sys.PtrSize
+		persistent.off = round(sys.PtrSize, align)
 	}
 	p := persistent.base.add(persistent.off)
 	persistent.off += size
@@ -1238,8 +1294,8 @@ func inPersistentAlloc(p uintptr) bool {
 	return false
 }
 
-// linearAlloc 是一个简单的线性分配器，提前储备了内存的一块区域并在需要时指向该区域。
-// 调用方负责加锁。
+// linearAlloc 是一个简单的线性分配器，它预留一块内存区域并按需将其映射到 Ready 状态。
+// 调用方有责任对齐进行加锁。
 type linearAlloc struct {
 	next   uintptr // 下一个可用的字节
 	mapped uintptr // 映射空间后的一个字节
@@ -1258,7 +1314,7 @@ func (l *linearAlloc) alloc(size, align uintptr, sysStat *uint64) unsafe.Pointer
 	}
 	l.next = p + size
 	if pEnd := round(l.next-1, physPageSize); pEnd > l.mapped {
-		// We need to map more of the reserved space.
+		// Transition from Reserved to Prepared to Ready.
 		sysMap(unsafe.Pointer(l.mapped), pEnd-l.mapped, sysStat)
 		l.mapped = pEnd
 	}

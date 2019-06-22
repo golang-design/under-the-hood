@@ -113,19 +113,10 @@ func gcMarkRootCheck() {
 	lock(&allglock)
 	// Check that stacks have been scanned.
 	var gp *g
-	if gcphase == _GCmarktermination && debug.gcrescanstacks > 0 {
-		for i := 0; i < len(allgs); i++ {
-			gp = allgs[i]
-			if !(gp.gcscandone && gp.gcscanvalid) && readgstatus(gp) != _Gdead {
-				goto fail
-			}
-		}
-	} else {
-		for i := 0; i < work.nStackRoots; i++ {
-			gp = allgs[i]
-			if !gp.gcscandone {
-				goto fail
-			}
+	for i := 0; i < work.nStackRoots; i++ {
+		gp = allgs[i]
+		if !gp.gcscandone {
+			goto fail
 		}
 	}
 	unlock(&allglock)
@@ -264,8 +255,6 @@ func markrootBlock(b0, n0 uintptr, ptrmask0 *uint8, gcw *gcWork, shard int) {
 //
 // This does not free stacks of dead Gs cached on Ps, but having a few
 // cached stacks around isn't a problem.
-//
-//TODO go:nowritebarrier
 func markrootFreeGStacks() {
 	// Take list of dead Gs with stacks.
 	lock(&sched.gFree.lock)
@@ -279,7 +268,9 @@ func markrootFreeGStacks() {
 	// Free stacks.
 	q := gQueue{list.head, list.head}
 	for gp := list.head.ptr(); gp != nil; gp = gp.schedlink.ptr() {
-		shrinkstack(gp)
+		stackfree(gp.stack)
+		gp.stack.lo = 0
+		gp.stack.hi = 0
 		// Manipulate the queue directly since the Gs are
 		// already all linked the right way.
 		q.tail.set(gp)
@@ -633,7 +624,7 @@ func gcFlushBgCredit(scanWork int64) {
 			// Satisfy this entire assist debt.
 			scanBytes += gp.gcAssistBytes
 			gp.gcAssistBytes = 0
-			// It's important that we *not* put xgp in
+			// It's important that we *not* put gp in
 			// runnext. Otherwise, it's possible for user
 			// code to exploit the GC worker's high
 			// scheduler priority to get itself always run
@@ -718,14 +709,37 @@ func scanstack(gp *g, gcw *gcWork) {
 		return true
 	}
 	gentraceback(^uintptr(0), ^uintptr(0), 0, gp, 0, nil, 0x7fffffff, scanframe, nil, 0)
+
+	// Find additional pointers that point into the stack from the heap.
+	// Currently this includes defers and panics. See also function copystack.
+
+	// Find and trace all defer arguments.
 	tracebackdefers(gp, scanframe, nil)
+
+	// Find and trace other pointers in defer records.
 	for d := gp._defer; d != nil; d = d.link {
-		// tracebackdefers above does not scan the func value, which could
-		// be a stack allocated closure. See issue 30453.
 		if d.fn != nil {
+			// tracebackdefers above does not scan the func value, which could
+			// be a stack allocated closure. See issue 30453.
 			scanblock(uintptr(unsafe.Pointer(&d.fn)), sys.PtrSize, &oneptrmask[0], gcw, &state)
 		}
+		if d.link != nil {
+			// The link field of a stack-allocated defer record might point
+			// to a heap-allocated defer record. Keep that heap record live.
+			scanblock(uintptr(unsafe.Pointer(&d.link)), sys.PtrSize, &oneptrmask[0], gcw, &state)
+		}
+		// Retain defers records themselves.
+		// Defer records might not be reachable from the G through regular heap
+		// tracing because the defer linked list might weave between the stack and the heap.
+		if d.heap {
+			scanblock(uintptr(unsafe.Pointer(&d)), sys.PtrSize, &oneptrmask[0], gcw, &state)
+		}
 	}
+	if gp._panic != nil {
+		// Panics are always stack allocated.
+		state.putPtr(uintptr(unsafe.Pointer(gp._panic)))
+	}
+
 	// Find and scan all reachable stack objects.
 	state.buildIndex()
 	for {
@@ -795,22 +809,45 @@ func scanstack(gp *g, gcw *gcWork) {
 
 // Scan a stack frame: local variables and function arguments/results.
 //go:nowritebarrier
-func scanframeworker(frame *stkframe, cache *pcvalueCache, gcw *gcWork) {
+func scanframeworker(frame *stkframe, state *stackScanState, gcw *gcWork) {
 	if _DebugGC > 1 && frame.continpc != 0 {
 		print("scanframe ", funcname(frame.fn), "\n")
 	}
 
-	locals, args := getStackMap(frame, cache, false)
+	locals, args, objs := getStackMap(frame, &state.cache, false)
 
 	// Scan local variables if stack frame has been allocated.
 	if locals.n > 0 {
 		size := uintptr(locals.n) * sys.PtrSize
-		scanblock(frame.varp-size, size, locals.bytedata, gcw)
+		scanblock(frame.varp-size, size, locals.bytedata, gcw, state)
 	}
 
 	// Scan arguments.
 	if args.n > 0 {
-		scanblock(frame.argp, uintptr(args.n)*sys.PtrSize, args.bytedata, gcw)
+		scanblock(frame.argp, uintptr(args.n)*sys.PtrSize, args.bytedata, gcw, state)
+	}
+
+	// Add all stack objects to the stack object list.
+	if frame.varp != 0 {
+		// varp is 0 for defers, where there are no locals.
+		// In that case, there can't be a pointer to its args, either.
+		// (And all args would be scanned above anyway.)
+		for _, obj := range objs {
+			off := obj.off
+			base := frame.varp // locals base pointer
+			if off >= 0 {
+				base = frame.argp // arguments and return values base pointer
+			}
+			ptr := base + uintptr(off)
+			if ptr < frame.sp {
+				// object hasn't been allocated in the frame yet.
+				continue
+			}
+			if stackTraceDebug {
+				println("stkobj at", hex(ptr), "of type", obj.typ.string())
+			}
+			state.addObject(ptr, obj.typ)
+		}
 	}
 }
 

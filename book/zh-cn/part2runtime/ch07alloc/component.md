@@ -144,8 +144,8 @@ func (f *fixalloc) free(p unsafe.Pointer) {
 在 32 位系统上使用，这里不做详细分析。
 
 ```go
-// linearAlloc 是一个简单的线性分配器，提前储备了内存的一块区域并在需要时指向该区域。
-// 调用方负责加锁。
+// linearAlloc 是一个简单的线性分配器，它预留一块内存区域并按需将其映射到 Ready 状态。
+// 调用方有责任对齐进行加锁。
 type linearAlloc struct {
 	next   uintptr // 下一个可用的字节
 	mapped uintptr // 映射空间后的一个字节
@@ -224,10 +224,13 @@ type mcache struct {
 var emptymspan mspan
 
 func allocmcache() *mcache {
-	lock(&mheap_.lock)
-	c := (*mcache)(mheap_.cachealloc.alloc())
-	c.flushGen = mheap_.sweepgen
-	unlock(&mheap_.lock)
+	var c *mcache
+	systemstack(func() {
+		lock(&mheap_.lock)
+		c = (*mcache)(mheap_.cachealloc.alloc())
+		c.flushGen = mheap_.sweepgen
+		unlock(&mheap_.lock)
+	}
 	for i := range c.alloc {
 		c.alloc[i] = &emptymspan // 暂时指向虚拟的 mspan 中
 	}

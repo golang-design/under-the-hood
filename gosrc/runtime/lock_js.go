@@ -10,7 +10,7 @@ import (
 	_ "unsafe"
 )
 
-// js/wasm 还不支持线程。因此不存在抢占一说。目前等待 mutex 是通过在 mutex 解锁前运行其他 goroutine 实现的。
+// js/wasm 还不支持线程。因此不存在抢占一说。
 
 const (
 	mutex_unlocked = 0
@@ -36,7 +36,6 @@ func lock(l *mutex) {
 		throw("lock count")
 	}
 	gp.m.locks++
-	l.key = mutex_locked
 }
 
 func unlock(l *mutex) {

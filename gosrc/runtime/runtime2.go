@@ -18,6 +18,13 @@ const (
 	// 除了指示 G 的一般状态之外，G 的状态就类似于 goroutine 的堆栈的一个锁（即它执行用户代码的能力）。
 	// 如果你在给此列表增加内容，还需要添加到 mgcmark.go 中的 “垃圾收集期间的正常” 状态列表中。
 	//
+	//
+	// TODO(austin): The _Gscan bit could be much lighter-weight.
+	// For example, we could choose not to run _Gscanrunnable
+	// goroutines found in the run queue, rather than CAS-looping
+	// until they become _Grunnable. And transitions like
+	// _Gscanwaiting -> _Gscanrunnable are actually okay because
+	// they don't affect stack ownership.
 
 	// _Gidle 表示 goroutine 刚刚完成分配且还未被初始化
 	_Gidle = iota // 0
@@ -76,10 +83,49 @@ const (
 
 const (
 	// P 的状态
-	_Pidle    = iota
-	_Prunning // 只允许此 P 从 _Prunning 更改
+	// _Pidle means a P is not being used to run user code or the
+	// scheduler. Typically, it's on the idle P list and available
+	// to the scheduler, but it may just be transitioning between
+	// other states.
+	//
+	// The P is owned by the idle list or by whatever is
+	// transitioning its state. Its run queue is empty.
+	_Pidle = iota
+	// _Prunning means a P is owned by an M and is being used to
+	// run user code or the scheduler. Only the M that owns this P
+	// is allowed to change the P's status from _Prunning. The M
+	// may transition the P to _Pidle (if it has no more work to
+	// do), _Psyscall (when entering a syscall), or _Pgcstop (to
+	// halt for the GC). The M may also hand ownership of the P
+	// off directly to another M (e.g., to schedule a locked G).
+	_Prunning
+
+	// _Psyscall means a P is not running user code. It has
+	// affinity to an M in a syscall but is not owned by it and
+	// may be stolen by another M. This is similar to _Pidle but
+	// uses lightweight transitions and maintains M affinity.
+	//
+	// Leaving _Psyscall must be done with a CAS, either to steal
+	// or retake the P. Note that there's an ABA hazard: even if
+	// an M successfully CASes its original P back to _Prunning
+	// after a syscall, it must understand the P may have been
+	// used by another M in the interim.
 	_Psyscall
+
+	// _Pgcstop means a P is halted for STW and owned by the M
+	// that stopped the world. The M that stopped the world
+	// continues to use its P, even in _Pgcstop. Transitioning
+	// from _Prunning to _Pgcstop causes an M to release its P and
+	// park.
+	//
+	// The P retains its run queue and startTheWorld will restart
+	// the scheduler on Ps with non-empty run queues.
 	_Pgcstop
+
+	// _Pdead means a P is no longer used (GOMAXPROCS shrank). We
+	// reuse Ps if GOMAXPROCS increases. A dead P is mostly
+	// stripped of its resources, though a few things remain
+	// (e.g., trace buffers).
 	_Pdead
 )
 
@@ -401,11 +447,11 @@ type m struct {
 	schedlink     muintptr
 	mcache        *mcache
 	lockedg       guintptr
-	createstack   [32]uintptr    // 当前线程创建的栈
-	lockedExt     uint32         // 外部 LockOSThread 追踪
-	lockedInt     uint32         // 内部 lockOSThread 追踪
-	nextwaitm     muintptr       // 正在等待锁的下一个 m
-	waitunlockf   unsafe.Pointer // todo go func(*g, unsafe.pointer) bool
+	createstack   [32]uintptr // 当前线程创建的栈
+	lockedExt     uint32      // 外部 LockOSThread 追踪
+	lockedInt     uint32      // 内部 lockOSThread 追踪
+	nextwaitm     muintptr    // 正在等待锁的下一个 m
+	waitunlockf   func(*g, unsafe.Pointer) bool
 	waitlock      unsafe.Pointer
 	waittraceev   byte
 	waittraceskip int
@@ -424,6 +470,8 @@ type m struct {
 	vdsoSP uintptr // SP 用于 VDSO 调用的回溯 (如果没有产生调用则为 0)
 	vdsoPC uintptr // PC 用于 VDSO 调用的回溯
 
+	dlogPerM
+
 	mOS
 }
 
@@ -438,7 +486,7 @@ type p struct {
 	sysmontick  sysmontick // 系统监控观察到的最后一次记录
 	m           muintptr   // 反向链接到关联的 m （nil 则表示 idle）
 	mcache      *mcache
-	racectx     uintptr
+	raceprocctx uintptr
 
 	deferpool    [5][]*_defer // 不同大小的可用的 defer 结构池 (见 panic.go)
 	deferpoolbuf [5][32]*_defer
@@ -480,10 +528,12 @@ type p struct {
 
 	palloc persistentAlloc // per-P，用于避免 mutex
 
+	_ uint32 // Alignment for atomic fields below
+
 	// Per-P GC 状态
-	gcAssistTime         int64 // assistAlloc 时间 (纳秒)
-	gcFractionalMarkTime int64 // fractional mark worker 的时间 (纳秒)
-	gcBgMarkWorker       guintptr
+	gcAssistTime         int64    // assistAlloc 时间 (纳秒)
+	gcFractionalMarkTime int64    // fractional mark worker 的时间 (纳秒)，原子读写
+	gcBgMarkWorker       guintptr // (原子读写)
 	gcMarkWorkerMode     gcMarkWorkerMode
 
 	// gcMarkWorkerStartTime 为该 mark worker 开始的 nanotime()
@@ -673,9 +723,16 @@ func extendRandom(r []byte, n int) {
 
 // _defer 在被推迟调用的列表上保存了一个入口，
 // 如果你在这里增加了一个字段，则需要在 freedefer 中增加清除它的代码
+// This struct must match the code in cmd/compile/internal/gc/reflect.go:deferstruct
+// and cmd/compile/internal/gc/ssa.go:(*state).call.
+// Some defers will be allocated on the stack and some on the heap.
+// All defers are logically part of the stack, so write barriers to
+// initialize them are not required. All defers must be manually scanned,
+// and for heap defers, marked.
 type _defer struct {
-	siz     int32
+	siz     int32 // includes both arguments and results
 	started bool
+	heap    bool
 	sp      uintptr // defer 时的 sp
 	pc      uintptr
 	fn      *funcval
@@ -747,6 +804,7 @@ const (
 	waitReasonSelectNoCases                           // "select (no cases)"
 	waitReasonGCAssistWait                            // "GC assist wait"
 	waitReasonGCSweepWait                             // "GC sweep wait"
+	waitReasonGCScavengeWait                          // "GC scavenge wait"
 	waitReasonChanReceive                             // "chan receive"
 	waitReasonChanSend                                // "chan send"
 	waitReasonFinalizerWait                           // "finalizer wait"
@@ -774,6 +832,7 @@ var waitReasonStrings = [...]string{
 	waitReasonSelectNoCases:         "select (no cases)",
 	waitReasonGCAssistWait:          "GC assist wait",
 	waitReasonGCSweepWait:           "GC sweep wait",
+	waitReasonGCScavengeWait:        "GC scavenge wait",
 	waitReasonChanReceive:           "chan receive",
 	waitReasonChanSend:              "chan send",
 	waitReasonFinalizerWait:         "finalizer wait",
