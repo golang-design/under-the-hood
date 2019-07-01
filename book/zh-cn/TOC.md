@@ -101,7 +101,8 @@
 
 #### 第十三章 编译器
 
-- [`unsafe`](part3compile/ch13gc/9-unsafe.md)
+- [逃逸分析](part3compile/ch13gc/escape.md)
+- [`unsafe`](part3compile/ch13gc/unsafe.md)
 - [词法与文法](part3compile/ch13gc/parse.md)
 - [类型系统](part3compile/ch13gc/type.md)
 - [编译后端 SSA](part3compile/ch13gc/ssa.md)

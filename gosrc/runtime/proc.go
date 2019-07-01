@@ -3746,9 +3746,6 @@ func _GC()                        { _GC() }
 func _LostSIGPROFDuringAtomic64() { _LostSIGPROFDuringAtomic64() }
 func _VDSO()                      { _VDSO() }
 
-// Counts SIGPROFs received while in atomic64 critical section, on mips{,le}
-var lostAtomic64Count uint64
-
 // Called if we receive a SIGPROF signal.
 // Called by the signal handler, may run during STW.
 //go:nowritebarrierrec
@@ -3766,7 +3763,7 @@ func sigprof(pc, sp, lr uintptr, gp *g, mp *m) {
 	if GOARCH == "mips" || GOARCH == "mipsle" || GOARCH == "arm" {
 		if f := findfunc(pc); f.valid() {
 			if hasPrefix(funcname(f), "runtime/internal/atomic") {
-				lostAtomic64Count++
+				cpuprof.lostAtomic++
 				return
 			}
 		}
@@ -3906,10 +3903,6 @@ func sigprof(pc, sp, lr uintptr, gp *g, mp *m) {
 	}
 
 	if prof.hz != 0 {
-		if (GOARCH == "mips" || GOARCH == "mipsle" || GOARCH == "arm") && lostAtomic64Count > 0 {
-			cpuprof.addLostAtomic64(lostAtomic64Count)
-			lostAtomic64Count = 0
-		}
 		cpuprof.add(gp, stk[:n])
 	}
 	getg().m.mallocing--

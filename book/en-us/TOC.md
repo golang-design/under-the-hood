@@ -86,6 +86,7 @@
 
 #### Chapter 13: Compiler
 
+- [Escape Analysis](part3compile/ch13gc/escape.md)
 - [`unsafe`](part3compile/ch13gc/9-unsafe.md)
 - [Lexical and Grammar](part3compile/ch13gc/parse.md)
 - [Type System](part3compile/ch13gc/type.md)
