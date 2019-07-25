@@ -32,6 +32,20 @@ type Once struct {
 // 如果 f 发生 panic，则 Do 认为 f 已经返回；之后的调用也不会调用 f。
 //
 func (o *Once) Do(f func()) {
+	// Note: Here is an incorrect implementation of Do:
+	//
+	//	if atomic.CompareAndSwapUint32(&o.done, 0, 1) {
+	//		f()
+	//	}
+	//
+	// Do guarantees that when it returns, f has finished.
+	// This implementation would not implement that guarantee:
+	// given two simultaneous calls, the winner of the cas would
+	// call f, and the second would return immediately, without
+	// waiting for the first's call to f to complete.
+	// This is why the slow path falls back to a mutex, and why
+	// the atomic.StoreUint32 must be delayed until after f returns.
+
 	// 原子读取 Once 内部的 done 属性，是否为 0，是则进入慢速路径，否则直接调用
 	if atomic.LoadUint32(&o.done) == 0 {
 		o.doSlow(f)
