@@ -182,7 +182,7 @@ func (l *linearAlloc) alloc(size, align uintptr, sysStat *uint64) unsafe.Pointer
 type mcache struct {
 	// 下面的成员在每次 malloc 时都会被访问
 	// 因此将它们放到一起来利用缓存的局部性原理
-	next_sample int32   // 分配这么多字节后触发堆样本
+	next_sample uintptr	// 分配这么多字节后触发堆样本
 	local_scan  uintptr // 分配的可扫描堆的字节数
 
 	// 没有指针的微小对象的分配器缓存。
@@ -247,7 +247,7 @@ func allocmcache() *mcache {
 `MemProfileRate` 为均值。
 
 ```go
-func nextSample() int32 {
+func nextSample() uintptr {
 	if GOOS == "plan9" {
 		// Plan 9 doesn't support floating point in note handler.
 		if g := getg(); g == g.m.gsignal {
@@ -255,7 +255,7 @@ func nextSample() int32 {
 		}
 	}
 
-	return fastexprand(MemProfileRate) // 即 exp(MemProfileRate)
+	return uintptr(fastexprand(MemProfileRate))
 }
 ```
 

@@ -300,7 +300,15 @@ var physPageSize uintptr
 // If set, this must be set by the OS init code (typically in osinit) before
 // mallocinit. However, setting it at all is optional, and leaving the default
 // value is always safe (though potentially less efficient).
-var physHugePageSize uintptr
+//
+// Since physHugePageSize is always assumed to be a power of two,
+// physHugePageShift is defined as physHugePageSize == 1 << physHugePageShift.
+// The purpose of physHugePageShift is to avoid doing divisions in
+// performance critical functions.
+var (
+	physHugePageSize  uintptr
+	physHugePageShift uint
+)
 
 // OS memory management abstraction layer
 //
@@ -402,6 +410,17 @@ func mallocinit() {
 	if physPageSize&(physPageSize-1) != 0 {
 		print("system page size (", physPageSize, ") must be a power of 2\n")
 		throw("bad system page size")
+	}
+	if physHugePageSize&(physHugePageSize-1) != 0 {
+		print("system huge page size (", physHugePageSize, ") must be a power of 2\n")
+		throw("bad system huge page size")
+	}
+	if physHugePageSize != 0 {
+		// Since physHugePageSize is a power of 2, it suffices to increase
+		// physHugePageShift until 1<<physHugePageShift == physHugePageSize.
+		for 1<<physHugePageShift != physHugePageSize {
+			physHugePageShift++
+		}
 	}
 
 	// 初始化堆
@@ -1131,7 +1150,7 @@ func profilealloc(mp *m, x unsafe.Pointer, size uintptr) {
 // 但在分配时间线上具有完全随机的分布；这对应于带有参数 MemProfileRate 的泊松过程。
 // 在泊松过程中，两个样本之间的距离遵循指数分布（exp(MemProfileRate)），
 // 因此最佳返回值是取自指数分布的随机数，其均值为 MemProfileRate。
-func nextSample() int32 {
+func nextSample() uintptr {
 	if GOOS == "plan9" {
 		// Plan 9 doesn't support floating point in note handler.
 		if g := getg(); g == g.m.gsignal {
@@ -1139,7 +1158,7 @@ func nextSample() int32 {
 		}
 	}
 
-	return fastexprand(MemProfileRate) // exp(MemProfileRate)
+	return uintptr(fastexprand(MemProfileRate))
 }
 
 // fastexprand returns a random number from an exponential distribution with
@@ -1174,14 +1193,14 @@ func fastexprand(mean int) int32 {
 
 // nextSampleNoFP is similar to nextSample, but uses older,
 // simpler code to avoid floating point.
-func nextSampleNoFP() int32 {
+func nextSampleNoFP() uintptr {
 	// Set first allocation sample size.
 	rate := MemProfileRate
 	if rate > 0x3fffffff { // make 2*rate not overflow
 		rate = 0x3fffffff
 	}
 	if rate != 0 {
-		return int32(fastrand() % uint32(2*rate))
+		return uintptr(fastrand() % uint32(2*rate))
 	}
 	return 0
 }

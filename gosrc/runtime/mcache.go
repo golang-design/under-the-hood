@@ -18,7 +18,7 @@ import (
 type mcache struct {
 	// 下面的成员在每次 malloc 时都会被访问
 	// 因此将它们放到一起来利用缓存的局部性原理
-	next_sample int32   // 分配这么多字节后触发堆样本
+	next_sample uintptr	// 分配这么多字节后触发堆样本
 	local_scan  uintptr // 分配的可扫描堆的字节数
 
 	// 没有指针的微小对象的分配器缓存。
