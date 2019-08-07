@@ -41,8 +41,6 @@ type g struct {
 }
 ```
 
-TODO: gobuf & stack consts
-
 ```
 
                            <-- _StackPreempt
@@ -82,41 +80,56 @@ TODO: gobuf & stack consts
 
 ## 初始化
 
-执行栈可以在函数执行完毕后，专门被垃圾回收整个回收掉，从而将它们单独管理起来能够利于垃圾回收器的编写：
+执行栈可以在函数执行完毕后，专门被垃圾回收整个回收掉，从而将它们单独管理起来能够利于垃圾回收器的统一回收：
 
 ```go
 // 具有可用栈的 span 的全局池
-// _NumStackOrders == 4, 分别对应 2K/4K/8K/16K 大小的小栈
-var stackpool [_NumStackOrders]mSpanList
-var stackpoolmu mutex
+// 每个栈均根据其大小会被分配一个 order = log_2(size/FixedStack)
+// 每个 order 都包含一个可用 mspan 链表
+var stackpool [_NumStackOrders]struct {
+	item stackpoolItem
+	_    [cpu.CacheLinePadSize - unsafe.Sizeof(stackpoolItem{})%cpu.CacheLinePadSize]byte
+}
+//go:notinheap
+type stackpoolItem struct {
+	mu   mutex
+	span mSpanList
+}
 
-// 大栈直接分配 span 全局池
+
 var stackLarge struct {
 	lock mutex
-	free [heapAddrBits - pageShift]mSpanList // free lists by log_2(s.npages)
+	free [heapAddrBits - pageShift]mSpanList // 按 log_2(s.npages) 阶组成的多个链表
 }
 ```
 
-`stackpool/stackLarge` 均为全局变量，他们均为 `mspan` 的双向链表
-（参见 [内存分配器：基础](../../part2runtime/ch07alloc/basic.md)）他们的初始化逻辑非常简单，
+`stackpool/stackLarge` 均为全局变量，他们均为 `mspan` 的双向链表，他们的初始化逻辑非常简单，
 既将整个链表初始化为空链，不分配节点：
 
 ```go
-// 初始化栈空间复用管理链表
+//go:notinheap
+type mSpanList struct { // 不带头结点的 mspan 双向链表
+	first *mspan
+	last  *mspan
+}
+
+func (list *mSpanList) init() {
+	list.first = nil
+	list.last = nil
+}
+```
+
+`stackpool` 和 `stackLarge` 的初始化仅仅就是讲这两个链表中不同阶的 mspan 链表进行初始化：
+
+```go
 func stackinit() {
 	(...)
 	for i := range stackpool {
-		stackpool[i].init()
+		stackpool[i].item.span.init()
 	}
 	for i := range stackLarge.free {
 		stackLarge.free[i].init()
 	}
-}
-
-// 初始化空双向链表
-func (list *mSpanList) init() {
-	list.first = nil
-	list.last = nil
 }
 ```
 
@@ -133,7 +146,7 @@ func hello(msg string) {
 }
 
 func main() {
-	go hello("hello world")
+	go hello("hello world") // 7-8 行
 }
 ```
 
@@ -141,15 +154,15 @@ func main() {
 
 ```asm
 TEXT main.main(SB) main.go
-  main.go:7		0x104df70		65488b0c2530000000	MOVQ GS:0x30, CX			
+  main.go:7		0x104df70		65488b0c2530000000	MOVQ GS:0x30, CX
   (...)
-  main.go:8		0x104df8d		488d055ed10100		LEAQ go.string.*+1874(SB), AX		
-  main.go:8		0x104df94		4889442410		MOVQ AX, 0x10(SP)			
-  main.go:8		0x104df99		48c74424180b000000	MOVQ $0xb, 0x18(SP)			
-  main.go:8		0x104dfa2		c7042410000000		MOVL $0x10, 0(SP)			
-  main.go:8		0x104dfa9		488d05b80c0200		LEAQ go.func.*+67(SB), AX		
-  main.go:8		0x104dfb0		4889442408		MOVQ AX, 0x8(SP)			
-  main.go:8		0x104dfb5		e876cefdff		CALL runtime.newproc(SB)		
+  main.go:8		0x104df8d		488d055ed10100		LEAQ go.string.*+1874(SB), AX
+  main.go:8		0x104df94		4889442410		MOVQ AX, 0x10(SP)
+  main.go:8		0x104df99		48c74424180b000000	MOVQ $0xb, 0x18(SP)
+  main.go:8		0x104dfa2		c7042410000000		MOVL $0x10, 0(SP)
+  main.go:8		0x104dfa9		488d05b80c0200		LEAQ go.func.*+67(SB), AX
+  main.go:8		0x104dfb0		4889442408		MOVQ AX, 0x8(SP)
+  main.go:8		0x104dfb5		e876cefdff		CALL runtime.newproc(SB)
   (...)
 ```
 
@@ -204,16 +217,13 @@ func newproc(siz int32, fn *funcval) {
 ```go
 func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintptr) {
 	(...)
-	// 根据 p 获得一个新的 g
-	newg := gfget(_p_)
+	newg := gfget(_p_) // 根据 p 获得一个新的 g
 
 	// 初始化阶段，gfget 是不可能找到 g 的
 	// 也可能运行中本来就已经耗尽了
 	if newg == nil {
-		// 创建一个拥有 _StackMin 大小的栈的 g
-		newg = malg(_StackMin)
-		// 将新创建的 g 从 _Gidle 更新为 _Gdead 状态
-		casgstatus(newg, _Gidle, _Gdead)
+		newg = malg(_StackMin)		 // 创建一个拥有 _StackMin 大小的栈的 g
+		casgstatus(newg, _Gidle, _Gdead) // 将新创建的 g 从 _Gidle 更新为 _Gdead 状态
 		allgadd(newg) // 将 Gdead 状态的 g 添加到 allg，这样 GC 不会扫描未初始化的栈
 	}
 	(...)
@@ -244,7 +254,7 @@ func malg(stacksize int32) *g {
 `stackguard0` 不出所料的被设置为了 `stack.lo + _StackGuard`，而 `stackguard0` 则为 `~0`。
 而执行栈本身是通过 `stackalloc` 来进行分配。
 
-## 分配
+## 执行栈的分配
 
 前面已经提到栈可能从两个不同的位置被分配：小栈和大栈。小栈指大小为 2K/4K/8K/16K 的栈，大栈则是更大的栈。
 `stackalloc` 基本上也就是在权衡应该从哪里分配出一个执行栈，返回所在栈的低位和高位。
@@ -274,6 +284,9 @@ func stackalloc(n uint32) stack {
 
 ### 小栈分配
 
+对于大小较小的栈可以从 stackpool 或者 stackcache 中进行分配，这取决于
+当产生栈分配时，goroutine 所在的 m 是否具有 mcache （`m.mcache`）或者是否发生抢占（`m.preemptoff`）：
+
 ```go
 // 计算对应的 mSpanList
 order := uint8(0)
@@ -284,50 +297,77 @@ for n2 > _FixedStack {
 }
 var x gclinkptr
 c := thisg.m.mcache
+
 // 决定是否从 stackpool 中分配
-if stackNoCache != 0 || c == nil || thisg.m.preemptoff != "" {
-	// c == nil 可能发生在 exitsyscall 或 procresize 的内部。
-	// 只需从全局池中获取一个堆栈。在 gc 期间也不要接触 stackcache，因为它会并发的 flush。
-	lock(&stackpoolmu)
+if c == nil || thisg.m.preemptoff != "" {
+	// c == nil 可能发生在 exitsyscall 或 procresize 时
+	lock(&stackpool[order].item.mu)
 	x = stackpoolalloc(order)
-	unlock(&stackpoolmu)
-} else {
-	// 从对应链表提取可复用的空间
+	unlock(&stackpool[order].item.mu)
+} else { // 从对应链表提取可复用的空间
 	x = c.stackcache[order].list
-	// 提取失败，扩容再重试
-	if x.ptr() == nil {
+	if x.ptr() == nil { // 提取失败，扩容再重试
 		stackcacherefill(c, order)
 		x = c.stackcache[order].list
 	}
 	c.stackcache[order].list = x.ptr().next
 	c.stackcache[order].size -= uintptr(n)
 }
-v = unsafe.Pointer(x)
+v = unsafe.Pointer(x) // 最终取得 stack
 ```
 
-如果没有缓存，则将其填充：
+如果没他们都有缓存，则向内部填充更多的缓存：
 
 ```go
 //go:systemstack
 func stackcacherefill(c *mcache, order uint8) {
-	if stackDebug >= 1 {
-		print("stackcacherefill order=", order, "\n")
-	}
+	(...)
 
-	// Grab some stacks from the global cache.
-	// Grab half of the allowed capacity (to prevent thrashing).
+	// 从全局缓存中获取一些 stack
+	// 获取所允许的容量的一半来防止 thrashing
 	var list gclinkptr
 	var size uintptr
-	lock(&stackpoolmu)
+	lock(&stackpool[order].item.mu)
 	for size < _StackCacheSize/2 {
 		x := stackpoolalloc(order)
 		x.ptr().next = list
 		list = x
 		size += _FixedStack << order
 	}
-	unlock(&stackpoolmu)
+	unlock(&stackpool[order].item.mu)
 	c.stackcache[order].list = list
 	c.stackcache[order].size = size
+}
+```
+
+最终落实到 `stackpoolalloc` 上：
+
+```go
+// 从空闲池中分配一个栈，必须在持有 stackpool[order].item.mu 下调用
+func stackpoolalloc(order uint8) gclinkptr {
+	list := &stackpool[order].item.span
+	s := list.first // 链表头
+	if s == nil {
+		// 缓存已空，从 mheap 上进行分配
+		s = mheap_.allocManual(_StackCacheSize>>_PageShift, &memstats.stacks_inuse)
+		(...)
+		s.elemsize = _FixedStack << order
+		for i := uintptr(0); i < _StackCacheSize; i += s.elemsize {
+			x := gclinkptr(s.base() + i)
+			x.ptr().next = s.manualFreeList
+			s.manualFreeList = x
+		}
+		list.insert(s)
+	}
+	x := s.manualFreeList
+	(...)
+	s.manualFreeList = x.ptr().next
+	s.allocCount++
+	if s.manualFreeList.ptr() == nil {
+		// s 中所有的栈都被分配了
+		list.remove(s)
+	}
+	return x
 }
 ```
 
@@ -348,26 +388,72 @@ if !stackLarge.free[log2npage].isEmpty() {
 }
 unlock(&stackLarge.lock)
 
-if s == nil {
-	// 从堆中分配一个新的栈
+if s == nil { // 如果无法从缓存中获取，则从堆中分配一个新的栈
 	s = mheap_.allocManual(npage, &memstats.stacks_inuse)
-	if s == nil {
-		throw("out of memory")
-	}
-	osStackAlloc(s)
+	(...)
 	s.elemsize = uintptr(n)
 }
 v = unsafe.Pointer(s.base())
 ```
 
-TODO: alloc
+### 堆上分配
 
-## 连续栈
+无论是小栈分配还是大栈的分配，在分配失败时都会从 `mheap` 上分配重新分配新的缓存，使用 `allocManual`：
 
-早年的 Go 运行时使用分段栈的机制，即当一个 goroutine 的执行栈溢出时，
+```go
+//go:systemstack
+func (h *mheap) allocManual(npage uintptr, stat *uint64) *mspan {
+	lock(&h.lock)
+	s := h.allocSpanLocked(npage, stat)
+	if s != nil {
+		s.state = mSpanManual
+		s.manualFreeList = 0
+		s.allocCount = 0
+		s.spanclass = 0
+		s.nelems = 0
+		s.elemsize = 0
+		s.limit = s.base() + s.npages<<_PageShift
+		(...)
+	}
+
+	// This unlock acts as a release barrier. See mheap.alloc_m.
+	unlock(&h.lock)
+
+	return s
+}
+```
+
+其中的 `allocSpanLocked`：
+
+```go
+func (h *mheap) allocSpanLocked(npage uintptr, stat *uint64) *mspan {
+	t := h.free.find(npage) // 第一次从 mheap 的缓存中寻找
+	if t.valid() {
+		goto HaveSpan
+	}
+	if !h.grow(npage) { // 第一次没找到，尝试对堆进行扩充
+		return nil
+	}
+	t = h.free.find(npage) // 第二次从 mheap 缓存中寻找
+	if t.valid() {
+		goto HaveSpan
+	}
+	throw("grew heap, but no adequate free span found")
+
+HaveSpan:
+	s := t.span()
+	(...)
+	return s
+}
+```
+
+
+## 执行栈的伸缩
+
+早年的 Go 运行时使用**分段栈**的机制，即当一个 goroutine 的执行栈溢出时，
 栈的扩张操作是在另一个栈上进行的，这两个栈彼此没有连续。
 这种设计的缺陷很容易破坏缓存的局部性原理，从而降低程序的运行时性能。
-因此现在 Go 运行时开始使用连续栈机制，当一个执行栈发生溢出时，
+因此现在 Go 运行时开始使用**连续栈**机制，当一个执行栈发生溢出时，
 新建一个两倍于原栈大小的新栈，再将原栈整个拷贝到新栈上。
 从而整个栈总是连续的。栈的拷贝并非想象中的那样简单，因为一个栈上可能保留指向被拷贝栈的指针，
 从而当栈发生拷贝后，这个指针可能还指向原栈，从而造成错误。
@@ -456,7 +542,7 @@ TEXT runtime·morestack_noctxt(SB),NOSPLIT,$0
 	JMP	runtime·morestack(SB)
 ```
 
-## 栈的扩张
+### 栈的扩张
 
 用户栈的扩张发生在 morestack 处，该函数此前会检查该调用是否正确的在用户栈上调用（因此 g0 栈和信号栈
 不能发生此调用）。而后将 `morebuf` 设置为 f 的调用方，并将 G 的执行栈设置为 f 的 ctxt，
@@ -555,17 +641,193 @@ func newstack() {
 
 	// 因为 gp 处于 Gcopystack 状态，当我们对栈进行复制时并发 GC 不会扫描此栈
 	copystack(gp, newsize, true)
-	if stackDebug >= 1 {
-		print("stack grow done\n")
-	}
+	(...)
 	casgstatus(gp, _Gcopystack, _Grunning)
 	gogo(&gp.sched) // 继续执行
 }
 ```
 
-## 栈的收缩
+### 栈的拷贝
 
-TODO: gc
+前面我们已经提到了，栈拷贝的其中一个难点就是 Go 中栈上的变量会包含自己的地址，
+当我们拷贝了一个指向原栈的指针时，拷贝后的指针会变为无效指针。
+不难发现，只有栈上分配的指针才能指向栈上的地址，否则这个指针指向的对象会重新在堆中进行分配（逃逸）。
+
+```go
+func copystack(gp *g, newsize uintptr, sync bool) {
+	(...)
+	old := gp.stack
+	(...)
+	used := old.hi - gp.sched.sp
+
+	// 分配新的栈
+	new := stackalloc(uint32(newsize))
+	if stackPoisonCopy != 0 {
+		fillstack(new, 0xfd)
+	}
+	(...)
+
+	// 计算调整的幅度
+	var adjinfo adjustinfo
+	adjinfo.old = old
+	adjinfo.delta = new.hi - old.hi
+
+	// 调整 sudogs, 必要时与 channel 操作同步
+	ncopy := used
+	if sync {
+		adjustsudogs(gp, &adjinfo)
+	} else {
+		// sudogs can point in to the stack. During concurrent
+		// shrinking, these areas may be written to. Find the
+		// highest such pointer so we can handle everything
+		// there and below carefully. (This shouldn't be far
+		// from the bottom of the stack, so there's little
+		// cost in handling everything below it carefully.)
+		adjinfo.sghi = findsghi(gp, old)
+
+		// Synchronize with channel ops and copy the part of
+		// the stack they may interact with.
+		ncopy -= syncadjustsudogs(gp, used, &adjinfo)
+	}
+
+	// 将原来的栈的内容复制到新的位置
+	memmove(unsafe.Pointer(new.hi-ncopy), unsafe.Pointer(old.hi-ncopy), ncopy)
+
+	// Adjust remaining structures that have pointers into stacks.
+	// We have to do most of these before we traceback the new
+	// stack because gentraceback uses them.
+	adjustctxt(gp, &adjinfo)
+	adjustdefers(gp, &adjinfo)
+	adjustpanics(gp, &adjinfo)
+	if adjinfo.sghi != 0 {
+		adjinfo.sghi += adjinfo.delta
+	}
+
+	// 为新栈置换出旧栈
+	gp.stack = new
+	gp.stackguard0 = new.lo + _StackGuard // 注意: 可能覆盖（clobber）一个抢占请求
+	gp.sched.sp = new.hi - used
+	gp.stktopsp += adjinfo.delta
+
+	// 在新栈重调整指针
+	gentraceback(^uintptr(0), ^uintptr(0), 0, gp, 0, nil, 0x7fffffff, adjustframe, noescape(unsafe.Pointer(&adjinfo)), 0)
+
+	// 释放旧栈
+	if stackPoisonCopy != 0 {
+		fillstack(old, 0xfc)
+	}
+	stackfree(old)
+}
+
+func fillstack(stk stack, b byte) {
+	for p := stk.lo; p < stk.hi; p++ {
+		*(*byte)(unsafe.Pointer(p)) = b
+	}
+}
+func findsghi(gp *g, stk stack) uintptr {
+	var sghi uintptr
+	for sg := gp.waiting; sg != nil; sg = sg.waitlink {
+		p := uintptr(sg.elem) + uintptr(sg.c.elemsize)
+		if stk.lo <= p && p < stk.hi && p > sghi {
+			sghi = p
+		}
+	}
+	return sghi
+}
+func syncadjustsudogs(gp *g, used uintptr, adjinfo *adjustinfo) uintptr {
+	if gp.waiting == nil {
+		return 0
+	}
+
+	// Lock channels to prevent concurrent send/receive.
+	// It's important that we *only* do this for async
+	// copystack; otherwise, gp may be in the middle of
+	// putting itself on wait queues and this would
+	// self-deadlock.
+	var lastc *hchan
+	for sg := gp.waiting; sg != nil; sg = sg.waitlink {
+		if sg.c != lastc {
+			lock(&sg.c.lock)
+		}
+		lastc = sg.c
+	}
+
+	// Adjust sudogs.
+	adjustsudogs(gp, adjinfo)
+
+	// Copy the part of the stack the sudogs point in to
+	// while holding the lock to prevent races on
+	// send/receive slots.
+	var sgsize uintptr
+	if adjinfo.sghi != 0 {
+		oldBot := adjinfo.old.hi - used
+		newBot := oldBot + adjinfo.delta
+		sgsize = adjinfo.sghi - oldBot
+		memmove(unsafe.Pointer(newBot), unsafe.Pointer(oldBot), sgsize)
+	}
+
+	// Unlock channels.
+	lastc = nil
+	for sg := gp.waiting; sg != nil; sg = sg.waitlink {
+		if sg.c != lastc {
+			unlock(&sg.c.lock)
+		}
+		lastc = sg.c
+	}
+
+	return sgsize
+}
+```
+
+### 栈的收缩
+
+栈的收缩发生在 GC 时对栈进行扫描的阶段：
+
+```go
+//go:nowritebarrier
+//go:systemstack
+func scanstack(gp *g, gcw *gcWork) {
+	(...)
+	// _Grunnable, _Gsyscall, _Gwaiting 才会发生
+
+	// 如果栈使用不多，则进行栈收缩
+	shrinkstack(gp)
+	(...)
+}
+
+func shrinkstack(gp *g) {
+	(...)
+
+	oldsize := gp.stack.hi - gp.stack.lo
+	newsize := oldsize / 2
+	// 当收缩后的大小小于最小的栈的大小时，不再进行搜索
+	if newsize < _FixedStack {
+		return
+	}
+	// 计算当前正在使用的栈数量，如果 gp 使用的当前栈少于四分之一，则对栈进行收缩。
+	// 当前使用的栈包括到 SP 的所有内容以及栈保护空间，以确保有 nosplit 功能的空间。
+	avail := gp.stack.hi - gp.stack.lo
+	if used := gp.stack.hi - gp.sched.sp + _StackLimit; used >= avail/4 {
+		return
+	}
+
+	// 在系统调用期间无法对栈进行拷贝
+	// 因为系统调用可能包含指向栈的指针
+	if gp.syscallsp != 0 {
+		return
+	}
+	if sys.GoosWindows != 0 && gp.m != nil && gp.m.libcallsp != 0 {
+		return
+	}
+
+	(...)
+
+	// 将旧栈拷贝到新收缩后的栈上
+	copystack(gp, newsize, false)
+}
+```
+
+可以看到，如果一个栈仅被使用了四分之一，则会出发栈的收缩，收缩后的大小是原来栈大小的一半。
 
 ## 总结
 

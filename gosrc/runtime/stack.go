@@ -5,6 +5,7 @@
 package runtime
 
 import (
+	"internal/cpu"
 	"runtime/internal/atomic"
 	"runtime/internal/sys"
 	"unsafe"
@@ -103,7 +104,6 @@ const (
 	stackFromSystem  = 0 // 从系统内存而不是堆分配栈
 	stackFaultOnFree = 0 // old stacks are mapped noaccess to detect use after free
 	stackPoisonCopy  = 0 // fill stack that should not be accessed with garbage, to detect bad dereferences during copy
-	stackNoCache     = 0 // disable per-P small stack caches
 
 	// check the BP links during traceback.
 	debugCheckBP = false
@@ -128,9 +128,16 @@ const (
 // 每个栈均根据其大小会被分配一个 order
 //     order = log_2(size/FixedStack)
 // 每个 order 都包含一个可用链表
-// TODO: one lock per order?
-var stackpool [_NumStackOrders]mSpanList
-var stackpoolmu mutex
+var stackpool [_NumStackOrders]struct {
+	item stackpoolItem
+	_    [cpu.CacheLinePadSize - unsafe.Sizeof(stackpoolItem{})%cpu.CacheLinePadSize]byte
+}
+
+//go:notinheap
+type stackpoolItem struct {
+	mu   mutex
+	span mSpanList
+}
 
 // 大小较大的栈 span 的全局池
 var stackLarge struct {
@@ -145,7 +152,7 @@ func stackinit() {
 		throw("cache size must be a multiple of page size")
 	}
 	for i := range stackpool {
-		stackpool[i].init()
+		stackpool[i].item.span.init()
 	}
 	for i := range stackLarge.free {
 		stackLarge.free[i].init()
@@ -162,9 +169,9 @@ func stacklog2(n uintptr) int {
 	return log2
 }
 
-// 从空闲池中分配一个栈，必须在持有 stackpoolmu 下调用
+// 从空闲池中分配一个栈，必须在持有 stackpool[order].item.mu 下调用
 func stackpoolalloc(order uint8) gclinkptr {
-	list := &stackpool[order]
+	list := &stackpool[order].item.span
 	s := list.first
 	if s == nil {
 		// no free stacks. Allocate another span worth.
@@ -200,7 +207,7 @@ func stackpoolalloc(order uint8) gclinkptr {
 	return x
 }
 
-// 将栈 x 放回到池中，必须在持有 stackpoolmu 下调用
+// 将栈 x 放回到池中，必须在持有 stackpool[order].item.mu 下调用
 func stackpoolfree(x gclinkptr, order uint8) {
 	s := spanOfUnchecked(uintptr(x))
 	if s.state != mSpanManual {
@@ -208,7 +215,7 @@ func stackpoolfree(x gclinkptr, order uint8) {
 	}
 	if s.manualFreeList.ptr() == nil {
 		// s will now have a free stack
-		stackpool[order].insert(s)
+		stackpool[order].item.span.insert(s)
 	}
 	x.ptr().next = s.manualFreeList
 	s.manualFreeList = x
@@ -229,7 +236,7 @@ func stackpoolfree(x gclinkptr, order uint8) {
 		//    pointer into a free span.
 		//
 		// By not freeing, we prevent step #4 until GC is done.
-		stackpool[order].remove(s)
+		stackpool[order].item.span.remove(s)
 		s.manualFreeList = 0
 		osStackFree(s)
 		mheap_.freeManual(s, &memstats.stacks_inuse)
@@ -245,18 +252,18 @@ func stackcacherefill(c *mcache, order uint8) {
 		print("stackcacherefill order=", order, "\n")
 	}
 
-	// Grab some stacks from the global cache.
-	// Grab half of the allowed capacity (to prevent thrashing).
+	// 从全局缓存中获取一些 stack
+	// 获取所允许的容量的一半来防止 thrashing
 	var list gclinkptr
 	var size uintptr
-	lock(&stackpoolmu)
+	lock(&stackpool[order].item.mu)
 	for size < _StackCacheSize/2 {
 		x := stackpoolalloc(order)
 		x.ptr().next = list
 		list = x
 		size += _FixedStack << order
 	}
-	unlock(&stackpoolmu)
+	unlock(&stackpool[order].item.mu)
 	c.stackcache[order].list = list
 	c.stackcache[order].size = size
 }
@@ -268,14 +275,14 @@ func stackcacherelease(c *mcache, order uint8) {
 	}
 	x := c.stackcache[order].list
 	size := c.stackcache[order].size
-	lock(&stackpoolmu)
+	lock(&stackpool[order].item.mu)
 	for size > _StackCacheSize/2 {
 		y := x.ptr().next
 		stackpoolfree(x, order)
 		x = y
 		size -= _FixedStack << order
 	}
-	unlock(&stackpoolmu)
+	unlock(&stackpool[order].item.mu)
 	c.stackcache[order].list = x
 	c.stackcache[order].size = size
 }
@@ -285,8 +292,8 @@ func stackcache_clear(c *mcache) {
 	if stackDebug >= 1 {
 		print("stackcache clear\n")
 	}
-	lock(&stackpoolmu)
 	for order := uint8(0); order < _NumStackOrders; order++ {
+		lock(&stackpool[order].item.mu)
 		x := c.stackcache[order].list
 		for x.ptr() != nil {
 			y := x.ptr().next
@@ -295,8 +302,8 @@ func stackcache_clear(c *mcache) {
 		}
 		c.stackcache[order].list = 0
 		c.stackcache[order].size = 0
+		unlock(&stackpool[order].item.mu)
 	}
-	unlock(&stackpoolmu)
 }
 
 // stackalloc 分配一个 n 字节的栈。
@@ -342,12 +349,12 @@ func stackalloc(n uint32) stack {
 		}
 		var x gclinkptr
 		c := thisg.m.mcache
-		if stackNoCache != 0 || c == nil || thisg.m.preemptoff != "" {
+		if c == nil || thisg.m.preemptoff != "" {
 			// c == nil 可能发生在 exitsyscall 或 procresize 的内部。
 			// 只需从全局池中获取一个堆栈。在 gc 期间也不要接触 stackcache，因为它会并发的 flush。
-			lock(&stackpoolmu)
+			lock(&stackpool[order].item.mu)
 			x = stackpoolalloc(order)
-			unlock(&stackpoolmu)
+			unlock(&stackpool[order].item.mu)
 		} else {
 			// 从对应链表提取可复用的空间
 			x = c.stackcache[order].list
@@ -438,10 +445,10 @@ func stackfree(stk stack) {
 		}
 		x := gclinkptr(v)
 		c := gp.m.mcache
-		if stackNoCache != 0 || c == nil || gp.m.preemptoff != "" {
-			lock(&stackpoolmu)
+		if c == nil || gp.m.preemptoff != "" {
+			lock(&stackpool[order].item.mu)
 			stackpoolfree(x, order)
-			unlock(&stackpoolmu)
+			unlock(&stackpool[order].item.mu)
 		} else {
 			if c.stackcache[order].size >= _StackCacheSize {
 				stackcacherelease(c, order)
@@ -813,6 +820,8 @@ func syncadjustsudogs(gp *g, used uintptr, adjinfo *adjustinfo) uintptr {
 // particular, no other G may be writing to gp's stack (e.g., via a
 // channel operation). If sync is false, copystack protects against
 // concurrent channel operations.
+// 当 sync 为 true 时，为自行出发的栈增长，特别地，没有其他 G 能写入 gp 的栈（例如通过 channel）
+// 当 sync 为 false 时，copystack 会保护当前的并发 channel 操作
 func copystack(gp *g, newsize uintptr, sync bool) {
 	if gp.syscallsp != 0 {
 		throw("stack growth not allowed in system call")
@@ -1124,10 +1133,10 @@ func shrinkstack(gp *g) {
 
 // freeStackSpans frees unused stack spans at the end of GC.
 func freeStackSpans() {
-	lock(&stackpoolmu)
 
 	// Scan stack pools for empty stack spans.
 	for order := range stackpool {
+		lock(&stackpool[order].item.mu)
 		list := &stackpool[order]
 		for s := list.first; s != nil; {
 			next := s.next
@@ -1139,9 +1148,8 @@ func freeStackSpans() {
 			}
 			s = next
 		}
+		unlock(&stackpool[order].item.mu)
 	}
-
-	unlock(&stackpoolmu)
 
 	// Free large stack spans.
 	lock(&stackLarge.lock)

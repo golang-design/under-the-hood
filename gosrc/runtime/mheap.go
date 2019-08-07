@@ -293,7 +293,7 @@ var mSpanStateNames = []string{
 	"mSpanFree",
 }
 
-// mSpanList 是一个 span 的单向链表
+// mSpanList 是一个 mspan 的双向链表
 //
 //go:notinheap
 type mSpanList struct {
@@ -1074,13 +1074,17 @@ func (h *mheap) alloc(npage uintptr, spanclass spanClass, large bool, needzero b
 
 // allocManual allocates a manually-managed span of npage pages.
 // allocManual returns nil if allocation fails.
+// allocManual 分配一个具有 npage 页数的手动管理的 span。
 //
 // allocManual adds the bytes used to *stat, which should be a
 // memstats in-use field. Unlike allocations in the GC'd heap, the
 // allocation does *not* count toward heap_inuse or heap_sys.
+// allocManual 会增加使用的字节数到 *stat, 也就是 memstats 中 in-used 字段
+// 与 GC 堆中分配不同的是，这里的分配不会计入 heap_inuse 或者 heap_sys。
 //
 // The memory backing the returned span may not be zeroed if
 // span.needzero is set.
+// 内存
 //
 // allocManual must be called on the system stack because it acquires
 // the heap lock. See mheap for details.
@@ -1097,7 +1101,7 @@ func (h *mheap) allocManual(npage uintptr, stat *uint64) *mspan {
 		s.nelems = 0
 		s.elemsize = 0
 		s.limit = s.base() + s.npages<<_PageShift
-		// Manually managed memory doesn't count toward heap_sys.
+		// 手动管理的内存不会计入 heap_sys
 		memstats.heap_sys -= uint64(s.npages << _PageShift)
 	}
 
@@ -1132,6 +1136,8 @@ func (h *mheap) setSpans(base, npage uintptr, s *mspan) {
 // Allocates a span of the given size.  h must be locked.
 // The returned span has been removed from the
 // free structures, but its state is still mSpanFree.
+// 分配一个给定大小的 span。h 必须锁住
+// 返回的 span 必须从 free 结构中移除，但它的状态仍然是 mSpanFree
 func (h *mheap) allocSpanLocked(npage uintptr, stat *uint64) *mspan {
 	t := h.free.find(npage)
 	if t.valid() {
