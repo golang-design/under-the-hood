@@ -6,7 +6,7 @@
 cgo 性能远不及原生 Go 程序的性能，执行一个 cgo 调用的代价很大。
 下图展示了 cgo, go, c 之间的性能差异（网络 I/O 场景）：
 
-![](../../../images/cgo-go-c.png)
+![](../../../assets/cgo-go-c.png)
 
 **图1: cgo/Go/C/net 包 在网络 I/O 场景下的性能对比，图取自 [changkun/cgo-benchmarks](https://github.com/changkun/cgo-benchmarks)**
 

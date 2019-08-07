@@ -52,7 +52,7 @@ func isBlack(ref interface{}) bool {
 并将灰色对象 A 对白色对象 B 的引用移除（ref2），则在继续扫描的过程中，白色对象 B 永远不会被标记为黑色对象了（回收器不会重新扫描黑色对象）。
 进而产生被错误回收的对象 B，如图 1 所示。
 
-![](../../../images/mutator.png)
+![](../../../assets/mutator.png)
 
 _图 1: 回收器正确性的破坏_
 

@@ -1,15 +1,6 @@
-<div align="center">
-<img src="book/assets/header.png" alt="logo" />
-<br/><br/>
-<a href="./book/en-us/TOC.md"><img src="https://img.shields.io/badge/lang-English-blue.svg?longCache=true&style=flat-square" alt="en-us" href="https://github.com/changkun/go-under-the-hood/blob/master/TOC.en-us.md"/></a>
-<a href="./book/zh-cn/TOC.md"><img src="https://img.shields.io/badge/lang-简体中文-red.svg?longCache=true&style=flat-square" alt="zh-cn"/></a>
-<a href="./LICENSE"><img src="https://img.shields.io/github/license/changkun/go-under-the-hood.svg?style=flat-square"/></a>
-<a href="./LICENSE"><img src="https://img.shields.io/badge/license-CC%20BY--NC--ND%204.0-lightgrey.svg?style=flat-square"/></a>
-<a href="https://www.paypal.me/changkunde/4.99eur"><img src="https://img.shields.io/badge/donate-PayPal-104098.svg?style=popout-square&logo=PayPal"/></a>
-<a href="https://t.me/joinchat/FEeulA4zgj2DsBbudBqMcQ"><img src="https://img.shields.io/badge/chat-telegram-%232CA5E0.svg?logo=telegram&logoColor=white&style=flat-square"/></a>
-<br/><br/>
-<p>A source code study of Go | Based on <code>go1.13</code></p>
-</div>
+# Preface
+
+[TOC]
 
 ## To Readers
 
@@ -32,18 +23,14 @@ In the meantime, the development of the Go runtime is quite active, so I hope to
 
 ## Structure and Contents
 
-This book covers the core source code of the entire Go language, including but not limited to the Go runtime `runtime` that Go users can directly reach, the compiler `cmd/compile` related to key language features, and many important standard libraries `sync`/`reflect`/`errors` and so on.
-In rare cases, this book will cover the implementation differences cross different platforms, primarily based on Linux/Darwin amd64 and WebAssembly introduced in Go 1.11.
+This book covers the core source code of the entire Go language, including but not limited to the Go runtime `runtime` that the client can directly contact, the compiler `cmd/compile` related to key language features,
+Many important standard libraries `sync`/`reflect`/`errors` and so on.
+In rare cases, this book will discuss implementation differences across platforms, primarily based on Linux/Darwin amd64 and WebAssembly introduced in Go 1.11.
 
 The book is divided into four parts. The first part briefly reviews the basic theories related to the Go runtime and the compiler, and briefly discusses the life cycle of the Go program in its final chapter.
-The second part focuses on Go's runtime mechanism, which includes the scheduler, memory allocator, garbage collector, debugging mechanism, and ABI for the Go program.
-The third part covers Go compiler mechanism, including the Go compiler translation for keywords, the behavior for cgo programs, and the linker.
-The last part of the book discusses some standard libraries that rely on the runtime and compiler, as well as the package that are important to our daily development. Note that rhis book only introduces the cooperation between these standard libraries and the runtime and compiler, and does not analyze the source code of the entire package.
-
-## Getting started
-
-- [简体中文](./book/zh-cn/TOC.md)
-- [English](./book/en-us/TOC.md)
+The second part focuses on Go's runtime mechanism, which includes the scheduler, memory allocator, garbage collection period, debugging mechanism, and ABI for the program.
+The third part looks at Go's compiler mechanism, including the Go compiler's translation behavior for keywords, the translation process for cgo programs, and the linker.
+The last section discusses some standard libraries that rely on the runtime and compiler. This book only introduces the cooperation between these standard libraries and the runtime and compiler, and does not analyze the source code of the entire package.
 
 ## Environment
 
@@ -58,10 +45,6 @@ The author has limited time and language skills. If readers find any mistakes of
 
 The author would like to thank [@egonelbre](https://github.com/egonelbre/gophers) for his charming gopher design.
 
-<div align="center">
-<p></p>
-<p><a href="https://github.com/changkun/go-under-the-hood">Go under the hood</a> &copy; 2018 - 2019 <a href="https://changkun.de">Changkun Ou</a></p>
-</div>
+## License
 
-
-
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

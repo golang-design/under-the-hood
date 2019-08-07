@@ -1,7 +1,5 @@
 # How to contribute?
 
-[![](https://img.shields.io/badge/chat-telegram-%232CA5E0.svg?logo=telegram&logoColor=white&style=flat-square)](https://t.me/joinchat/FEeulA4zgj2DsBbudBqMcQ)
-
 This page describes how to contributes to "Go under the hood"
 
 ## Submitting Issue
@@ -34,9 +32,8 @@ please also [submit an issue] (https://github.com/changkun/go-under-the-hood/iss
 However, please read the following instructions carefully before submitting PR:
 
 - Before you submit your PR, make sure that the [issue list] (https://github.com/changkun/go-under-the-hood/issues) contains the problem that you want to solve. If not, please refer to the **Submitting Issue** section.
-- When you are ready to submit a typo error PR, make sure your PR has improved the `typo` error of more than 50 English words, otherwise please do not submit your PR.
 - Please don't hesitate to submit a PR that fixes the principled error. I am very grateful for this!
-- If you really like this book, and you want to be a co-author of this book, fell free to send an email: `[104 105 64 99 104 97 110 103 107 117 110 46 117 115]`.
+- If you really like this book, and you want to be a co-author of this book, fell free to send an email: `hi[at]changkun.us`.
 
 # 如何参与贡献
 
@@ -68,7 +65,6 @@ However, please read the following instructions carefully before submitting PR:
 但在提交 PR 之前请仔细阅读下面的说明：
 
 - 当你认为需要提交一个 PR 时，请确保 [issue 列表](https://github.com/changkun/go-under-the-hood/issues)中，已经包含了你想要解决的问题。如果没有，请参考**提交 Issue** 一节中的描述，提交你的 issue，再提交你的 PR。
-- 当你准备提交一个 typo 错误的 PR 时，请确保你的 PR 改进了 **超过 50 个汉字(或英文单词)** 的 `typo` 错误，否则请不要提交 PR。
 - 请不要犹豫提交一个修复原则性错误的 PR，笔者对此表示非常感谢！
-- 如果非常喜欢本书，以至于希望参与本书的合著，成为作者，请发邮件询问：`[104 105 64 99 104 97 110 103 107 117 110 46 117 115]`。
+- 如果非常喜欢本书，以至于希望参与本书的合著，成为作者，请发邮件询问：`hi[at]changkun.us`。
 
