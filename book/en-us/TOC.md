@@ -86,7 +86,7 @@
 
 #### Chapter 13: Compiler
 
-- [Escape Analysis](part3compile/ch13gc/escape.md)
+- [Escape analysis](part3compile/ch13gc/escape.md)
 - [`unsafe`](part3compile/ch13gc/9-unsafe.md)
 - [Lexical and Grammar](part3compile/ch13gc/parse.md)
 - [Type System](part3compile/ch13gc/type.md)
@@ -96,6 +96,9 @@
 ### [Part 4: Standard Library](part4lib/readme.md)
 
 #### [Chapter 14: Error handling](part4lib/ch14errors/readme.md)
+
+- [14.1 Error handling and its history](part4lib/ch14errors/error.md)
+- [14.2 Package `errors` and error inspection](part4lib/ch14errors/errors.md)
 
 #### [Chapter 15: Package sync and atomic](part4lib/ch15sync/readme.md)
 

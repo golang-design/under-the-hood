@@ -112,7 +112,8 @@
 
 #### [第十四章 错误处理](part4lib/ch14errors/readme.md)
 
-- TODO
+- [14.1 错误处理的历史及其演化](part4lib/ch14errors/error.md)
+- [14.2 `errors` 包与错误检查](part4lib/ch14errors/errors.md)
 
 #### [第十五章 sync 与 atomic 包](part4lib/ch15sync/readme.md)
 
