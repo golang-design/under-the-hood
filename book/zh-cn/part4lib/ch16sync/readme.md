@@ -1,6 +1,6 @@
-# 第十五章 sync 包与 atomic 包
+# 第十六章 sync 与 atomic 包
 
-- [信号量 sema 机制](./sema.md)
+- [信号量 Semaphore 机制](./sema.md)
 - [`sync.Pool`](./pool.md)
 - [`sync.Once`](./once.md)
 - [`sync.Map`](./map.md)

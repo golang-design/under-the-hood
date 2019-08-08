@@ -1,7 +1,8 @@
 # 第四部分 标准库
 
-- [第十四章 sync 与 atomic](ch14sync/readme.md)
-- [第十五章 其他](ch15other/readme.md)
+- [第十五章 错误处理](ch15errors/readme.md)
+- [第十六章 sync 与 atomic](ch16sync/readme.md)
+- [第十七章 其他](ch17other/readme.md)
 
 ## 许可
 

@@ -10,12 +10,12 @@
 
 #### 第二章 并发与分布式计算
 
-<!-- - [3.1 并发] -->
+<!-- - [并发] -->
 
 #### 第三章 排队与调度理论
 
-<!-- - [2.1 排队理论引导]()
-- [2.2 工作窃取调度](papers/sched/work-steal-sched.md)
+<!-- - [排队理论引导]()
+- [工作窃取调度](papers/sched/work-steal-sched.md)
 - [调度理论](4-sched/theory.md) -->
 
 #### 第四章 内存管理工程
@@ -50,14 +50,14 @@
 
 #### [第七章 内存分配器](part2runtime/ch07alloc/readme.md)
 
-- [基本知识](part2runtime/ch07alloc/basic.md)
-- [组件](part2runtime/ch07alloc/component.md)
-- [初始化](part2runtime/ch07alloc/init.md)
-- [大对象分配](part2runtime/ch07alloc/largealloc.md)
-- [小对象分配](part2runtime/ch07alloc/smallalloc.md)
-- [微对象分配](part2runtime/ch07alloc/tinyalloc.md)
-- [内存统计](part2runtime/ch07alloc/mstats.md)
-- [过去、现在与未来](part2runtime/ch07alloc/history.md)
+- [7.1 基本知识](part2runtime/ch07alloc/basic.md)
+- [7.2 组件](part2runtime/ch07alloc/component.md)
+- [7.3 初始化](part2runtime/ch07alloc/init.md)
+- [7.4 大对象分配](part2runtime/ch07alloc/largealloc.md)
+- [7.5 小对象分配](part2runtime/ch07alloc/smallalloc.md)
+- [7.6 微对象分配](part2runtime/ch07alloc/tinyalloc.md)
+- [7.7 内存统计](part2runtime/ch07alloc/mstats.md)
+- [7.8 过去、现在与未来](part2runtime/ch07alloc/history.md)
 
 #### [第八章 垃圾回收器](part2runtime/ch08GC/readme.md)
 
@@ -94,46 +94,65 @@
 - [`chan` 与 `select`](part3compile/ch11keyword/chan.md)
 - [`interface`](part3compile/ch11keyword/interface.md)
 
-#### 第十二章 模块链接器
+#### 第十二章 泛型
 
-- [初始化](part3compile/ch12link/init.md)
-- [模块链接](part3compile/ch12link/link.md)
+- [12.1 泛型的历史及其演化]
+- [12.2 泛型的实现]
 
-#### 第十三章 编译器
+#### 第十三章 模块链接器
 
-- [逃逸分析](part3compile/ch13gc/escape.md)
-- [`unsafe`](part3compile/ch13gc/unsafe.md)
-- [词法与文法](part3compile/ch13gc/parse.md)
-- [类型系统](part3compile/ch13gc/type.md)
-- [编译后端 SSA](part3compile/ch13gc/ssa.md)
+- [初始化](part3compile/ch13link/init.md)
+- [模块链接](part3compile/ch13link/link.md)
+
+#### 第十四章 编译器
+
+- [逃逸分析](part3compile/ch14gc/escape.md)
+- [`unsafe`](part3compile/ch14gc/unsafe.md)
+- [词法与文法](part3compile/ch14gc/parse.md)
+- [类型系统](part3compile/ch14gc/type.md)
+- [编译后端 SSA](part3compile/ch14gc/ssa.md)
 - [过去、现在与未来]
 
 ### [第四部分：标准库](part4lib/readme.md)
 
-#### [第十四章 错误处理](part4lib/ch14errors/readme.md)
+#### [第十五章 错误处理](part4lib/ch15errors/readme.md)
 
-- [14.1 错误处理的历史及其演化](part4lib/ch14errors/error.md)
-- [14.2 `errors` 包与错误检查](part4lib/ch14errors/errors.md)
+- [15.1 错误处理的历史及其演化](part4lib/ch15errors/error.md)
+    + `error` 类型的历史形态
+    + 错误处理的基本策略
+      + 哨兵错误
+      + 自定义错误
+      + 隐式错误
+    + `pkg/errors` 的错误处理原语
+    + 争议
+      + 对错误处理进行改进的反馈
+      + check/handle 关键字
+      + 内建函数 try
+- [16.2 `errors` 包与错误检查](part4lib/ch15errors/errors.md)
+    + 错误检查
+      + Unwrap
+      + As 与 Is
+      + `%w`
 
-#### [第十五章 sync 与 atomic 包](part4lib/ch15sync/readme.md)
+#### [第十六章 sync 与 atomic 包](part4lib/ch16sync/readme.md)
 
-- [信号量 sema 机制](part4lib/ch15sync/sema.md)
-- [`sync.Pool`](part4lib/ch15sync/pool.md)
-- [`sync.Once`](part4lib/ch15sync/once.md)
-- [`sync.Map`](part4lib/ch15sync/map.md)
-- [`sync.WaitGroup`](part4lib/ch15sync/waitgroup.md)
-- [`sync.Mutex`](part4lib/ch15sync/mutex.md)
-- [`sync.Cond`](part4lib/ch15sync/cond.md)
-- [`sync/atomic.*`](part4lib/ch15sync/atomic.md)
+- [信号量 sema 机制](part4lib/ch16sync/sema.md)
+- [`sync.Pool`](part4lib/ch16sync/pool.md)
+- [`sync.Once`](part4lib/ch16sync/once.md)
+- [`sync.Map`](part4lib/ch16sync/map.md)
+- [`sync.WaitGroup`](part4lib/ch16sync/waitgroup.md)
+- [`sync.Mutex`](part4lib/ch16sync/mutex.md)
+- [`sync.Cond`](part4lib/ch16sync/cond.md)
+- [`sync/atomic.*`](part4lib/ch16sync/atomic.md)
 
 
-#### [第十六章 其他](part4lib/ch16other/readme.md)
+#### [第十七章 其他](part4lib/ch17other/readme.md)
 
-- [`syscall.*`](part4lib/ch16other/syscall.md)
-- [`os/signal.*`](part4lib/ch16other/signal.md)
-- [`reflect.*`](part4lib/ch16other/reflect.md)
-- [`net.*`](part4lib/ch16other/net.md)
-- [`time.*`](part4lib/ch16other/time.md)
+- [`syscall.*`](part4lib/ch17other/syscall.md)
+- [`os/signal.*`](part4lib/ch17other/signal.md)
+- [`reflect.*`](part4lib/ch17other/reflect.md)
+- [`net.*`](part4lib/ch17other/net.md)
+- [`time.*`](part4lib/ch17other/time.md)
 
 ### [结束语](finalwords.md)
 
