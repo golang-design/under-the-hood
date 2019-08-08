@@ -136,13 +136,13 @@ func makechan(t *chantype, size int) *hchan {
 	var c *hchan
 	switch {
 	case mem == 0:
-		// Queue or element size is zero.
+		// 队列或元素大小为零
 		c = (*hchan)(mallocgc(hchanSize, nil, true))
-		// Race detector uses this location for synchronization.
+		// 竞争检查使用此位置进行同步
 		c.buf = c.raceaddr()
 	case elem.ptrdata == 0:
-		// Elements do not contain pointers.
-		// Allocate hchan and buf in one call.
+		// 元素不包含指针
+		// 在一个调用中分配 hchan 和 buf
 		c = (*hchan)(mallocgc(hchanSize+mem, nil, true))
 		c.buf = add(unsafe.Pointer(c), hchanSize)
 	default:
@@ -172,17 +172,18 @@ func chansend1(c *hchan, elem unsafe.Pointer) {
 	chansend(c, elem, true, getcallerpc())
 }
 
-// generic single channel send/recv
-// If block is not nil,
-// then the protocol will not
-// sleep but return if it could
-// not complete.
+// 泛型单 channel send/recv
+// 如果 block 非空，则 protocol 在未完成的情况下会返回而非 sleep
 //
 // sleep can wake up with g.param == nil
 // when a channel involved in the sleep has
 // been closed.  it is easiest to loop and re-run
 // the operation; we'll see that it's now closed.
 func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
+	// 当向 nil channel 发送数据时，会调用 gopark
+	// 而 gopark 会将当前的 goroutine 休眠，并用过第一个参数的 unlockf 来回调唤醒
+	// 但此处传递的参数为 nil，因此向 channel 发送数据的 goroutine 和接收数据的 goroutine 都会阻塞，
+	// 进而死锁
 	if c == nil {
 		if !block {
 			return false
@@ -225,11 +226,12 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 
 	lock(&c.lock)
 
-	if c.closed != 0 {
+	if c.closed != 0 { // 不允许向已经 close 的 channel 发送数据
 		unlock(&c.lock)
 		panic(plainError("send on closed channel"))
 	}
 
+	// 1. 找到了阻塞在 channel 上的读者，直接发送
 	if sg := c.recvq.dequeue(); sg != nil {
 		// Found a waiting receiver. We pass the value we want to send
 		// directly to the receiver, bypassing the channel buffer (if any).
@@ -237,8 +239,9 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 		return true
 	}
 
+	// 2. 判断 channel 中缓存是否仍然有空间剩余
 	if c.qcount < c.dataqsiz {
-		// Space is available in the channel buffer. Enqueue the element to send.
+		// 有空间剩余，入队
 		qp := chanbuf(c, c.sendx)
 		if raceenabled {
 			raceacquire(qp)
@@ -259,7 +262,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 		return false
 	}
 
-	// Block on the channel. Some receiver will complete our operation for us.
+	// 3. 阻塞在 channel 上，等待接收方接收数据
 	gp := getg()
 	mysg := acquireSudog()
 	mysg.releasetime = 0
@@ -395,7 +398,7 @@ func closechan(c *hchan) {
 
 	var glist gList
 
-	// release all readers
+	// 释放所有的读者
 	for {
 		sg := c.recvq.dequeue()
 		if sg == nil {
@@ -416,7 +419,7 @@ func closechan(c *hchan) {
 		glist.push(gp)
 	}
 
-	// release all writers (they will panic)
+	// 释放所有的写者 (panic)
 	for {
 		sg := c.sendq.dequeue()
 		if sg == nil {
@@ -435,7 +438,7 @@ func closechan(c *hchan) {
 	}
 	unlock(&c.lock)
 
-	// Ready all Gs now that we've dropped the channel lock.
+	// 就绪所有的 G 即可释放 channel 锁
 	for !glist.empty() {
 		gp := glist.pop()
 		gp.schedlink = 0
