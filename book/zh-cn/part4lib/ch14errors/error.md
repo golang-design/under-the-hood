@@ -90,6 +90,47 @@ func main() {
 
 这类错误处理的方式是非常危险的，因为它在调用方和被调用方之间建立了牢不可破的依赖关系。
 
+哨兵错误还有一个相当致命的危险，那就是这种方式所定义的错误并非常量，例如：
+
+```go
+package io
+
+var EOF = errors.New("EOF")
+```
+
+而当我们将此错误类型公开给其他包使用后，我们非常难以避免这种事情发生：
+
+```go
+package main
+
+import "io"
+
+func init() {
+    io.EOF = nil
+}
+```
+
+这种事情甚至严重到：
+
+```go
+import "cropto/rsa"
+
+func init() {
+    rsa.ErrVerification = nil
+}
+```
+
+在硕大的代码依赖中，我们几乎无法保证这种恶意代码不会出现在某个依赖的包中。
+为了安全起见，变量错误类型可以被建议的修改：
+
+```diff
+-var EOF = errors.New("EOF")
++const EOF = ioError("EOF")
++type ioEorror string
++
++func (e ioError) Error() string { return string(e) }
+```
+
 ### 自定义错误
 
 ```go
