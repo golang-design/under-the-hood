@@ -2,6 +2,26 @@
 
 [TOC]
 
+## 并发三色回收一瞥
+
+下面四张图清晰的展示了 Go 语言内建的垃圾回收的进化历史。
+
+在 Go 1 的时代，尽管所有的用户代码都是并发执行的，但是一旦垃圾回收器开始进行垃圾回收工作时，所有的用户代码都会停止执行，而且垃圾回收器仅在一个线程上执行，这时是最原始的垃圾回收器的实现，即单线程版的三色标记清扫。
+
+![图片截取自 [Hiltner 2017]](../../../assets/gc1.png)
+
+在 Go 1.1 时候，官方成功将三色标记清扫算法的垃圾回收的代码得以并行，从而成功缩短了用户代码的停止时间，但是这仍然会造成大量的空隙，如果用户代码是一个 Web 应用，且正在处理一个非常重要的请求时，则会对请求延迟造成巨大的影响。
+
+![图片截取自 [Hiltner 2017]](../../../assets/gc1.1.png)
+
+为了解决这一问题，官方使用写屏障技术开始让垃圾回收与用户代码得以并行执行。从而只有在执行写屏障和很短一段时间内需要进行 STW。
+
+![图片截取自 [Hiltner 2017]](../../../assets/gc1.5.png)
+
+最后在 1.8 时，通过引入混合屏障，Go 团队成功将 STW 进一步缩短，几乎解决了 STW 的问题。
+
+![图片截取自 [Hiltner 2017]](../../../assets/gc1.8.png)
+
 ## 内存模型
 
 语言的内存模型定义了并行状态下拥有确定读取和写入的时序的条件。
@@ -66,7 +86,8 @@ Go 中的 happens before 有以下保证：
 
 ## 进一步阅读的参考文献
 
-1. [The Go Memory Model](https://golang.org/ref/mem)
+- [The Go Memory Model](https://golang.org/ref/mem)
+- [Hiltner 2017] [Rhys Hiltner, An Introduction to go tool trace, July 13, 2017](https://about.sourcegraph.com/go/an-introduction-to-go-tool-trace-rhys-hiltner)
 
 ## 许可
 
