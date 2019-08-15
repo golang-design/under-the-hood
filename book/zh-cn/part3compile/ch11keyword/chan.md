@@ -194,8 +194,7 @@ func makechan(t *chantype, size int) *hchan {
 	case mem == 0:
 		// 队列或元素大小为零
 		c = (*hchan)(mallocgc(hchanSize, nil, true))
-		// 竞争检查使用此位置进行同步
-		c.buf = c.raceaddr()
+		(...)
 	case elem.ptrdata == 0:
 		// 元素不包含指针
 		// 在一个调用中分配 hchan 和 buf
@@ -253,9 +252,6 @@ func chansend1(c *hchan, elem unsafe.Pointer) {
 ```
 
 注意，到目前为止，我们尚未发现 buffered channel 和 unbuffered channel 之间的区别。
-
-<!-- 在关注发送数据的具体实现之前，我们先从感性上建立一些认识，从一个 goroutine 向另一个 goroutine 发送数据时，
-两个 goroutine ： -->
 
 下面我们来关注 chansend 的具体实现的第一个部分：
 
@@ -453,8 +449,8 @@ chansend 的具体实现如下，由于我们已经仔细分析过发送过程�
 其中第二个步骤包含三个子步骤：
 
 1. 如果 channel 已被关闭，且 channel 没有数据，立刻返回
-2. 如果存在正在阻塞的发送方，则直接从发送方拷贝
-3. 如果缓存中仍有数据，则从缓存中读取，读取过程会将队列中的数据拷贝一份到接收方的执行栈中
+2. 如果存在正在阻塞的发送方，说明缓存已满，从缓存队头取一个数据，再复始一个阻塞的发送方
+3. 否则，检查缓存，如果缓存中仍有数据，则从缓存中读取，读取过程会将队列中的数据拷贝一份到接收方的执行栈中
 4. 没有能接受的数据，阻塞当前的接收方 goroutine
 
 ```go
@@ -667,13 +663,286 @@ func closechan(c *hchan) {
 ### select 自身
 
 select 本身会被编译为 `selectgo` 调用。这与普通的多个 if 分支不同。
-这是因为如果一个 select 包含多接收数据的分支，他们从原则上应该能够无阻塞并发并发的执行。
-而包含多个 if 分支的语句则会依次阻塞在不同的分支上。
-
-`selectgo` 则用于支持不同分支上的无阻塞读写并发。
+`selectgo` 则用于随机化每条分支的执行顺序，普通多个 if 分支的执行顺序始终是一致的。
 
 ```go
-TODO:
+type scase struct {
+	c           *hchan         // chan
+	elem        unsafe.Pointer // data element
+	kind        uint16
+	pc          uintptr // race pc (for race detector / msan)
+	releasetime int64
+}
+func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
+	(...)
+
+	cas1 := (*[1 << 16]scase)(unsafe.Pointer(cas0))
+	order1 := (*[1 << 17]uint16)(unsafe.Pointer(order0))
+
+	scases := cas1[:ncases:ncases]
+	pollorder := order1[:ncases:ncases]
+	lockorder := order1[ncases:][:ncases:ncases]
+
+	// 替换 closed channel
+	for i := range scases {
+		cas := &scases[i]
+		if cas.c == nil && cas.kind != caseDefault {
+			*cas = scase{}
+		}
+	}
+
+	(...)
+
+	(...)
+	// 生成随机顺序
+	for i := 1; i < ncases; i++ {
+		j := fastrandn(uint32(i + 1))
+		pollorder[i] = pollorder[j]
+		pollorder[j] = uint16(i)
+	}
+
+	// 根据 channel 的地址进行堆排序，决定获取锁的顺序
+	for i := 0; i < ncases; i++ {
+		(...)
+	}
+	(...)
+
+	// 依次加锁
+	sellock(scases, lockorder)
+
+	var (
+		gp     *g
+		sg     *sudog
+		c      *hchan
+		k      *scase
+		sglist *sudog
+		sgnext *sudog
+		qp     unsafe.Pointer
+		nextp  **sudog
+	)
+
+loop:
+	// 1 检查是否有正在等待
+	var dfli int
+	var dfl *scase
+	var casi int
+	var cas *scase
+	var recvOK bool
+	for i := 0; i < ncases; i++ {
+		casi = int(pollorder[i])
+		cas = &scases[casi]
+		c = cas.c
+		switch cas.kind {
+		case caseNil:
+			continue
+		case caseRecv:
+			sg = c.sendq.dequeue()
+			if sg != nil {
+				goto recv
+			}
+			if c.qcount > 0 {
+				goto bufrecv
+			}
+			if c.closed != 0 {
+				goto rclose
+			}
+		case caseSend:
+			(...)
+			if c.closed != 0 {
+				goto sclose
+			}
+			sg = c.recvq.dequeue()
+			if sg != nil {
+				goto send
+			}
+			if c.qcount < c.dataqsiz {
+				goto bufsend
+			}
+		case caseDefault:
+			dfli = casi
+			dfl = cas
+		}
+	}
+	// 存在 default 分支，直接去 retc 执行
+	if dfl != nil {
+		selunlock(scases, lockorder)
+		casi = dfli
+		cas = dfl
+		goto retc
+	}
+
+	// 2 入队所有的 channel
+	gp = getg()
+	(...)
+	nextp = &gp.waiting
+	for _, casei := range lockorder {
+		casi = int(casei)
+		cas = &scases[casi]
+		if cas.kind == caseNil {
+			continue
+		}
+		c = cas.c
+		sg := acquireSudog()
+		sg.g = gp
+		sg.isSelect = true
+		// No stack splits between assigning elem and enqueuing
+		// sg on gp.waiting where copystack can find it.
+		sg.elem = cas.elem
+		sg.releasetime = 0
+		if t0 != 0 {
+			sg.releasetime = -1
+		}
+		sg.c = c
+		// 按锁的顺序创建等待链表
+		*nextp = sg
+		nextp = &sg.waitlink
+
+		switch cas.kind {
+		case caseRecv:
+			c.recvq.enqueue(sg)
+
+		case caseSend:
+			c.sendq.enqueue(sg)
+		}
+	}
+
+	// 等待被唤醒
+	gp.param = nil
+	// selparkcommit 根据等待列表依次解锁
+	gopark(selparkcommit, nil, waitReasonSelect, traceEvGoBlockSelect, 1)
+
+	// 重新上锁
+	sellock(scases, lockorder)
+
+	gp.selectDone = 0
+	sg = (*sudog)(gp.param)
+	gp.param = nil
+
+	// pass 3 - dequeue from unsuccessful chans
+	// otherwise they stack up on quiet channels
+	// record the successful case, if any.
+	// We singly-linked up the SudoGs in lock order.
+	casi = -1
+	cas = nil
+	sglist = gp.waiting
+	// Clear all elem before unlinking from gp.waiting.
+	for sg1 := gp.waiting; sg1 != nil; sg1 = sg1.waitlink {
+		sg1.isSelect = false
+		sg1.elem = nil
+		sg1.c = nil
+	}
+	gp.waiting = nil
+
+	for _, casei := range lockorder {
+		k = &scases[casei]
+		if k.kind == caseNil {
+			continue
+		}
+		if sglist.releasetime > 0 {
+			k.releasetime = sglist.releasetime
+		}
+		if sg == sglist {
+			// sg has already been dequeued by the G that woke us up.
+			casi = int(casei)
+			cas = k
+		} else {
+			c = k.c
+			if k.kind == caseSend {
+				c.sendq.dequeueSudoG(sglist)
+			} else {
+				c.recvq.dequeueSudoG(sglist)
+			}
+		}
+		sgnext = sglist.waitlink
+		sglist.waitlink = nil
+		releaseSudog(sglist)
+		sglist = sgnext
+	}
+
+	if cas == nil {
+		// We can wake up with gp.param == nil (so cas == nil)
+		// when a channel involved in the select has been closed.
+		// It is easiest to loop and re-run the operation;
+		// we'll see that it's now closed.
+		// Maybe some day we can signal the close explicitly,
+		// but we'd have to distinguish close-on-reader from close-on-writer.
+		// It's easiest not to duplicate the code and just recheck above.
+		// We know that something closed, and things never un-close,
+		// so we won't block again.
+		goto loop
+	}
+
+	c = cas.c
+	(...)
+	if cas.kind == caseRecv {
+		recvOK = true
+	}
+	(...)
+	selunlock(scases, lockorder)
+	goto retc
+
+bufrecv:
+	// 可以从 buf 接收
+	(...)
+	recvOK = true
+	qp = chanbuf(c, c.recvx)
+	if cas.elem != nil {
+		typedmemmove(c.elemtype, cas.elem, qp)
+	}
+	typedmemclr(c.elemtype, qp)
+	c.recvx++
+	if c.recvx == c.dataqsiz {
+		c.recvx = 0
+	}
+	c.qcount--
+	selunlock(scases, lockorder)
+	goto retc
+
+bufsend:
+	// 可以发送到 buf
+	(...)
+	typedmemmove(c.elemtype, chanbuf(c, c.sendx), cas.elem)
+	c.sendx++
+	if c.sendx == c.dataqsiz {
+		c.sendx = 0
+	}
+	c.qcount++
+	selunlock(scases, lockorder)
+	goto retc
+
+recv:
+	// can receive from sleeping sender (sg)
+	recv(c, sg, cas.elem, func() { selunlock(scases, lockorder) }, 2)
+	(...)
+	recvOK = true
+	goto retc
+
+rclose:
+	// read at end of closed channel
+	selunlock(scases, lockorder)
+	recvOK = false
+	if cas.elem != nil {
+		typedmemclr(c.elemtype, cas.elem)
+	}
+	(...)
+	goto retc
+
+send:
+	// can send to a sleeping receiver (sg)
+	(...)
+	send(c, sg, cas.elem, func() { selunlock(scases, lockorder) }, 2)
+	(...)
+	goto retc
+
+retc:
+	(...)
+	return casi, recvOK
+
+sclose:
+	// 向已关闭的 channel 进行发送
+	selunlock(scases, lockorder)
+	panic(plainError("send on closed channel"))
+}
 ```
 
 ### 发送数据的分支
