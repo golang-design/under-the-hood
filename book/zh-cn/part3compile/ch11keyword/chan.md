@@ -1,4 +1,4 @@
-# 关键字: chan 与 select
+# 11.5 关键字: chan 与 select
 
 [TOC]
 
@@ -11,7 +11,7 @@ Go 语言实现了部分 CSP 理论，goroutine 就是 CSP 理论中的并发实
 其中的区别在于 CSP 理论中通信是隐式的，而 Go 的通信则是显式的由程序员进行控制，channel 是 Go 提供
 的除了 sync 这种基于共享内存的同步原语之外的，基于消息传递的同步原语。
 
-## channel 
+## channel 的本质
 
 ### 基本使用
 
@@ -660,7 +660,7 @@ func closechan(c *hchan) {
 
 ## select 的本质
 
-### select 自身
+### 随机化分支
 
 select 本身会被编译为 `selectgo` 调用。这与普通的多个 if 分支不同。
 `selectgo` 则用于随机化每条分支的执行顺序，普通多个 if 分支的执行顺序始终是一致的。

@@ -577,7 +577,7 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 因此这个函数在执行过程中不会发生扩张和抢占，这个函数中的每一行代码都是深思熟虑过、确保能够在有限的栈空间内
 完成执行。
 
-### 细节
+### 一些细节
 
 我们再额外看几个调用的函数：
 

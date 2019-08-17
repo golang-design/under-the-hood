@@ -1,15 +1,97 @@
 # 第六章 调度器
 
 - [6.1 基本结构](./basic.md)
+    + 工作线程的暂止和复始
+    + 主要结构
+      + M 的结构
+      + P 的结构
+      + G 的结构
+      + 调度器 sched 的结构
+      + 总结
+      + 进一步阅读的参考文献
 - [6.2 调度器初始化](./init.md)
+    + M 的初始化
+    + P 的初始化
+      + GOMAXPROCS
+    + G 的初始化
+      + 一些细节
+    + 总结
 - [6.3 调度循环](./exec.md)
+    + 执行前的准备
+      + mstart 和 mstart1
+      + M/P 的绑定
+      + M 的暂止和复始
+    + 核心调度
+      + 偷取工作
+      + M 的唤醒
+      + M 的创生
+        + 系统线程的创建 (darwin)
+        + 系统线程的创建 (linux)
+      + M/G 解绑
+      + M 的死亡
+    + 总结
+    + 进一步阅读的参考文献
 - [6.4 系统监控](./sysmon.md)
+    + 监控循环
+    + 总结
 - [6.5 线程管理](./thread.md)
+    + LockOSThread
+    + UnlockOSThread
+    + lockedg/lockedm 与调度循环
+    + 模板线程
+    + 总结
+    + 进一步阅读的参考文献
 - [6.6 信号处理机制](./signal.md)
+    + 信号与软中断
+    + 初始化
+    + 获取原始信号屏蔽字
+    + 初始化信号栈
+    + 初始化信号屏蔽字
+    + 信号处理
+    + Extra M
+    + 总结
+    + 进一步阅读的参考文献
 - [6.7 执行栈管理](./stack.md)
+    + goroutine 栈结构
+    + 执行栈初始化
+    + G 的创生
+    + 执行栈的分配
+      + 小栈分配
+      + 大栈分配
+      + 堆上分配
+    + 执行栈的伸缩
+      + 分段标记
+      + 栈的扩张
+      + 栈的拷贝
+      + 栈的收缩
+    + 总结
 - [6.8 协作与抢占](./preemptive.md)
-- [6.9 同步机制](./sync.md)
+    + 协作式调度
+      + 主动让权: Gosched
+      + 主动弃权: 栈扩张与抢占标记
+      + 被动弃权: 阻塞监控
+    + 抢占式调度
+    + 总结
+    + 进一步阅读的参考文献
+- [6.9 运行时同步原语](./sync.md)
+    + runtime.note
+      + 结构
+      + noteclear
+      + notesleep, notesleep
+      + notewakeup
+      + notetsleepg
+    + runtime.mutex
+      + 结构
+      + lock
+      + unlock
+    + semaphore
+    + 总结
 - [6.10 过去、现在与未来](./history.md)
+    + 演进史
+    + 改进展望
+      + 非均匀访存感知的调度器设计
+    + 总结
+    + 进一步阅读的参考文献
 
 > _Simplicity is complicated._ 
 >
