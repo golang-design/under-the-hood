@@ -107,7 +107,7 @@ type hchan struct {
 
 	// lock 保护了 hchan 的所有字段，以及在此 channel 上阻塞的 sudog 的一些字段
 	//
-	// 当持有此锁时不改变其他 G 的状态（特别的，不 ready 一个 G），因为
+	// 当持有此锁时不应该改变其他 G 的状态（特别的，不 ready 一个 G），因为
 	// 它会在栈收缩时发生死锁
 	//
 	lock mutex
@@ -465,7 +465,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 		throw("unreachable")
 	}
 
-	// Fast path: check for failed non-blocking operation without acquiring the lock.
+	// 快速路径: 在不持有锁的情况下检查失败的非阻塞操作
 	if !block && (c.dataqsiz == 0 && c.sendq.first == nil ||
 		c.dataqsiz > 0 && atomic.Loaduint(&c.qcount) == 0) &&
 		atomic.Load(&c.closed) == 0 {
@@ -525,9 +525,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	(...)
 	// 唤醒
 	gp.waiting = nil
-	if mysg.releasetime > 0 {
-		blockevent(mysg.releasetime-t0, 2)
-	}
+	(...)
 	closed := gp.param == nil
 	gp.param = nil
 	mysg.c = nil
@@ -550,11 +548,11 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 		// 从缓存队列拷贝
 		qp := chanbuf(c, c.recvx)
 		(...)
-		// copy data from queue to receiver
+		// 从队列拷贝数据到接收方
 		if ep != nil {
 			typedmemmove(c.elemtype, ep, qp)
 		}
-		// copy data from sender to queue
+		// 从发送方拷贝数据到队列
 		typedmemmove(c.elemtype, qp, sg.elem)
 		c.recvx++
 		if c.recvx == c.dataqsiz {
@@ -566,9 +564,7 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 	gp := sg.g
 	unlockf()
 	gp.param = unsafe.Pointer(sg)
-	if sg.releasetime != 0 {
-		sg.releasetime = cputicks()
-	}
+	(...)
 	goready(gp, skip+1)
 }
 ```
@@ -619,9 +615,7 @@ func closechan(c *hchan) {
 			typedmemclr(c.elemtype, sg.elem) // 清零
 			sg.elem = nil
 		}
-		if sg.releasetime != 0 {
-			sg.releasetime = cputicks()
-		}
+		(...)
 		gp := sg.g
 		gp.param = nil
 		(...)
@@ -636,9 +630,7 @@ func closechan(c *hchan) {
 			break
 		}
 		sg.elem = nil
-		if sg.releasetime != 0 {
-			sg.releasetime = cputicks()
-		}
+		(...)
 		gp := sg.g
 		gp.param = nil
 		(...)
@@ -785,13 +777,9 @@ loop:
 		sg := acquireSudog()
 		sg.g = gp
 		sg.isSelect = true
-		// No stack splits between assigning elem and enqueuing
-		// sg on gp.waiting where copystack can find it.
+		// 在 gp.waiting 上分配 elem 和入队 sg 之间没有栈分段，copystack 可以在其中找到它。
 		sg.elem = cas.elem
-		sg.releasetime = 0
-		if t0 != 0 {
-			sg.releasetime = -1
-		}
+		(...)
 		sg.c = c
 		// 按锁的顺序创建等待链表
 		*nextp = sg
@@ -818,14 +806,13 @@ loop:
 	sg = (*sudog)(gp.param)
 	gp.param = nil
 
-	// pass 3 - dequeue from unsuccessful chans
-	// otherwise they stack up on quiet channels
-	// record the successful case, if any.
-	// We singly-linked up the SudoGs in lock order.
+	// pass 3 - 从不成功的 channel 中出队
+	// 否则将它们堆到一个安静的 channel 上并记录所有成功的分支
+	// 我们按锁的顺序单向链接 sudog
 	casi = -1
 	cas = nil
 	sglist = gp.waiting
-	// Clear all elem before unlinking from gp.waiting.
+	// 从 gp.waiting 取消链接之前清除所有的 elem
 	for sg1 := gp.waiting; sg1 != nil; sg1 = sg1.waitlink {
 		sg1.isSelect = false
 		sg1.elem = nil
@@ -838,11 +825,9 @@ loop:
 		if k.kind == caseNil {
 			continue
 		}
-		if sglist.releasetime > 0 {
-			k.releasetime = sglist.releasetime
-		}
+		(...)
 		if sg == sglist {
-			// sg has already been dequeued by the G that woke us up.
+			// sg 已经被唤醒我们的 G 出队了。
 			casi = int(casei)
 			cas = k
 		} else {
@@ -860,15 +845,12 @@ loop:
 	}
 
 	if cas == nil {
-		// We can wake up with gp.param == nil (so cas == nil)
-		// when a channel involved in the select has been closed.
-		// It is easiest to loop and re-run the operation;
-		// we'll see that it's now closed.
-		// Maybe some day we can signal the close explicitly,
-		// but we'd have to distinguish close-on-reader from close-on-writer.
-		// It's easiest not to duplicate the code and just recheck above.
-		// We know that something closed, and things never un-close,
-		// so we won't block again.
+		// 当一个参与在 select 语句中的 channel 被关闭时，我们可以在 gp.param == nil 时进行唤醒(所以 cas == nil)
+		// 最简单的方法就是循环并重新运行该操作，然后就能看到它现在已经被关闭了
+		// 也许未来我们可以显式的发送关闭信号，
+		// 但我们就必须区分在接收方上关闭(close-on-reader)和在写入方上关闭(close-on-writer)这两种情况了
+		// 最简单的方法是不复制代码并重新检查上面的代码。
+		// 我们知道某些 channel 被关闭了，也知道某些可能永远不会被重新打开，因此我们不会再次阻塞
 		goto loop
 	}
 
@@ -911,14 +893,14 @@ bufsend:
 	goto retc
 
 recv:
-	// can receive from sleeping sender (sg)
+	// 可以从一个休眠的发送方 (sg)直接接收
 	recv(c, sg, cas.elem, func() { selunlock(scases, lockorder) }, 2)
 	(...)
 	recvOK = true
 	goto retc
 
 rclose:
-	// read at end of closed channel
+	// 在已经关闭的 channel 末尾进行读
 	selunlock(scases, lockorder)
 	recvOK = false
 	if cas.elem != nil {
@@ -928,7 +910,7 @@ rclose:
 	goto retc
 
 send:
-	// can send to a sleeping receiver (sg)
+	// 可以向一个休眠的接收方 (sg) 发送
 	(...)
 	send(c, sg, cas.elem, func() { selunlock(scases, lockorder) }, 2)
 	(...)
@@ -1175,7 +1157,6 @@ func selectnbrecv(elem unsafe.Pointer, c *hchan) (selected bool) {
 //	}
 //
 func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool) {
-	// TODO(khr): just return 2 values from this function, now that it is in Go.
 	selected, *received = chanrecv(c, elem, false)
 	return
 }
