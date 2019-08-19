@@ -32,12 +32,6 @@
 - [5.1 程序引导](part1basic/ch05boot/boot.md)
     + 入口
     + 引导
-      + 步骤1: runtime.check
-      + 步骤2: runtime.args
-      + 步骤3: runtime.osinit
-      + 步骤4: runtime.schedinit
-      + 步骤5: runtime.newproc
-      + 步骤6: runtime.mstart
     + 总结
     + 进一步阅读的参考文献
 - [5.2 初始化概览](part1basic/ch05boot/init.md)
@@ -62,8 +56,8 @@
       + P 的结构
       + G 的结构
       + 调度器 sched 的结构
-      + 总结
-      + 进一步阅读的参考文献
+    + 总结
+    + 进一步阅读的参考文献
 - [6.2 调度器初始化](part2runtime/ch06sched/init.md)
     + M 的初始化
     + P 的初始化
