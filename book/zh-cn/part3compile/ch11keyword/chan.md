@@ -84,7 +84,7 @@ default:
 +---------+
 |  recvx  | 接受索引
 +---------+     +---+     +---+     +---+
-|  recvq  | --> | G | --> |   | --> |   | --> nil 接收队列
+|  recvq  | --> | G | --> |   | --> |   | --> nil     接收队列
 +---------+     +---+     +---+     +---+
 |  sendq  | --+     +---+     +---+     +---+
 +---------+   +---> | G | --> |   | --> |   | --> nil 发送队列
@@ -118,45 +118,8 @@ type waitq struct { // 等待队列 sudog 双向队列
 }
 ```
 
-其中 recvq 和 sendq 分别是 sudog 的一个链式队列，其元素是一个包含当前包含队 goroutine 及其要在 channel 中发送的数据的一个封装：
-
-```go
-   sudog   
-+---------+
-|    g    | ---> goroutine
-+---------+
-|   next  | ---> 下一个 g
-+---------+
-|  	prev  | ---> 上一个 g
-+---------+
-|   elem  | ---> 发送的元素，可能指向其他 goroutine 的执行栈
-+---------+
-|   ...   |
-
-type sudog struct {
-	// 下面的字段由这个 sudog 阻塞的通道的 hchan.lock 进行保护。
-	// shrinkstack 依赖于它服务于 sudog 相关的 channel 操作。
-
-	g *g
-
-	// isSelect 表示 g 正在参与一个 select，因此 g.selectDone 必须以 CAS 的方式来避免唤醒时候的 data race。
-	isSelect bool
-	next     *sudog
-	prev     *sudog
-	elem     unsafe.Pointer // 数据元素（可能指向栈）
-
-	// 下面的字段永远不会并发的被访问。对于 channel waitlink 只会被 g 访问
-	// 对于 semaphores，所有的字段（包括上面的）只会在持有 semaRoot 锁时被访问
-
-	acquiretime int64
-	releasetime int64
-	ticket      uint32
-	parent      *sudog // semaRoot 二叉树
-	waitlink    *sudog // g.waiting 列表或 semaRoot
-	waittail    *sudog // semaRoot
-	c           *hchan // channel
-}
-```
+其中 recvq 和 sendq 分别是 sudog 的一个链式队列，其元素是一个包含当前包含队 goroutine 及其要在 channel 中发送的数据的一个封装。
+更多关于 sudog 的细节，请参考 [调度器：运行时同步原语](../../part2runtime/ch06sched/sync.md)。
 
 ### channel 的创生
 

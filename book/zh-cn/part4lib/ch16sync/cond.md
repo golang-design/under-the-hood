@@ -197,8 +197,6 @@ func notifyListWait(l *notifyList, t uint32) {
 		unlock(&l.lock)
 		return
 	}
-
-	// 将自身 goroutine 入队
 	s := acquireSudog()
 	s.g = getg()
 	s.ticket = t

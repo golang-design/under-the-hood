@@ -2,13 +2,14 @@
 
 [TOC]
 
+Go 的运行时能够直接接触到操作系统内核级的同步原语，`note` 和 `mutex` 分别是 Go 运行时实现的一次性通知机制和互斥锁机制，
+其实现是操作系统特定的，这里讨论 darwin 和 linux 的分别基于 semaphore 和 futex 的实现，wasm 的实现我们放到其章节中专门讨论。
 
+虽然 Go 受到 CSP 的影响提供了 channel 这一同步原语，但 channel 在某些情况下（比如天然需要共享内存的资源池）
+使用共享内存的互斥锁这一同步原语在编程上会更加方便。但问题在于，由于调度器的存在，内核级的同步原语并不能直接暴露给用户态代码，
+因此运行时还需要特殊设计的信号量机制来支持用户态的同步原语。
 
-
-`note` 和 `mutex` 分别是 Go 运行时实现的一次性通知机制和互斥锁机制，其实现是操作系统特定的，
-这里讨论 darwin 和 linux 的分别基于 semaphore 和 futex 的实现，wasm 的实现我们放到其章节中专门讨论。
-
-## runtime.note
+## 运行时通知机制 note
 
 ### 结构
 
@@ -57,7 +58,7 @@ func noteclear(n *note) {
 
 ### `notetsleepg`
 
-## runtime.mutex
+## 运行时互斥量机制 mutex
 
 ### 结构
 
@@ -78,67 +79,69 @@ type mutex struct {
 
 ```go
 const (
-	locked uintptr = 1
+	mutex_unlocked = 0
+	mutex_locked   = 1
+	mutex_sleeping = 2
 
 	active_spin     = 4
-	active_spin_cnt = 30
 	passive_spin    = 1
 )
-
+//go:nosplit
+func key32(p *uintptr) *uint32 {
+	return (*uint32)(unsafe.Pointer(p))
+}
 func lock(l *mutex) {
 	gp := getg()
-	if gp.m.locks < 0 {
-		throw("runtime·lock: lock count")
-	}
+	(...)
 	gp.m.locks++
 
-	// Speculative grab for lock.
-	if atomic.Casuintptr(&l.key, 0, locked) {
+	// 锁的推测抓取
+	v := atomic.Xchg(key32(&l.key), mutex_locked)
+	if v == mutex_unlocked {
 		return
 	}
-	semacreate(gp.m)
 
-	// On uniprocessor's, no point spinning.
-	// On multiprocessors, spin for ACTIVE_SPIN attempts.
+	// wait 可能是 MUTEX_LOCKED 或 MUTEX_SLEEPING
+	// 取决于是否有线程在此 mutex 上休眠。
+	// 如果我们没有将 l.key 从 MUTEX_SLEEPING 修改到其他值，
+	// 我们必须小心的在返回前将其修改回 MUTEX_SLEEPING，进而保证睡眠的
+	// 的线程能够获得唤醒调用
+	wait := v
+
+	// 在单处理器中，没有 spinning
+	// 在多处理器中，作为 ACTIVE_SPIN 尝试进行自旋
 	spin := 0
 	if ncpu > 1 {
 		spin = active_spin
 	}
-Loop:
-	for i := 0; ; i++ {
-		v := atomic.Loaduintptr(&l.key)
-		if v&locked == 0 {
-			// Unlocked. Try to lock.
-			if atomic.Casuintptr(&l.key, v, v|locked) {
-				return
+	for {
+		// 尝试加锁, spinning
+		for i := 0; i < spin; i++ {
+			for l.key == mutex_unlocked {
+				if atomic.Cas(key32(&l.key), mutex_unlocked, wait) {
+					return
+				}
 			}
-			i = 0
+			procyield(active_spin_cnt) // 30
 		}
-		if i < spin {
-			procyield(active_spin_cnt)
-		} else if i < spin+passive_spin {
+
+		// Try for lock, rescheduling.
+		for i := 0; i < passive_spin; i++ {
+			for l.key == mutex_unlocked {
+				if atomic.Cas(key32(&l.key), mutex_unlocked, wait) {
+					return
+				}
+			}
 			osyield()
-		} else {
-			// Someone else has it.
-			// l->waitm points to a linked list of M's waiting
-			// for this lock, chained through m->nextwaitm.
-			// Queue this M.
-			for {
-				gp.m.nextwaitm = muintptr(v &^ locked)
-				if atomic.Casuintptr(&l.key, v, uintptr(unsafe.Pointer(gp.m))|locked) {
-					break
-				}
-				v = atomic.Loaduintptr(&l.key)
-				if v&locked == 0 {
-					continue Loop
-				}
-			}
-			if v&locked != 0 {
-				// Queued. Wait.
-				semasleep(-1)
-				i = 0
-			}
 		}
+
+		// Sleep.
+		v = atomic.Xchg(key32(&l.key), mutex_sleeping)
+		if v == mutex_unlocked {
+			return
+		}
+		wait = mutex_sleeping
+		futexsleep(key32(&l.key), mutex_sleeping, -1)
 	}
 }
 ```
@@ -166,7 +169,24 @@ TEXT runtime·osyield(SB),NOSPLIT,$0
 
 ### `unlock`
 
-## semaphore
+```go
+func unlock(l *mutex) {
+	v := atomic.Xchg(key32(&l.key), mutex_unlocked)
+	(...)
+	if v == mutex_sleeping {
+		futexwakeup(key32(&l.key), 1)
+	}
+
+	gp := getg()
+	gp.m.locks--
+	(...)
+	if gp.m.locks == 0 && gp.preempt { // restore the preemption request in case we've cleared it in newstack
+		gp.stackguard0 = stackPreempt
+	}
+}
+```
+
+## 信号量 semaphore 机制
 
 sync 包中 Mutex 的实现依赖运行时中关于 `runtime_Semacquire` 与 `runtime_Semrelease` 的实现。
 他们对应于运行时的 `sync_runtime_Semacquire` 和 `sync_runtime_Semrelease` 函数。
@@ -184,94 +204,63 @@ func sync_runtime_Semrelease(addr *uint32, handoff bool, skipframes int) {
 
 可以看到他们均为运行时中的 `semacquire1` 和 `semrelease1` 函数。
 
-先来看 `semacquire1`。
+### sudog 缓存
+
+sudog 是运行时用来存放处于阻塞状态的 goroutine 的一个上层抽象，是用来实现用户态信号量的主要机制之一。
+例如当一个 goroutine 因为等待 channel 的数据需要进行阻塞时，sudog 会将 goroutine 及其用于等待数据的位置进行记录，
+并进而串联成一个等待队列，或二叉平衡树。
 
 ```go
-func semacquire1(addr *uint32, lifo bool, profile semaProfileFlags, skipframes int) {
-	// 获取当前 goroutine
-	// 该调用发生在 goroutine 运行时，所以有绑定的 P
-	gp := getg()
-	if gp != gp.m.curg {
-		throw("semacquire not on the G stack")
-	}
+   sudog   
++---------+
+|    g    | ---> goroutine
++---------+
+|   next  | ---> 下一个 g
++---------+
+|  	prev  | ---> 上一个 g
++---------+
+|   elem  | ---> 发送的元素，可能指向其他 goroutine 的执行栈
++---------+
+|   ...   |
 
-	// 简单情况，直接 acquire 成功
-	if cansemacquire(addr) {
-		return
-	}
+type sudog struct {
+	// 由 sudog 阻塞的通道的 hchan.lock 进行保护
+	g *g
 
-	// 比较难情况
-	//	增加等待计数
-	//	再试一次 cansemacquire 如果成功则直接返回
-	//	将自己作为等待器入队
-	//	休眠
-	//	(等待器描述符由出队信号产生出队行为)
-	s := acquireSudog()
-	root := semroot(addr)
-	t0 := int64(0)
-	s.releasetime = 0
-	s.acquiretime = 0
-	s.ticket = 0
-	if profile&semaBlockProfile != 0 && blockprofilerate > 0 {
-		t0 = cputicks()
-		s.releasetime = -1
-	}
-	if profile&semaMutexProfile != 0 && mutexprofilerate > 0 {
-		if t0 == 0 {
-			t0 = cputicks()
-		}
-		s.acquiretime = t0
-	}
-	for {
-		lock(&root.lock)
-		// Add ourselves to nwait to disable "easy case" in semrelease.
-		atomic.Xadd(&root.nwait, 1)
-		// Check cansemacquire to avoid missed wakeup.
-		if cansemacquire(addr) {
-			atomic.Xadd(&root.nwait, -1)
-			unlock(&root.lock)
-			break
-		}
-		// Any semrelease after the cansemacquire knows we're waiting
-		// (we set nwait above), so go to sleep.
-		root.queue(addr, s, lifo)
-		goparkunlock(&root.lock, waitReasonSemacquire, traceEvGoBlockSync, 4+skipframes)
-		if s.ticket != 0 || cansemacquire(addr) {
-			break
-		}
-	}
-	if s.releasetime > 0 {
-		blockevent(s.releasetime-t0, 3+skipframes)
-	}
-	releaseSudog(s)
+	// isSelect 表示 g 正在参与一个 select，因此 g.selectDone 必须以 CAS 的方式来避免唤醒时候的 data race。
+	isSelect bool
+	next     *sudog
+	prev     *sudog
+	elem     unsafe.Pointer // 数据元素（可能指向栈）
+
+	// 下面的字段永远不会并发的被访问。对于 channel waitlink 只会被 g 访问
+	// 对于 semaphores，所有的字段（包括上面的）只会在持有 semaRoot 锁时被访问
+
+	acquiretime int64
+	releasetime int64
+	ticket      uint32
+	parent      *sudog // semaRoot 二叉树
+	waitlink    *sudog // g.waiting 列表或 semaRoot
+	waittail    *sudog // semaRoot
+	c           *hchan // channel
 }
 ```
 
-```go
-func cansemacquire(addr *uint32) bool {
-	for {
-		v := atomic.Load(addr)
-		// 如果地址中的值为 0 则不能处理，即保证不为负
-		if v == 0 {
-			return false
-		}
-		// 比较并执行减一，如果成功则返回 true
-		if atomic.Cas(addr, v, v-1) {
-			return true
-		}
-		// 否则继续 acquire
-	}
-}
-```
+这些信息是从一个全局缓存池或 per-P 的缓存池进行分配（per-P 优先），当使用完毕后又再次归还给缓存池。
+其遵循策略：
+
+1. 优先从 per-P 缓存中获取，如果 per-P 缓存为空，则从全局池抓取一半；
+2. 优先归还到 per-P 缓存，如果 per-P 缓存已满，则将 per-P 缓存的一半归还到全局池。
 
 ```go
 //go:nosplit
 func acquireSudog() *sudog {
-	mp := acquirem()
+	mp := acquirem() // 获取当前 g 所在的 m
 	pp := mp.p.ptr()
+	// 检查 per-P sudogcache 池是否存在可复用的 sudog
 	if len(pp.sudogcache) == 0 {
 		lock(&sched.sudoglock)
-		// First, try to grab a batch from central cache.
+		// 从中央缓存抓取一半
 		for len(pp.sudogcache) < cap(pp.sudogcache)/2 && sched.sudogcache != nil {
 			s := sched.sudogcache
 			sched.sudogcache = s.next
@@ -279,126 +268,34 @@ func acquireSudog() *sudog {
 			pp.sudogcache = append(pp.sudogcache, s)
 		}
 		unlock(&sched.sudoglock)
-		// If the central cache is empty, allocate a new one.
+		// 中央缓存也没有，新分配
 		if len(pp.sudogcache) == 0 {
 			pp.sudogcache = append(pp.sudogcache, new(sudog))
 		}
 	}
+	// 取出
 	n := len(pp.sudogcache)
 	s := pp.sudogcache[n-1]
 	pp.sudogcache[n-1] = nil
 	pp.sudogcache = pp.sudogcache[:n-1]
-	if s.elem != nil {
-		throw("acquireSudog: found s.elem != nil in cache")
-	}
+	(...)
 	releasem(mp)
 	return s
 }
-```
-
-```go
-func semroot(addr *uint32) *semaRoot {
-	return &semtable[(uintptr(unsafe.Pointer(addr))>>3)%semTabSize].root
-}
-```
-
-
-```go
-type semaRoot struct {
-	lock  mutex
-	treap *sudog
-	nwait uint32
-}
-func (root *semaRoot) queue(addr *uint32, s *sudog, lifo bool) {
-	s.g = getg()
-	s.elem = unsafe.Pointer(addr)
-	s.next = nil
-	s.prev = nil
-
-	var last *sudog
-	pt := &root.treap
-	for t := *pt; t != nil; t = *pt {
-		if t.elem == unsafe.Pointer(addr) {
-			// Already have addr in list.
-			if lifo {
-				// Substitute s in t's place in treap.
-				*pt = s
-				s.ticket = t.ticket
-				s.acquiretime = t.acquiretime
-				s.parent = t.parent
-				s.prev = t.prev
-				s.next = t.next
-				if s.prev != nil {
-					s.prev.parent = s
-				}
-				if s.next != nil {
-					s.next.parent = s
-				}
-				// Add t first in s's wait list.
-				s.waitlink = t
-				s.waittail = t.waittail
-				if s.waittail == nil {
-					s.waittail = t
-				}
-				t.parent = nil
-				t.prev = nil
-				t.next = nil
-				t.waittail = nil
-			} else {
-				// Add s to end of t's wait list.
-				if t.waittail == nil {
-					t.waitlink = s
-				} else {
-					t.waittail.waitlink = s
-				}
-				t.waittail = s
-				s.waitlink = nil
-			}
-			return
-		}
-		last = t
-		if uintptr(unsafe.Pointer(addr)) < uintptr(t.elem) {
-			pt = &t.prev
-		} else {
-			pt = &t.next
-		}
-	}
-
-	s.ticket = fastrand() | 1
-	s.parent = last
-	*pt = s
-
-	// Rotate up into tree according to ticket (priority).
-	for s.parent != nil && s.parent.ticket > s.ticket {
-		if s.parent.prev == s {
-			root.rotateRight(s.parent)
-		} else {
-			if s.parent.next != s {
-				panic("semaRoot queue")
-			}
-			root.rotateLeft(s.parent)
-		}
-	}
-}
-```
-
-
-```go
 //go:nosplit
 func releaseSudog(s *sudog) {
 	(...)
-	gp := getg()
-	(...)
-	mp := acquirem() // avoid rescheduling to another P
+	mp := acquirem() // 避免在释放时重新调度到其他的 p 上
 	pp := mp.p.ptr()
+	// p 的 sudogcache 已存满，将一半放回到中央缓存中
 	if len(pp.sudogcache) == cap(pp.sudogcache) {
-		// Transfer half of local cache to the central cache.
 		var first, last *sudog
 		for len(pp.sudogcache) > cap(pp.sudogcache)/2 {
 			n := len(pp.sudogcache)
 			p := pp.sudogcache[n-1]
 			pp.sudogcache[n-1] = nil
 			pp.sudogcache = pp.sudogcache[:n-1]
+			// 构建 sudog 链表
 			if first == nil {
 				first = p
 			} else {
@@ -411,201 +308,121 @@ func releaseSudog(s *sudog) {
 		sched.sudogcache = first
 		unlock(&sched.sudoglock)
 	}
+	// 将释放的 s 添加到 sudogcache
 	pp.sudogcache = append(pp.sudogcache, s)
 	releasem(mp)
 }
 ```
 
-### semrelease1
+### 基于 goroutine 抽象的信号量
+
+运行时的信号量需要在 Go 运行时调度器的基础之上提供一个 sleep 和 wakeup 原语，从而向用户态代码屏蔽内部调度器的存在。
+例如，当用户态代码使用互斥锁发生竞争时，能够让用户态代码依附的 goroutine 进行 sleep，并在可用时候被 wakeup，并被重新调度。
+
+因此 sleep 和 wakeup 原语的本质是，当一个 goroutine 需要休眠时，将其进行集中存放，当需要 wakeup 时，再将其取出，重新放入调度器中。
 
 ```go
-func semrelease1(addr *uint32, handoff bool) {
+type semaRoot struct {
+	lock  mutex
+	treap *sudog
+	nwait uint32
+}
+var semtable [251]struct {
+	root semaRoot
+	pad  [cpu.CacheLinePadSize - unsafe.Sizeof(semaRoot{})]byte
+}
+func semroot(addr *uint32) *semaRoot {
+	// 对信号量的地址取 hash(x) = (x >> 3) % size
+	return &semtable[(uintptr(unsafe.Pointer(addr))>>3)%semTabSize].root
+}
+```
+
+其实现中使用分布式哈希表结构，根据信号量的实际地址的哈希值将其打散到 251 个 treap 树中。
+
+```go
+func semacquire1(addr *uint32, lifo bool, profile semaProfileFlags, skipframes int) {
+	// 快速路径: *addr -= 1
+	if cansemacquire(addr) {
+		return
+	}
+
+	// 增加等待计数
+	// 再试一次 cansemacquire 如果成功则直接返回
+	// 将自己作为等待者入队
+	// 休眠
+	// (等待器描述符由出队信号产生出队行为)
+	s := acquireSudog()
+	root := semroot(addr)
+	(...)
+	s.ticket = 0
+	(...)
+	for {
+		lock(&root.lock)
+		// 把我们添加到 nwait 进而避免 semrelease 中的快速路径
+		atomic.Xadd(&root.nwait, 1)
+		// 避免虚假唤醒
+		if cansemacquire(addr) { // atomic *addr -= 1
+			atomic.Xadd(&root.nwait, -1)
+			unlock(&root.lock)
+			break
+		}
+		// 任何在 cansemacquire 之后的 semrelease 都知道我们在等待（因为设置了 nwait），因此休眠
+		// treap.insert(addr, s), addr 保存到 s.elem 中, s 保存到 root 中, 
+		root.queue(addr, s, lifo) // lifo == true: list 中已经有 addr 了
+		goparkunlock(&root.lock, waitReasonSemacquire, traceEvGoBlockSync, 4+skipframes)
+		if s.ticket != 0 || cansemacquire(addr) { // atomic *addr -= 1
+			break
+		}
+	}
+	(...)
+	releaseSudog(s)
+}
+
+func semrelease1(addr *uint32, handoff bool, skipframes int) {
 	root := semroot(addr)
 	atomic.Xadd(addr, 1)
 
-	// Easy case: no waiters?
-	// This check must happen after the xadd, to avoid a missed wakeup
-	// (see loop in semacquire).
+	// 快速路径: 没有人在此 root 等待
+	// 必须发生在 xadd 之后，避免虚假唤醒
 	if atomic.Load(&root.nwait) == 0 {
 		return
 	}
 
-	// Harder case: search for a waiter and wake it.
+	// 搜索一个等待着然后将其唤醒
 	lock(&root.lock)
 	if atomic.Load(&root.nwait) == 0 {
-		// The count is already consumed by another goroutine,
-		// so no need to wake up another goroutine.
 		unlock(&root.lock)
 		return
 	}
-	s, t0 := root.dequeue(addr)
+	s, t0 := root.dequeue(addr) // 查找第一个出现的 addr
 	if s != nil {
 		atomic.Xadd(&root.nwait, -1)
 	}
 	unlock(&root.lock)
-	if s != nil { // May be slow, so unlock first
-		acquiretime := s.acquiretime
-		if acquiretime != 0 {
-			mutexevent(t0-acquiretime, 3)
-		}
-		if s.ticket != 0 {
-			throw("corrupted semaphore ticket")
-		}
-		if handoff && cansemacquire(addr) {
+	if s != nil { // 可能会很慢，因此先解锁
+		(...)
+		if handoff && cansemacquire(addr) { // atomic *addr -= 1
 			s.ticket = 1
 		}
-		readyWithTime(s, 5)
+		readyWithTime(s, 5) // goready(s.g, 5) // 标记 runnable，等待被重新调度
 	}
 }
 ```
 
-
-```go
-func (root *semaRoot) dequeue(addr *uint32) (found *sudog, now int64) {
-	ps := &root.treap
-	s := *ps
-	for ; s != nil; s = *ps {
-		if s.elem == unsafe.Pointer(addr) {
-			goto Found
-		}
-		if uintptr(unsafe.Pointer(addr)) < uintptr(s.elem) {
-			ps = &s.prev
-		} else {
-			ps = &s.next
-		}
-	}
-	return nil, 0
-
-Found:
-	now = int64(0)
-	if s.acquiretime != 0 {
-		now = cputicks()
-	}
-	if t := s.waitlink; t != nil {
-		// Substitute t, also waiting on addr, for s in root tree of unique addrs.
-		*ps = t
-		t.ticket = s.ticket
-		t.parent = s.parent
-		t.prev = s.prev
-		if t.prev != nil {
-			t.prev.parent = t
-		}
-		t.next = s.next
-		if t.next != nil {
-			t.next.parent = t
-		}
-		if t.waitlink != nil {
-			t.waittail = s.waittail
-		} else {
-			t.waittail = nil
-		}
-		t.acquiretime = now
-		s.waitlink = nil
-		s.waittail = nil
-	} else {
-		// Rotate s down to be leaf of tree for removal, respecting priorities.
-		for s.next != nil || s.prev != nil {
-			if s.next == nil || s.prev != nil && s.prev.ticket < s.next.ticket {
-				root.rotateRight(s)
-			} else {
-				root.rotateLeft(s)
-			}
-		}
-		// Remove s, now a leaf.
-		if s.parent != nil {
-			if s.parent.prev == s {
-				s.parent.prev = nil
-			} else {
-				s.parent.next = nil
-			}
-		} else {
-			root.treap = nil
-		}
-	}
-	s.parent = nil
-	s.elem = nil
-	s.next = nil
-	s.prev = nil
-	s.ticket = 0
-	return s, now
-}
-```
-
-
-```go
-//go:linkname mutexevent sync.event
-func mutexevent(cycles int64, skip int) {
-	if cycles < 0 {
-		cycles = 0
-	}
-	rate := int64(atomic.Load64(&mutexprofilerate))
-	// TODO(pjw): measure impact of always calling fastrand vs using something
-	// like malloc.go:nextSample()
-	if rate > 0 && int64(fastrand())%rate == 0 {
-		saveblockevent(cycles, skip+1, mutexProfile)
-	}
-}
-func saveblockevent(cycles int64, skip int, which bucketType) {
-	gp := getg()
-	var nstk int
-	var stk [maxStack]uintptr
-	if gp.m.curg == nil || gp.m.curg == gp {
-		nstk = callers(skip, stk[:])
-	} else {
-		nstk = gcallers(gp.m.curg, skip, stk[:])
-	}
-	lock(&proflock)
-	b := stkbucket(which, 0, stk[:nstk], true)
-	b.bp().count++
-	b.bp().cycles += cycles
-	unlock(&proflock)
-}
-```
-
-```go
-func readyWithTime(s *sudog, traceskip int) {
-	if s.releasetime != 0 {
-		s.releasetime = cputicks()
-	}
-	goready(s.g, traceskip)
-}
-func goready(gp *g, traceskip int) {
-	systemstack(func() {
-		ready(gp, traceskip, true)
-	})
-}
-// 将 gp 标记为 ready 来运行
-func ready(gp *g, traceskip int, next bool) {
-	if trace.enabled {
-		traceGoUnpark(gp, traceskip)
-	}
-
-	status := readgstatus(gp)
-
-	// 标记为 runnable.
-	_g_ := getg()
-	_g_.m.locks++ // 禁止抢占，因为它可以在局部变量中保存 p
-	if status&^_Gscan != _Gwaiting {
-		dumpgstatus(gp)
-		throw("bad g->status in ready")
-	}
-
-	// 状态为 Gwaiting 或 Gscanwaiting, 标记 Grunnable 并将其放入运行队列 runq
-	casgstatus(gp, _Gwaiting, _Grunnable)
-	runqput(_g_.m.p.ptr(), gp, next)
-	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 {
-		wakep()
-	}
-	_g_.m.locks--
-	if _g_.m.locks == 0 && _g_.preempt { // 在 newstack 中已经清除它的情况下恢复抢占请求
-		_g_.stackguard0 = stackPreempt
-	}
-}
-```
+这一对 semacquire 和 semrelease 理解上可能不太直观。
+首先，我们必须意识到这两个函数一定是在两个不同的 M（线程）上得到执行，否则不会出现并发，我们不妨设为 M1 和 M2。
+当 M1 上的 G1 执行到 semacquire1 时，如果快速路径成功，则说明 G1 抢到锁，能够继续执行。但一旦失败且在慢速路径下
+依然抢不到锁，则会进入 goparkunlock，将当前的 G1 放到等待队列中，进而让 M1 切换并执行其他 G。
+当 M2 上的 G2 开始调用 semrelease1 时，只是单纯的将等待队列的 G1 重新放到调度队列中，而当 G1 重新被调度时（假设运气好又在 M1 上被调度），代码仍然会从 goparkunlock 之后开始执行，并再次尝试竞争信号量，如果成功，则会归还 sudog。
 
 ## 总结
 
 TODO:
+
+## 进一步阅读的参考文献
+
+- [Russ Cox, Semaphores in Plan 9](https://swtch.com/semaphore.pdf)
+- [U. Drepper, Futexes are Tricky](http://people.redhat.com/drepper/futex.pdf)
 
 [返回目录](./readme.md) | [上一节](./preemptive.md) | [下一节 过去、现在与未来](./history.md)
 
