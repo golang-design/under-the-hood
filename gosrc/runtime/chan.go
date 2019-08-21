@@ -31,19 +31,16 @@ type hchan struct {
 	qcount   uint           // 队列中的所有数据数
 	dataqsiz uint           // 环形队列的大小
 	buf      unsafe.Pointer // 指向大小为 dataqsiz 的数组
-	elemsize uint16
-	closed   uint32
-	elemtype *_type // 元素类型
-	sendx    uint   // 发送索引
-	recvx    uint   // 接受索引
-	recvq    waitq  // recv 等待列表，即（ <-chan）
-	sendq    waitq  // send 等待列表，即（ ch<- ）
+	elemsize uint16         // 元素大小
+	closed   uint32         // 是否关闭
+	elemtype *_type         // 元素类型
+	sendx    uint           // 发送索引
+	recvx    uint           // 接受索引
+	recvq    waitq          // recv 等待列表，即（ <-chan）
+	sendq    waitq          // send 等待列表，即（ ch<- ）
 
 	// lock 保护了 hchan 的所有字段，以及在此 channel 上阻塞的 sudog 的一些字段
-	//
-	// 当持有此锁时不改变其他 G 的状态（特别的，不 ready 一个 G），因为
-	// 它会在栈收缩时发生死锁
-	//
+	// 当持有此锁时不应该改变其他 G 的状态（特别的，不 ready 一个 G），因为它会在栈收缩时发生死锁
 	lock mutex
 }
 

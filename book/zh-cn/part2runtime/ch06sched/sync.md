@@ -422,7 +422,7 @@ TODO:
 ## 进一步阅读的参考文献
 
 - [Russ Cox, Semaphores in Plan 9](https://swtch.com/semaphore.pdf)
-- [U. Drepper, Futexes are Tricky](http://people.redhat.com/drepper/futex.pdf)
+- [U. Drepper, Futexes are Tricky](http://people.redhat.com/drepper/futex.pdf)
 
 [返回目录](./readme.md) | [上一节](./preemptive.md) | [下一节 过去、现在与未来](./history.md)
 

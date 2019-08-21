@@ -1125,6 +1125,30 @@ func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool
 }
 ```
 
+## 非阻塞式 channel
+
+TODO: 详细描述这些原因，补充一些文献
+
+影响非阻塞 channel 未被接收的一些原因:
+- 原因1（目前的主要原因）：
+  + 产生的问题：https://github.com/golang/go/issues/11506 
+    + 早年的 channel 实现基于重试机制（多个阻塞在同一 channel 的的 goroutine 被唤醒时，需要重新持有锁，这时谁抢到锁谁就能拿到数据）
+    + 所以他们被唤醒的顺序不是 FIFO 而是随机的，最坏情况下可能存在一个 goroutine 始终不会接受到数据，Cox 希望阻塞的 goroutine 能够按照 FIFO 的顺序被唤醒（虽然在语言层面上未定义多个 goroutine 的唤醒顺序），保证得到数据的公平性。参与讨论的人中也支持这一改变。
+    + 但这一决定基本上抹杀了无锁 channel 的实现机制。
+  +  FIFO 的实现：runtime: simplify buffered channels https://go-review.googlesource.com/c/go/+/9345/ 
+- 原因2（早年被搁置的主要原因之一）：提出的 lockfree channel 并非 waitfree，其实际性能是否能 scale 并没有强有力的证据；与此同时，调度器不是 NUMA-aware 的，在核心较多时，一个外部实现的 lockfree channel 的性能测试结果表明 lock-free 版本甚至比 futex 版本还要慢
+  - 未使用运行时的一个实现：https://github.com/OneOfOne/lfchan
+    - 性能测试：https://github.com/OneOfOne/lfchan/issues/3
+  - 后续的一些跟进讨论：https://groups.google.com/forum/#!msg/golang-dev/0IElw_BbTrk/cGHMdNoHGQEJ
+    - 使用 fastpath 优化有锁的情况 https://codereview.appspot.com/110580043/
+    - 降低 select 对锁持有的粒度 https://codereview.appspot.com/112990043/
+- 原因3（早年被搁置的主要原因之二）：lockfree 版本的 channel 可维护性大打折扣
+  + lockfree 的一个教训：runtime: simplify chan ops, take 2 https://go-review.googlesource.com/c/go/+/16740
+    + 直接读分为两个过程 1. 读取发送方的值的指针 2. 拷贝到要接受的位置
+    + 在 1 和 2 这两个步骤之间，发送方的执行栈可能发生收缩，进而指针失效
+    + 题外话：这还牵涉到 GC 和 sched 之间的配合，所以 tight loop 的抢占式调度实现其实并不是想象中的向系统线程发送信号那么简单，正确性还需要严格验证
+    + lock-free programing 形式化验证工具 http://spinroot.com/spin/whatispin.html
+
 ## 总结
 
 channel 的实现是一个典型的环形队列+mutex锁的实现，与 channel 同步出现的 select 更像是一个语法糖，其本质仍然是一个 `chansend` 和 `chanrecv` 的两个通用实现。但为了支持 select 在不同分支上的非阻塞操作，`selectgo` 完成了这一需求。
