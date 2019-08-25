@@ -11,9 +11,17 @@ Go 的运行时能够直接接触到操作系统内核级的同步原语，`note
 
 ## 运行时通知机制 note
 
+运行时的通知机制在 Linux 上直接基于 Futex（Fast userspace mutex），我们首先回顾它。
+
+当需要资源互斥时，需要使用系统调用，这时必须从用户空间切换到内核空间，因此使用系统调用的代价非常昂贵。
+Futex 则认为，大部分情况下锁并没有发生竞争，从而当一个线程尝试获取一个空闲锁时，持有它的代价非常廉价，
+因此很有可能不存在其他线程视图获取它。
+
+TODO:
+
 ### 结构
 
-`note` 的结构本身并没有什么黑魔法，它自身只包含一个 `uintptr` 类型的标志。
+`note` 的结构本身并没有什么可说的，它自身只包含一个 `uintptr` 类型的标志。
 
 ```go
 // 休眠与唤醒一次性事件.
@@ -31,12 +39,141 @@ Go 的运行时能够直接接触到操作系统内核级的同步原语，`note
 type note struct {
 	// 基于 futex 的实现将其视为 uint32 key (linux)
 	// 而基于 sema 实现则将其视为 M* waitm。 (darwin)
-	// 以前作为 union 使用，但 union 会打破精确 GC
+	// 以前作为 union 使用，但 union 会破坏精确 GC
 	key uintptr
 }
 ```
 
-### `noteclear`
+### 注册通知
+
+```go
+func notesleep(n *note) {
+	gp := getg()
+	if gp != gp.m.g0 {
+		throw("notesleep not on g0")
+	}
+	ns := int64(-1)
+	if *cgo_yield != nil {
+		// Sleep for an arbitrary-but-moderate interval to poll libc interceptors.
+		ns = 10e6
+	}
+	for atomic.Load(key32(&n.key)) == 0 {
+		gp.m.blocked = true
+		futexsleep(key32(&n.key), 0, ns)
+		if *cgo_yield != nil {
+			asmcgocall(*cgo_yield, nil)
+		}
+		gp.m.blocked = false
+	}
+}
+```
+
+```go
+func notetsleep(n *note, ns int64) bool {
+	(...)
+	return notetsleep_internal(n, ns)
+}
+//go:nosplit
+//go:nowritebarrier
+func notetsleep_internal(n *note, ns int64) bool {
+	gp := getg()
+
+	if ns < 0 {
+		if *cgo_yield != nil {
+			// Sleep for an arbitrary-but-moderate interval to poll libc interceptors.
+			ns = 10e6
+		}
+		for atomic.Load(key32(&n.key)) == 0 {
+			gp.m.blocked = true
+			futexsleep(key32(&n.key), 0, ns)
+			if *cgo_yield != nil {
+				asmcgocall(*cgo_yield, nil)
+			}
+			gp.m.blocked = false
+		}
+		return true
+	}
+
+	if atomic.Load(key32(&n.key)) != 0 {
+		return true
+	}
+
+	deadline := nanotime() + ns
+	for {
+		if *cgo_yield != nil && ns > 10e6 {
+			ns = 10e6
+		}
+		gp.m.blocked = true
+		futexsleep(key32(&n.key), 0, ns)
+		if *cgo_yield != nil {
+			asmcgocall(*cgo_yield, nil)
+		}
+		gp.m.blocked = false
+		if atomic.Load(key32(&n.key)) != 0 {
+			break
+		}
+		now := nanotime()
+		if now >= deadline {
+			break
+		}
+		ns = deadline - now
+	}
+	return atomic.Load(key32(&n.key)) != 0
+}
+//go:nosplit
+func futexsleep(addr *uint32, val uint32, ns int64) {
+	// Some Linux kernels have a bug where futex of
+	// FUTEX_WAIT returns an internal error code
+	// as an errno. Libpthread ignores the return value
+	// here, and so can we: as it says a few lines up,
+	// spurious wakeups are allowed.
+	if ns < 0 {
+		futex(unsafe.Pointer(addr), _FUTEX_WAIT_PRIVATE, val, nil, nil, 0)
+		return
+	}
+
+	var ts timespec
+	ts.setNsec(ns)
+	futex(unsafe.Pointer(addr), _FUTEX_WAIT_PRIVATE, val, unsafe.Pointer(&ts), nil, 0)
+}
+```
+
+
+```go
+// 允许在用户 g 上调用
+func notetsleepg(n *note, ns int64) bool {
+	(...)
+	entersyscallblock()
+	ok := notetsleep_internal(n, ns)
+	exitsyscall()
+	return ok
+}
+```
+
+
+### 发送通知
+
+```go
+func notewakeup(n *note) {
+	old := atomic.Xchg(key32(&n.key), 1)
+	if old != 0 {
+		print("notewakeup - double wakeup (", old, ")\n")
+		throw("notewakeup - double wakeup")
+	}
+	futexwakeup(key32(&n.key), 1)
+}
+func futexwakeup(addr *uint32, cnt uint32) {
+	// linux futex 系统调用
+	ret := futex(unsafe.Pointer(addr), _FUTEX_WAKE_PRIVATE, cnt, nil, nil, 0)
+	if ret >= 0 {
+		return
+	}
+	(...)
+}
+```
+
+
+### 清除通知
 
 `note` 通知被设计为调用前必须对其标志位进行复位，这就需要调用 `noteclear`：
 
@@ -51,12 +188,6 @@ func noteclear(n *note) {
 	n.key = 0
 }
 ```
-
-### `notesleep`/`notetsleep`
-
-### `notewakeup`
-
-### `notetsleepg`
 
 ## 运行时互斥量机制 mutex
 
@@ -186,7 +317,7 @@ func unlock(l *mutex) {
 }
 ```
 
-## 信号量 semaphore 机制
+## 运行时 semaphore 机制
 
 sync 包中 Mutex 的实现依赖运行时中关于 `runtime_Semacquire` 与 `runtime_Semrelease` 的实现。
 他们对应于运行时的 `sync_runtime_Semacquire` 和 `sync_runtime_Semrelease` 函数。

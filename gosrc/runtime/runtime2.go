@@ -568,7 +568,7 @@ type schedt struct {
 	mnext        int64    // 已经创建的 m 的个数，同时还表示下一个 m 的 id
 	maxmcount    int32    // 允许（或死亡）的 m 的最大值
 	nmsys        int32    // 不计入死锁的系统 m 的数量
-	nmfreed      int64    // 释放的 m 的计数（递增）// TODO: (@changkun) 这玩意儿不会溢出？
+	nmfreed      int64    // 释放的 m 的计数（递增）
 
 	ngsys uint32 // 系统 goroutine 的数量，动态更新
 

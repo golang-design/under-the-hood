@@ -80,6 +80,26 @@
       + M 的死亡
     + 总结
     + 进一步阅读的参考文献
+
+<!-- 
+M 的创建
+M 的休眠
+M 的唤醒
+M 的死亡
+G 的创建
+G 的休眠
+G 的唤醒
+G 的死亡
+P 的创建
+P 的死亡
+M 与 G 的绑定
+M 与 G 的解绑
+M 与 P 的绑定
+M 与 P 的解绑
+G 与 P 的绑定
+G 与 P 的解绑
+ -->
+
 - [6.4 系统监控](part2runtime/ch06sched/sysmon.md)
     + 监控循环
     + 总结
@@ -123,18 +143,20 @@
     + 总结
     + 进一步阅读的参考文献
 - [6.9 运行时同步原语](part2runtime/ch06sched/sync.md)
-    + runtime.note
+    + 运行时通知机制 note
       + 结构
-      + noteclear
-      + notesleep, notesleep
-      + notewakeup
-      + notetsleepg
-    + runtime.mutex
+      + 注册通知
+      + 发送通知
+      + 清除通知
+    + 运行时互斥量机制 mutex
       + 结构
       + lock
       + unlock
-    + semaphore
+    + 运行时 semaphore 机制
+      + sudog 缓存
+      + 基于 goroutine 抽象的信号量
     + 总结
+    + 进一步阅读的参考文献
 - [6.10 过去、现在与未来](part2runtime/ch06sched/history.md)
     + 演进史
     + 改进展望

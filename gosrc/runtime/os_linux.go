@@ -50,7 +50,7 @@ func futexsleep(addr *uint32, val uint32, ns int64) {
 	futex(unsafe.Pointer(addr), _FUTEX_WAIT_PRIVATE, val, unsafe.Pointer(&ts), nil, 0)
 }
 
-// If any procs are sleeping on addr, wake up at most cnt.
+// 如果任何 procs 在 addr 休眠，唤醒最多 cnt 次
 //go:nosplit
 func futexwakeup(addr *uint32, cnt uint32) {
 	ret := futex(unsafe.Pointer(addr), _FUTEX_WAKE_PRIVATE, cnt, nil, nil, 0)

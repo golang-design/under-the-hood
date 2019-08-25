@@ -789,7 +789,7 @@ func runqputslow(_p_ *p, gp *g, h, t uint32) bool {
 // 将一批 runnable goroutine 放入全局 runnable 队列中
 // 它会清楚 *batch
 // 调度器必须锁住才可调用
-func globrunqputbatch(ghead *g, gtail *g, n int32) {
+func globrunqputbatch(batch *gQueue, n int32) {
 	sched.runq.pushBackAll(*batch)
 	sched.runqsize += n
 	*batch = gQueue{}
