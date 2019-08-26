@@ -4,6 +4,7 @@
 - [参与运行时的系统调用（Darwin 篇）](./syscall-darwin.md)
 - [WebAssembly](./syscall-wasm.md)
 - [cgo](./cgo.md)
+- [用户态系统调用](./syscall-pkg.md)
 
 ## 许可
 

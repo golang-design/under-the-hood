@@ -38,6 +38,8 @@
       + atomic.Value
       + atomic.CompareAndSwapPointer
     + 运行时实现
+    + 原子操作的内存模型
+    + 进一步阅读的参考文献
 
 ## 许可
 

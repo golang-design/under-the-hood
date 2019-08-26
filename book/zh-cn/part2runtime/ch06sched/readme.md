@@ -7,8 +7,8 @@
       + P 的结构
       + G 的结构
       + 调度器 sched 的结构
-      + 总结
-      + 进一步阅读的参考文献
+    + 总结
+    + 进一步阅读的参考文献
 - [6.2 调度器初始化](./init.md)
     + M 的初始化
     + P 的初始化
@@ -74,18 +74,20 @@
     + 总结
     + 进一步阅读的参考文献
 - [6.9 运行时同步原语](./sync.md)
-    + runtime.note
+    + 运行时通知机制 note
       + 结构
-      + noteclear
-      + notesleep, notesleep
-      + notewakeup
-      + notetsleepg
-    + runtime.mutex
+      + 注册通知
+      + 发送通知
+      + 清除通知
+    + 运行时互斥量机制 mutex
       + 结构
       + lock
       + unlock
-    + semaphore
+    + 运行时 semaphore 机制
+      + sudog 缓存
+      + 基于 goroutine 抽象的信号量
     + 总结
+    + 进一步阅读的参考文献
 - [6.10 过去、现在与未来](./history.md)
     + 演进史
     + 改进展望

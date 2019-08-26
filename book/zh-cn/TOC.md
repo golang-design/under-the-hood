@@ -271,18 +271,24 @@ G 与 P 的解绑
     + 总结
     + 进一步阅读的参考文献
 - [10.4 WebAssembly](part2runtime/ch10abi/syscall-wasm.md)
+- [10.5 系统调用包 syscall](part2runtime/ch10abi/syscall-pkg.md)
+    + 由运行时提供支持的系统调用
+    + 通用型系统调用
+      + `runtime.entersyscall` 和 `runtime.exitsyscall`
+      + 返回的错误处理
+    + 进一步阅读的参考文献
 
 ### [第三部分：编译系统](part3compile/readme.md)
 
-#### 第十一章 关键字
+#### [第十一章 关键字与类型系统](part3compile/ch11type/readme.md)
 
-- [11.1 `go`](part3compile/ch11keyword/go.md)
-- [11.2 `defer`](part3compile/ch11keyword/defer.md)
-- [11.3 `panic` 与 `recover`](part3compile/ch11keyword/panic.md)
+- [11.1 `go`](part3compile/ch11type/go.md)
+- [11.2 `defer`](part3compile/ch11type/defer.md)
+- [11.3 `panic` 与 `recover`](part3compile/ch11type/panic.md)
     + gopanic 和 gorecover
     + 总结
-- [11.4 `map`](part3compile/ch11keyword/map.md)
-- [11.5 `chan` 与 `select`](part3compile/ch11keyword/chan.md)
+- [11.4 `map`](part3compile/ch11type/map.md)
+- [11.5 `chan` 与 `select`](part3compile/ch11type/chan.md)
     + channel 的本质
       + 基本使用
       + channel 的创生
@@ -296,8 +302,10 @@ G 与 P 的解绑
     + channel 的 lock-free 实现
     + 总结
     + 进一步阅读的参考文献
-
-- [11.6 `interface`](part3compile/ch11keyword/interface.md)
+- [11.6 `interface{}`](part3compile/ch11type/interface.md)
+- [11.7 slice](part3compile/ch11type/slice.md)
+- [11.8 string](part3compile/ch11type/string.md)
+- [11.9 运行时类型系统与 reflect 包](part3compile/ch11type/type.md)
 
 #### 第十二章 泛型
 
@@ -317,7 +325,6 @@ G 与 P 的解绑
     + Go 指针 `Pointer`
     + 指针操作
 - [词法与文法](part3compile/ch14gc/parse.md)
-- [类型系统](part3compile/ch14gc/type.md)
 - [编译后端 SSA](part3compile/ch14gc/ssa.md)
 - [过去、现在与未来]
 
@@ -340,7 +347,7 @@ G 与 P 的解绑
     + 错误检查
       + Unwrap
       + As 与 Is
-      + `%w`
+      + fmt.Errorf 中的 `%w`
 
 #### [第十六章 sync 与 atomic 包](part4lib/ch16sync/readme.md)
 
@@ -382,19 +389,13 @@ G 与 P 的解绑
       + atomic.Value
       + atomic.CompareAndSwapPointer
     + 运行时实现
+    + 原子操作的内存模型
+    + 进一步阅读的参考文献
 
 #### [第十七章 其他](part4lib/ch17other/readme.md)
 
-- [17.1 `syscall.*`](part4lib/ch17other/syscall.md)
-    + 由运行时提供支持的系统调用
-    + 通用型系统调用
-      + `runtime.entersyscall` 和 `runtime.exitsyscall`
-      + 返回的错误处理
-    + 进一步阅读的参考文献
-- [17.2 `os/signal.*`](part4lib/ch17other/signal.md)
-- [17.3 `reflect.*`](part4lib/ch17other/reflect.md)
-- [17.4 `net.*`](part4lib/ch17other/net.md)
-- [17.5 `time.*`](part4lib/ch17other/time.md)
+- [17.1 `net.*`](part4lib/ch17other/net.md)
+- [17.2 `time.*`](part4lib/ch17other/time.md)
 
 ### [结束语](finalwords.md)
 
