@@ -123,9 +123,8 @@
 
 M 是 OS 线程的实体。
 
-> 位于 `runtime/runtime2.go`
-
 ```go
+// src/runtime/runtime2.go
 type m struct {
 	g0      *g     // 用于执行调度指令的 goroutine
 	morebuf gobuf  // morestack 的 gobuf 参数
@@ -252,14 +251,7 @@ type p struct {
 	sudogcache []*sudog
 	sudogbuf   [128]*sudog
 
-	tracebuf traceBufPtr
-
-	// traceSweep 表示应该被 trace 的 sweep 事件
-	// 这用于 defer sweep 开始事件，直到 span 实际被 sweep。
-	traceSweep bool
-	// traceSwept 和 traceReclaimed 会 trace 当前 sweep 循环中
-	// sweeping 扫描和回收的字节数。
-	traceSwept, traceReclaimed uintptr
+	(...)
 
 	palloc persistentAlloc // per-P，用于避免 mutex
 

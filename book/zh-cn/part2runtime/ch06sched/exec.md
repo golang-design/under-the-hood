@@ -1580,69 +1580,7 @@ TEXT runtime·exitThread(SB),NOSPLIT,$0-8
 
 我们已经看过了整个调度器的设计，下图纵观了整个过程：
 
-```
-          mstart --> mstart1  -   -   -   -   -   -   -   -   -   -   --> mexit
-                        |                                                  ^
-                        v  yes                                             |
-                       m0? ---> mstartm0 --> newextram --> initsig         |
-                     no |                                     |            |
-                        v                                     |            |
-在这里保存 mstart 运行现场  save <-------------------------------+            | 从而在这里可以跳转到 mexit
-                        |                                                  |
-                        v                                                  |
-                     asminit                                               |
-                        |                                                  |
-                      minit                                                |
-                        |                                                  |
-                        v      yes                                         |
-                     mstartfn? ---> mstartfn                               |
-                     no |              |                                   |
-                        | <------------+                                   |
-                        |                                                  |
-                        |       yes                                        |
-                      helpgc? --------------> stopm                        |
-                     no |                       |                          |
-                        |                       | park m                   |
-                        |                       | until new g              |
-                        v                       |                          |
-                     acquirep                   |                          |
-                        | <---------------------+                          |
-                        v                                     no           |
-                     schedule <----------------------------------- lock on os thread?
-                        |                                                  |
-                        +-----> stoplockedm -----------------+             |
-      +----+----------> |                                    |             |
-      |    |            |                                    |             |
-      |    |      yes   |                                    |             |
-      | gcstopm <---- in gc?                                 |             |
-      |              no |                                    |             |
-      |                 v                                    |             |
-      |           runSafePointerFn                           |             |
-      |                 |                                    |             |
-      |                 v        yes                         |             |
-      |             gc blacken? ----> findRunnableGCWorker   |             |
-      |                 |                     |              |             |
-      |                 v                     |              |             |
-      |         runqget / globrunqget         |              |             |
-      |                 |                     |              |             |
-      |                 v                     |              |             |
-      |            findrunnable               |              |             |
-      |                 |                     |              |             |
-      |                 v                     |              |             |
-      |            resetspinning <------------+              |             |
-      |                 |                                    |             |
-      |           yes   v                                    |             |
-   startlockedm <---- locked m?                              |             |
-                     no |                                    |             |
-                        v                                    |             |
-                      execute <------------------------------+             |
-                        |                                                  |
-                        v                                                  |
-                       gogo                                              gfput
-                        |                                                  ^  
-                        v                                                  |  
-                        G --> goexit --> mcall --> goexit1 ------------> dropg
-```
+![](../../../assets/schedule.png)
 
 那么，很自然的能够想到这个流程中存在两个问题：
 
