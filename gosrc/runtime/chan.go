@@ -197,20 +197,11 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 		racereadpc(c.raceaddr(), callerpc, funcPC(chansend))
 	}
 
-	// Fast path: check for failed non-blocking operation without acquiring the lock.
+	// 快速路径: 在不需要锁的情况下检查失败的非阻塞操作
 	//
-	// After observing that the channel is not closed, we observe that the channel is
-	// not ready for sending. Each of these observations is a single word-sized read
-	// (first c.closed and second c.recvq.first or c.qcount depending on kind of channel).
-	// Because a closed channel cannot transition from 'ready for sending' to
-	// 'not ready for sending', even if the channel is closed between the two observations,
-	// they imply a moment between the two when the channel was both not yet closed
-	// and not ready for sending. We behave as if we observed the channel at that moment,
-	// and report that the send cannot proceed.
-	//
-	// It is okay if the reads are reordered here: if we observe that the channel is not
-	// ready for sending and then observe that it is not closed, that implies that the
-	// channel wasn't closed during the first observation.
+	// 注意到 channel 不可能从关闭转换为未关闭状态，因此这里的失败条件为：
+	// buffer 为空（或没有）时 c.recvq.first 为空，或 buffer 已满
+	// 当 c.closed 发生重排在条件之后被读取时，其实已经隐含了上一个条件检查中 channel 未被关闭。
 	if !block && c.closed == 0 && ((c.dataqsiz == 0 && c.recvq.first == nil) ||
 		(c.dataqsiz > 0 && c.qcount == c.dataqsiz)) {
 		return false
@@ -228,7 +219,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 		panic(plainError("send on closed channel"))
 	}
 
-	// 1. 找到了阻塞在 channel 上的读者，直接发送
+	// 1. 找到了阻塞在 channel 上的 reciver，发送
 	if sg := c.recvq.dequeue(); sg != nil {
 		// Found a waiting receiver. We pass the value we want to send
 		// directly to the receiver, bypassing the channel buffer (if any).
@@ -276,19 +267,22 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 	gp.waiting = mysg
 	gp.param = nil
 	c.sendq.enqueue(mysg)
-	goparkunlock(&c.lock, waitReasonChanSend, traceEvGoBlockSend, 3)
+	goparkunlock(&c.lock, waitReasonChanSend, traceEvGoBlockSend, 3) // 将当前的 g 从调度队列移出
+	// 因为调度器在停止当前 g 的时候会记录运行现场，当恢复阻塞的发送操作时候，会从此处继续开始执行
+
 	// Ensure the value being sent is kept alive until the
 	// receiver copies it out. The sudog has a pointer to the
 	// stack object, but sudogs aren't considered as roots of the
 	// stack tracer.
 	KeepAlive(ep)
 
-	// someone woke us up.
+	// 被唤醒
 	if mysg != gp.waiting {
 		throw("G waiting list is corrupted")
 	}
 	gp.waiting = nil
 	if gp.param == nil {
+		// 正常唤醒状态，goroutine 应该包含需要传递的参数，但如果没有唤醒时的参数，且 channel 没有被关闭，则为虚假唤醒
 		if c.closed == 0 {
 			throw("chansend: spurious wakeup")
 		}
@@ -298,8 +292,8 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 	if mysg.releasetime > 0 {
 		blockevent(mysg.releasetime-t0, 2)
 	}
-	mysg.c = nil
-	releaseSudog(mysg)
+	mysg.c = nil       // 取消与之前阻塞的 channel 的关联
+	releaseSudog(mysg) // 从 sudog 中移除
 	return true
 }
 
@@ -339,6 +333,8 @@ func send(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 	if sg.releasetime != 0 {
 		sg.releasetime = cputicks()
 	}
+	// 复始一个 goroutine，放入调度队列等待被后续调度
+	// 第二个参数用于 trace 追踪 ip 寄存器的位置，go runtime 又不希望暴露太多内部的调用，因此记录需要跳过多少 ip
 	goready(gp, skip+1)
 }
 
@@ -358,11 +354,13 @@ func sendDirect(t *_type, sg *sudog, src unsafe.Pointer) {
 	// Once we read sg.elem out of sg, it will no longer
 	// be updated if the destination's stack gets copied (shrunk).
 	// So make sure that no preemption points can happen between read & use.
+	// 我们必须在一个函数调用中完成 sg.elem 指针的读取，否则当发生栈伸缩时，指针可能失效（被移动了）。
 	dst := sg.elem
+	// 为了确保发送的数据能够被立刻观察到，需要写屏障支持，执行写屏障，保证代码正确性
 	typeBitsBulkBarrier(t, uintptr(dst), uintptr(src), t.size)
 	// No need for cgo write barrier checks because dst is always
 	// Go memory.
-	memmove(dst, src, t.size)
+	memmove(dst, src, t.size) // 直接写入 reader 的执行栈！
 }
 
 func recvDirect(t *_type, sg *sudog, dst unsafe.Pointer) {
@@ -468,7 +466,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	if debugChan {
 		print("chanrecv: chan=", c, "\n")
 	}
-
+	// nil channel，同 send，会导致两个 goroutine 的死锁
 	if c == nil {
 		if !block {
 			return
@@ -477,18 +475,17 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 		throw("unreachable")
 	}
 
-	// Fast path: check for failed non-blocking operation without acquiring the lock.
+	// 快速路径: 在不需要锁的情况下检查失败的非阻塞操作
 	//
-	// After observing that the channel is not ready for receiving, we observe that the
-	// channel is not closed. Each of these observations is a single word-sized read
-	// (first c.sendq.first or c.qcount, and second c.closed).
-	// Because a channel cannot be reopened, the later observation of the channel
-	// being not closed implies that it was also not closed at the moment of the
-	// first observation. We behave as if we observed the channel at that moment
-	// and report that the receive cannot proceed.
+	// 注意到 channel 不能由已关闭转换为未关闭，则
+	// 失败的条件是：1. 无 buf 时发送队列为空 2. 有 buf 时，buf 为空
+	// 此处的 c.closed 必须在条件判断之后进行验证（从而需要 atomic 操作），因为
+	// 如果指令重排后，如果先判断 c.closed，得出 channel 未关闭，无法判断失败条件中
+	// channel 是已关闭还是未关闭，从而得到错误的返回值（原本为 true, false，错误的返回了 false, false）
 	//
-	// The order of operations is important here: reversing the operations can lead to
-	// incorrect behavior when racing with a close.
+	// FIXME: 此条件有个优化，具体参考 https://go-review.googlesource.com/c/go/+/181543
+	// 优化情形为在一个未关闭的 channel 上进行非阻塞接收比
+	//         在一个已关闭的 channel 上进行非阻塞接收块 700 倍
 	if !block && (c.dataqsiz == 0 && c.sendq.first == nil ||
 		c.dataqsiz > 0 && atomic.Loaduint(&c.qcount) == 0) &&
 		atomic.Load(&c.closed) == 0 {
@@ -501,7 +498,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	}
 
 	lock(&c.lock)
-
+	// 1. channel 已经 close，且 channel 中没有数据，则直接返回
 	if c.closed != 0 && c.qcount == 0 {
 		if raceenabled {
 			raceacquire(c.raceaddr())
@@ -512,7 +509,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 		}
 		return true, false
 	}
-
+	// 2. 找到发送方，直接接收
 	if sg := c.sendq.dequeue(); sg != nil {
 		// Found a waiting sender. If buffer is size 0, receive value
 		// directly from sender. Otherwise, receive from head of queue
@@ -521,7 +518,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 		recv(c, sg, ep, func() { unlock(&c.lock) }, 3)
 		return true, true
 	}
-
+	// 3. channel 的 buf 不空
 	if c.qcount > 0 {
 		// Receive directly from queue
 		qp := chanbuf(c, c.recvx)
@@ -547,7 +544,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 		return false, false
 	}
 
-	// no sender available: block on this channel.
+	// 4. 没有更多的发送方，阻塞 channel
 	gp := getg()
 	mysg := acquireSudog()
 	mysg.releasetime = 0
@@ -566,7 +563,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	c.recvq.enqueue(mysg)
 	goparkunlock(&c.lock, waitReasonChanReceive, traceEvGoBlockRecv, 3)
 
-	// someone woke us up
+	// 唤醒
 	if mysg != gp.waiting {
 		throw("G waiting list is corrupted")
 	}
@@ -600,7 +597,7 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 			racesync(c, sg)
 		}
 		if ep != nil {
-			// copy data from sender
+			// 直接从对方的栈进行拷贝
 			recvDirect(c.elemtype, sg, ep)
 		}
 	} else {
@@ -608,6 +605,7 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 		// head of the queue. Make the sender enqueue
 		// its item at the tail of the queue. Since the
 		// queue is full, those are both the same slot.
+		// 从缓存队列拷贝
 		qp := chanbuf(c, c.recvx)
 		if raceenabled {
 			raceacquire(qp)
@@ -615,11 +613,11 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 			raceacquireg(sg.g, qp)
 			racereleaseg(sg.g, qp)
 		}
-		// copy data from queue to receiver
+		// 从队列拷贝数据到接收方
 		if ep != nil {
 			typedmemmove(c.elemtype, ep, qp)
 		}
-		// copy data from sender to queue
+		// 从发送方拷贝数据到队列
 		typedmemmove(c.elemtype, qp, sg.elem)
 		c.recvx++
 		if c.recvx == c.dataqsiz {

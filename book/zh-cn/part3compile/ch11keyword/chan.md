@@ -2,6 +2,8 @@
 
 [TOC]
 
+> 本节内容提供一个线上演讲：[YouTube 在线](https://www.youtube.com/watch?v=d7fFCGGn0Wc)，[Google Slides 讲稿](https://docs.google.com/presentation/d/18_9LcMc8u93aITZ6DqeUfRvOcHQYj2gwxhskf0XPX2U/edit?usp=sharing)。
+
 Tony Hoare 于 1977 年提出通信顺序进程（CSP）理论。
 简单来说，CSP 的模型由并发执行的实体（线程或者进程）所组成，实体之间通过发送消息进行通信，
 这里发送消息时使用的就是通道（channel）。也就是我们常说的
@@ -97,19 +99,16 @@ type hchan struct {
 	qcount   uint           // 队列中的所有数据数
 	dataqsiz uint           // 环形队列的大小
 	buf      unsafe.Pointer // 指向大小为 dataqsiz 的数组
-	elemsize uint16
-	closed   uint32
-	elemtype *_type // 元素类型
-	sendx    uint   // 发送索引
-	recvx    uint   // 接受索引
+	elemsize uint16         // 元素大小
+	closed   uint32         // 是否关闭
+	elemtype *_type         // 元素类型
+	sendx    uint           // 发送索引
+	recvx    uint           // 接收索引
 	recvq    waitq  // recv 等待列表，即（ <-ch ）
 	sendq    waitq  // send 等待列表，即（ ch<- ）
 
 	// lock 保护了 hchan 的所有字段，以及在此 channel 上阻塞的 sudog 的一些字段
-	//
-	// 当持有此锁时不应该改变其他 G 的状态（特别的，不 ready 一个 G），因为
-	// 它会在栈收缩时发生死锁
-	//
+	// 当持有此锁时不应该改变其他 G 的状态（特别的，不 ready 一个 G），因为它会在栈收缩时发生死锁
 	lock mutex
 }
 type waitq struct { // 等待队列 sudog 双向队列
@@ -428,7 +427,13 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 		throw("unreachable")
 	}
 
-	// 快速路径: 在不持有锁的情况下检查失败的非阻塞操作
+	// 快速路径: 在不需要锁的情况下检查失败的非阻塞操作
+	//
+	// 注意到 channel 不能由已关闭转换为未关闭，则
+	// 失败的条件是：1. 无 buf 时发送队列为空 2. 有 buf 时，buf 为空
+	// 此处的 c.closed 必须在条件判断之后进行验证（从而需要 atomic 操作），因为
+	// 如果指令重排后，如果先判断 c.closed，得出 channel 未关闭，无法判断失败条件中
+	// channel 是已关闭还是未关闭，从而得到错误的返回值（原本为 true, false，错误的返回了 false, false）
 	if !block && (c.dataqsiz == 0 && c.sendq.first == nil ||
 		c.dataqsiz > 0 && atomic.Loaduint(&c.qcount) == 0) &&
 		atomic.Load(&c.closed) == 0 {
@@ -499,6 +504,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 
 接受数据同样包含直接从接收方的执行栈中拷贝要发送的数据，但这种情况当且仅当缓存中数据为空时。那么什么时候
 一个 channel 的缓存为空，且会阻塞呢？没错，unbuffered channel 就是如此。
+
 ```go
 func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 	if c.dataqsiz == 0 {
@@ -1125,29 +1131,16 @@ func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool
 }
 ```
 
-## 非阻塞式 channel
+## channel 的 lock-free 实现
 
-TODO: 详细描述这些原因，补充一些文献
+早在 2014 年时， Dmitry Vyukov 就已经提出实现 lock-free 版本的 channel [Vyukov, 2014a] [Vyukov, 2014b]，但这提案至今未被实现。其未被接收这一现实可以总结为以下三个原因。
 
-影响非阻塞 channel 未被接收的一些原因:
-- 原因1（目前的主要原因）：
-  + 产生的问题：https://github.com/golang/go/issues/11506 
-    + 早年的 channel 实现基于重试机制（多个阻塞在同一 channel 的的 goroutine 被唤醒时，需要重新持有锁，这时谁抢到锁谁就能拿到数据）
-    + 所以他们被唤醒的顺序不是 FIFO 而是随机的，最坏情况下可能存在一个 goroutine 始终不会接受到数据，Cox 希望阻塞的 goroutine 能够按照 FIFO 的顺序被唤醒（虽然在语言层面上未定义多个 goroutine 的唤醒顺序），保证得到数据的公平性。参与讨论的人中也支持这一改变。
-    + 但这一决定基本上抹杀了无锁 channel 的实现机制。
-  +  FIFO 的实现：runtime: simplify buffered channels https://go-review.googlesource.com/c/go/+/9345/ 
-- 原因2（早年被搁置的主要原因之一）：提出的 lockfree channel 并非 waitfree，其实际性能是否能 scale 并没有强有力的证据；与此同时，调度器不是 NUMA-aware 的，在核心较多时，一个外部实现的 lockfree channel 的性能测试结果表明 lock-free 版本甚至比 futex 版本还要慢
-  - 未使用运行时的一个实现：https://github.com/OneOfOne/lfchan
-    - 性能测试：https://github.com/OneOfOne/lfchan/issues/3
-  - 后续的一些跟进讨论：https://groups.google.com/forum/#!msg/golang-dev/0IElw_BbTrk/cGHMdNoHGQEJ
-    - 使用 fastpath 优化有锁的情况 https://codereview.appspot.com/110580043/
-    - 降低 select 对锁持有的粒度 https://codereview.appspot.com/112990043/
-- 原因3（早年被搁置的主要原因之二）：lockfree 版本的 channel 可维护性大打折扣
-  + lockfree 的一个教训：runtime: simplify chan ops, take 2 https://go-review.googlesource.com/c/go/+/16740
-    + 直接读分为两个过程 1. 读取发送方的值的指针 2. 拷贝到要接受的位置
-    + 在 1 和 2 这两个步骤之间，发送方的执行栈可能发生收缩，进而指针失效
-    + 题外话：这还牵涉到 GC 和 sched 之间的配合，所以 tight loop 的抢占式调度实现其实并不是想象中的向系统线程发送信号那么简单，正确性还需要严格验证
-    + lock-free programing 形式化验证工具 http://spinroot.com/spin/whatispin.html
+早年的 channel 实现基于重试机制，换句话说：多个阻塞在同一 channel 的的 goroutine 被唤醒时，需要重新持有锁，这时谁抢到锁谁就能拿到数据。所以这些 goroutine 被唤醒的顺序不是 FIFO，而是随机的，最坏情况下可能存在一个 goroutine 始终不会接受到数据，Russ Cox 希望 [Cox, 2015] 阻塞的 goroutine 能够按照 FIFO 的顺序被唤醒（虽然在语言层面上未定义多个 goroutine 的唤醒顺序），保证得到数据的公平性，参与讨论的人中也表示支持。但这一决定基本上抹杀了无锁 channel 的实现机制 [Randall, 2015a]。这是目前未使用 lock-free 实现 channel 的一个最主要的原因。
+
+但早年为什么没有接收使用 lock-free 实现 channel 呢？
+第一个原因是提出的 lock-free channel 并非 wait-free，其实际性能是否能 scale 并没有强有力的证据；与此同时，调度器不是 NUMA-aware 的，在核心较多时，一个外部实现的 lock-free channel [OneOfOne, 2016] 的性能测试结果 [Gjengset, 2016] 表明 lock-free 版本甚至比 futex 版本还要慢。后续跟进中虽然没有采用 lock-free 实现，但仍然跟进了两个小成本的优化 [Vyukov, 2014d]：增加不需要锁时的快速路径和减少互斥锁的粒度。
+
+第二个原因则在于：lockfree 版本的 channel 可维护性大打折扣。这里我们简单提一个由于 lock-free 实现导致的维护性大打折扣的教训 [Randall, 2015b]，在 [Randall, 2015a] 的简化 channel 实现的过程中，由于没有考虑到发送数据过程中对要发送数据的指针进行读取会与调度器对执行栈的伸缩发生冲突，从而导致这个间隙没有被考虑到：直接读分为两个过程 1. 读取发送方的值的指针 2. 拷贝到要接受的位置；在 1 和 2 这两个步骤之间，发送方的执行栈可能发生收缩，进而指针失效。虽然有人提出使用 lock-free programing 形式化验证工具 [Bell Labs, 1980] 让调度器代码与形式验证的模型进行同步，但显然这需要更多的工作量。
 
 ## 总结
 
@@ -1160,7 +1153,13 @@ channel 的实现是一个典型的环形队列+mutex锁的实现，与 channel 
 - [Vyukov, 2014a] [Dmitry Vyukov, Go channels on steroids, January 2014](https://docs.google.com/document/d/1yIAYmbvL3JxOKOjuCyon7JhW4cSv1wy5hC0ApeGMV9s/pub)
 - [Vyukov, 2014b] [Dmitry Vyukov, runtime: lock-free channels, October 2014](https://github.com/golang/go/issues/8899)
 - [Vyukov, 2014c] [Dmitry Vyukov, runtime: chans on steroids, October 2014](https://codereview.appspot.com/12544043)
-
+- [Vyukov, 2014d] [update on "lock-free channels", 2015](https://groups.google.com/forum/#!msg/golang-dev/0IElw_BbTrk/cGHMdNoHGQEJ)
+- [Cox, 2015] [runtime: make sure blocked channels run operations in FIFO order](https://github.com/golang/go/issues/11506)
+- [Randall, 2015a] [Keith Randall, runtime: simplify buffered channels, 2015](https://go-review.googlesource.com/c/go/+/9345/ )
+- [Randall, 2015b] [Keith Randall, runtime: simplify chan ops, take 2, 2015](https://go-review.googlesource.com/c/go/+/16740)
+- [OneOfOne, 2016] [OneOfOne, A scalable lock-free channel, 2016](https://github.com/OneOfOne/lfchan)
+- [Gjengset, 2016] [Jon Gjengset, Fix poor scalability to many (true-SMP) cores, 2016](https://github.com/OneOfOne/lfchan/issues/3)
+- [Bell Labs, 1980] [Bell Labs, Verifying Multi-threaded Software with Spin, 1980](http://spinroot.com/spin/whatispin.html)
 ## 许可
 
 [Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

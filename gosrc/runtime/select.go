@@ -126,6 +126,7 @@ func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
 
 	// Replace send/receive cases involving nil channels with
 	// caseNil so logic below can assume non-nil channel.
+	// 替换 closed channel
 	for i := range scases {
 		cas := &scases[i]
 		if cas.c == nil && cas.kind != caseDefault {
@@ -149,7 +150,7 @@ func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
 	// cases correctly, and they are rare enough not to bother
 	// optimizing (and needing to test).
 
-	// generate permuted order
+	// 生成随机顺序
 	for i := 1; i < ncases; i++ {
 		j := fastrandn(uint32(i + 1))
 		pollorder[i] = pollorder[j]
@@ -158,9 +159,11 @@ func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
 
 	// sort the cases by Hchan address to get the locking order.
 	// simple heap sort, to guarantee n log n time and constant stack footprint.
+	// 堆排, 根据 channel 的地址进行堆排序，决定获取锁的顺序
 	for i := 0; i < ncases; i++ {
 		j := i
 		// Start with the pollorder to permute cases on the same channel.
+		// 根据 pullorder 开始进而在同一 channel 上排序所有 case
 		c := scases[pollorder[i]].c
 		for j > 0 && scases[lockorder[(j-1)/2]].c.sortkey() < c.sortkey() {
 			k := (j - 1) / 2
@@ -202,6 +205,7 @@ func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
 	}
 
 	// lock all the channels involved in the select
+	// 依次加锁
 	sellock(scases, lockorder)
 
 	var (
@@ -217,6 +221,7 @@ func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
 
 loop:
 	// pass 1 - look for something already waiting
+	// 1 检查是否有正在等待
 	var dfli int
 	var dfl *scase
 	var casi int
@@ -263,7 +268,7 @@ loop:
 			dfl = cas
 		}
 	}
-
+	// 存在 default 分支，直接去 retc 执行
 	if dfl != nil {
 		selunlock(scases, lockorder)
 		casi = dfli
@@ -272,6 +277,7 @@ loop:
 	}
 
 	// pass 2 - enqueue on all chans
+	// 2 入队所有的 channel
 	gp = getg()
 	if gp.waiting != nil {
 		throw("gp.waiting != nil")
@@ -289,6 +295,7 @@ loop:
 		sg.isSelect = true
 		// No stack splits between assigning elem and enqueuing
 		// sg on gp.waiting where copystack can find it.
+		// 在 gp.waiting 上分配 elem 和入队 sg 之间没有栈分段，copystack 可以在其中找到它。
 		sg.elem = cas.elem
 		sg.releasetime = 0
 		if t0 != 0 {
@@ -296,6 +303,7 @@ loop:
 		}
 		sg.c = c
 		// Construct waiting list in lock order.
+		// 按锁的顺序创建等待链表
 		*nextp = sg
 		nextp = &sg.waitlink
 
@@ -309,9 +317,12 @@ loop:
 	}
 
 	// wait for someone to wake us up
+	// 等待被唤醒
 	gp.param = nil
+	// selparkcommit 根据等待列表依次解锁
 	gopark(selparkcommit, nil, waitReasonSelect, traceEvGoBlockSelect, 1)
 
+	// 重新上锁
 	sellock(scases, lockorder)
 
 	gp.selectDone = 0
@@ -322,10 +333,14 @@ loop:
 	// otherwise they stack up on quiet channels
 	// record the successful case, if any.
 	// We singly-linked up the SudoGs in lock order.
+	// pass 3 - 从不成功的 channel 中出队
+	// 否则将它们堆到一个安静的 channel 上并记录所有成功的分支
+	// 我们按锁的顺序单向链接 sudog
 	casi = -1
 	cas = nil
 	sglist = gp.waiting
 	// Clear all elem before unlinking from gp.waiting.
+	// 从 gp.waiting 取消链接之前清除所有的 elem
 	for sg1 := gp.waiting; sg1 != nil; sg1 = sg1.waitlink {
 		sg1.isSelect = false
 		sg1.elem = nil
@@ -343,6 +358,7 @@ loop:
 		}
 		if sg == sglist {
 			// sg has already been dequeued by the G that woke us up.
+			// sg 已经被唤醒我们的 G 出队了。
 			casi = int(casei)
 			cas = k
 		} else {
@@ -369,6 +385,12 @@ loop:
 		// It's easiest not to duplicate the code and just recheck above.
 		// We know that something closed, and things never un-close,
 		// so we won't block again.
+		// 当一个参与在 select 语句中的 channel 被关闭时，我们可以在 gp.param == nil 时进行唤醒(所以 cas == nil)
+		// 最简单的方法就是循环并重新运行该操作，然后就能看到它现在已经被关闭了
+		// 也许未来我们可以显式的发送关闭信号，
+		// 但我们就必须区分在接收方上关闭(close-on-reader)和在写入方上关闭(close-on-writer)这两种情况了
+		// 最简单的方法是不复制代码并重新检查上面的代码。
+		// 我们知道某些 channel 被关闭了，也知道某些可能永远不会被重新打开，因此我们不会再次阻塞
 		goto loop
 	}
 
@@ -402,6 +424,7 @@ loop:
 
 bufrecv:
 	// can receive from buffer
+	// 可以从 buf 接收
 	if raceenabled {
 		if cas.elem != nil {
 			raceWriteObjectPC(c.elemtype, cas.elem, cas.pc, chanrecvpc)
@@ -428,6 +451,7 @@ bufrecv:
 
 bufsend:
 	// can send to buffer
+	// 可以发送到 buf
 	if raceenabled {
 		raceacquire(chanbuf(c, c.sendx))
 		racerelease(chanbuf(c, c.sendx))
@@ -447,6 +471,7 @@ bufsend:
 
 recv:
 	// can receive from sleeping sender (sg)
+	// 可以从一个休眠的发送方 (sg)直接接收
 	recv(c, sg, cas.elem, func() { selunlock(scases, lockorder) }, 2)
 	if debugSelect {
 		print("syncrecv: cas0=", cas0, " c=", c, "\n")
@@ -456,6 +481,7 @@ recv:
 
 rclose:
 	// read at end of closed channel
+	// 在已经关闭的 channel 末尾进行读
 	selunlock(scases, lockorder)
 	recvOK = false
 	if cas.elem != nil {
@@ -468,6 +494,7 @@ rclose:
 
 send:
 	// can send to a sleeping receiver (sg)
+	// 可以向一个休眠的接收方 (sg) 发送
 	if raceenabled {
 		raceReadObjectPC(c.elemtype, cas.elem, cas.pc, chansendpc)
 	}

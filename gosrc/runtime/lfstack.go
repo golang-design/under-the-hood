@@ -28,7 +28,7 @@ func (head *lfstack) push(node *lfnode) {
 		throw("lfstack.push")
 	}
 
-	// 普通的 cas 算法
+	// 普通的 cas 原语
 	for {
 		old := atomic.Load64((*uint64)(head))
 		node.next = old

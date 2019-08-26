@@ -8,19 +8,15 @@
 
 ### `atomic.Value`
 
-`atomic.Value` 提供了一种具备原子存取的结构。
-其自身的结构非常简单：
+`atomic.Value` 提供了一种具备原子存取的结构。其自身的结构非常简单，只包含一个存放数据的 `interface{}`：
 
 ```go
-// Value 提供了相同类型值的原子 load 和 store 操作
-// 零值的 Load 会返回 nil
-// 一旦 Store 被调用，Value 不能被复制
 type Value struct {
 	v interface{}
 }
 ```
 
-它仅仅只是对要存储的值进行了一层封装。我们来看它的 Load 方法：
+它仅仅只是对要存储的值进行了一层封装。我们来看它的 `Load` 方法：
 
 ```go
 // ifaceWords 定义了 interface{} 的内部表示。
@@ -29,8 +25,7 @@ type ifaceWords struct {
 	data unsafe.Pointer
 }
 
-// Load 返回最近存储的值集合
-// 如果已经没有 Value 调用 Store 则会返回 nil
+// Load 返回最近存储的值，如果已经没有 Value 调用 Store 则会返回 nil
 func (v *Value) Load() (x interface{}) {
 	// 获得自身结构的指针，因为 v 存储的是任意类型
 	// 在 go 中，interface 的内存布局有类型指针和数据指针两部分表示
@@ -42,12 +37,10 @@ func (v *Value) Load() (x interface{}) {
 		// 则说明 Value 当前没有保存值
 		return nil
 	}
-	// 否则从 data 字段中读取数据
+	// 否则从 data 字段中读取数据，将复制得到的 typ 和 data 给到 x
 	data := LoadPointer(&vp.data)
 	xp := (*ifaceWords)(unsafe.Pointer(&x))
-	// 将复制得到的 typ 给到 x
 	xp.typ = typ
-	// 将复制出来的 data 给到 x
 	xp.data = data
 	return
 }
@@ -68,9 +61,8 @@ func (v *Value) Store(x interface{}) {
 		panic("sync/atomic: store of nil value into Value")
 	}
 
-	// Value 存储值的指针
+	// Value 存储值的指针和要存储的 x 的指针
 	vp := (*ifaceWords)(unsafe.Pointer(v))
-	// 要存储的 x 的指针
 	xp := (*ifaceWords)(unsafe.Pointer(&x))
 
 	for {
@@ -116,7 +108,7 @@ func (v *Value) Store(x interface{}) {
 
 ### `atomic.CompareAndSwapPointer`
 
-sync.Map 中大量运用了 `atomic.CompareAndSwapPointer`，其上下文情景中具有 for 循环，这实质上是 CAS 算法：
+`atomic.CompareAndSwapPointer` 提供了 CAS 原语，使得我们可以通过 for 循环避免数据竞争：
 
 ```
 for {
@@ -128,8 +120,13 @@ for {
 }
 ```
 
-`CompareAndSwapPointer` 操作假设内存地址中的数据是旧数据，如果确实是旧数据，则替换为新数据，否则下次再试，从而达到无锁情况下原子操作的目的。
-借助于 `atomic.CompareAndSwapPointer`，我们就能轻易实现这种无锁型算法。
+它在包中只有函数定义，没有函数体：
+
+```go
+func CompareAndSwapPointer(addr *unsafe.Pointer, old, new unsafe.Pointer) (swapped bool)
+```
+
+其本身由运行时实现。
 
 ## 运行时实现
 
@@ -209,6 +206,14 @@ TEXT runtime∕internal∕atomic·Cas64(SB), NOSPLIT, $0-25
 
 因此原子操作本质上均为使用 CPU 指令进行实现（理所当然）。由于原子操作的方式比较单一，很容易举一反三，
 其他操作不再穷举。
+
+## 原子操作的内存模型
+
+TODO:
+
+## 进一步阅读的参考文献
+
+- [Russ Cox, doc: define how sync/atomic interacts with memory model, 2013](https://github.com/golang/go/issues/5045)
 
 ## 许可
 

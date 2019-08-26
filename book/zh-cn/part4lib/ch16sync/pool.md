@@ -539,7 +539,7 @@ func (d *poolDequeue) pack(head, tail uint32) uint64 {
 
 从 `poolChain` 的实现中我们可以看到，每个 `poolDequeue` 的 `vals` 长度为 8。
 但由于是循环队列，实现中并不关心队列的长度，只要收尾元素的索引相等，则说明队列已满。
-因此通过 CAS 算法实现单一生产者的对队头的读 `popHead` 和写 `pushHead`：
+因此通过 CAS 原语实现单一生产者的对队头的读 `popHead` 和写 `pushHead`：
 
 ```go
 func (d *poolDequeue) popHead() (interface{}, bool) {
