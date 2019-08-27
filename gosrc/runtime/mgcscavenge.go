@@ -235,7 +235,7 @@ func scavengeSleep(gen uint32, ns int64) bool {
 	return (nanotime() - now) >= ns
 }
 
-// Background scavenger.
+// 后台 scavenger.
 //
 // The background scavenger maintains the RSS of the application below
 // the line described by the proportional scavenging statistics in

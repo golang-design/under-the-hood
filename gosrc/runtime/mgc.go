@@ -180,8 +180,7 @@ func readgogc() int32 {
 }
 
 // 在我们即将开始让用户代码运行之前，在大量运行时初始化之后调用 gcenable。
-// It kicks off the background sweeper goroutine, the background
-// scavenger goroutine, and enables GC.
+// 它启用了后台 sweeper goroutine，后台 scavenger goroutine，并启用了 GC
 func gcenable() {
 	// Kick off sweeping and scavenging.
 	c := make(chan int, 2)
@@ -1007,19 +1006,15 @@ var work struct {
 // garbage collection is complete. It may also block the entire
 // program.
 func GC() {
-	// We consider a cycle to be: sweep termination, mark, mark
-	// termination, and sweep. This function shouldn't return
-	// until a full cycle has been completed, from beginning to
-	// end. Hence, we always want to finish up the current cycle
-	// and start a new one. That means:
+	// 我们考虑一个周期：清扫终止, 标记, 标记终止, 清扫.
+	// 这个函数在一个从开始到结束的完整周期完成之前，不应该返回。
+	// 因此我们总是希望完成当前周期，然后开始下一个周期，这意味着：
 	//
-	// 1. In sweep termination, mark, or mark termination of cycle
-	// N, wait until mark termination N completes and transitions
-	// to sweep N.
+	// 1. 在周期 N 的清扫终止、标记或者标记终止中，总是等待到第 N 个标记终止完成且转换到第 N 个清扫
 	//
-	// 2. In sweep N, help with sweep N.
+	// 2. 在清扫 N 时，帮助清扫 N。
 	//
-	// At this point we can begin a full cycle N+1.
+	// 这时我们可以开始第 N+1 个周期
 	//
 	// 3. Trigger cycle N+1 by starting sweep termination N+1.
 	//
@@ -1112,12 +1107,11 @@ const (
 	gcForceBlockMode               // stop-the-world GC now and STW sweep (forced by user)
 )
 
-// A gcTrigger is a predicate for starting a GC cycle. Specifically,
-// it is an exit condition for the _GCoff phase.
+// gcTrigger 是一个 GC 周期开始的谓词。具体而言，它是一个 _GCoff 阶段的退出条件
 type gcTrigger struct {
 	kind gcTriggerKind
-	now  int64  // gcTriggerTime: current time
-	n    uint32 // gcTriggerCycle: cycle number to start
+	now  int64  // gcTriggerTime: 当前时间
+	n    uint32 // gcTriggerCycle: 开始的周期数
 }
 
 type gcTriggerKind int
@@ -1139,9 +1133,8 @@ const (
 	gcTriggerCycle
 )
 
-// test reports whether the trigger condition is satisfied, meaning
-// that the exit condition for the _GCoff phase has been met. The exit
-// condition should be tested when allocating.
+// test 报告当前出发条件是否满足，换句话说 _GCoff 阶段的退出条件已满足。
+// 退出条件应该在分配阶段已完成测试。
 func (t gcTrigger) test() bool {
 	if !memstats.enablegc || panicking != 0 || gcphase != _GCoff {
 		return false
@@ -1166,12 +1159,12 @@ func (t gcTrigger) test() bool {
 	return true
 }
 
-// gcStart starts the GC. It transitions from _GCoff to _GCmark (if
-// debug.gcstoptheworld == 0) or performs all of GC (if
-// debug.gcstoptheworld != 0).
+// gcStart 开始执行 GC. 它从 _GCoff 过渡到 _GCmark （如果 debug.gcstoptheworld == 0）或
+// 执行所有 GC（如果 debug.gcstoptheworld != 0）
 //
 // This may return without performing this transition in some cases,
 // such as when called on a system stack or with locks held.
+// 他可在没有完成过渡的情况下返回，例如当在一个系统栈上调用、或者当锁被持有时。
 func gcStart(trigger gcTrigger) {
 	// Since this is called from malloc and malloc is called in
 	// the guts of a number of libraries that might be holding
@@ -2056,8 +2049,7 @@ func gcMark(start_time int64) {
 	}
 }
 
-// gcSweep must be called on the system stack because it acquires the heap
-// lock. See mheap for details.
+// gcSweep 必须在系统栈上调用，因为它要求持有 heap.lock, 参见 mheap
 //go:systemstack
 func gcSweep(mode gcMode) {
 	if gcphase != _GCoff {
