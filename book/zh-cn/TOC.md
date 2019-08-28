@@ -215,11 +215,10 @@ G 与 P 的解绑
     + 内存模型
     + 编译标志 `go:nowritebarrier`、`go:nowritebarrierrec` 和 `go:yeswritebarrierrec`
     + 进一步阅读的参考文献
-- [8.2 初始化](part2runtime/ch08GC/init.md)
-- [8.3 标记清扫思想](part2runtime/ch08GC/vanilla.md)
+- [8.2 标记清扫思想](part2runtime/ch08GC/vanilla.md)
     + 标记清扫算法
     + 进一步阅读的参考文献
-- [8.4 屏障技术](part2runtime/ch08GC/barrier.md)
+- [8.3 屏障技术](part2runtime/ch08GC/barrier.md)
     + 三色不变性原理
       + 强、弱不变性
       + 赋值器的颜色
@@ -233,11 +232,12 @@ G 与 P 的解绑
       + 实现细节
     + 总结
     + 进一步阅读的参考文献
-- [8.5 并发标记清扫](part2runtime/ch08GC/concurrent.md)
+- [8.4 并发标记清扫](part2runtime/ch08GC/concurrent.md)
     + 并发标记
     + 并发清扫
     + 并行三色标记
     + 进一步阅读的参考文献
+- [8.5 初始化](part2runtime/ch08GC/init.md)
 - [8.6 标记过程](part2runtime/ch08GC/mark.md)
 - [8.7 清扫过程](part2runtime/ch08GC/sweep.md)
 - [8.8 存活与终结](part2runtime/ch08GC/finalizer.md)

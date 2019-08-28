@@ -7,11 +7,10 @@
     + 内存模型
     + 编译标志 `go:nowritebarrier`、`go:nowritebarrierrec` 和 `go:yeswritebarrierrec`
     + 进一步阅读的参考文献
-- [8.2 初始化](./init.md)
-- [8.3 标记清扫思想](./vanilla.md)
+- [8.2 标记清扫思想](./vanilla.md)
     + 标记清扫算法
     + 进一步阅读的参考文献
-- [8.4 屏障技术](./barrier.md)
+- [8.3 屏障技术](./barrier.md)
     + 三色不变性原理
       + 强、弱不变性
       + 赋值器的颜色
@@ -25,11 +24,12 @@
       + 实现细节
     + 总结
     + 进一步阅读的参考文献
-- [8.5 并发标记清扫](./concurrent.md)
+- [8.4 并发标记清扫](./concurrent.md)
     + 并发标记
     + 并发清扫
     + 并行三色标记
     + 进一步阅读的参考文献
+- [8.5 初始化](./init.md)
 - [8.6 标记过程](./mark.md)
 - [8.7 清扫过程](./sweep.md)
 - [8.8 存活与终结](./finalizer.md)
