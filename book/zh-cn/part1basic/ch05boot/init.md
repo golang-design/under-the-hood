@@ -234,7 +234,6 @@ var CacheLineSize uintptr = CacheLinePadSize
 
 // x86 中的布尔值包含相应命名的 cpuid 功能位。
 // 仅当操作系统支持 XMM 和 YMM 寄存器时，才设置 HasAVX 和 HasAVX2
-// 除了正在设置的 cpuid 功能位，填充结构以避免 false sharing。
 type x86 struct {
 	_            CacheLinePad
 	HasAES       bool

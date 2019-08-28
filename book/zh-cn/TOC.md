@@ -8,9 +8,9 @@
 
 <!-- 内存布局？ -->
 
-#### 第二章 并发与分布式计算
+#### [第二章 并发与分布式计算](part1basic/ch02parallel/readmd.md)
 
-<!-- - [并发] -->
+- [缓存技术](part1basic/ch02parallel/cache.md)
 
 #### 第三章 排队与调度理论
 

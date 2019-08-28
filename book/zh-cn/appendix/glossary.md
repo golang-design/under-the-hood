@@ -11,7 +11,7 @@
 | 逃逸分析   |                | Escape Analysis       |           |      |
 | 快速路径   |                | Fast Path             |           |      |
 | 自由表     |                | Free List             |           |      |
-| 垃圾回收   |                | Garbage  Collection   | GC        |      |
+| 垃圾回收   |                | Garbage  Collection   | GC        |      |
 | 全局谓词   |                | Global Predicates     |           |      |
 | Goroutine  |                | Goroutine             | G/g       |      |
 | 大对象     |                | Large Object          |           |      |
@@ -48,7 +48,7 @@
 | 自旋       |                | Spinning              |           |      |
 | 非自旋     |                | Non-spinning          |           |      |
 |            |                |                       |           |      |
-|            |                |                       |           |      |
+| 假共享     |                | False Sharing         |           |      |
 |            |                |                       |           |      |
 |            |                |                       |           |      |
 |            |                |                       |           |      |

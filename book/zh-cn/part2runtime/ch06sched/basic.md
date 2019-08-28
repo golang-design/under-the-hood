@@ -272,15 +272,11 @@ type p struct {
 	wbBuf wbBuf
 
 	runSafePointFn uint32 // 如果为 1, 则在下一个 safe-point 运行 sched.safePointFn
-
-	pad cpu.CacheLinePad
+	(...)
 }
 ```
 
 所以整个结构除去 P 的本地 G 队列外，就是一些统计、调试、GC 辅助的字段了。
-
-此外，P 既然是处理器的抽象，因此在 P 的数组中是绝对不允许发生假共享（false sharing）的，
-这也就是 P 最后有一个缓存行填充的原因。
 
 ### G 的结构
 

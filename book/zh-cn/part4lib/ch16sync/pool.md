@@ -59,11 +59,6 @@ type poolLocal struct {
 我们先记住这个结构在局部 P 上可以进行 `pushHead` 和 `popHead` 操作（队头读写），
 在所有 P 上都可以进行 `popTail` （队尾出队）操作，之后再来详细看它的实现细节。
 
-> 注意：这里我们看到了一个使结构体防止虚假共享（false sharing）的技巧：
->
-> 因为目前我们的处理器一般拥有 32 * 1024 / 64 = 512 条缓存行，
-> 则将 poolLocal 补齐至缓存行的偶数倍数，每个缓存行具有 64 bytes，即 512 bit。
-
 ## Get
 
 当从池中获取对象时，会先从 per-P 的 `poolLocal` slice 中选取一个 `poolLocal`，选择策略遵循：

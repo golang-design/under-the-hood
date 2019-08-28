@@ -1,0 +1,14 @@
+goos: darwin
+goarch: amd64
+BenchmarkPad-4   	30000000	        66.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPad-4   	50000000	        70.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPad-4   	30000000	        68.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPad-4   	30000000	        69.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPad-4   	30000000	        68.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPad-4   	30000000	        74.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPad-4   	20000000	        68.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPad-4   	30000000	        68.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPad-4   	20000000	        68.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPad-4   	20000000	        68.2 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	_/Users/changkun/dev/go-under-the-hood/demo/ch2parallel/cache	20.645s
