@@ -2,40 +2,219 @@
 
 [TOC]
 
-TODO:
+到目前为止，我们已经累积了足够多的的理论知识，可以开始无障碍的阅读运行时 GC 的具体实现了。
+
+## GC 的早期初始化
 
 ```go
+// src/runtime/proc.go
+func schedinit() {
+	(...)
+
+	// 垃圾回收器初始化
+	gcinit()
+	(...)
+}
 // runtime/mgc.go
 func gcinit() {
 	(...)
 
-	// 第一个周期没有扫描。
+	// 第一个周期没有清扫
 	mheap_.sweepdone = 1
 
-	// 设置合理的初始 GC 触发比率。
+	// 设置合理的初始 GC 触发比率
 	memstats.triggerRatio = 7 / 8.0
 
-	// 伪造一个 heap_marked 值，使它看起来像一个触发器
-	// heapminimum 是 heap_marked的 适当增长。
+	// 伪造一个 heap_marked 值，
+	// 使它看起来像一个触发器 heapminimum 是 heap_marked的 适当增长。
 	// 这将用于计算初始 GC 目标。
 	memstats.heap_marked = uint64(float64(heapminimum) / (1 + memstats.triggerRatio))
 
 	// 从环境中设置 gcpercent。这也将计算并设置 GC 触发器和目标。
-	_ = setGCPercent(readgogc())
+	_ = setGCPercent(readgogc()) // 读取 GOGC 全局变量 off/number[0~100]
 
 	work.startSema = 1
 	work.markDoneSema = 1
 }
-func readgogc() int32 {
-	p := gogetenv("GOGC")
-	if p == "off" {
-		return -1
-	}
-	if n, ok := atoi32(p); ok {
-		return n
-	}
-	return 100
+```
+
+## GC 的辅助任务
+
+在分析调度器源码时我们就已看到，在用户代码开始执行之前，除了 `runtime.schedinit` 外，GC 还在 `runtime.main` 中做了部分准备工作了。
+我们来看看他们都是些什么工作。在 `runtime.main` 开始执行时，我们知道它依次启动了以下几个关键组件：
+
+```go
+// 主 goroutine
+func main() {
+	(...)
+
+	// 系统后台监控
+	// 在一个新的 m 的 g0 上执行系统监控
+	systemstack(func() {
+		newm(sysmon, nil)
+	})
+	(...)
+
+	// 执行 runtime.init
+	doInit(&runtime_inittask)
+	(...)
+
+	// 启动垃圾回收器后台
+	gcenable()
+	(...)
+
+	// 用户代码 main.init 和 main.main 入口
+	doInit(&main_inittask)
+	fn := main_main
+	fn()
+	(...)
 }
+```
+
+可以看到，在用户代码执行前的三个关键部件分别是：运行时 init 函数、系统监控和垃圾回收后台。
+
+先看第一个关键组件，系统监控：
+
+```go
+//go:nowritebarrierrec
+func sysmon() {
+	(...)
+	for {
+		(...)
+		// delay 根据一定策略调整
+		usleep(delay)
+
+		// 1. 如果在 STW，则暂时休眠
+		if debug.schedtrace <= 0 && (sched.gcwaiting != 0 || atomic.Load(&sched.npidle) == uint32(gomaxprocs)) {
+			(...)
+		}
+		(...)
+
+		// 2. 检查是否需要强制触发 GC
+		if t := (gcTrigger{kind: gcTriggerTime, now: now}); t.test() && atomic.Load(&forcegc.idle) != 0 {
+			lock(&forcegc.lock)
+			forcegc.idle = 0
+			var list gList
+			list.push(forcegc.g)
+			injectglist(&list)
+			unlock(&forcegc.lock)
+		}
+		(...)
+	}
+}
+```
+
+这个循环中，不难看到 `sched.gcwaiting` 的初始值为 0，表示不需要进行垃圾回收，如果值为 1 则表明正在等待垃圾回收的完成，需要进入休眠状态。
+因此在用户态代码开始时，会直接进入下一个条件。第二个条件需要检查 forcegc 这个全局变量：
+
+```go
+type forcegcstate struct {
+	lock mutex
+	g    *g
+	idle uint32
+}
+var forcegc    forcegcstate
+```
+
+可以看到，forcegc 这个全局变量的初始值为 0，这时条件 `atomic.Load(&forcegc.idle) != 0` 为 `false`。
+如果我们假设这个这个条件取得 `true` 且 `gcTrigger` 的测试也同意触发（我们还没有介绍这个测试具体是什么），这时 `injectlist` 会将 `forcegc.g` 强制加入调度器调度队列中，等待执行 GC 调度。那么，这个 `forcegc.g` 究竟会执行什么呢？
+
+第二个启动的关键组件 `runtime.init` 解释了这个问题。在这个初始化函数中，我们可以看到强制 GC 的 `forcegc` 开始被初始化：
+
+```go
+func init() {
+	go forcegchelper()
+}
+func forcegchelper() {
+	forcegc.g = getg() // 指定 forcegc 的 goroutine
+	for {
+		lock(&forcegc.lock)
+        (...)
+        // 将 forcegc 设置为空闲状态，并进入休眠
+		atomic.Store(&forcegc.idle, 1)
+		goparkunlock(&forcegc.lock, waitReasonForceGGIdle, traceEvGoBlock, 1)
+		(...)
+		// 当 forcegc.g 被唤醒时，开始从此处进行调度完全并发
+		gcStart(gcTrigger{kind: gcTriggerTime, now: nanotime()})
+	}
+}
+```
+
+由此我们可以看到，到目前为止，都只是在全局变量中设置 `forcegc.g` 这个 goroutine 的运行现场，并在触发 GC 前进行 `gopark`。
+当下一次 GC 需要被触发时，调度器会重新调度休眠后的 `forcegc.g` 会从 `forcegchelper` 的 `gcStart` 开始执行。
+如此反复。
+
+第三个关键部分是 `runtime.gcenable` 将启动两个关键的清扫 goroutine，当然他们都有自己的初始化工作，
+因此首先创建了一个大小为 2 的 channel 来确保首次初始化工作在用户态代码运行之前完成：
+
+```go
+func gcenable() {
+	// 启动 bgsweep 和 bgscavenge
+	c := make(chan int, 2)
+	go bgsweep(c)
+	go bgscavenge(c)
+	<-c
+	<-c
+	memstats.enablegc = true // 现在运行时已经初始化完毕了，GC 已就绪
+}
+var sweep sweepdata
+type sweepdata struct {
+	lock    mutex
+	g       *g
+	parked  bool
+	started bool
+
+	nbgsweep    uint32
+	npausesweep uint32
+}
+func bgsweep(c chan int) {
+	sweep.g = getg()
+	lock(&sweep.lock)
+	sweep.parked = true
+	c <- 1
+	goparkunlock(&sweep.lock, waitReasonGCSweepWait, traceEvGoBlock, 1)
+	(...)
+}
+var scavenge struct {
+	lock   mutex
+	g      *g
+	parked bool
+	timer  *timer
+	gen    uint32 // read with either lock or mheap_.lock, write with both
+}
+func bgscavenge(c chan int) {
+	scavenge.g = getg()
+	lock(&scavenge.lock)
+	scavenge.parked = true
+	scavenge.timer = new(timer)
+	scavenge.timer.f = func(_ interface{}, _ uintptr) {
+		lock(&scavenge.lock)
+		wakeScavengerLocked()
+		unlock(&scavenge.lock)
+	}
+	c <- 1
+	goparkunlock(&scavenge.lock, waitReasonGCScavengeWait, traceEvGoBlock, 1)
+	(...)
+}
+func wakeScavengerLocked() {
+	if scavenge.parked {
+		// scavenger 处于 parked 状态，停止 timer 并 ready scavenger g
+		stopTimer(scavenge.timer)
+		scavenge.parked = false
+		ready(scavenge.g, 0, true) // ready goroutine, waiting -> runnable
+	}
+}
+```
+
+这些初始化工作没有什么特别引人注目的东西，无非是将各自的 goroutine 记录到全局变量，通过 `park` 变量标记他们的执行状态，
+以及设定 scavenger 能够被周期性唤醒的 timer。此外，从 `scavenger.lock` 可以看出，
+该锁确保了 scavenger 不会被并发的被 timer 唤醒而执行。
+
+## GC 的触发频率
+
+TODO:
+
+```go
 //go:linkname setGCPercent runtime/debug.setGCPercent
 func setGCPercent(in int32) (out int32) {
 	lock(&mheap_.lock)
@@ -45,24 +224,20 @@ func setGCPercent(in int32) (out int32) {
 	}
 	gcpercent = in
 	heapminimum = defaultHeapMinimum * uint64(gcpercent) / 100
-	// 更新步调来响应 gcpercent 变化
-	gcSetTriggerRatio(memstats.triggerRatio)
+	gcSetTriggerRatio(memstats.triggerRatio) // 更新步调来响应 gcpercent 变化
 	unlock(&mheap_.lock)
-
-	// 如果我们刚好禁用了 GC，则等待任何并发 GC 标记完成，从而我们总是能够在没有 GC 的情况下返回
-	if in < 0 {
-		gcWaitOnMark(atomic.Load(&work.cycles))
-	}
-
+	(...)
 	return out
 }
-```
-
-```go
-func isSweepDone() bool {
-	return mheap_.sweepdone != 0
-}
 func gcSetTriggerRatio(triggerRatio float64) {
+	// Compute the next GC goal, which is when the allocated heap
+	// has grown by GOGC/100 over the heap marked by the last
+	// cycle.
+	goal := ^uint64(0)
+	if gcpercent >= 0 {
+		goal = memstats.heap_marked + memstats.heap_marked*uint64(gcpercent)/100
+	}
+
 	// Set the trigger ratio, capped to reasonable bounds.
 	if triggerRatio < 0 {
 		// This can happen if the mutator is allocating very
@@ -87,13 +262,13 @@ func gcSetTriggerRatio(triggerRatio float64) {
 		trigger = uint64(float64(memstats.heap_marked) * (1 + triggerRatio))
 		// Don't trigger below the minimum heap size.
 		minTrigger := heapminimum
-		if !isSweepDone() {
+		if !isSweepDone() { // 即 mheap_.sweepdone != 0
 			// Concurrent sweep happens in the heap growth
 			// from heap_live to gc_trigger, so ensure
 			// that concurrent sweep has some heap growth
 			// in which to perform sweeping before we
 			// start the next GC cycle.
-			sweepMin := atomic.Load64(&memstats.heap_live) + sweepMinHeapDistance*uint64(gcpercent)/100
+			sweepMin := atomic.Load64(&memstats.heap_live) + sweepMinHeapDistance
 			if sweepMin > minTrigger {
 				minTrigger = sweepMin
 			}
@@ -101,26 +276,17 @@ func gcSetTriggerRatio(triggerRatio float64) {
 		if trigger < minTrigger {
 			trigger = minTrigger
 		}
-		if int64(trigger) < 0 {
-			print("runtime: next_gc=", memstats.next_gc, " heap_marked=", memstats.heap_marked, " heap_live=", memstats.heap_live, " initialHeapLive=", work.initialHeapLive, "triggerRatio=", triggerRatio, " minTrigger=", minTrigger, "\n")
-			throw("gc_trigger underflow")
-		}
-	}
-	memstats.gc_trigger = trigger
-
-	// Compute the next GC goal, which is when the allocated heap
-	// has grown by GOGC/100 over the heap marked by the last
-	// cycle.
-	goal := ^uint64(0)
-	if gcpercent >= 0 {
-		goal = memstats.heap_marked + memstats.heap_marked*uint64(gcpercent)/100
-		if goal < trigger {
+		(...)
+		if trigger > goal {
 			// The trigger ratio is always less than GOGC/100, but
 			// other bounds on the trigger may have raised it.
 			// Push up the goal, too.
 			goal = trigger
 		}
 	}
+
+	// Commit to the trigger and goal.
+	memstats.gc_trigger = trigger
 	memstats.next_gc = goal
 	if trace.enabled {
 		traceNextGC()
@@ -163,138 +329,8 @@ func gcSetTriggerRatio(triggerRatio float64) {
 			atomic.Store64(&mheap_.pagesSweptBasis, pagesSwept)
 		}
 	}
-}
-```
 
-```go
-func (c *gcControllerState) revise() {
-	gcpercent := gcpercent
-	if gcpercent < 0 {
-		// If GC is disabled but we're running a forced GC,
-		// act like GOGC is huge for the below calculations.
-		gcpercent = 100000
-	}
-	live := atomic.Load64(&memstats.heap_live)
-
-	var heapGoal, scanWorkExpected int64
-	if live <= memstats.next_gc {
-		// We're under the soft goal. Pace GC to complete at
-		// next_gc assuming the heap is in steady-state.
-		heapGoal = int64(memstats.next_gc)
-
-		// Compute the expected scan work remaining.
-		//
-		// This is estimated based on the expected
-		// steady-state scannable heap. For example, with
-		// GOGC=100, only half of the scannable heap is
-		// expected to be live, so that's what we target.
-		//
-		// (This is a float calculation to avoid overflowing on
-		// 100*heap_scan.)
-		scanWorkExpected = int64(float64(memstats.heap_scan) * 100 / float64(100+gcpercent))
-	} else {
-		// We're past the soft goal. Pace GC so that in the
-		// worst case it will complete by the hard goal.
-		const maxOvershoot = 1.1
-		heapGoal = int64(float64(memstats.next_gc) * maxOvershoot)
-
-		// Compute the upper bound on the scan work remaining.
-		scanWorkExpected = int64(memstats.heap_scan)
-	}
-
-	// Compute the remaining scan work estimate.
-	//
-	// Note that we currently count allocations during GC as both
-	// scannable heap (heap_scan) and scan work completed
-	// (scanWork), so allocation will change this difference will
-	// slowly in the soft regime and not at all in the hard
-	// regime.
-	scanWorkRemaining := scanWorkExpected - c.scanWork
-	if scanWorkRemaining < 1000 {
-		// We set a somewhat arbitrary lower bound on
-		// remaining scan work since if we aim a little high,
-		// we can miss by a little.
-		//
-		// We *do* need to enforce that this is at least 1,
-		// since marking is racy and double-scanning objects
-		// may legitimately make the remaining scan work
-		// negative, even in the hard goal regime.
-		scanWorkRemaining = 1000
-	}
-
-	// Compute the heap distance remaining.
-	heapRemaining := heapGoal - int64(live)
-	if heapRemaining <= 0 {
-		// This shouldn't happen, but if it does, avoid
-		// dividing by zero or setting the assist negative.
-		heapRemaining = 1
-	}
-
-	// Compute the mutator assist ratio so by the time the mutator
-	// allocates the remaining heap bytes up to next_gc, it will
-	// have done (or stolen) the remaining amount of scan work.
-	c.assistWorkPerByte = float64(scanWorkRemaining) / float64(heapRemaining)
-	c.assistBytesPerWork = float64(heapRemaining) / float64(scanWorkRemaining)
-}
-
-
-
-var gcController gcControllerState
-
-type gcControllerState struct {
-	scanWork int64
-	bgScanCredit int64
-	assistTime int64
-	dedicatedMarkTime int64
-	fractionalMarkTime int64
-	idleMarkTime int64
-	markStartTime int64
-	dedicatedMarkWorkersNeeded int64
-	assistWorkPerByte float64
-	assistBytesPerWork float64
-	fractionalUtilizationGoal float64
-
-	_ cpu.CacheLinePad
-}
-```
-
-```go
-func gcWaitOnMark(n uint32) {
-	for {
-		// Disable phase transitions.
-		lock(&work.sweepWaiters.lock)
-		nMarks := atomic.Load(&work.cycles)
-		if gcphase != _GCmark {
-			// We've already completed this cycle's mark.
-			nMarks++
-		}
-		if nMarks > n {
-			// We're done.
-			unlock(&work.sweepWaiters.lock)
-			return
-		}
-
-		// Wait until sweep termination, mark, and mark
-		// termination of cycle N complete.
-		work.sweepWaiters.list.push(getg())
-		goparkunlock(&work.sweepWaiters.lock, waitReasonWaitForGCCycle, traceEvGoBlock, 1)
-	}
-}
-// 将当前 goroutine 置于等待状态并解锁 lock。
-// 通过调用 goready(gp) 可让 goroutine 再次 runnable
-func goparkunlock(lock *mutex, reason waitReason, traceEv byte, traceskip int) {
-	gopark(parkunlock_c, unsafe.Pointer(lock), reason, traceEv, traceskip)
-}
-```
-
-```go
-// 在我们即将开始让用户代码运行之前，在大量运行时初始化之后调用 gcenable。
-// 它启动后台的 sweeper goroutine 并启用 GC。
-func gcenable() {
-	c := make(chan int, 1)
-	go bgsweep(c)
-	<-c
-	memstats.enablegc = true // 现在运行时已经初始化完毕了，GC 已就绪
+	gcPaceScavenger()
 }
 ```
 

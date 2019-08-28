@@ -760,7 +760,7 @@ func gcSetTriggerRatio(triggerRatio float64) {
 		trigger = uint64(float64(memstats.heap_marked) * (1 + triggerRatio))
 		// Don't trigger below the minimum heap size.
 		minTrigger := heapminimum
-		if !isSweepDone() {
+		if !isSweepDone() { // 即 mheap_.sweepdone != 0
 			// Concurrent sweep happens in the heap growth
 			// from heap_live to gc_trigger, so ensure
 			// that concurrent sweep has some heap growth
@@ -778,8 +778,7 @@ func gcSetTriggerRatio(triggerRatio float64) {
 			print("runtime: next_gc=", memstats.next_gc, " heap_marked=", memstats.heap_marked, " heap_live=", memstats.heap_live, " initialHeapLive=", work.initialHeapLive, "triggerRatio=", triggerRatio, " minTrigger=", minTrigger, "\n")
 			throw("gc_trigger underflow")
 		}
-	}
-	if trigger > goal {
+		if trigger > goal {
 			// The trigger ratio is always less than GOGC/100, but
 			// other bounds on the trigger may have raised it.
 			// Push up the goal, too.
@@ -787,7 +786,7 @@ func gcSetTriggerRatio(triggerRatio float64) {
 		}
 	}
 
- 	// Commit to the trigger and goal.
+	// Commit to the trigger and goal.
 	memstats.gc_trigger = trigger
 	memstats.next_gc = goal
 	if trace.enabled {
@@ -835,7 +834,7 @@ func gcSetTriggerRatio(triggerRatio float64) {
 	gcPaceScavenger()
 }
 
- // gcEffectiveGrowthRatio returns the current effective heap growth
+// gcEffectiveGrowthRatio returns the current effective heap growth
 // ratio (GOGC/100) based on heap_marked from the previous GC and
 // next_gc for the current GC.
 //
