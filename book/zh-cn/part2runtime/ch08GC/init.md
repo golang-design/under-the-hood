@@ -118,7 +118,8 @@ var forcegc    forcegcstate
 ```
 
 可以看到，forcegc 这个全局变量的初始值为 0，这时条件 `atomic.Load(&forcegc.idle) != 0` 为 `false`。
-如果我们假设这个这个条件取得 `true` 且 `gcTrigger` 的测试也同意触发（我们还没有介绍这个测试具体是什么），这时 `injectlist` 会将 `forcegc.g` 强制加入调度器调度队列中，等待执行 GC 调度。那么，这个 `forcegc.g` 究竟会执行什么呢？
+如果我们假设这个这个条件取得 `true` 且 `gcTrigger` 的测试也同意触发（我们在下一节中讨论它的具体细节），
+这时 `injectlist` 会将 `forcegc.g` 强制加入调度器调度队列中，等待执行 GC 调度。那么，这个 `forcegc.g` 究竟会执行什么呢？
 
 第二个启动的关键组件 `runtime.init` 解释了这个问题。在这个初始化函数中，我们可以看到强制 GC 的 `forcegc` 开始被初始化：
 
@@ -211,130 +212,6 @@ func wakeScavengerLocked() {
 这些初始化工作没有什么特别引人注目的东西，无非是将各自的 goroutine 记录到全局变量，通过 `park` 变量标记他们的执行状态，
 以及设定 scavenger 能够被周期性唤醒的 timer。此外，从 `scavenger.lock` 可以看出，
 该锁确保了 scavenger 不会被并发的被 timer 唤醒而执行。
-
-## GC 的触发频率
-
-TODO:
-
-```go
-//go:linkname setGCPercent runtime/debug.setGCPercent
-func setGCPercent(in int32) (out int32) {
-	lock(&mheap_.lock)
-	out = gcpercent
-	if in < 0 {
-		in = -1
-	}
-	gcpercent = in
-	heapminimum = defaultHeapMinimum * uint64(gcpercent) / 100
-	gcSetTriggerRatio(memstats.triggerRatio) // 更新步调来响应 gcpercent 变化
-	unlock(&mheap_.lock)
-	(...)
-	return out
-}
-func gcSetTriggerRatio(triggerRatio float64) {
-	// Compute the next GC goal, which is when the allocated heap
-	// has grown by GOGC/100 over the heap marked by the last
-	// cycle.
-	goal := ^uint64(0)
-	if gcpercent >= 0 {
-		goal = memstats.heap_marked + memstats.heap_marked*uint64(gcpercent)/100
-	}
-
-	// Set the trigger ratio, capped to reasonable bounds.
-	if triggerRatio < 0 {
-		// This can happen if the mutator is allocating very
-		// quickly or the GC is scanning very slowly.
-		triggerRatio = 0
-	} else if gcpercent >= 0 {
-		// Ensure there's always a little margin so that the
-		// mutator assist ratio isn't infinity.
-		maxTriggerRatio := 0.95 * float64(gcpercent) / 100
-		if triggerRatio > maxTriggerRatio {
-			triggerRatio = maxTriggerRatio
-		}
-	}
-	memstats.triggerRatio = triggerRatio
-
-	// Compute the absolute GC trigger from the trigger ratio.
-	//
-	// We trigger the next GC cycle when the allocated heap has
-	// grown by the trigger ratio over the marked heap size.
-	trigger := ^uint64(0)
-	if gcpercent >= 0 {
-		trigger = uint64(float64(memstats.heap_marked) * (1 + triggerRatio))
-		// Don't trigger below the minimum heap size.
-		minTrigger := heapminimum
-		if !isSweepDone() { // 即 mheap_.sweepdone != 0
-			// Concurrent sweep happens in the heap growth
-			// from heap_live to gc_trigger, so ensure
-			// that concurrent sweep has some heap growth
-			// in which to perform sweeping before we
-			// start the next GC cycle.
-			sweepMin := atomic.Load64(&memstats.heap_live) + sweepMinHeapDistance
-			if sweepMin > minTrigger {
-				minTrigger = sweepMin
-			}
-		}
-		if trigger < minTrigger {
-			trigger = minTrigger
-		}
-		(...)
-		if trigger > goal {
-			// The trigger ratio is always less than GOGC/100, but
-			// other bounds on the trigger may have raised it.
-			// Push up the goal, too.
-			goal = trigger
-		}
-	}
-
-	// Commit to the trigger and goal.
-	memstats.gc_trigger = trigger
-	memstats.next_gc = goal
-	if trace.enabled {
-		traceNextGC()
-	}
-
-	// Update mark pacing.
-	if gcphase != _GCoff {
-		gcController.revise()
-	}
-
-	// Update sweep pacing.
-	if isSweepDone() {
-		mheap_.sweepPagesPerByte = 0
-	} else {
-		// Concurrent sweep needs to sweep all of the in-use
-		// pages by the time the allocated heap reaches the GC
-		// trigger. Compute the ratio of in-use pages to sweep
-		// per byte allocated, accounting for the fact that
-		// some might already be swept.
-		heapLiveBasis := atomic.Load64(&memstats.heap_live)
-		heapDistance := int64(trigger) - int64(heapLiveBasis)
-		// Add a little margin so rounding errors and
-		// concurrent sweep are less likely to leave pages
-		// unswept when GC starts.
-		heapDistance -= 1024 * 1024
-		if heapDistance < _PageSize {
-			// Avoid setting the sweep ratio extremely high
-			heapDistance = _PageSize
-		}
-		pagesSwept := atomic.Load64(&mheap_.pagesSwept)
-		sweepDistancePages := int64(mheap_.pagesInUse) - int64(pagesSwept)
-		if sweepDistancePages <= 0 {
-			mheap_.sweepPagesPerByte = 0
-		} else {
-			mheap_.sweepPagesPerByte = float64(sweepDistancePages) / float64(heapDistance)
-			mheap_.sweepHeapLiveBasis = heapLiveBasis
-			// Write pagesSweptBasis last, since this
-			// signals concurrent sweeps to recompute
-			// their debt.
-			atomic.Store64(&mheap_.pagesSweptBasis, pagesSwept)
-		}
-	}
-
-	gcPaceScavenger()
-}
-```
 
 ## 总结
 

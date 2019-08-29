@@ -6,26 +6,36 @@
 
 #### 第一章 程序基础
 
-<!-- 内存布局？ -->
+<!-- CPU 架构与操作系统? -->
+<!-- 程序堆栈布局？ -->
+<!-- - [Plan 9 汇编(asm.md)? -->
+<!-- [Linux 系统调用]? -->
 
 #### [第二章 并发与分布式计算](part1basic/ch02parallel/readmd.md)
 
 - [缓存技术](part1basic/ch02parallel/cache.md)
-
+    + UMA
+    + NUMA
+    + 一致性协议
+    + 真假共享
 #### 第三章 排队与调度理论
 
 <!-- - [排队理论引导]()
 - [工作窃取调度](papers/sched/work-steal-sched.md)
 - [调度理论](4-sched/theory.md) -->
 
-#### 第四章 内存管理工程
+#### [第四章 内存管理工程](part1basic/ch04memory/readme.md)
 
-<!-- - 垃圾回收统一理论 -->
-
-<!-- CPU 架构与操作系统? -->
-
-<!-- - [Linux 系统调用]
-- [Plan 9 汇编](appendix/asm.md) -->
+- [内存屏障技术](part1basic/ch04memory/barrier.md)
+    + 三色不变性原理
+      + 强、弱不变性
+      + 赋值器的颜色
+      + 新分配对象的颜色
+    + 赋值器屏障技术
+      + 灰色赋值器的 Dijkstra 插入屏障
+      + 黑色赋值器的 Yuasa 删除屏障
+    + 进一步阅读的参考文献
+- [垃圾回收统一理论](part1basic/ch04memory/unifiedgc.md)
 
 #### [第五章 Go 程序生命周期](part1basic/ch05boot/readme.md)
 
@@ -82,6 +92,7 @@
     + 进一步阅读的参考文献
 
 <!-- 
+按以下逻辑重新组织本章？
 M 的创建
 M 的休眠
 M 的唤醒
@@ -219,13 +230,7 @@ G 与 P 的解绑
     + 标记清扫算法
     + 进一步阅读的参考文献
 - [8.3 屏障技术](part2runtime/ch08GC/barrier.md)
-    + 三色不变性原理
-      + 强、弱不变性
-      + 赋值器的颜色
-      + 新分配对象的颜色
-    + 赋值器屏障技术
-      + 灰色赋值器的 Dijkstra 插入屏障
-      + 黑色赋值器的 Yuasa 删除屏障
+    + Dijkstra 插入屏障
     + 混合写屏障
       + 基本思想
       + 可靠性、完备性和有界性的证明
