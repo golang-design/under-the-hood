@@ -193,11 +193,11 @@ func gcenable() {
 
 //go:linkname setGCPercent runtime/debug.setGCPercent
 func setGCPercent(in int32) (out int32) {
-	// Run on the system stack since we grab the heap lock.
+	// 需要获取 heap 锁，切换到系统栈
 	systemstack(func() {
 		lock(&mheap_.lock)
 		out = gcpercent
-		if in < 0 {
+		if in < 0 { // GC=off
 			in = -1
 		}
 		gcpercent = in
@@ -444,14 +444,11 @@ func (c *gcControllerState) startCycle() {
 	}
 }
 
-// revise updates the assist ratio during the GC cycle to account for
-// improved estimates. This should be called either under STW or
-// whenever memstats.heap_scan, memstats.heap_live, or
-// memstats.next_gc is updated (with mheap_.lock held).
+// revise 在 GC 周期期间更新 assist ratio 以考虑改进估计。
+// 该函数应该在 STW 或者下调用，或每当 memstats.heap_scan，memstats.heap_live 或
+// memstats.next_gc （在只有 mheap_.lock 的情况下）更新时调用。
 //
-// It should only be called when gcBlackenEnabled != 0 (because this
-// is when assists are enabled and the necessary statistics are
-// available).
+// 它只应在 gcBlackenEnabled != 0 时调用（因为这是启用 assist 并且必要的统计信息可用的时候）。
 func (c *gcControllerState) revise() {
 	gcpercent := gcpercent
 	if gcpercent < 0 {
@@ -793,12 +790,12 @@ func gcSetTriggerRatio(triggerRatio float64) {
 		traceNextGC()
 	}
 
-	// Update mark pacing.
+	// 更新 mark 步调.
 	if gcphase != _GCoff {
 		gcController.revise()
 	}
 
-	// Update sweep pacing.
+	// 更新 sweep 步调.
 	if isSweepDone() {
 		mheap_.sweepPagesPerByte = 0
 	} else {
@@ -1073,25 +1070,26 @@ func GC() {
 	releasem(mp)
 }
 
-// gcWaitOnMark blocks until GC finishes the Nth mark phase. If GC has
-// already completed this mark phase, it returns immediately.
+// gcWaitOnMark 将阻塞到 GC 完成第 N 个周期的 Mark 阶段。
+// 如果 GC 已经完成了该 Mark 阶段，则立刻返回。
 func gcWaitOnMark(n uint32) {
 	for {
-		// Disable phase transitions.
+		// 禁止转换到不同的阶段
 		lock(&work.sweepWaiters.lock)
+
+		// 读取 GC 的周期数
 		nMarks := atomic.Load(&work.cycles)
 		if gcphase != _GCmark {
-			// We've already completed this cycle's mark.
+			// 已经完成该周期的 Mark 阶段
 			nMarks++
 		}
 		if nMarks > n {
-			// We're done.
+			// 完成，立刻返回
 			unlock(&work.sweepWaiters.lock)
 			return
 		}
 
-		// Wait until sweep termination, mark, and mark
-		// termination of cycle N complete.
+		// 等待到第 N 个周期的清扫终止、标记、标记终止结束
 		work.sweepWaiters.list.push(getg())
 		goparkunlock(&work.sweepWaiters.lock, waitReasonWaitForGCCycle, traceEvGoBlock, 1)
 	}

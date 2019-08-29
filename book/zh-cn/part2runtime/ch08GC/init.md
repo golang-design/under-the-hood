@@ -44,7 +44,7 @@ func gcinit() {
 我们来看看他们都是些什么工作。在 `runtime.main` 开始执行时，我们知道它依次启动了以下几个关键组件：
 
 ```go
-// 主 goroutine
+// src/runtime/proc.go
 func main() {
 	(...)
 
@@ -76,6 +76,7 @@ func main() {
 先看第一个关键组件，系统监控：
 
 ```go
+// src/runtime/proc.go
 //go:nowritebarrierrec
 func sysmon() {
 	(...)
@@ -122,6 +123,7 @@ var forcegc    forcegcstate
 第二个启动的关键组件 `runtime.init` 解释了这个问题。在这个初始化函数中，我们可以看到强制 GC 的 `forcegc` 开始被初始化：
 
 ```go
+// src/runtime/proc.go
 func init() {
 	go forcegchelper()
 }
@@ -333,6 +335,21 @@ func gcSetTriggerRatio(triggerRatio float64) {
 	gcPaceScavenger()
 }
 ```
+
+## 总结
+
+从两个初始化过程中我们可以明确知道，GC 的具体实现中，在执行用户态代码时有以下几个辅助任务：
+
+1. 初始化 GC 步调，确定合适开始触发下一个 GC 周期;
+2. 启动系统监控，监控合适必须强制执行 GC；
+3. 启动后台清扫器，与用户态代码并发被调度器调度，归还从内存分配器中申请的内存；
+4. 启动后台清理器，与用户态代码并发被调度，归还从操作系统中申请的内存。
+
+`gcStart` 是 GC 正式开始的地方，它有以下几种触发方式：
+
+1. 强制被系统监控触发
+2. 在 `mallocgc` 分配内存时触发
+3. 通过 `runtime.GC()` 调用触发
 
 ## 许可
 

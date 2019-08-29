@@ -13,6 +13,7 @@
 - [Clements and Hudson, 2016b] [Proposal: Concurrent stack re-scanning](https://go.googlesource.com/proposal/+/master/design/17505-concurrent-rescan.md), [Discussion #17505](https://golang.org/issue/17505), unreleased.
 - [Hudson and Clements, 2016] [Request Oriented Collector (ROC) Algorithm](https://docs.google.com/document/d/1gCsFxXamW8RRvOe5hECz98Ftk-tcRRJcDFANj2VwCB0/edit), unreleased.
 - [Clements, 2018] [Proposal: Simplify mark termination and eliminate mark 2](https://go.googlesource.com/proposal/+/master/design/26903-simplify-mark-termination.md), [Discussion #26903](https://golang.org/issue/26903), released go1.12
+- [Hudson, 2018] [Richard L. Hudson. Getting to Go: The Journey of Go's Garbage Collector, in International Symposium on Memory Management (ISMM), June 18, 2018](https://blog.golang.org/ismmkeynote)
 - [Knyszek, 2019] [Proposal: Smarter Scavenging](https://go.googlesource.com/proposal/+/master/design/30333-smarter-scavenging.md), [Discussion #30333](https://golang.org/issue/30333)
 
 ## 许可

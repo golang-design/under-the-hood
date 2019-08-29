@@ -2,11 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Scavenging free pages.
+// 清理空闲页.
 //
 // This file implements scavenging (the release of physical pages backing mapped
 // memory) of free and unused pages in the heap as a way to deal with page-level
-// fragmentation and reduce the RSS of Go applications.
+// fragmentation and reduce the RSS of Go applications. (RSS: Resident set size,
+// is the portion of memory occupied by a process that is held in main memory)
 //
 // Scavenging in Go happens on two fronts: there's the background
 // (asynchronous) scavenger and the heap-growth (synchronous) scavenger.
@@ -70,8 +71,7 @@ func heapRetained() uint64 {
 	return memstats.heap_sys - memstats.heap_released
 }
 
-// gcPaceScavenger updates the scavenger's pacing, particularly
-// its rate and RSS goal.
+// gcPaceScavenger 更新了 scavenger 的步调, 尤其是它的频率和 RSS 目标。
 //
 // The RSS goal is based on the current heap goal with a small overhead
 // to accomodate non-determinism in the allocator.

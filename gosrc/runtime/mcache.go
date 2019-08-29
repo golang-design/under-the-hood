@@ -180,5 +180,5 @@ func (c *mcache) prepareForSweep() {
 	}
 	c.releaseAll()
 	stackcache_clear(c)
-	atomic.Store(&c.flushGen, mheap_.sweepgen) // Synchronizes with gcStart
+	atomic.Store(&c.flushGen, mheap_.sweepgen) // 与 gcStart 同步
 }
