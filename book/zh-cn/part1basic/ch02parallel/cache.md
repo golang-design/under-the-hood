@@ -117,7 +117,7 @@ type mheap struct {
 pad [cpu.CacheLinePadSize - unsafe.Sizeof(mcentral{})%cpu.CacheLinePadSize]byte
 ```
 
-从而解决了假共享的问题，同样的做法还有很多，在本书后面的源码分析中，将默认此做法，不再详细介绍。
+从而解决了假共享的问题，同样的做法还有很多，在本书后面的源码分析中，将默认读者已经熟悉此做法，不再详细介绍。
 
 ## 许可
 

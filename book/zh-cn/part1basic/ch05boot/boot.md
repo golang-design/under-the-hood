@@ -2,11 +2,11 @@
 
 [TOC]
 
-本节讨论程序引导流程。
+本节讨论 Go 程序的引导流程。
 
 ## 入口
 
-首先，我们需要寻找程序的入口，通过编写下面的程序：
+首先，我们需要寻找程序的入口，一个通常的做法是编写一个非常基本的程序：
 
 ```go
 package main
@@ -16,7 +16,7 @@ func main() {
 }
 ```
 
-编译：
+然后编译：
 
 ```bash
 go build -gcflags "-N -l" -ldflags=-compressdwarf=false -o main main.go
@@ -27,7 +27,7 @@ go build -gcflags "-N -l" -ldflags=-compressdwarf=false -o main main.go
 > 此外还需注意，Go 1.11 开始将调试信息压缩为 DWARF，macOS 下的 gdb 不能解释 DWARF。
 因此需要使用 GDB 调试需要增加 `-ldflags=-compressdwarf=false`。
 
-通过 gdb 调试：
+并使用通过 gdb 调试来确定程序的入口地址：
 
 ```gdb
 $ gdb main
@@ -163,13 +163,13 @@ GLOBL	runtime·mainPC(SB),RODATA,$8
 
 ### 步骤1：runtime.check
 
-> 位于 `runtime/runtime1.go`
-
 `runtime.check` 位于进行类型检查，
 基本上属于对编译器翻译工作的一个校验，确保运行时类型正确。
 这里粗略展示整个函数的内容：
 
 ```go
+// runtime/runtime1.go
+
 func check() {
 	var (
 		a     int8
@@ -191,11 +191,11 @@ func check() {
 
 ### 步骤2：runtime.args
 
-> 位于 `runtime/runtime1.go`
-
 接下来我们看到 `argc, argv` 作为参数传递给 `runtime.args` 处理程序参数的相关事宜。
 
 ```go
+// runtime/runtime1.go
+
 func args(c int32, v **byte) {
 	argc = c
 	argv = v
@@ -208,9 +208,9 @@ func args(c int32, v **byte) {
 
 在 darwin 平台中，只负责获取程序的 `executable_path`：
 
-> 位于 `runtime/os_darwin.go`
-
 ```go
+// runtime/os_darwin.go
+
 //go:nosplit
 func argv_index(argv **byte, i int32) *byte {
 	return *(**byte)(add(unsafe.Pointer(argv), uintptr(i)*sys.PtrSize))
@@ -244,43 +244,15 @@ func sysargs(argc int32, argv **byte) {
 ELF 除了 argc, argv, envp 之外，会携带辅助向量（auxiliary vector）将某些内核级的信息
 传递给用户进程。具体结构如图 1 所示。
 
-```
-position            content                     size (bytes) + comment
-  ------------------------------------------------------------------------
-  stack pointer ->  [ argc = number of args ]     4
-                    [ argv[0] (pointer) ]         4   (program name)
-                    [ argv[1] (pointer) ]         4
-                    [ argv[..] (pointer) ]        4 * x
-                    [ argv[n - 1] (pointer) ]     4
-                    [ argv[n] (pointer) ]         4   (= NULL)
+![](../../../assets/proc-stack.png)
 
-                    [ envp[0] (pointer) ]         4
-                    [ envp[1] (pointer) ]         4
-                    [ envp[..] (pointer) ]        4
-                    [ envp[term] (pointer) ]      4   (= NULL)
-
-                    [ auxv[0] (Elf32_auxv_t) ]    8
-                    [ auxv[1] (Elf32_auxv_t) ]    8
-                    [ auxv[..] (Elf32_auxv_t) ]   8
-                    [ auxv[term] (Elf32_auxv_t) ] 8   (= AT_NULL vector)
-
-                    [ padding ]                   0 - 16
-
-                    [ argument ASCIIZ strings ]   >= 0
-                    [ environment ASCIIZ str. ]   >= 0
-
-  (0xbffffffc)      [ end marker ]                4   (= NULL)
-
-  (0xc0000000)      < bottom of stack >           0   (virtual)
-  ------------------------------------------------------------------------
-```
-***图1：进程栈结构，引自 [5]***
-
-> 位于 `runtime/os_linux.go`
+***图1：进程栈结构***
 
 对照词表，我们能够很容易的看明白 `runtime.sysargs` 在 Linux amd64 下作的事情：
 
 ```go
+// runtime/os_linux.go
+
 // physPageSize 是操作系统的物理页字节大小。内存页的映射和反映射操作必须以
 // physPageSize 的整数倍完成
 var physPageSize uintptr
@@ -376,13 +348,11 @@ func sysauxv(auxv []uintptr) int {
 }
 ```
 
-其中涉及 mmap、mincore、munmap 等系统调用，见 [7, 8]。对于 vdso 表，已经超出我们的关注点，
-这里暂不讨论 vdso 的细节，但看 `runtime.vdsoauxv` 函数而言，
-只是去解析 `_At_SYSINFO_EHDR` 标签对应的值。
-
-> 位于 `runtime/vdso_linux.go`
+其中涉及 mmap、mincore、munmap 等系统调用 [7, 8]。对于 vdso 表，已经超出我们的关注点，
+这里暂不讨论 vdso 的细节，但看 `runtime.vdsoauxv` 函数而言，只是去解析 `_At_SYSINFO_EHDR` 标签对应的值。
 
 ```go
+// runtime/vdso_linux.go
 func vdsoauxv(tag, val uintptr) {
 	switch tag {
 	case _AT_SYSINFO_EHDR:

@@ -48,6 +48,7 @@
 | 自旋       |                | Spinning              |           |      |
 | 非自旋     |                | Non-spinning          |           |      |
 |            |                |                       |           |      |
+| 真共享     |                | True Sharing          |           |      |
 | 假共享     |                | False Sharing         |           |      |
 |            |                |                       |           |      |
 |            |                |                       |           |      |
