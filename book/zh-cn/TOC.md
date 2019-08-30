@@ -18,10 +18,12 @@
     + NUMA
     + 一致性协议
     + 真假共享
-#### 第三章 排队与调度理论
 
-<!-- - [排队理论引导]()
-- [工作窃取调度](papers/sched/work-steal-sched.md)
+#### [第三章 排队与调度理论](part1basic/ch03scheduling/readme.md)
+
+- [单机调度模型](part1basic/ch03scheduling/single.md)
+
+<!-- - [工作窃取调度](papers/sched/work-steal-sched.md)
 - [调度理论](4-sched/theory.md) -->
 
 #### [第四章 内存管理工程](part1basic/ch04memory/readme.md)
