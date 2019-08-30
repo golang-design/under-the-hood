@@ -175,10 +175,8 @@ func procresize(nprocs int32) *p {
 		}
 	}
 	stealOrder.reset(uint32(nprocs))
-	var int32p *int32 = &gomaxprocs                                 // 让编译器检查 gomaxprocs 是 int32 类型
-	atomic.Store((*uint32)(unsafe.Pointer(int32p)), uint32(nprocs)) // gomaxprocs = nprocs
-	// 返回所有包含本地任务的 P 链表
-	return runnablePs
+	atomic.Store((*uint32)(unsafe.Pointer(gomaxprocs)), uint32(nprocs)) // gomaxprocs = nprocs
+	return runnablePs // 返回所有包含本地任务的 P 链表
 }
 
 // 初始化 pp，
@@ -193,10 +191,7 @@ func (pp *p) init(id int32) {
 	if pp.mcache == nil {
 		// 如果 old == 0 且 i == 0 说明这是引导阶段初始化第一个 p
 		if id == 0 {
-			// 确认当前 g 的 m 的 mcache 分空
-			if getg().m.mcache == nil {
-				throw("missing mcache?")
-			}
+			(...)
 			pp.mcache = getg().m.mcache // bootstrap
 		} else {
 			pp.mcache = allocmcache()
@@ -240,56 +235,6 @@ func (pp *p) destroy() {
 
 显然，在运行 P 初始化之前，我们刚刚初始化完 M，因此第 7 步中的绑定 M 会将当前的 P 绑定到初始 M 上。
 而后由于程序刚刚开始，P 队列是空的，所以他们都会被链接到可运行的 P 链表上处于 `_Pidle` 状态。
-
-### GOMAXPROCS
-
-我们知道在大部分的时间里，P 的数量是不会被动态调整的。而 `runtime.GOMAXPROCS` 
-能够在运行时动态调整 P 的数量，我们就来看看这个调用会做什么事情。
-
-它的代码非常简单：
-
-```go
-// GOMAXPROCS 设置能够同时执行线程的最大 CPU 数，并返回原先的设定。
-// 如果 n < 1，则他不会进行任何修改。
-// 机器上的逻辑 CPU 的个数可以从 NumCPU 调用上获取。
-// 该调用会在调度器进行改进后被移除。
-func GOMAXPROCS(n int) int {
-	(...)
-
-	// 当调整 P 的数量时，调度器会被锁住
-	lock(&sched.lock)
-	ret := int(gomaxprocs)
-	unlock(&sched.lock)
-
-	// 返回原有设置
-	if n <= 0 || n == ret {
-		return ret
-	}
-
-	// 停止一切事物，将 STW 的原因设置为 P 被调整
-	stopTheWorld("GOMAXPROCS")
-
-	// STW 后，修改 P 的数量
-	newprocs = int32(n)
-
-	// 重新恢复
-	// 在这个过程中，startTheWorld 会调用 procresize 进而动态的调整 P 的数量
-	startTheWorld()
-	return ret
-}
-```
-
-可以看到，`GOMAXPROCS` 从一出生似乎就被判了死刑，官方的注释已经明确的说明了这个调用
-在后续改进调度器后会被移除。
-
-它的过程也非常简单粗暴，调用他必须付出 STW 这种极大的代价。
-当 P 被调整为小于 1 或与原有值相同时候，不会产生任何效果，例如：
-
-```go
-runtime.GOMAXPROCS(runtime.GOMAXPROCS(0))
-```
-
-关于 `stopTheWorld` 和 `startTheWorld` 我们会在垃圾回收器中进行详细讨论，这里就不加以详述了。
 
 ## G 初始化
 
@@ -392,9 +337,6 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	newg.gopc = callerpc
 	newg.ancestors = saveAncestors(callergp) // 调试相关，追踪调用方
 	newg.startpc = fn.fn                     // 入口 pc
-	if _g_.m.curg != nil {
-		newg.labels = _g_.m.curg.labels // 增加 profiler 标签
-	}
 	(...)
 
 	newg.gcscanvalid = false

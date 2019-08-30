@@ -73,7 +73,6 @@
 - [6.2 调度器初始化](part2runtime/ch06sched/init.md)
     + M 的初始化
     + P 的初始化
-      + GOMAXPROCS
     + G 的初始化
       + 一些细节
     + 总结
@@ -176,6 +175,7 @@ G 与 P 的解绑
       + 非均匀访存感知的调度器设计
     + 总结
     + 进一步阅读的参考文献
+- [6.11 用户层 APIs](part2runtime/ch06sched/calls.md)
 
 #### [第七章 内存分配器](part2runtime/ch07alloc/readme.md)
 

@@ -12,7 +12,6 @@
 - [6.2 调度器初始化](./init.md)
     + M 的初始化
     + P 的初始化
-      + GOMAXPROCS
     + G 的初始化
       + 一些细节
     + 总结
@@ -94,7 +93,8 @@
       + 非均匀访存感知的调度器设计
     + 总结
     + 进一步阅读的参考文献
-
+- [6.11 用户层 APIs](./calls.md)
+- 
 > _Simplicity is complicated._ 
 >
 > -- Rob Pike
