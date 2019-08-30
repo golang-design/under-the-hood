@@ -13,36 +13,22 @@ M 其实就是 OS 线程，它只有两个状态：自旋、非自旋。
 该初始化进包含对 M 及用于处理 M 信号的 G 的相关运算操作，未涉及工作线程的暂止和复始。
 
 ```go
+// src/runtime/proc.go
+
 func mcommoninit(mp *m) {
-	_g_ := getg()
+	(...)
 
-	// 检查当前 g 是否是 g0
-	// g0 栈对用户而言是没有意义的（且不是不可避免的）
-	if _g_ != _g_.m.g0 {
-		callers(1, mp.createstack[:])
-	}
-
-	// 锁住调度器
 	lock(&sched.lock)
 	(...)
+
 	// mnext 表示当前 m 的数量，还表示下一个 m 的 id
 	mp.id = sched.mnext
 	// 增加 m 的数量
 	sched.mnext++
-	// 检查 m 的数量不会太多
-	checkmcount()
 
-	// 用于 fastrand 快速取随机数
-	mp.fastrand[0] = 1597334677 * uint32(mp.id)
-	mp.fastrand[1] = uint32(cputicks())
-	if mp.fastrand[0]|mp.fastrand[1] == 0 {
-		mp.fastrand[1] = 1
-	}
+	(...) // 初始化 gsignal，用于处理 m 上的信号
 
-	// 初始化 gsignal
-	(...)
-
-	// 添加到 allm 中，从而当它刚保存到寄存器或本地线程存储时候 GC 不会释放 g->m
+	// 添加到 allm 中，从而当它刚保存到寄存器或本地线程存储时候 GC 不会释放 g.m
 	mp.alllink = allm
 
 	// NumCgoCall() 会在没有使用 schedlock 时遍历 allm，等价于 allm = mp
@@ -53,7 +39,7 @@ func mcommoninit(mp *m) {
 }
 ```
 
-这里省略了比较重要的 `gsignal` 的初始化过程，参见 [调度器: 信号处理机制](signal.md)。
+这里省略了对不影响本节内容的 `gsignal` 的初始化过程，其作用参见 [调度器: 信号处理机制](signal.md)。
 
 ## P 初始化
 
@@ -82,10 +68,6 @@ func mcommoninit(mp *m) {
 func procresize(nprocs int32) *p {
 	// 获取先前的 P 个数
 	old := gomaxprocs
-	// 边界检查
-	if old < 0 || nprocs <= 0 {
-		throw("procresize: invalid arg")
-	}
 	(...)
 
 	// 更新统计信息，记录此次修改 gomaxprocs 的时间
@@ -117,102 +99,15 @@ func procresize(nprocs int32) *p {
 	}
 
 	// 初始化新的 P
-	for i := int32(0); i < nprocs; i++ {
+	for i := old; i < nprocs; i++ {
 		pp := allp[i]
 
 		// 如果 p 是新创建的(新创建的 p 在数组中为 nil)，则申请新的 P 对象
 		if pp == nil {
 			pp = new(p)
-			// p 的 id 就是它在 allp 中的索引
-			pp.id = i
-			// 新创建的 p 处于 _Pgcstop 状态
-			pp.status = _Pgcstop
-			pp.sudogcache = pp.sudogbuf[:0]
-			for i := range pp.deferpool {
-				pp.deferpool[i] = pp.deferpoolbuf[i][:0]
-			}
-			pp.wbBuf.reset()
-
-			// 保存至 allp, allp[i] = pp
-			atomicstorep(unsafe.Pointer(&allp[i]), unsafe.Pointer(pp))
 		}
-
-		// 为 P 分配 cache 对象
-		if pp.mcache == nil {
-			// 如果 old == 0 且 i == 0 说明这是引导阶段初始化第一个 p
-			if old == 0 && i == 0 {
-				// 确认当前 g 的 m 的 mcache 分空
-				if getg().m.mcache == nil {
-					throw("missing mcache?")
-				}
-				pp.mcache = getg().m.mcache
-			} else {
-				// 创建 cache
-				pp.mcache = allocmcache()
-			}
-		}
-
-		(...)
-	}
-
-	// 释放未使用的 P，一般情况下不会执行这段代码
-	for i := nprocs; i < old; i++ {
-		p := allp[i]
-
-		(...)
-
-		// 将所有 runnable goroutine 移动至全局队列
-		for p.runqhead != p.runqtail {
-			// 从本地队列中 pop
-			p.runqtail--
-			gp := p.runq[p.runqtail%uint32(len(p.runq))].ptr()
-			// push 到全局队列中
-			globrunqputhead(gp)
-		}
-		if p.runnext != 0 {
-			globrunqputhead(p.runnext.ptr())
-			p.runnext = 0
-		}
-		// 如果存在 gc 后台 worker，则让其 runnable 并将其放到全局队列中从而可以让其对自身进行清理
-		if gp := p.gcBgMarkWorker.ptr(); gp != nil {
-			casgstatus(gp, _Gwaiting, _Grunnable)
-			(...)
-			globrunqput(gp)
-			// 此赋值不会发生竞争，因为此时已经 STW
-			p.gcBgMarkWorker.set(nil)
-		}
-		// 刷新 p 的写屏障缓存
-		if gcphase != _GCoff {
-			wbBufFlush1(p)
-			p.gcw.dispose()
-		}
-		for i := range p.sudogbuf {
-			p.sudogbuf[i] = nil
-		}
-		p.sudogcache = p.sudogbuf[:0]
-		for i := range p.deferpool {
-			for j := range p.deferpoolbuf[i] {
-				p.deferpoolbuf[i][j] = nil
-			}
-			p.deferpool[i] = p.deferpoolbuf[i][:0]
-		}
-		// 释放当前 P 绑定的 cache
-		freemcache(p.mcache)
-		p.mcache = nil
-
-		// 将当前 P 的 G 复链转移到全局
-		gfpurge(p)
-		(...)
-		p.gcAssistTime = 0
-		p.status = _Pdead
-		// 这里不能释放 P，因为它可能被一个正在系统调用中的 M 引用
-	}
-
-	// 清理完毕后，修剪 allp, nprocs 个数之外的所有 P
-	if int32(len(allp)) != nprocs {
-		lock(&allpLock)
-		allp = allp[:nprocs]
-		unlock(&allpLock)
+		pp.init(i)
+		atomicstorep(unsafe.Pointer(&allp[i]), unsafe.Pointer(pp)) // allp[i] = pp
 	}
 
 	_g_ := getg()
@@ -221,6 +116,7 @@ func procresize(nprocs int32) *p {
 	if _g_.m.p != 0 && _g_.m.p.ptr().id < nprocs {
 		// 继续使用当前 P
 		_g_.m.p.ptr().status = _Prunning
+		(...)
 	} else {
 		// 释放当前 P，因为已失效
 		if _g_.m.p != 0 {
@@ -236,6 +132,21 @@ func procresize(nprocs int32) *p {
 		acquirep(p) // 直接将 allp[0] 绑定到当前的 M
 
 		(...)
+	}
+
+	// 从未使用的 p 释放资源
+	for i := nprocs; i < old; i++ {
+		p := allp[i]
+		p.destroy()
+		// 不能释放 p 本身，因为他可能在 m 进入系统调用时被引用
+	}
+
+
+	// 清理完毕后，修剪 allp, nprocs 个数之外的所有 P
+	if int32(len(allp)) != nprocs {
+		lock(&allpLock)
+		allp = allp[:nprocs]
+		unlock(&allpLock)
 	}
 
 	// 将没有本地任务的 P 放到空闲链表中
@@ -265,23 +176,67 @@ func procresize(nprocs int32) *p {
 	}
 	stealOrder.reset(uint32(nprocs))
 	var int32p *int32 = &gomaxprocs                                 // 让编译器检查 gomaxprocs 是 int32 类型
-	atomic.Store((*uint32)(unsafe.Pointer(int32p)), uint32(nprocs)) // *int32p = nprocs
+	atomic.Store((*uint32)(unsafe.Pointer(int32p)), uint32(nprocs)) // gomaxprocs = nprocs
 	// 返回所有包含本地任务的 P 链表
 	return runnablePs
+}
+
+// 初始化 pp，
+func (pp *p) init(id int32) {
+	// p 的 id 就是它在 allp 中的索引
+	pp.id = id
+	// 新创建的 p 处于 _Pgcstop 状态
+	pp.status = _Pgcstop
+	(...)
+
+	// 为 P 分配 cache 对象
+	if pp.mcache == nil {
+		// 如果 old == 0 且 i == 0 说明这是引导阶段初始化第一个 p
+		if id == 0 {
+			// 确认当前 g 的 m 的 mcache 分空
+			if getg().m.mcache == nil {
+				throw("missing mcache?")
+			}
+			pp.mcache = getg().m.mcache // bootstrap
+		} else {
+			pp.mcache = allocmcache()
+		}
+	}
+	(...)
+}
+
+// 释放未使用的 P，一般情况下不会执行这段代码
+func (pp *p) destroy() {
+	// 将所有 runnable goroutine 移动至全局队列
+	for pp.runqhead != pp.runqtail {
+		// 从本地队列中 pop
+		pp.runqtail--
+		gp := pp.runq[pp.runqtail%uint32(len(pp.runq))].ptr()
+		// push 到全局队列中
+		globrunqputhead(gp)
+	}
+	if pp.runnext != 0 {
+		globrunqputhead(pp.runnext.ptr())
+		pp.runnext = 0
+	}
+	(...)
+	// 将当前 P 的 G 复链转移到全局
+	gfpurge(pp)
+	(...)
+	pp.status = _Pdead
 }
 ```
 
 `procresize` 这个函数相对较长，我们来总结一下它主要干了什么事情：
 
-1. 调用时已经 STW；
-2. 记录调整 P 的时间；
-3. 按需调整 `allp` 的大小；
-4. 按需初始化 `allp` 中的 P；
-5. 从 `allp` 移除不需要的 P，将释放的 P 队列中的任务扔进全局队列；
-6. 如果当前的 P 还可以继续使用（没有被移除），则将 P 设置为 _Prunning；
-7. 否则将第一个 P 抢过来给当前 G 的 M 进行绑定
-8. 最后挨个检查 P，将没有任务的 P 放入 idle 队列
-9. 出去当前 P 之外，将有任务的 P 彼此串联成链表，将没有任务的 P 放回到 idle 链表中
+1. 调用时已经 STW，记录调整 P 的时间；
+2. 按需调整 `allp` 的大小；
+3. 按需初始化 `allp` 中的 P；
+4 如果当前的 P 还可以继续使用（没有被移除），则将 P 设置为 _Prunning；
+5. 否则将第一个 P 抢过来给当前 G 的 M 进行绑定
+6. 从 `allp` 移除不需要的 P，将释放的 P 队列中的任务扔进全局队列；
+7. 最后挨个检查 P，将没有任务的 P 放入 idle 队列
+8. 出去当前 P 之外，将有任务的 P 彼此串联成链表，将没有任务的 P 放回到 idle 链表中
 
 显然，在运行 P 初始化之前，我们刚刚初始化完 M，因此第 7 步中的绑定 M 会将当前的 P 绑定到初始 M 上。
 而后由于程序刚刚开始，P 队列是空的，所以他们都会被链接到可运行的 P 链表上处于 `_Pidle` 状态。
@@ -299,9 +254,7 @@ func procresize(nprocs int32) *p {
 // 机器上的逻辑 CPU 的个数可以从 NumCPU 调用上获取。
 // 该调用会在调度器进行改进后被移除。
 func GOMAXPROCS(n int) int {
-	if GOARCH == "wasm" && n > 1 {
-		n = 1 // WebAssembly 还没有线程支持，只能设置一个 CPU。
-	}
+	(...)
 
 	// 当调整 P 的数量时，调度器会被锁住
 	lock(&sched.lock)
@@ -340,11 +293,11 @@ runtime.GOMAXPROCS(runtime.GOMAXPROCS(0))
 
 ## G 初始化
 
-运行完 `runtime.procresize` 之后，我们已经在 [程序引导](../../part1basic/ch05boot/boot.md) 和 [主 goroutine 生命周期](../../part1basic/ch05boot/main.md) 中已经看到，
+运行完 `runtime.procresize` 之后，我们已经在 [程序引导](../../part1basic/ch05boot/boot.md) 
+和 [主 goroutine 生命周期](../../part1basic/ch05boot/main.md) 中已经看到，
 主 goroutine 会以被调度器调度的方式进行运行，这将由 `runtime.newproc` 来完成主 goroutine 的初始化工作。
 
 在看 `runtime.newproc` 之前，我们先大致浏览一下 G 的各个状态，如图 2 所示。
-
 
 ![](../../../assets/g-status.png)
 
@@ -376,13 +329,11 @@ func newproc(siz int32, fn *funcval) {
 // callerps 是 go 语句的起始地址。新创建的 g 会被放入 g 的队列中等待运行。
 func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintptr) {
 	_g_ := getg() // 因为是在系统栈运行所以此时的 g 为 g0
-
 	(...)
 
 	_g_.m.locks++ // 禁止这时 g 的 m 被抢占因为它可以在一个局部变量中保存 p
 	siz := narg
 	siz = (siz + 7) &^ 7
-
 	(...)
 
 	// 获得 p
@@ -399,15 +350,7 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 		casgstatus(newg, _Gidle, _Gdead)
 		allgadd(newg) // 将 Gdead 状态的 g 添加到 allg，这样 GC 不会扫描未初始化的栈
 	}
-	// 检查新 g 的执行栈
-	if newg.stack.hi == 0 {
-		throw("newproc1: newg missing stack")
-	}
-
-	// 无论是取到的 g 还是新创建的 g，都应该是 _Gdead 状态
-	if readgstatus(newg) != _Gdead {
-		throw("newproc1: new g is not Gdead")
-	}
+	(...)
 
 	// 计算运行空间大小，对齐
 	totalSize := 4*sys.RegSize + uintptr(siz) + sys.MinFrameSize // extra space in case of reads slightly beyond frame
@@ -416,7 +359,6 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	// 确定 sp 和参数入栈位置
 	sp := newg.stack.hi - totalSize
 	spArg := sp
-
 	(...)
 
 	// 处理参数，当有参数时，将参数拷贝到 goroutine 的执行栈中
@@ -453,11 +395,7 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	if _g_.m.curg != nil {
 		newg.labels = _g_.m.curg.labels // 增加 profiler 标签
 	}
-
-	// 调试相关
-	if isSystemGoroutine(newg) {
-		atomic.Xadd(&sched.ngsys, +1)
-	}
+	(...)
 
 	newg.gcscanvalid = false
 	// 现在将 g 更换为 _Grunnable 状态
@@ -474,7 +412,6 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	}
 	newg.goid = int64(_p_.goidcache)
 	_p_.goidcache++
-
 	(...)
 
 	// 将这里新创建的 g 放入 p 的本地队列或直接放入全局队列
@@ -486,8 +423,14 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 && mainStarted {
 		wakep()
 	}
-	_g_.m.locks--
-	if _g_.m.locks == 0 && _g_.preempt { // 恢复可抢占的请求，注意我们已经在 newstack 的时候已经被清理掉了
+	releasem(_g_.m)
+}
+//go:nosplit
+func releasem(mp *m) {
+	_g_ := getg()
+	mp.locks--
+	if mp.locks == 0 && _g_.preempt {
+		// 如果我们在 newstack 中清除了抢占请求，则恢复抢占请求
 		_g_.stackguard0 = stackPreempt
 	}
 }

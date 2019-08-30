@@ -70,7 +70,7 @@
 
 这句话的信息量较多，我们先来解释一些概念：
 
-一个**自旋（spinning）**工作线程在实现上，自旋状态由 `sched.nmspinning` 和 `m.spinning` 表示。
+一个 **自旋（spinning）** 工作线程在实现上，自旋状态由 `sched.nmspinning` 和 `m.spinning` 表示。
 
 1. 如果一个工作线程的本地队列、全局运行队列或 netpoller 中均没有工作，则该线程成为自旋线程；
 2. 满足该条件的、被复始的线程也被称为自旋线程。我们也不对这种线程进行 G 切换，因此这类线程最初就是没有工作的状态。
@@ -130,7 +130,6 @@ type m struct {
 	morebuf gobuf  // morestack 的 gobuf 参数
 	(...)
 
-	// debugger 无法观察到的字段
 	procid        uint64       // 用于 debugger，偏移量不是写死的
 	gsignal       *g           // 处理 signal 的 g
 	goSigStack    gsignalStack // Go 分配的 signal handling 栈
@@ -139,7 +138,7 @@ type m struct {
 	mstartfn      func()
 	curg          *g       // 当前运行的用户 goroutine
 	caughtsig     guintptr // goroutine 在 fatal signal 中运行
-	p             puintptr // attached p for executing go code (nil if not executing go code)
+	p             puintptr // 执行 go 代码时持有的 p (如果没有执行则为 nil)
 	nextp         puintptr
 	oldp          puintptr // 执行系统调用之前绑定的 p
 	id            int64
@@ -151,7 +150,6 @@ type m struct {
 	profilehz     int32
 	spinning      bool // m 当前没有运行 work 且正处于寻找 work 的活跃状态
 	blocked       bool // m 阻塞在一个 note 上
-	inwb          bool // m 正在执行 write barrier
 	newSigstack   bool // C 线程上的 minit 调用了 signalstack（C 调用 Go?）
 	printlock     int8
 	incgo         bool   // m 正在执行 cgo 调用
@@ -168,15 +166,13 @@ type m struct {
 	schedlink     muintptr
 	mcache        *mcache
 	lockedg       guintptr
-	createstack   [32]uintptr    // 当前线程创建的栈
-	lockedExt     uint32         // 外部 LockOSThread 追踪
-	lockedInt     uint32         // 内部 lockOSThread 追踪
-	nextwaitm     muintptr       // 正在等待锁的下一个 m
-	waitunlockf   unsafe.Pointer // todo go func(*g, unsafe.pointer) bool
+	createstack   [32]uintptr // 当前线程创建的栈
+	lockedExt     uint32      // 外部 LockOSThread 追踪
+	lockedInt     uint32      // 内部 lockOSThread 追踪
+	nextwaitm     muintptr    // 正在等待锁的下一个 m
+	waitunlockf   func(*g, unsafe.Pointer) bool
 	waitlock      unsafe.Pointer
-	waittraceev   byte
-	waittraceskip int
-	startingtrace bool
+	(...)
 	syscalltick   uint32
 	thread        uintptr // 线程处理
 	freelink      *m      // 在 sched.freem 上
@@ -210,8 +206,6 @@ P 只是处理器的抽象，而非处理器本身，它存在的意义在于实
 
 ```go
 type p struct {
-	lock mutex
-
 	id          int32
 	status      uint32 // p 的状态 pidle/prunning/...
 	link        puintptr
@@ -220,7 +214,7 @@ type p struct {
 	sysmontick  sysmontick // 系统监控观察到的最后一次记录
 	m           muintptr   // 反向链接到关联的 m （nil 则表示 idle）
 	mcache      *mcache
-	racectx     uintptr
+	(...)
 
 	deferpool    [5][]*_defer // 不同大小的可用的 defer 结构池 (见 panic.go)
 	deferpoolbuf [5][32]*_defer
@@ -255,10 +249,12 @@ type p struct {
 
 	palloc persistentAlloc // per-P，用于避免 mutex
 
+	_ uint32 // 对齐，用于下面字段的原子操作
+
 	// Per-P GC 状态
-	gcAssistTime         int64 // assistAlloc 时间 (纳秒)
-	gcFractionalMarkTime int64 // fractional mark worker 的时间 (纳秒)
-	gcBgMarkWorker       guintptr
+	gcAssistTime         int64    // assistAlloc 时间 (纳秒) 原子操作
+	gcFractionalMarkTime int64    // fractional mark worker 的时间 (纳秒) 原子操作
+	gcBgMarkWorker       guintptr // 原子操作
 	gcMarkWorkerMode     gcMarkWorkerMode
 
 	// gcMarkWorkerStartTime 为该 mark worker 开始的 nanotime()
@@ -316,11 +312,10 @@ type g struct {
 	gcscandone     bool       // g 执行栈已经 scan 了；此此段受 _Gscan 位保护
 	gcscanvalid    bool       // 在 gc 周期开始时为 false；当 G 从上次 scan 后就没有运行时为 true
 	throwsplit     bool       // 必须不能进行栈分段
-	raceignore     int8       // 忽略 race 检查事件
+	(...)
 	sysblocktraced bool       // StartTrace 已经出发了此 goroutine 的 EvGoInSyscall
 	sysexitticks   int64      // 当 syscall 返回时的 cputicks（用于跟踪）
-	traceseq       uint64     // trace event sequencer 跟踪事件排序器
-	tracelastp     puintptr   // 最后一个为此 goroutine 触发事件的 P
+	(...)
 	lockedm        muintptr
 	sig            uint32
 	writebuf       []byte
@@ -330,7 +325,7 @@ type g struct {
 	gopc           uintptr         // 当前创建 goroutine go 语句的 pc 寄存器
 	ancestors      *[]ancestorInfo // 创建此 goroutine 的 ancestor goroutine 的信息(debug.tracebackancestors 调试用)
 	startpc        uintptr         // goroutine 函数的 pc 寄存器
-	racectx        uintptr
+	(...)
 	waiting        *sudog         // 如果 g 发生阻塞（且有有效的元素指针）sudog 会将当前 g 按锁住的顺序组织起来
 	cgoCtxt        []uintptr      // cgo 回溯上下文
 	labels         unsafe.Pointer // profiler 的标签
