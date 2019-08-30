@@ -57,11 +57,11 @@ func mcommoninit(mp *m) {
 
 ## P 初始化
 
-在看 `runtime.procresize` 函数之前，我们先概览一遍 P 的状态机。
+在看 `runtime.procresize` 函数之前，我们先概览一遍 P 的状态转换图，如图 1 所示。
 
 ![](../../../assets/p-status.png)
 
-图 1: P 的状态转换图
+**图 1: P 的状态转换图**
 
 通常情况下（在程序运行时不调整 P 的个数），P 只会在四种状态下进行切换。
 当程序刚开始运行进行初始化时，所有的 P 都处于 `_Pgcstop` 状态，
@@ -343,50 +343,12 @@ runtime.GOMAXPROCS(runtime.GOMAXPROCS(0))
 运行完 `runtime.procresize` 之后，我们已经在 [程序引导](../../part1basic/ch05boot/boot.md) 和 [主 goroutine 生命周期](../../part1basic/ch05boot/main.md) 中已经看到，
 主 goroutine 会以被调度器调度的方式进行运行，这将由 `runtime.newproc` 来完成主 goroutine 的初始化工作。
 
-在看 `runtime.newproc` 之前，我们先大致浏览一下 G 的各个状态。
+在看 `runtime.newproc` 之前，我们先大致浏览一下 G 的各个状态，如图 2 所示。
 
-```
-所有的 G 状态：
-_Gidle
-_Grunnable
-_Grunning
-_Gsyscall
-_Gwaiting
-_Gdead
-_Gcopystack
-_Gscan
-_Gscanrunnable
-_Gscanrunning
-_Gscansyscall
-_Gscanwaiting
-                                               +---------------+
-                                               | _Gscanwaiting |
-                                               +---------------+
-                                                     ^  |
-                                  runtime.newstack   |  | runtime.newstack
-                                                     |  v                               +-------------+
-   runtime.gcMarkTermination / runtime.ready      +-----------+  runtime.casgcopystack  |             |
-                          +---------------------- | _Gwaiting | ----------------------> | _Gcopystack |
-                          |   runtime.schedule    +-----------+  +--------------------> |             |
-                          |                             ^        |   runtime.morestack  +-------------+
-                          |      runtime.gcBgMarkWorker |        |   runtime.casgcopystack
-                          |   runtime.gcMarkTermination |        |
-     New G                v               runtime.dropg |        v
-  +--------+        +------------+   runtime.execute  +-----------+                     +--------+
-  |        |        |            | -----------------> |           |  runtime.Goexit     |        |
-  | _Gidle |        | _Grunnable |                    | _Grunning | ------------------> | _Gdead | 
-  |        |        |            | <----------------- |           |                     |        |
-  +--------+        +------------+    runtime.Gosched +-----------+                     +--------+
-       |              ^   ^                              ^     | runtime.entersyscallblock ^ | ^
-       |              |   |                              |     | runtime.entersyscall      | | |
-       |              |   |         runtime.exitsyscall  |     v                           | | |
-       |              |   |                           +-----------+          runtime.dropm | | |
-       |              |   +-------------------------- | _Gsyscall | -----------------------+ | |
-       |              |                               +-----------+                          | |
-       |              +----------------------------------------------------------------------+ |
-       |                    runtime.newproc / runtime.oneNewExtraM                             |
-       +---------------------------------------------------------------------------------------+
-```
+
+![](../../../assets/g-status.png)
+
+**图2: G 的转状态转换图**
 
 我们接下来就来粗略看一看 `runtime.newproc`：
 
