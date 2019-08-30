@@ -430,7 +430,6 @@ type m struct {
 	profilehz     int32
 	spinning      bool // m 当前没有运行 work 且正处于寻找 work 的活跃状态
 	blocked       bool // m 阻塞在一个 note 上
-	inwb          bool // m 正在执行 write barrier
 	newSigstack   bool // C 线程上的 minit 调用了 signalstack（C 调用 Go?）
 	printlock     int8
 	incgo         bool   // m 正在执行 cgo 调用
@@ -476,8 +475,6 @@ type m struct {
 }
 
 type p struct {
-	lock mutex
-
 	id          int32
 	status      uint32 // p 的状态 pidle/prunning/...
 	link        puintptr
@@ -531,9 +528,9 @@ type p struct {
 	_ uint32 // Alignment for atomic fields below
 
 	// Per-P GC 状态
-	gcAssistTime         int64    // assistAlloc 时间 (纳秒)
-	gcFractionalMarkTime int64    // fractional mark worker 的时间 (纳秒)，原子读写
-	gcBgMarkWorker       guintptr // (原子读写)
+	gcAssistTime         int64    // assistAlloc 时间 (纳秒) 原子操作
+	gcFractionalMarkTime int64    // fractional mark worker 的时间 (纳秒) 原子操作
+	gcBgMarkWorker       guintptr // 原子操作
 	gcMarkWorkerMode     gcMarkWorkerMode
 
 	// gcMarkWorkerStartTime 为该 mark worker 开始的 nanotime()

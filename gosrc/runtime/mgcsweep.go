@@ -157,12 +157,10 @@ func sweepone() uintptr {
 	return npages
 }
 
-// isSweepDone reports whether all spans are swept or currently being swept.
-//
-// Note that this condition may transition from false to true at any
-// time as the sweeper runs. It may transition from true to false if a
-// GC runs; to prevent that the caller must be non-preemptible or must
-// somehow block GC progress.
+// isSweepDone 报告是否所有 span 已经清扫或当前正在清扫。
+// 请注意，此条件可能会在清扫器运行期间任何情况下从 false 转换为 true。
+// 如果当 GC 执行时，它可能会从 true 转换为 false;
+// 防止调用者必为不可抢占的或必须以某种方式阻止 GC 进行。
 func isSweepDone() bool {
 	return mheap_.sweepdone != 0
 }

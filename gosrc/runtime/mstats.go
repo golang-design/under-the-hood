@@ -87,40 +87,27 @@ type mstats struct {
 	// during mark termination for the next cycle's trigger.
 	triggerRatio float64
 
-	// gc_trigger is the heap size that triggers marking.
+	// gc_trigger 指触发标记阶段的堆大小
 	//
-	// When heap_live ≥ gc_trigger, the mark phase will start.
-	// This is also the heap size by which proportional sweeping
-	// must be complete.
+	// 当 heap_live ≥ gc_trigger 时，标记阶段将开始执行
+	// 它同样用来表示必须完成的成比例清扫时的堆大小。
 	//
-	// This is computed from triggerRatio during mark termination
-	// for the next cycle's trigger.
+	// 该字段在 triggerRatio 在标记终止阶段为下一个周期的触发器进行计算。
 	gc_trigger uint64
 
-	// heap_live is the number of bytes considered live by the GC.
-	// That is: retained by the most recent GC plus allocated
-	// since then. heap_live <= heap_alloc, since heap_alloc
-	// includes unmarked objects that have not yet been swept (and
-	// hence goes up as we allocate and down as we sweep) while
-	// heap_live excludes these objects (and hence only goes up
-	// between GCs).
+	// heap_live 是 GC 认为的实际字节数。即：最近一次 GC 保留的加上从那之后分配的字节数。
+	// heap_live <= heap_alloc ，因为 heap_alloc 包括尚未扫描的未标记对象
+	// （因此在我们扫描时分配和向下），而 heap_live 不包含这些对象（因此只在 GC 之间上升）。
 	//
-	// This is updated atomically without locking. To reduce
-	// contention, this is updated only when obtaining a span from
-	// an mcentral and at this point it counts all of the
-	// unallocated slots in that span (which will be allocated
-	// before that mcache obtains another span from that
-	// mcentral). Hence, it slightly overestimates the "true" live
-	// heap size. It's better to overestimate than to
-	// underestimate because 1) this triggers the GC earlier than
-	// necessary rather than potentially too late and 2) this
-	// leads to a conservative GC rate rather than a GC rate that
-	// is potentially too low.
+	// 该字段是在没有锁的情况下原子更新的。
+	// 为了减少竞争，只有在从 mcentral 获取 span 时才会更新，
+	// 并且此时它会计算该 span 中的所有未分配的插槽（将在该 mcache 从该 mcentral 获取另一个 span 之前分配）。
+	// 因此，它对 “真正的” 实时堆大小的估计略微偏高了。之所以高估而非低估的原因是
+	// 1) 在必要时提前触发 GC 2) 这会导致保守的 GC 率而而非过低的 GC 率。
 	//
-	// Reads should likewise be atomic (or during STW).
+	// 读取同样应该是原子的（或在 STW 期间）。
 	//
-	// Whenever this is updated, call traceHeapAlloc() and
-	// gcController.revise().
+	// 每当更新该字段时，请调用 traceHeapAlloc() 和 gcController.revise()
 	heap_live uint64
 
 	// heap_scan is the number of bytes of "scannable" heap. This
@@ -130,10 +117,8 @@ type mstats struct {
 	// Whenever this is updated, call gcController.revise().
 	heap_scan uint64
 
-	// heap_marked is the number of bytes marked by the previous
-	// GC. After mark termination, heap_live == heap_marked, but
-	// unlike heap_live, heap_marked does not change until the
-	// next mark termination.
+	// heap_marked 表示前一个 GC 中标记的字节数。标记终止阶段结束后，heap_live == heap_marked,
+	// 与 heap_live 不同的是，heap_marked 在下一个 mark_termination 之前都不会发生变化
 	heap_marked uint64
 }
 

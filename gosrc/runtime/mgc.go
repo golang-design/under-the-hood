@@ -748,14 +748,13 @@ func gcSetTriggerRatio(triggerRatio float64) {
 	}
 	memstats.triggerRatio = triggerRatio
 
-	// Compute the absolute GC trigger from the trigger ratio.
+	// 根据触发器比率来计算绝对的 GC 触发器
 	//
-	// We trigger the next GC cycle when the allocated heap has
-	// grown by the trigger ratio over the marked heap size.
+	// 当分配的堆的大小超过标记的堆大小时，我们触发下一个 GC 循环。
 	trigger := ^uint64(0)
 	if gcpercent >= 0 {
 		trigger = uint64(float64(memstats.heap_marked) * (1 + triggerRatio))
-		// Don't trigger below the minimum heap size.
+		// 小于最小堆大小时不触发
 		minTrigger := heapminimum
 		if !isSweepDone() { // 即 mheap_.sweepdone != 0
 			// Concurrent sweep happens in the heap growth
@@ -1114,43 +1113,41 @@ type gcTrigger struct {
 type gcTriggerKind int
 
 const (
-	// gcTriggerHeap indicates that a cycle should be started when
-	// the heap size reaches the trigger heap size computed by the
-	// controller.
+	// gcTriggerHeap 表示当堆大小达到控制器计算的触发堆大小时开始一个周期
 	gcTriggerHeap gcTriggerKind = iota
 
-	// gcTriggerTime indicates that a cycle should be started when
-	// it's been more than forcegcperiod nanoseconds since the
-	// previous GC cycle.
+	// gcTriggerTime 表示自上一个 GC 周期后当循环超过
+	// forcegcperiod 纳秒时应开始一个周期。
 	gcTriggerTime
 
-	// gcTriggerCycle indicates that a cycle should be started if
-	// we have not yet started cycle number gcTrigger.n (relative
-	// to work.cycles).
+	// gcTriggerCycle 表示如果我们还没有启动第 gcTrigger.n 个周期
+	// （相对于 work.cycles）时应开始一个周期。
 	gcTriggerCycle
 )
 
 // test 报告当前出发条件是否满足，换句话说 _GCoff 阶段的退出条件已满足。
 // 退出条件应该在分配阶段已完成测试。
 func (t gcTrigger) test() bool {
+	// 如果已禁用 GC
 	if !memstats.enablegc || panicking != 0 || gcphase != _GCoff {
 		return false
 	}
+	// 根据类别做不同判断
 	switch t.kind {
 	case gcTriggerHeap:
-		// Non-atomic access to heap_live for performance. If
-		// we are going to trigger on this, this thread just
-		// atomically wrote heap_live anyway and we'll see our
-		// own write.
+		// 上个周期结束时剩余的加上到目前为止分配的内存 超过 触发标记阶段标准的内存
+		// 考虑性能问题，对非原子操作访问 heap_live 。如果我们需要触发该条件，
+		// 则所在线程一定会原子的写入 heap_live，从而我们会观察到我们的写入。
 		return memstats.heap_live >= memstats.gc_trigger
 	case gcTriggerTime:
-		if gcpercent < 0 {
+		if gcpercent < 0 { // 因为允许在运行时动态调整 gcpercent，因此需要额外再检查一遍
 			return false
 		}
+		// 计算上次 gc 开始时间是否大于强制执行 GC 周期的时间
 		lastgc := int64(atomic.Load64(&memstats.last_gc_nanotime))
 		return lastgc != 0 && t.now-lastgc > forcegcperiod
 	case gcTriggerCycle:
-		// t.n > work.cycles, but accounting for wraparound.
+		// 进行测试的周期 t.n 大于实际触发的，需要进行 GC 则通过测试
 		return int32(t.n-work.cycles) > 0
 	}
 	return true

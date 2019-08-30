@@ -4011,16 +4011,23 @@ func setcpuprofilerate(hz int32) {
 
 // init initializes pp, which may be a freshly allocated p or a
 // previously destroyed p, and transitions it to status _Pgcstop.
+// 初始化 pp，
 func (pp *p) init(id int32) {
+	// p 的 id 就是它在 allp 中的索引
 	pp.id = id
+	// 新创建的 p 处于 _Pgcstop 状态
 	pp.status = _Pgcstop
 	pp.sudogcache = pp.sudogbuf[:0]
 	for i := range pp.deferpool {
 		pp.deferpool[i] = pp.deferpoolbuf[i][:0]
 	}
 	pp.wbBuf.reset()
+
+	// 为 P 分配 cache 对象
 	if pp.mcache == nil {
+		// 如果 old == 0 且 i == 0 说明这是引导阶段初始化第一个 p
 		if id == 0 {
+			// 确认当前 g 的 m 的 mcache 分空
 			if getg().m.mcache == nil {
 				throw("missing mcache?")
 			}
@@ -4043,32 +4050,31 @@ func (pp *p) init(id int32) {
 // transitions it to status _Pdead.
 //
 // sched.lock must be held and the world must be stopped.
+// 释放未使用的 P，一般情况下不会执行这段代码
 func (pp *p) destroy() {
-	// Move all runnable goroutines to the global queue
+	// 将所有 runnable goroutine 移动至全局队列
 	for pp.runqhead != pp.runqtail {
-		// Pop from tail of local queue
+		// 从本地队列中 pop
 		pp.runqtail--
 		gp := pp.runq[pp.runqtail%uint32(len(pp.runq))].ptr()
-		// Push onto head of global queue
+		// push 到全局队列中
 		globrunqputhead(gp)
 	}
 	if pp.runnext != 0 {
 		globrunqputhead(pp.runnext.ptr())
 		pp.runnext = 0
 	}
-	// If there's a background worker, make it runnable and put
-	// it on the global queue so it can clean itself up.
+	// 如果存在 gc 后台 worker，则让其 runnable 并将其放到全局队列中从而可以让其对自身进行清理
 	if gp := pp.gcBgMarkWorker.ptr(); gp != nil {
 		casgstatus(gp, _Gwaiting, _Grunnable)
 		if trace.enabled {
 			traceGoUnpark(gp, 0)
 		}
 		globrunqput(gp)
-		// This assignment doesn't race because the
-		// world is stopped.
+		// 此赋值不会发生竞争，因为此时已经 STW
 		pp.gcBgMarkWorker.set(nil)
 	}
-	// Flush p's write barrier buffer.
+	// 刷新 p 的写屏障缓存
 	if gcphase != _GCoff {
 		wbBufFlush1(pp)
 		pp.gcw.dispose()
@@ -4083,8 +4089,10 @@ func (pp *p) destroy() {
 		}
 		pp.deferpool[i] = pp.deferpoolbuf[i][:0]
 	}
+	// 释放当前 P 绑定的 cache
 	freemcache(pp.mcache)
 	pp.mcache = nil
+	// 将当前 P 的 G 复链转移到全局
 	gfpurge(pp)
 	traceProcFree(pp)
 	if raceenabled {
@@ -4163,6 +4171,7 @@ func procresize(nprocs int32) *p {
 		// We must do this before destroying our current P
 		// because p.destroy itself has write barriers, so we
 		// need to do that from a valid P.
+		// 释放当前 P，因为已失效
 		if _g_.m.p != 0 {
 			if trace.enabled {
 				// Pretend that we were descheduled
