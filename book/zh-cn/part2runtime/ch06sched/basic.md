@@ -362,41 +362,6 @@ type stack struct {
 }
 ```
 
-`sudog` 用于组织产生阻塞的 g（例如在 channel 上阻塞）：
-
-```go
-// sudog 表示了一个等待队列中的 g，例如在一个 channel 中进行发送和接受
-//
-// sudog 是必要的，因为 g <-> 同步对象之间的关系是多对多。一个 g 可以在多个等待列表上，
-// 因此可以有很多的 sudog 为一个 g 服务；并且很多 g 可能在等待同一个同步对象，
-// 因此也会有很多 sudog 为一个同步对象服务。
-//
-// 所有的 sudog 分配在一个特殊的池中。使用 acquireSudog 和 releaseSudog 来分配并释放它们。
-type sudog struct {
-	// 下面的字段由这个 sudog 阻塞的通道的 hchan.lock 进行保护。
-	// shrinkstack 依赖于它服务于 sudog 相关的 channel 操作。
-
-	g *g
-
-	// isSelect 表示 g 正在参与一个 select，因此 g.selectDone 必须以 CAS 的方式来避免唤醒时候的 data race。
-	isSelect bool
-	next     *sudog
-	prev     *sudog
-	elem     unsafe.Pointer // 数据元素（可能指向栈）
-
-	// 下面的字段永远不会并发的被访问。对于 channel waitlink 只会被 g 访问
-	// 对于 semaphores，所有的字段（包括上面的）只会在持有 semaRoot 锁时被访问
-
-	acquiretime int64
-	releasetime int64
-	ticket      uint32
-	parent      *sudog // semaRoot 二叉树
-	waitlink    *sudog // g.waiting 列表或 semaRoot
-	waittail    *sudog // semaRoot
-	c           *hchan // channel
-}
-```
-
 ### 调度器 `sched` 结构
 
 调度器，所有 goroutine 被调度的核心。
