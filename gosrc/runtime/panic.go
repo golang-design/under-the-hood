@@ -539,10 +539,15 @@ func deferreturn(arg0 uintptr) {
 // without func main returning. Since func main has not returned,
 // the program continues execution of other goroutines.
 // If all other goroutines exit, the program crashes.
+// Goexit 终止调用它的 goroutine。 没有其他 goroutine 受到影响。
+// Goexit 在终止 goroutine 之前运行所有延迟调用。 因为 Goexit
+// 不是 panic，那些 defer 函数中的任何恢复调用都将返回 nil。
+// 从主 goroutine 调用 Goexit 终止了 goroutine
+// 没有 func main 返回。 由于 func main 还没有返回，
+// 该程序继续执行其他 goroutines。
+// 如果所有其他 goroutine 退出，程序崩溃。
 func Goexit() {
-	// Run all deferred functions for the current goroutine.
-	// This code is similar to gopanic, see that implementation
-	// for detailed comments.
+	// 为当前 goroutine 运行时偶有 defer 函数，此代码与 gopanic 类似
 	gp := getg()
 	for {
 		d := gp._defer

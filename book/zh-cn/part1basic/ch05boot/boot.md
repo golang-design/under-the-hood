@@ -65,7 +65,7 @@ TEXT _rt0_amd64(SB),NOSPLIT,$-8
 从汇编的 `JMP` 指令可以看出，程序会立即跳转到 `runtime.rt0_go`，它便完成了整个
 运行时的调用：
 
-```c
+```asm
 TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	// 将参数向前复制到一个偶数栈上
 	MOVQ	DI, AX		// argc

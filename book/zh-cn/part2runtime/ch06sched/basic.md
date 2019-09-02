@@ -7,7 +7,7 @@
 理解调度器涉及的主要概念包括以下三个：
 
 - G: **G**oroutine，即我们在 Go 程序中使用 `go` 关键字创建的执行体；
-- M: worker thread, 或 **M**achine，即传统意义上进程的线程；
+- M: Worker thread, 或 **M**achine，即传统意义上进程的线程；
 - P: **P**rocessor，即一种人为抽象的、用于执行 Go 代码被要求资源。只有当 M 关联一个 P 后才能执行 Go 代码，
 但它可以被阻塞或在一个系统调用中没有关联的 P。
 
@@ -420,7 +420,7 @@ type schedt struct {
 	// freem 是当 m.exited 设置后等待被释放的 m 的列表，通过 m.freelink 链接
 	freem *m
 
-	gcwaiting  uint32 // 等待 gc 运行
+	gcwaiting  uint32 // 需要进行 GC，应该停止调度
 	stopwait   int32
 	stopnote   note
 	sysmonwait uint32
@@ -430,7 +430,6 @@ type schedt struct {
 	safePointFn   func(*p)
 	safePointWait int32
 	safePointNote note
-
 	(...)
 
 	procresizetime int64 // 上一次修改 gomaxprocs 的时间 nanotime()
@@ -465,11 +464,9 @@ type muintptr uintptr
 
 ## 总结
 
-调度器的设计还是相当巧妙的。
-它通过引入一个 P，巧妙的减缓了全局锁的调用频率，进一步压榨了机器的性能。
+调度器的设计还是相当巧妙的。它通过引入一个 P，巧妙的减缓了全局锁的调用频率，进一步压榨了机器的性能。
 goroutine 本身也不是什么黑魔法，运行时只是将其作为一个需要运行的入口地址保存在了 G 中，
-同时对调用的参数进行了一份拷贝。
-我们说 P 是处理器自身的抽象，但 P 只是一个纯粹的概念。相反，M 才是运行代码的真身。
+同时对调用的参数进行了一份拷贝。我们说 P 是处理器自身的抽象，但 P 只是一个纯粹的概念。相反，M 才是运行代码的真身。
 
 [返回目录](./readme.md) | 上一节 | [下一节 调度器初始化](./init.md)
 

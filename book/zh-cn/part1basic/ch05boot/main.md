@@ -53,7 +53,6 @@ func main() {
 	// 即便是在 main.main 下仍然可以通过公共方法 runtime.LockOSThread
 	// 来强制将一些特殊的需要主 OS 线程的调用锁在主 OS 线程下执行初始化
 	lockOSThread()
-
 	(...)
 
 	// 执行 runtime.init

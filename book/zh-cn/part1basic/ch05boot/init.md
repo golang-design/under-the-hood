@@ -5,7 +5,7 @@
 本节简单讨论程序初始化工作，即 `runtime.schedinit`。
 
 ```go
-// runtime/proc.go
+// src/runtime/proc.go
 func schedinit() {
 	_g_ := getg()
 

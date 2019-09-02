@@ -4,7 +4,45 @@
 
 我们已经在 [初始化概览](../../part1basic/ch05boot/init.md) 中粗略了解到 `schedinit` 函数，
 现在我们来仔细分析里面真正关于调度器的初始化步骤。
-M/P/G 彼此的初始化顺序遵循：`mcommoninit` --> `procresize` --> `newproc`。
+
+```go
+// runtime/proc.go
+func schedinit() {
+	_g_ := getg()
+	(...)
+
+	// M 初始化
+	mcommoninit(_g_.m)
+	(...)
+
+	// P 初始化
+	if procresize(procs) != nil {
+		throw("unknown runnable goroutine during bootstrap")
+	}
+	(...)
+}
+```
+
+```asm
+TEXT runtime·rt0_go(SB),NOSPLIT,$0
+	(...)
+	CALL	runtime·schedinit(SB) // M, P 初始化
+	MOVQ	$runtime·mainPC(SB), AX
+	PUSHQ	AX
+	PUSHQ	$0
+	CALL	runtime·newproc(SB) // G 初始化
+	POPQ	AX
+	POPQ	AX
+	(...)
+	RET
+
+DATA	runtime·mainPC+0(SB)/8,$runtime·main(SB)
+GLOBL	runtime·mainPC(SB),RODATA,$8
+```
+
+![](../../../assets/sched-init.png)
+
+**图1: MPG 初始化过程。M/P/G 彼此的初始化顺序遵循：`mcommoninit` --> `procresize` --> `newproc`，他们分别负责初始化 M 资源池（allm）、P 资源池（allp）、G 的运行现场（g.sched）以及调度队列（p.runq）。**
 
 ## M 初始化
 
@@ -51,7 +89,7 @@ func mcommoninit(mp *m) {
 
 通常情况下（在程序运行时不调整 P 的个数），P 只会在四种状态下进行切换。
 当程序刚开始运行进行初始化时，所有的 P 都处于 `_Pgcstop` 状态，
-随着 P 的初始化（`runtime.procresize`），会被置于 `_Pidle`（马上讨论）。
+随着 P 的初始化（`runtime.procresize`），会被置于 `_Pidle`。
 
 当 M 需要运行时，会 `runtime.acquirep`，并通过 `runtime.releasep` 来释放。
 当 G 执行时需要进入系统调用时，P 会被设置为 `_Psyscall`，
@@ -59,12 +97,12 @@ func mcommoninit(mp *m) {
 如果在程序运行中发生 GC，则 P 会被设置为 `_Pgcstop`，
 并在 `runtime.startTheWorld` 时重新调整为 `_Pidle` 或者 `_Prunning`。
 
-这里我们还在讨论初始化过程，我们先只关注 `runtime.procresize` 这个函数：
+因为这里我们还在讨论初始化过程，我们先只关注 `runtime.procresize` 这个函数：
 
-```go
-// 修改 P 的数量，此时所有工作均被停止 STW，sched 被锁定
+<!-- // 修改 P 的数量，此时所有工作均被停止 STW， sched 被锁定
 // gcworkbufs 既不会被 GC 修改，也不会被 write barrier 修改
-// 返回带有 local work 的 P 列表，他们需要被调用方调度
+// 返回带有 local work 的 P 列表，他们需要被调用方调度 -->
+```go
 func procresize(nprocs int32) *p {
 	// 获取先前的 P 个数
 	old := gomaxprocs
@@ -84,9 +122,8 @@ func procresize(nprocs int32) *p {
 	if nprocs > int32(len(allp)) {
 		// 此处与 retake 同步，它可以同时运行，因为它不会在 P 上运行。
 		lock(&allpLock)
-		// 如果 nprocs 被调小了
 		if nprocs <= int32(cap(allp)) {
-			// 扔掉多余的 p
+			// 如果 nprocs 被调小了，扔掉多余的 p
 			allp = allp[:nprocs]
 		} else {
 			// 否则（调大了）创建更多的 p

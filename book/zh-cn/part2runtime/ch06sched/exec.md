@@ -3,23 +3,36 @@
 [TOC]
 
 所有的初始化工作都已经完成了，是时候启动运行时调度器了。
+我们已经知道，当所有准备工作都完成后，
+最后一个开始执行的引导调用就是 `runtime.mstart` 了。现在我们来研究一下它在干什么。
+
+```asm
+TEXT runtime·rt0_go(SB),NOSPLIT,$0
+	(...)
+	CALL	runtime·newproc(SB) // G 初始化
+	POPQ	AX
+	POPQ	AX
+
+	// 启动 M
+	CALL	runtime·mstart(SB) // 开始执行
+	RET
+
+DATA	runtime·mainPC+0(SB)/8,$runtime·main(SB)
+GLOBL	runtime·mainPC(SB),RODATA,$8
+```
 
 ## 执行前的准备
 
-在 [Go 程序生命周期：程序引导](../../part1basic/ch05boot/boot.md) 中我们已经看到了当所有准备工作都完成后，
-最后一个开始执行的引导调用就是 `runtime.mstart` 了。现在我们来研究一下它在干什么。
-
 ### `mstart` 与 `mstart1`
 
-在启动前，我们在 [调度器: 初始化](./init.md) 中已经了解到 g 的栈边界是还没有初始化的。
-因此我们得在开始前计算栈边界，因此在 `mstart1` 之前，就是一些确定执行栈边界的工作。
+在启动前，在 [调度器: 初始化](./init.md) 中我们已经了解到 G 的栈边界是还没有初始化的。
+因此我们必须在开始前计算栈边界，因此在 `mstart1` 之前，就是一些确定执行栈边界的工作。
+当 `mstart1` 结束后，会执行 `mexit` 退出 M。`mstart` 也是所有新创建的 M 的起点。
 
-当 `mstart1` 结束后，会执行 `mexit` 退出 m。
+<!-- 该函数不能进行栈分段，因为我们甚至还没有设置栈的边界
+它可能会在 STW 阶段运行（因为它还没有 P），所以 write barrier 也是不允许的 -->
 
 ```go
-// 该函数不能进行栈分段，因为我们甚至还没有设置栈的边界
-// 它可能会在 STW 阶段运行（因为它还没有 P），所以 write barrier 也是不允许的
-//
 //go:nosplit
 //go:nowritebarrierrec
 func mstart() {
@@ -106,10 +119,10 @@ func mstart1() {
 
 关于运行时信号处理，以及 note 同步机制，我们分别在 [信号处理机制](./signal.md) 和 [运行时同步原语](./sync.md) 详细分析。
 
-### M/P 的绑定
+### M 与 P 的绑定
 
-m 与 p 的绑定过程只是简单的将 p 链表中的 p ，保存到 m 中的 p 指针上。
-绑定前，P 的状态一定是 `_Pidle`，绑定后 P 的状态为 `_Prunning`。
+M 与 P 的绑定过程只是简单的将 P 链表中的 P ，保存到 M 中的 P 指针上。
+绑定前，P 的状态一定是 `_Pidle`，绑定后 P 的状态一定为 `_Prunning`。
 
 ```go
 //go:yeswritebarrierrec
@@ -118,8 +131,6 @@ func acquirep(_p_ *p) {
 	wirep(_p_)
 	(...)
 }
-// wirep 为 acquirep 的实际获取 p 的第一步，它关联了当前的 M 到 P 上。
-// 之所以进行分段是因为我们可以为这个部分驳回 write barrier
 //go:nowritebarrierrec
 //go:nosplit
 func wirep(_p_ *p) {
@@ -132,11 +143,9 @@ func wirep(_p_ *p) {
 		throw("wirep: invalid p state")
 	}
 
-	// 正式获取 p
+	// 将 p 绑定到 m，p 和 m 互相引用
 	_g_.m.p.set(_p_) // *_g_.m.p = _p_
-
-	// 将 p 绑定到 m
-	_p_.m.set(_g_.m) // *_g_.m = _p_ = _g_.m
+	_p_.m.set(_g_.m) // *_p_.m = _g_.m
 
 	// 修改 p 的状态
 	_p_.status = _Prunning
@@ -145,9 +154,8 @@ func wirep(_p_ *p) {
 
 ### M 的暂止和复始
 
-无论出于什么原因，当 m 需要被暂止时，可能（因为还有其他暂止 M 的方法）会执行该调用。
-此调用会将 m 进行暂止，并阻塞到它被复始时。
-这一过程就是工作线程的暂止和复始。
+无论出于什么原因，当 M 需要被暂止时，可能（因为还有其他暂止 M 的方法）会执行该调用。
+此调用会将 M 进行暂止，并阻塞到它被复始时。这一过程就是工作线程的暂止和复始。
 
 ```go
 // 停止当前 m 的执行，直到新的 work 有效
@@ -187,7 +195,7 @@ func schedule() {
 	_g_ := getg()
 	(...)
 
-	// m.lockedg 会在 lockosthread 下变为非零
+	// m.lockedg 会在 LockOSThread 下变为非零
 	if _g_.m.lockedg != 0 {
 		stoplockedm()
 		execute(_g_.m.lockedg.ptr(), false) // 永不返回
@@ -196,7 +204,7 @@ func schedule() {
 
 top:
 	if sched.gcwaiting != 0 {
-		// 如果还在等待 gc，则
+		// 如果需要 GC，不再进行调度
 		gcstopm()
 		goto top
 	}
@@ -208,13 +216,13 @@ top:
 	var inheritTime bool
 	(...)
 
-	// 正在 gc，去找 gc 的 g
+	// 正在 GC，去找 GC 的 g
 	if gp == nil && gcBlackenEnabled != 0 {
 		gp = gcController.findRunnableGCWorker(_g_.m.p.ptr())
 	}
 
 	if gp == nil {
-		// 说明不在 gc
+		// 说明不在 GC
 		//
 		// 每调度 61 次，就检查一次全局队列，保证公平性
 		// 否则两个 goroutine 可以通过互相 respawn 一直占领本地的 runqueue
@@ -318,7 +326,7 @@ func execute(gp *g, inheritTime bool) {
 设置自身的抢占信号，将 m 和 g 进行绑定。
 最终调用 `gogo` 开始执行。
 
-我们看一下 amd64 平台下的实现：
+在 amd64 平台下的实现：
 
 ```asm
 // void gogo(Gobuf*)
@@ -1226,7 +1234,7 @@ func newosproc(mp *m) {
 }
 ```
 
-`pthread_create` 在 [参与运行时的系统调用（darwin）](../../part2runtime/ch10abi/syscall-darwin.md) 中讨论。
+`pthread_create` 在 [参与运行时的系统调用（Darwin 篇）](../../part2runtime/ch10abi/syscall-darwin.md) 中讨论。
 
 ##### 系统线程的创建 (linux)
 
@@ -1245,13 +1253,12 @@ func newosproc(mp *m) {
 	sigprocmask(_SIG_SETMASK, &sigset_all, &oset)
 	ret := clone(cloneFlags, stk, unsafe.Pointer(mp), unsafe.Pointer(mp.g0), unsafe.Pointer(funcPC(mstart)))
 	sigprocmask(_SIG_SETMASK, &oset, nil)
-
 	(...)
 }
 
 ```
 
-`clone` 是系统调用，我们在 [参与运行时的系统调用（linux）](../../part2runtime/ch10abi/syscall-linux.md) 中讨论
+`clone` 是系统调用，我们在 [参与运行时的系统调用（Linux 篇）](../../part2runtime/ch10abi/syscall-linux.md) 中讨论
 这些系统调用在 Go 中的实现方式。
 
 ### M/G 解绑

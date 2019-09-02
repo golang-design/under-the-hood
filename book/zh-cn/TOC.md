@@ -79,7 +79,7 @@
 - [6.3 调度循环](part2runtime/ch06sched/exec.md)
     + 执行前的准备
       + mstart 和 mstart1
-      + M/P 的绑定
+      + M 与 P 的绑定
       + M 的暂止和复始
     + 核心调度
       + 偷取工作
@@ -112,17 +112,14 @@ G 与 P 的绑定
 G 与 P 的解绑
  -->
 
-- [6.4 系统监控](part2runtime/ch06sched/sysmon.md)
-    + 监控循环
-    + 总结
-- [6.5 线程管理](part2runtime/ch06sched/thread.md)
+- [6.4 线程管理](part2runtime/ch06sched/thread.md)
     + LockOSThread
     + UnlockOSThread
     + lockedg/lockedm 与调度循环
     + 模板线程
     + 总结
     + 进一步阅读的参考文献
-- [6.6 信号处理机制](part2runtime/ch06sched/signal.md)
+- [6.5 信号处理机制](part2runtime/ch06sched/signal.md)
     + 信号与软中断
     + 初始化
     + 获取原始信号屏蔽字
@@ -132,7 +129,7 @@ G 与 P 的解绑
     + Extra M
     + 总结
     + 进一步阅读的参考文献
-- [6.7 执行栈管理](part2runtime/ch06sched/stack.md)
+- [6.6 执行栈管理](part2runtime/ch06sched/stack.md)
     + goroutine 栈结构
     + 执行栈初始化
     + G 的创生
@@ -146,15 +143,15 @@ G 与 P 的解绑
       + 栈的拷贝
       + 栈的收缩
     + 总结
-- [6.8 协作与抢占](part2runtime/ch06sched/preemptive.md)
+- [6.7 协作与抢占](part2runtime/ch06sched/preemptive.md)
     + 协作式调度
-      + 主动让权: Gosched
-      + 主动弃权: 栈扩张与抢占标记
-      + 被动弃权: 阻塞监控
+      + 主动用户让权: Gosched
+      + 主动调度弃权: 栈扩张与抢占标记
+      + 被动监控弃权: 阻塞监控
     + 抢占式调度
     + 总结
     + 进一步阅读的参考文献
-- [6.9 运行时同步原语](part2runtime/ch06sched/sync.md)
+- [6.8 运行时同步原语](part2runtime/ch06sched/sync.md)
     + 运行时通知机制 note
       + 结构
       + 注册通知
@@ -169,10 +166,15 @@ G 与 P 的解绑
       + 基于 goroutine 抽象的信号量
     + 总结
     + 进一步阅读的参考文献
+- [6.9 系统监控](part2runtime/ch06sched/sysmon.md)
+    + 监控循环
+    + 总结
 - [6.10 过去、现在与未来](part2runtime/ch06sched/history.md)
     + 演进史
-    + 改进展望
-      + 非均匀访存感知的调度器设计
+      + 单线程版调度器
+      + 多线程版调度器
+      + 工作窃取调度器
+    + 改进展望：非均匀访存感知的调度器设计
     + 总结
     + 进一步阅读的参考文献
 - [6.11 用户层 APIs](part2runtime/ch06sched/calls.md)

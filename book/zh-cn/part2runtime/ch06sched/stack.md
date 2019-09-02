@@ -42,10 +42,7 @@ type g struct {
 ```
 
 ```
-
                            <-- _StackPreempt
-
-
 
 高地址
        goroutine stack

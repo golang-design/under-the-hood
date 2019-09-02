@@ -5,13 +5,27 @@
 我们已经完整分析过调度器的调度执行了。
 当我们通过 `runtime.newproc` 创建好主 goroutine 后，会将其加入到一个 P 的本地队列中。
 随着 `runtime.mstart` 启动调度器，主 goroutine 便开始得以调度。
+
+```go
+// src/runtime/proc.go
+
+// 主 goroutine
+func main() {
+	(...)
+	// 启动系统后台监控（定期垃圾回收、并发任务调度）
+	systemstack(func() {
+		newm(sysmon, nil)
+	})
+	(...)
+}
+```
+
 那么是时候看看主 goroutine 中的系统监控 `newm(sysmon, nil)` 到底在干什么了。
 
 ## 监控循环
 
 ```go
 // 系统监控在一个独立的 m 上运行
-//
 // 总是在没有 P 的情况下运行，因此不能出现写屏障
 //go:nowritebarrierrec
 func sysmon() {
@@ -25,9 +39,7 @@ func sysmon() {
 	// 如果一个堆 span 在 GC 超过五分钟没有被使用
 	// 则回收交于操作系统
 	scavengelimit := int64(5 * 60 * 1e9)
-
 	(...)
-
 	lastscavenge := nanotime()
 	nscavenge := 0
 
@@ -78,6 +90,7 @@ func sysmon() {
 				// 休眠结束
 				lock(&sched.lock)
 				atomic.Store(&sched.sysmonwait, 0)
+
 				// 清除休眠超时通知
 				noteclear(&sched.sysmonnote)
 				idle = 0
@@ -113,26 +126,24 @@ func sysmon() {
 		}
 		// 检查是否需要强制触发 GC
 		if t := (gcTrigger{kind: gcTriggerTime, now: now}); t.test() && atomic.Load(&forcegc.idle) != 0 {
-			lock(&forcegc.lock)
-			forcegc.idle = 0
-			forcegc.g.schedlink = 0
-			injectglist(forcegc.g)
-			unlock(&forcegc.lock)
+			(...) // 触发 GC 的操作
 		}
-		// 一段时间内清理堆
+	
+		// 检查是否需要清理堆内存
 		if lastscavenge+scavengelimit/2 < now {
 			mheap_.scavenge(int32(nscavenge), uint64(now), uint64(scavengelimit))
 			lastscavenge = now
 			nscavenge++
 		}
-
 		(...)
 	}
 }
 ```
 
-系统监控在运行时扮演的角色无需多言，它自身透过 `newm` 在一个 M 上独立运行，自身永远保持在一个循环内直到应用结束。
-休眠有好几种不同的休眠策略：
+系统监控在运行时扮演的角色无需多言，
+因为使用的是运行时通知机制，在 Linux 上由 Futex 实现，不依赖调度器，
+因此它自身通过 `newm` 在一个 M 上独立运行，
+自身永远保持在一个循环内直到应用结束。休眠有好几种不同的休眠策略：
 
 1. 至少休眠 20us
 2. 如果抢占 P 和 G 失败次数超过五十、且没有触发 GC，则说明很闲，翻倍休眠
@@ -150,17 +161,16 @@ func sysmon() {
 4. 检查是不是该触发 GC 了
 5. 如果距离上一次堆清理已经超过了两分半，则执行清理工作
 
-总的来说系统监控的本职工作还是比较明确的，它负责处理网络数据、抢占 P/G、触发 GC、清理堆 span。
-对于这些职责，我们需要确定一些细节工作：
-
-1. 如何抢占 P/G？在 [协作与抢占](./preemptive.md) 一节中详细讨论。
-2. 如何触发 GC？
-3. 如何清理堆 span？
-4. 如何 poll 网络数据？
+其中的 `note` 同步机制 `retake` 抢占已在[运行时同步原语](./sync.md) 和 [协作与抢占](./preemptive.md) 中详细讨论过了。
 
 ## 总结
 
-TODO:
+总的来说系统监控的本职工作还是比较明确的，它在一个单独的 M 上执行，负责处理网络数据、抢占 P/G、触发 GC、清理堆 span。
+对于这些职责，我们需要确定一些细节工作：
+
+2. `gcTrigger` 如何触发 GC？在 [垃圾回收器：初始化](../ch08GC/init.md) 一节中详细讨论。
+3. `scavenge` 如何清理堆 span？
+4. `netpoll` 如何 poll 网络数据？
 
 [返回目录](./readme.md) | [上一节](./exec.md) | [下一节 线程管理](./thread.md)
 
