@@ -317,7 +317,7 @@ func unlock(l *mutex) {
 }
 ```
 
-## 运行时 semaphore 机制
+## 运行时信号量机制 semaphore
 
 sync 包中 Mutex 的实现依赖运行时中关于 `runtime_Semacquire` 与 `runtime_Semrelease` 的实现。
 他们对应于运行时的 `sync_runtime_Semacquire` 和 `sync_runtime_Semrelease` 函数。

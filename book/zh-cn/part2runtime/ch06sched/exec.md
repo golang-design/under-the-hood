@@ -63,16 +63,12 @@ func mstart() {
 ```go
 func mstart1() {
 	_g_ := getg()
-
-	// 检查当前执行的 g 是不是 g0
-	if _g_ != _g_.m.g0 {
-		throw("bad runtime·mstart")
-	}
+	(...)
 
 	// 为了在 mcall 的栈顶使用调用方来结束当前线程，做记录
 	// 当进入 schedule 之后，我们再也不会回到 mstart1，所以其他调用可以复用当前帧。
 	save(getcallerpc(), getcallersp())
-	asminit()
+	(...)
 	minit()
 
 	// 设置信号 handler；在 minit 之后，因为 minit 可以准备处理信号的的线程
@@ -108,16 +104,7 @@ func mstart1() {
 我们可能会问一个问题：为什么不在创建 G 的时候就完成执行栈边界的计算？
 原因在于 `mstart1` 会在每一个线程被创建时被执行，只有当线程被创建后，才能计算 g 执行栈的边界。 -->
 
-除以上过程之外，在这个过程中有一个 `asminit`，不过这不是我们关注的重点。它用于初始化 386 平台上的浮点数精度类型为扩展式浮点精度，
-在其他平台（amd64）上不做任何处理：
-
-```asm
-TEXT runtime·asminit(SB),NOSPLIT,$0-0
-	// No per-thread init.
-	RET
-```
-
-关于运行时信号处理，以及 note 同步机制，我们分别在 [信号处理与 os/signal](./signal.md) 和 [同步机制](./sync.md) 详细分析。
+关于运行时信号处理，以及 note 同步机制，我们分别在 [信号处理机制](./signal.md) 和 [运行时同步原语](./sync.md) 详细分析。
 
 ### M/P 的绑定
 
@@ -125,18 +112,10 @@ m 与 p 的绑定过程只是简单的将 p 链表中的 p ，保存到 m 中的
 绑定前，P 的状态一定是 `_Pidle`，绑定后 P 的状态为 `_Prunning`。
 
 ```go
-// 因为该函数会立即 acquire P，因此即使调用方不允许 write barrier，
-// 此函数仍然允许 write barrier。
 //go:yeswritebarrierrec
 func acquirep(_p_ *p) {
 	// 此处不允许 write barrier
 	wirep(_p_)
-
-	// 已经获取了 p，因此之后允许 write barrier
-	//
-	// 在 P 可以从一个潜在设置的 mcache 分配前执行偏好的 mcache flush
-	_p_.mcache.prepareForSweep()
-
 	(...)
 }
 // wirep 为 acquirep 的实际获取 p 的第一步，它关联了当前的 M 到 P 上。
@@ -145,35 +124,23 @@ func acquirep(_p_ *p) {
 //go:nosplit
 func wirep(_p_ *p) {
 	_g_ := getg()
-
-	// 检查 确实没有 p
-	if _g_.m.p != 0 || _g_.m.mcache != nil {
-		throw("wirep: already in go")
-	}
+	(...)
 
 	// 检查 m 是否正常，并检查要获取的 p 的状态
 	if _p_.m != 0 || _p_.status != _Pidle {
-		id := int64(0)
-		if _p_.m != 0 {
-			id = _p_.m.ptr().id
-		}
-		print("wirep: p->m=", _p_.m, "(", id, ") p->status=", _p_.status, "\n")
+		(...)
 		throw("wirep: invalid p state")
 	}
 
 	// 正式获取 p
-	_g_.m.p.set(_p_)
+	_g_.m.p.set(_p_) // *_g_.m.p = _p_
 
 	// 将 p 绑定到 m
-	_p_.m.set(_g_.m)
+	_p_.m.set(_g_.m) // *_g_.m = _p_ = _g_.m
 
 	// 修改 p 的状态
 	_p_.status = _Prunning
 }
-//go:nosplit
-func (pp *puintptr) set(p *p) { *pp = puintptr(unsafe.Pointer(p)) }
-//go:nosplit
-func (mp *muintptr) set(m *m) { *mp = muintptr(unsafe.Pointer(m)) }
 ```
 
 ### M 的暂止和复始
@@ -187,16 +154,7 @@ func (mp *muintptr) set(m *m) { *mp = muintptr(unsafe.Pointer(m)) }
 // 在包含要求的 P 下返回
 func stopm() {
 	_g_ := getg()
-
-	if _g_.m.locks != 0 {
-		throw("stopm holding locks")
-	}
-	if _g_.m.p != 0 {
-		throw("stopm holding p")
-	}
-	if _g_.m.spinning {
-		throw("stopm spinning")
-	}
+	(...)
 
 	// 将 m 放回到 空闲列表中，因为我们马上就要暂止了
 	lock(&sched.lock)
@@ -227,22 +185,14 @@ func stopm() {
 // 调度器的一轮：找到 runnable goroutine 并进行执行且永不返回
 func schedule() {
 	_g_ := getg()
-
-	if _g_.m.locks != 0 {
-		throw("schedule: holding locks")
-	}
+	(...)
 
 	// m.lockedg 会在 lockosthread 下变为非零
 	if _g_.m.lockedg != 0 {
 		stoplockedm()
 		execute(_g_.m.lockedg.ptr(), false) // 永不返回
 	}
-
-	// 我们不应该调度一个正在执行 cgo 调用的 g
-	// 因为 cgo 在使用当前 m 的 g0 栈
-	if _g_.m.incgo {
-		throw("schedule: in cgo")
-	}
+	(...)
 
 top:
 	if sched.gcwaiting != 0 {
@@ -256,7 +206,6 @@ top:
 
 	var gp *g
 	var inheritTime bool
-
 	(...)
 
 	// 正在 gc，去找 gc 的 g
@@ -283,9 +232,7 @@ top:
 		//  2. 全局队列中偷不到的取
 		// 从本地队列中取
 		gp, inheritTime = runqget(_g_.m.p.ptr())
-		if gp != nil && _g_.m.spinning {
-			throw("schedule: spinning with local work")
-		}
+		(...)
 	}
 	if gp == nil {
 		// 如果偷都偷不到，则休眠，在此阻塞
@@ -337,8 +284,6 @@ top:
 // 在当前 M 上调度 gp。
 // 如果 inheritTime 为 true，则 gp 继承剩余的时间片。否则从一个新的时间片开始
 // 永不返回。
-//
-// 该函数允许 write barrier 因为它是在 acquire P 之后的调用的。
 //
 //go:yeswritebarrierrec
 func execute(gp *g, inheritTime bool) {
@@ -397,8 +342,8 @@ TEXT runtime·gogo(SB), NOSPLIT, $16-8
 ```
 
 这个 `gogo` 的实现真实非常巧妙。初次阅读时，看到 `JMP BX` 开始执行 goroutine 函数体
-后就没了，简直一脸疑惑，就这么没了？后续调用怎么回到调度器呢？事实上我们已经在 [调度器：初始化](./init.md) 一节中
-看到过相关操作了：
+后就没了，简直一脸疑惑，就这么没了？后续调用怎么回到调度器呢？
+事实上我们已经在 [调度器：初始化](./init.md) 一节中看到过相关操作了：
 
 ```go
 func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintptr) {
@@ -534,7 +479,6 @@ TEXT runtime·goexit(SB),NOSPLIT,$0-0
 ```go
 // 完成当前 goroutine 的执行
 func goexit1() {
-
 	(...)
 
 	// 开始收尾工作
@@ -626,8 +570,7 @@ func goexit0(gp *g) {
 		// 再次进行调度
 		schedule() // 永不返回
 	}
-
-	(...) // lockOSThread 顺序不能出错
+	(...)
 
 	// 将 g 扔进 gfree 链表中等待复用
 	gfput(_g_.m.p.ptr(), gp)
@@ -969,12 +912,7 @@ stop:
 	// poll 网络
 	// 和上面重新找 runqueue 的逻辑类似
 	if netpollinited() && atomic.Load(&netpollWaiters) > 0 && atomic.Xchg64(&sched.lastpoll, 0) != 0 {
-		if _g_.m.p != 0 {
-			throw("findrunnable: netpoll with p")
-		}
-		if _g_.m.spinning {
-			throw("findrunnable: netpoll with spinning")
-		}
+		(...)
 		gp := netpoll(true) // 阻塞到新的 work 有效为止
 		atomic.Store64(&sched.lastpoll, uint64(nanotime()))
 		if gp != nil {
@@ -1026,14 +964,12 @@ stop:
 ```go
 func resetspinning() {
 	_g_ := getg()
-	if !_g_.m.spinning {
-		throw("resetspinning: not a spinning m")
-	}
+	(...)
+
 	_g_.m.spinning = false
 	nmspinning := atomic.Xadd(&sched.nmspinning, -1)
-	if int32(nmspinning) < 0 {
-		throw("findrunnable: negative nmspinning")
-	}
+	(...)
+
 	// M wakeup policy is deliberately somewhat conservative, so check if we
 	// need to wakeup another P here. See "Worker thread parking/unparking"
 	// comment at the top of the file for details.
@@ -1084,12 +1020,8 @@ func startm(_p_ *p, spinning bool) {
 		newm(fn, _p_)
 		return
 	}
-	if mp.spinning {
-		throw("startm: m is spinning")
-	}
-	if mp.nextp != 0 {
-		throw("startm: m has p")
-	}
+	(...)
+
 	if spinning && !runqempty(_p_) {
 		throw("startm: p has runnable gs")
 	}

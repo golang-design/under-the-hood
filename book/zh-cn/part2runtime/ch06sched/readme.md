@@ -82,7 +82,7 @@
       + 结构
       + lock
       + unlock
-    + 运行时 semaphore 机制
+    + 运行时信号量机制 semaphore
       + sudog 缓存
       + 基于 goroutine 抽象的信号量
     + 总结

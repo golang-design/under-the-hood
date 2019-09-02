@@ -568,9 +568,8 @@ func runqputslow(_p_ *p, gp *g, h, t uint32) bool {
 	// 首先，从本地队列中抓取一半 work
 	n := t - h
 	n = n / 2
-	if n != uint32(len(_p_.runq)/2) {
-		throw("runqputslow: queue is not full")
-	}
+	(...)
+
 	for i := uint32(0); i < n; i++ {
 		batch[i] = _p_.runq[(h+i)%uint32(len(_p_.runq))].ptr()
 	}
