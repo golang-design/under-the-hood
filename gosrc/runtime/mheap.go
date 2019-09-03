@@ -363,12 +363,12 @@ type mspan struct { // 双向链表
 	allocBits  *gcBits
 	gcmarkBits *gcBits
 
-	// sweep 代:
+	// sweep 阶段:
 	// 如果 sweepgen == h->sweepgen - 2, 则 span 需要扫描
 	// 如果 sweepgen == h->sweepgen - 1, 则 span 正在被扫描
 	// 如果 sweepgen == h->sweepgen, 则 span 已经被扫描可以被使用
-	// if sweepgen == h->sweepgen + 1, the span was cached before sweep began and is still cached, and needs sweeping
-	// if sweepgen == h->sweepgen + 3, the span was swept and then cached and is still cached
+	// if sweepgen == h->sweepgen + 1, span 在扫描开始之前被缓存并且仍然被缓存，需要扫描
+	// if sweepgen == h->sweepgen + 3, span 已被清扫且被缓存并仍继续被缓存
 	// h->sweepgen 每次 GC 后都增加 2
 
 	sweepgen    uint32

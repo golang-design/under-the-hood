@@ -520,26 +520,32 @@ func prepareFreeWorkbufs() {
 	unlock(&work.wbufSpans.lock)
 }
 
-// freeSomeWbufs frees some workbufs back to the heap and returns
-// true if it should be called again to free more.
+// freeSomeWbufs 释放一些 workbufs 回到堆中，如果需要再次调用则返回 true
 func freeSomeWbufs(preemptible bool) bool {
-	const batchSize = 64 // ~1–2 µs per span.
+	const batchSize = 64 // 每个 span 需要 ~1–2 µs
 	lock(&work.wbufSpans.lock)
+	// 如果此时在标记阶段、或者 wbufSpans 为空，则不需要进行释放
+	// 因为标记阶段 workbufs 需要被标记，而 workbufs 为空则更不需要释放
 	if gcphase != _GCoff || work.wbufSpans.free.isEmpty() {
 		unlock(&work.wbufSpans.lock)
 		return false
 	}
 	systemstack(func() {
 		gp := getg().m.curg
+		// 清扫一批 span，64 个，大约 ~1–2 µs
+		// 在需要被抢占时停止、在清扫完毕后停止
 		for i := 0; i < batchSize && !(preemptible && gp.preempt); i++ {
 			span := work.wbufSpans.free.first
 			if span == nil {
 				break
 			}
+			// 将 span 移除 wbufSpans 的空闲链表中
 			work.wbufSpans.free.remove(span)
+			// 将 span 归还到 mheap 中
 			mheap_.freeManual(span, &memstats.gc_sys)
 		}
 	})
+	// workbufs 的空闲 span 列表尚未清空，还需要更多清扫
 	more := !work.wbufSpans.free.isEmpty()
 	unlock(&work.wbufSpans.lock)
 	return more

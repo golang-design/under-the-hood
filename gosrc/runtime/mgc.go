@@ -220,14 +220,14 @@ var writeBarrier struct {
 var gcBlackenEnabled uint32
 
 const (
-	_GCoff             = iota // GC not running; sweeping in background, write barrier disabled
-	_GCmark                   // GC marking roots and workbufs: allocate black, write barrier ENABLED
-	_GCmarktermination        // GC mark termination: allocate black, P's help GC, write barrier ENABLED
+	_GCoff             = iota // GC 没有运行，sweep 在后台运行，写屏障没有启用
+	_GCmark                   // GC 标记 roots 和 workbufs: 分配黑色，写屏障启用
+	_GCmarktermination        // GC 标记终止: 分配黑色, P's 帮助 GC, 写屏障启用
 )
 
 //go:nosplit
 func setGCPhase(x uint32) {
-	atomic.Store(&gcphase, x)
+	atomic.Store(&gcphase, x) // *gcphase = x
 	writeBarrier.needed = gcphase == _GCmark || gcphase == _GCmarktermination
 	writeBarrier.enabled = writeBarrier.needed || writeBarrier.cgo
 }

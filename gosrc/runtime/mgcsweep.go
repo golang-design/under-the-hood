@@ -99,6 +99,7 @@ func sweepone() uintptr {
 
 	// increment locks to ensure that the goroutine is not preempted
 	// in the middle of sweep thus leaving the span in an inconsistent state for next GC
+	// 增加锁的数量确保 goroutine 在 sweep 中不会被抢占，进而不会将 span 留到下个 GC 产生不一致
 	_g_.m.locks++
 	if atomic.Load(&mheap_.sweepdone) != 0 {
 		_g_.m.locks--
@@ -112,9 +113,11 @@ func sweepone() uintptr {
 	for {
 		s = mheap_.sweepSpans[1-sg/2%2].pop()
 		if s == nil {
+			// 清扫完毕，退出
 			atomic.Store(&mheap_.sweepdone, 1)
 			break
 		}
+
 		if s.state != mSpanInUse {
 			// This can happen if direct sweeping already
 			// swept this span, but in that case the sweep
@@ -200,8 +203,7 @@ func (s *mspan) ensureSwept() {
 // Sweep frees or collects finalizers for blocks not marked in the mark phase.
 // It clears the mark bits in preparation for the next GC round.
 // Returns true if the span was returned to heap.
-// If preserve=true, don't return it to heap nor relink in mcentral lists;
-// caller takes care of it.
+// 如果 preserve= true，则不归还到 heap 或者重新链接到 mcentral 列表，调用方负责进行后续处理
 //TODO go:nowritebarrier
 func (s *mspan) sweep(preserve bool) bool {
 	// It's critical that we enter this function with preemption disabled,
