@@ -1041,10 +1041,10 @@ func stopTheWorldWithSema() {
 	sched.stopwait = gomaxprocs
 	atomic.Store(&sched.gcwaiting, 1)
 	preemptall()
-	// stop current P
-	_g_.m.p.ptr().status = _Pgcstop // Pgcstop is only diagnostic.
+	// 停止当前的 P
+	_g_.m.p.ptr().status = _Pgcstop // Pgcstop 只用于诊断.
 	sched.stopwait--
-	// try to retake all P's in Psyscall status
+	// 尝试抢占所有在 Psyscall 状态的 P
 	for _, p := range allp {
 		s := p.status
 		if s == _Psyscall && atomic.Cas(&p.status, s, _Pgcstop) {
@@ -1056,7 +1056,7 @@ func stopTheWorldWithSema() {
 			sched.stopwait--
 		}
 	}
-	// stop idle P's
+	// 停止 idle P's
 	for {
 		p := pidleget()
 		if p == nil {
@@ -1068,10 +1068,10 @@ func stopTheWorldWithSema() {
 	wait := sched.stopwait > 0
 	unlock(&sched.lock)
 
-	// wait for remaining P's to stop voluntarily
+	// 等待剩余的 P 主动停止
 	if wait {
 		for {
-			// wait for 100us, then try to re-preempt in case of any races
+			// 等待 100us, 然后尝试重新抢占，从而防止竞争
 			if notetsleep(&sched.stopnote, 100*1000) {
 				noteclear(&sched.stopnote)
 				break
@@ -1151,6 +1151,9 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 	// Wakeup an additional proc in case we have excessive runnable goroutines
 	// in local queues or in the global queue. If we don't, the proc will park itself.
 	// If we have lots of excessive work, resetspinning will unpark additional procs as necessary.
+	// 如果我们在本地队列或全局队列中有过多的可运行的 goroutine，则唤醒一个额外的 proc。
+	// 如果我们不这样做，那么过程就会停止。
+	// 如果我们有大量过多的工作，重新设置将取消必要的额外过程。
 	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 {
 		wakep()
 	}

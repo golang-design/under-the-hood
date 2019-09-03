@@ -2,6 +2,9 @@
 
 [TOC]
 
+现在我们来讨论具体的清扫过程：如何将一个已经从内存分配器中分配出得内存回收到内存分配器中。
+<!-- 清扫 goroutine 在程序启动后处于休眠状态， -->
+
 ```go
 var sweep sweepdata
 
@@ -19,13 +22,7 @@ type sweepdata struct {
 
 ```go
 func bgsweep(c chan int) {
-	sweep.g = getg()
-
-	lock(&sweep.lock)
-	sweep.parked = true
-	c <- 1
-	goparkunlock(&sweep.lock, waitReasonGCSweepWait, traceEvGoBlock, 1) // "GC sweep wait"
-
+	(...)
 	for {
 		for sweepone() != ^uintptr(0) {
 			sweep.nbgsweep++

@@ -42,10 +42,11 @@ type sweepdata struct {
 	npausesweep uint32
 }
 
-// finishsweep_m ensures that all spans are swept.
+// finishsweep_m 确保所有的 span 都已经被清除.
 //
 // The world must be stopped. This ensures there are no sweeps in
 // progress.
+// 此时必须 STW。这确保了不会有其他的 sweeper 正在进行
 //
 //go:nowritebarrier
 func finishsweep_m() {

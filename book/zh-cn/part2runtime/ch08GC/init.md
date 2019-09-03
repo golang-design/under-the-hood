@@ -4,7 +4,7 @@
 
 到目前为止，我们已经累积了足够多的的理论知识，可以开始无障碍的阅读运行时 GC 的具体实现了。
 
-## GC 的早期初始化
+## 引导阶段的 GC 初始化
 
 ```go
 // src/runtime/proc.go
@@ -38,13 +38,14 @@ func gcinit() {
 }
 ```
 
-## GC 的辅助任务
+## GC 的后台工作
 
 在分析调度器源码时我们就已看到，在用户代码开始执行之前，除了 `runtime.schedinit` 外，GC 还在 `runtime.main` 中做了部分准备工作了。
 我们来看看他们都是些什么工作。在 `runtime.main` 开始执行时，我们知道它依次启动了以下几个关键组件：
 
 ```go
 // src/runtime/proc.go
+
 func main() {
 	(...)
 
@@ -77,6 +78,7 @@ func main() {
 
 ```go
 // src/runtime/proc.go
+
 //go:nowritebarrierrec
 func sysmon() {
 	(...)

@@ -1,10 +1,12 @@
-# 存活与终结
+# 垃圾回收器：用户层 APIs
 
 [TOC]
 
 TODO:
 
-## SetFinalizer
+## 存活与终结
+
+### SetFinalizer
 
 ```go
 type eface struct {
@@ -289,7 +291,7 @@ func addfinalizer(p unsafe.Pointer, f *funcval, nret uintptr, fint *_type, ot *p
 }
 ```
 
-## KeepAlive
+### KeepAlive
 
 KeepAlive 会将某个参数标记为可达，从而能够保证某个对象在
 调用 KeepAlive 之前都不会被垃圾回收所释放（因为被引用），进而这个对象设置的

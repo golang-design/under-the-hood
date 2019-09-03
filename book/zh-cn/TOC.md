@@ -227,32 +227,37 @@ G 与 P 的解绑
 
 - [8.1 基本知识](part2runtime/ch08GC/basic.md)
     + 并发三色回收一瞥
+    + 原始的标记清扫算法
     + 内存模型
-    + 编译标志 `go:nowritebarrier`、`go:nowritebarrierrec` 和 `go:yeswritebarrierrec`
     + 进一步阅读的参考文献
-- [8.2 标记清扫思想](part2runtime/ch08GC/vanilla.md)
-    + 标记清扫算法
-    + 进一步阅读的参考文献
-- [8.3 屏障技术](part2runtime/ch08GC/barrier.md)
-    + Dijkstra 插入屏障
-    + 混合写屏障
-      + 基本思想
-      + 可靠性、完备性和有界性的证明
-      + 实现细节
+- [8.2 混合写屏障技术](part2runtime/ch08GC/barrier.md)
+    + 基本思想
+    + 可靠性、完备性和有界性的证明
+    + 实现细节
     + 总结
     + 进一步阅读的参考文献
-- [8.4 并发标记清扫](part2runtime/ch08GC/concurrent.md)
+- [8.3 并发标记清扫](part2runtime/ch08GC/concurrent.md)
     + 并发标记
     + 并发清扫
     + 并行三色标记
     + 进一步阅读的参考文献
-- [8.5 初始化](part2runtime/ch08GC/init.md)
-- [8.6 标记过程](part2runtime/ch08GC/mark.md)
-- [8.7 清扫过程](part2runtime/ch08GC/sweep.md)
-- [8.8 存活与终结](part2runtime/ch08GC/finalizer.md)
-    + SetFinalizer
-    + KeepAlive
-- [8.9 过去、现在与未来](part2runtime/ch08GC/history.md)
+- [8.4 初始化](part2runtime/ch08GC/init.md)
+    + 引导阶段的 GC 初始化
+    + GC 的后台工作
+- [8.5 触发机制与调步算法](part2runtime/ch08GC/pacing.md)
+    + GC 的调控方式
+    + 调步算法的设计
+    + 实现
+- [8.6 GC 周期概述](part2runtime/ch08GC/cycle.md)
+- [8.7 扫描标记阶段](part2runtime/ch08GC/mark.md)
+- [8.8 标记终止阶段](part2runtime/ch08GC/termination.md)
+- [8.9 内存清扫阶段](part2runtime/ch08GC/sweep.md)
+- [9.10 内存归还阶段](part2runtime/ch08GC/scavenge.md)
+- [8.11 过去、现在与未来](part2runtime/ch08GC/history.md)
+- [8.12 用户层 APIs](part2runtime/ch08GC/finalizer.md)
+    + 存活与终结
+      + SetFinalizer
+      + KeepAlive
 
 #### 第九章 调试
 
