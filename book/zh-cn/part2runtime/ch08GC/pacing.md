@@ -101,7 +101,7 @@ func (t gcTrigger) test() bool {
 		}
 		// 计算上次 gc 开始时间是否大于强制执行 GC 周期的时间
 		lastgc := int64(atomic.Load64(&memstats.last_gc_nanotime))
-		return lastgc != 0 && t.now-lastgc > forcegcperiod
+		return lastgc != 0 && t.now-lastgc > forcegcperiod // 两分钟
 	case gcTriggerCycle:
 		// 进行测试的周期 t.n 大于实际触发的，需要进行 GC 则通过测试
 		return int32(t.n-work.cycles) > 0
@@ -229,9 +229,7 @@ func gcSetTriggerRatio(triggerRatio float64) {
 	// Commit to the trigger and goal.
 	memstats.gc_trigger = trigger
 	memstats.next_gc = goal
-	if trace.enabled {
-		traceNextGC()
-	}
+	(...)
 
 	// Update mark pacing.
 	if gcphase != _GCoff {
