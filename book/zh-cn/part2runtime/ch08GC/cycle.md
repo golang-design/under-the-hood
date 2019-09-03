@@ -1,8 +1,90 @@
 # 垃圾回收器：GC 周期概述
 
-## 停止、启动一切
+## GC 周期的不同阶段
 
-## Stop The World 的实现
+GC 主要包含三个阶段，其对应的写屏障状态如下表所示：
+
+| 阶段 | 写屏障 |
+|:----:|:----:|
+| GCoff | 关闭 |
+| GCmark | 启用 |
+| GCmarktermination | 启用 |
+
+当需要进行 GC 阶段切换时，主要就只是控制 `gcphase` 和 `writeBarrier` 这两个变量，实现也比较简单：
+
+```go
+const (
+	_GCoff             = iota // GC 没有运行，sweep 在后台运行，写屏障没有启用
+	_GCmark                   // GC 标记 roots 和 workbufs: 分配黑色，写屏障启用
+	_GCmarktermination        // GC 标记终止: 分配黑色, P's 帮助 GC, 写屏障启用
+)
+
+//go:nosplit
+func setGCPhase(x uint32) {
+	atomic.Store(&gcphase, x) // *gcphase = x
+	// 只有 mark 和 marktermination 才需要写屏障
+	writeBarrier.needed = gcphase == _GCmark || gcphase == _GCmarktermination
+	// 只有需要或者 cgo 时候才启用写屏障
+	writeBarrier.enabled = writeBarrier.needed || writeBarrier.cgo
+}
+```
+
+在运行时代码中，阶段切换的标记非常明确：
+
+1. 在 gcStart 时，切换到 Mark 标记阶段；
+2. 当标记工作完成时候切换到 MarkTermination 阶段，并在完成标记后切换到 Off 阶段，停用写屏障。
+
+```go
+// src/runtime/mgc.go
+
+func gcStart(trigger gcTrigger) {
+	(...)
+	systemstack(stopTheWorldWithSema) // STW 开始
+	(...)
+	setGCPhase(_GCmark)
+	(...)
+	systemstack(func() {
+		now = startTheWorldWithSema(trace.enabled) // STW 结束
+		(...)
+	})
+	(...)
+}
+func gcMarkDone() {
+	(...)
+	systemstack(stopTheWorldWithSema)  // STW 开始
+	(...)
+}
+func gcMarkTermination(nextTriggerRatio float64) {
+	(...)
+	setGCPhase(_GCmarktermination)
+	(...)
+	systemstack(func() {
+		(...)
+		setGCPhase(_GCoff)
+		(...)
+	}
+	(...)
+	systemstack(func() { startTheWorldWithSema(true) })  // STW 结束
+	(...)
+}
+```
+
+在这三个主要的阶段切换中，都伴随着 STW 操作，为了叙述方便，我们以 STW 为界限，将 GC 划分为五个阶段：
+
+| 阶段 | 说明 | 状态 |
+|:---:|:----:|:----:|
+| GCMark | 标记准备阶段，为并发标记做准备工作，启用写屏障 | STW |
+| GCMark | 扫描标记阶段，与赋值器并发执行 | 并发 |
+| GCMarkTermination | 标记终止阶段，保证一个周期内标记任务完成，关闭写屏障 | STW |
+| GCoff | 内存清扫阶段，将需要回收的内存归还到堆中 | 并发 |
+| GCoff | 内存归还阶段，将过多的内存归还给操作系统 | 并发 |
+
+接下来我们来关注进入 STW 和退出 STW 时的具体实现。
+
+## STW 的启动
+
+STW 要确保所有被调度器调度执行的用户代码停止执行，一个可行的方案就是让所有的 M 与其关联的 P 解除绑定，
+这样 M 便无法再继续执行用户代码了。
 
 ```go
 func stopTheWorldWithSema() {
@@ -10,25 +92,25 @@ func stopTheWorldWithSema() {
 	(...)
 
 	lock(&sched.lock)
+	// 停止调度器需要停止的线程数
 	sched.stopwait = gomaxprocs
+	// 设置因 GC 需要停止调度器的标志位
 	atomic.Store(&sched.gcwaiting, 1)
+	// 抢占所有当前执行的 G
 	preemptall()
-	// 停止当前的 P
+	// 停止当前 G 所在的的 P，这时需要解绑的数量少了一个
 	_g_.m.p.ptr().status = _Pgcstop // Pgcstop 只用于诊断.
 	sched.stopwait--
-	// 尝试抢占所有在 Psyscall 状态的 P
+	// 抢占所有在系统调用 Psyscall 状态的 P
 	for _, p := range allp {
 		s := p.status
 		if s == _Psyscall && atomic.Cas(&p.status, s, _Pgcstop) {
-			if trace.enabled {
-				traceGoSysBlock(p)
-				traceProcStop(p)
-			}
+			(...)
 			p.syscalltick++
 			sched.stopwait--
 		}
 	}
-	// 停止 idle P's
+	// 抢占所有空闲的 P，防止再次被抢走
 	for {
 		p := pidleget()
 		if p == nil {
@@ -40,7 +122,7 @@ func stopTheWorldWithSema() {
 	wait := sched.stopwait > 0
 	unlock(&sched.lock)
 
-	// 等待剩余的 P 主动停止
+	// 等待剩余的无法被抢占的 P 主动停止
 	if wait {
 		for {
 			// 等待 100us, 然后尝试重新抢占，从而防止竞争
@@ -54,32 +136,82 @@ func stopTheWorldWithSema() {
 
 	(...)
 }
+
+func preemptall() bool {
+	res := false
+	for _, _p_ := range allp {
+		// 尝试抢占所有处于运行状态的 P
+		if _p_.status != _Prunning {
+			continue
+		}
+		if preemptone(_p_) {
+			res = true
+		}
+	}
+	return res // 至少成功了一个
+}
+
+func preemptone(_p_ *p) bool {
+	mp := _p_.m.ptr()
+	if mp == nil || mp == getg().m {
+		return false
+	}
+	gp := mp.curg
+	if gp == nil || gp == mp.g0 {
+		return false
+	}
+
+	// 设置抢占标记
+	// goroutine 中的每个调用都会通过比较当前栈指针和 gp.stackgard0 来检查栈是否溢出。
+	// 设置 gp.stackgard0 为 StackPreempt 来将抢占转换为正常的栈溢出检查。
+	gp.preempt = true
+	gp.stackguard0 = stackPreempt
+	return true
+}
 ```
 
-## Start The World
+这样来看其实 STW 的逻辑很简单：
+
+1. 尝试为每个处于运行状态 (`_Prunning`) 的 P 上的 goroutine 设置抢占标记，这样所有正在运行的 G 在发生进一步函数调用时，会主动被抢占
+2. 抢占所有正在进行系统调用状态（`_Psyscall`）时还来不及被抢夺的 P
+3. 抢占所有处于空闲状态尚未被 M 绑定的 P
+4. 等待所有的 P 都与 M 成功解绑。
+
+## STW 的结束
+
+当要结束 STW 阶段时，无非就是唤醒调度器，即唤醒已经处于休眠状态的 M，重新开始调度 G。
 
 ```go
 func startTheWorldWithSema(emitTraceEvent bool) int64 {
-	mp := acquirem() // disable preemption because it can be holding p in a local var
+	mp := acquirem()
+
+	// 优先处理网络数据
 	if netpollinited() {
 		list := netpoll(false) // 非阻塞
 		injectglist(&list)
 	}
+
 	lock(&sched.lock)
 
+	// 处理 P 的数量调整
 	procs := gomaxprocs
 	if newprocs != 0 {
 		procs = newprocs
 		newprocs = 0
 	}
 	p1 := procresize(procs)
+
+	// 调度器可以开始调度了
 	sched.gcwaiting = 0
+
+	// 唤醒系统监控
 	if sched.sysmonwait != 0 {
 		sched.sysmonwait = 0
 		notewakeup(&sched.sysmonnote)
 	}
 	unlock(&sched.lock)
 
+	// 依次将 m 唤醒，并绑定到 p，开始执行
 	for p1 != nil {
 		p := p1
 		p1 = p1.link.ptr()
@@ -95,7 +227,7 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 		}
 	}
 
-	// 在执行清理任务之前捕获 start-the-world 时间。
+	// 记录 STW 结束时间
 	startTime := nanotime()
 	(...)
 
@@ -111,7 +243,15 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 }
 ```
 
-## GC 周期
+这个逻辑也很直接：
+
+1. 网络数据优先级最高，优先确定需要处理的网络数据
+2. 其次唤醒系统监控
+3. 最后再依次唤醒 M，将其绑定 P，并重新开始调度 G
+
+## GC 的启动
+
+TODO:
 
 ```go
 func gcStart(trigger gcTrigger) {
@@ -143,9 +283,18 @@ func gcStart(trigger gcTrigger) {
 	mode := gcBackgroundMode
 	(...)
 
-	// 好的，我们确实要进行 GC，停止所有其他人！
-	semacquire(&worldsema)
+	semacquire(&worldsema) // 无法抢到 worldsema 的其他人，会在此阻塞
+
+	(...) // 进入标记阶段前的准备工作
+```
+
+## 标记准备阶段
+
+
+```go
+func gcStart(trigger gcTrigger) {
 	(...)
+	// 进入标记阶段前的准备工作
 
 	gcBgMarkStartWorkers()
 
@@ -211,8 +360,7 @@ func gcStart(trigger gcTrigger) {
 }
 ```
 
-
-### 后台标记
+TODO: 后台标记
 
 ```go
 // gcBgMarkStartWorkers 准备后台标记 worker goroutines。
@@ -228,6 +376,12 @@ func gcBgMarkStartWorkers() {
 	}
 }
 ```
+
+## 总结
+
+TODO:
+
+![](../../../assets/gc-phase.png)
 
 ## 许可
 
