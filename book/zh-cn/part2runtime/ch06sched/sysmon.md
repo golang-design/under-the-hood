@@ -66,8 +66,8 @@ func sysmon() {
 				atomic.Store(&sched.sysmonwait, 1)
 				unlock(&sched.lock)
 				// 确保 wake-up 周期足够小从而进行正确的采样
-				maxsleep := forcegcperiod / 2
-				if scavengelimit < forcegcperiod {
+				maxsleep := forcegcperiod / 2      // 一分钟
+				if scavengelimit < forcegcperiod { // 两分钟
 					maxsleep = scavengelimit / 2
 				}
 				shouldRelax := true

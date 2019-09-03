@@ -64,18 +64,7 @@ func schedinit() {
 		throw("unknown runnable goroutine during bootstrap")
 	}
 
-	// 不重要，调试相关
-	// For cgocheck > 1, we turn on the write barrier at all times
-	// and check all pointer writes. We can't do this until after
-	// procresize because the write barrier needs a P.
-	if debug.cgocheck > 1 {
-		writeBarrier.cgo = true
-		writeBarrier.enabled = true
-		for _, p := range allp {
-			p.wbBuf.reset()
-		}
-	}
-
+	(...)
 	if buildVersion == "" {
 		// 该条件永远不会被触发，此处只是为了防止 buildVersion 被编译器优化移除掉。
 		buildVersion = "unknown"
