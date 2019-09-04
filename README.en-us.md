@@ -43,7 +43,7 @@ The last part of the book discusses some standard libraries that rely on the run
 ## Getting started
 
 - [🇨🇳 简体中文](./book/zh-cn/TOC.md)
-- [🇬🇧 English](./book/en-us/TOC.md)
+- 🇬🇧 English (Unplanned)
 
 ## Acknowledgements
 
