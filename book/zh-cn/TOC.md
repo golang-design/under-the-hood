@@ -11,13 +11,17 @@
 <!-- - [Plan 9 汇编(asm.md)? -->
 <!-- [Linux 系统调用]? -->
 
-#### [第二章 并发与分布式计算](part1basic/ch02parallel/readmd.md)
+#### [第二章 并行、并发与分布式计算](part1basic/ch02parallel/readme.md)
 
-- [缓存技术](part1basic/ch02parallel/cache.md)
+- [2.1 并行、并发的基本概念](part1basic/ch02parallel/define.md)
+- [2.2 缓存技术](part1basic/ch02parallel/cache.md)
     + UMA
     + NUMA
     + 一致性协议
     + 真假共享
+- [2.3 性能模型](part1basic/ch02parallel/perfs.md)
+- [2.4 分布式计算的基本概念](part1basic/ch02parallel/distributed.md)
+- [2.5 共识技术](part1basic/ch02parallel/consensus.md)
 
 #### [第三章 排队与调度理论](part1basic/ch03scheduling/readme.md)
 
