@@ -279,8 +279,6 @@ func gcStart(trigger gcTrigger) {
 
 	// 对于统计信息，请检查用户是否强制使用此 GC。
 	work.userForced = trigger.kind == gcTriggerCycle
-
-	mode := gcBackgroundMode
 	(...)
 
 	semacquire(&worldsema) // 无法抢到 worldsema 的其他人，会在此阻塞
@@ -291,13 +289,19 @@ func gcStart(trigger gcTrigger) {
 ## 标记准备阶段
 
 
+
 ```go
 func gcStart(trigger gcTrigger) {
 	(...)
+	mode := gcBackgroundMode
+	(...)
+
 	// 进入标记阶段前的准备工作
 
+	// 启动 mark workers
 	gcBgMarkStartWorkers()
 
+	// 重置 mark 状态
 	systemstack(gcResetMarkState)
 
 	// 记录此次 GC 时 STW 的各项信息，用于计算下一次 GC 周期的触发时间
@@ -316,13 +320,14 @@ func gcStart(trigger gcTrigger) {
 
 	// ----------------- 正式 STW ----------------------
 	systemstack(stopTheWorldWithSema)
-	// 在我们开始并发 scan 之前完成 sweep。
 	systemstack(func() {
-		finishsweep_m()
+		finishsweep_m() // 等待 sweeper 完成，确保所有 span 已被清除
 	})
 	(...)
 
+	// 记录 GC 周期
 	work.cycles++
+	// 重置 GC controller 的状态，用于估计下一次 GC 的触发时间
 	gcController.startCycle()
 	work.heapGoal = memstats.next_gc
 	(...)
@@ -344,10 +349,9 @@ func gcStart(trigger gcTrigger) {
 	// 启用 mutator 协助对快速分配 mutator 施加压力。
 	atomic.Store(&gcBlackenEnabled, 1)
 
-	// Assists 和 workers 可以在我们 start the world 的瞬间直接启动
+	// 记录标记开始的时间
 	gcController.markStartTime = now
 
-	// 并发 mark
 	systemstack(func() {
 		now = startTheWorldWithSema(trace.enabled)
 		work.pauseNS += now - work.pauseStart
@@ -357,6 +361,20 @@ func gcStart(trigger gcTrigger) {
 
 	(...)
 	semrelease(&work.startSema)
+}
+
+//go:nowritebarrier
+func finishsweep_m() {
+	// Sweeping must be complete before marking commences, so
+	// sweep any unswept spans. If this is a concurrent GC, there
+	// shouldn't be any spans left to sweep, so this should finish
+	// instantly. If GC was forced before the concurrent sweep
+	// finished, there may be spans to sweep.
+	for sweepone() != ^uintptr(0) {
+		sweep.npausesweep++
+	}
+
+	nextMarkBitArenaEpoch()
 }
 ```
 
@@ -375,6 +393,112 @@ func gcBgMarkStartWorkers() {
 		}
 	}
 }
+
+func gcBgMarkWorker(_p_ *p) {
+	gp := getg()
+
+	type parkInfo struct {
+		m      muintptr // Release this m on park.
+		attach puintptr // If non-nil, attach to this p on park.
+	}
+	// We pass park to a gopark unlock function, so it can't be on
+	// the stack (see gopark). Prevent deadlock from recursively
+	// starting GC by disabling preemption.
+	gp.m.preemptoff = "GC worker init"
+	park := new(parkInfo)
+	gp.m.preemptoff = ""
+
+	park.m.set(acquirem())
+	park.attach.set(_p_)
+	// Inform gcBgMarkStartWorkers that this worker is ready.
+	// After this point, the background mark worker is scheduled
+	// cooperatively by gcController.findRunnable. Hence, it must
+	// never be preempted, as this would put it into _Grunnable
+	// and put it on a run queue. Instead, when the preempt flag
+	// is set, this puts itself into _Gwaiting to be woken up by
+	// gcController.findRunnable at the appropriate time.
+	notewakeup(&work.bgMarkReady)
+
+	(...)
+}
+```
+
+```go
+func gcBgMarkPrepare() {
+	work.nproc = ^uint32(0)
+	work.nwait = ^uint32(0)
+}
+//go:nowritebarrier
+func gcMarkRootPrepare() {
+	work.nFlushCacheRoots = 0
+
+	// Compute how many data and BSS root blocks there are.
+	nBlocks := func(bytes uintptr) int {
+		return int((bytes + rootBlockBytes - 1) / rootBlockBytes)
+	}
+
+	work.nDataRoots = 0
+	work.nBSSRoots = 0
+
+	// 扫描全局变量
+	for _, datap := range activeModules() {
+		nDataRoots := nBlocks(datap.edata - datap.data)
+		if nDataRoots > work.nDataRoots {
+			work.nDataRoots = nDataRoots
+		}
+	}
+
+	for _, datap := range activeModules() {
+		nBSSRoots := nBlocks(datap.ebss - datap.bss)
+		if nBSSRoots > work.nBSSRoots {
+			work.nBSSRoots = nBSSRoots
+		}
+	}
+
+	// Scan span roots for finalizer specials.
+	//
+	// We depend on addfinalizer to mark objects that get
+	// finalizers after root marking.
+	//
+	// We're only interested in scanning the in-use spans,
+	// which will all be swept at this point. More spans
+	// may be added to this list during concurrent GC, but
+	// we only care about spans that were allocated before
+	// this mark phase.
+	work.nSpanRoots = mheap_.sweepSpans[mheap_.sweepgen/2%2].numBlocks()
+
+	// Scan stacks.
+	//
+	// Gs may be created after this point, but it's okay that we
+	// ignore them because they begin life without any roots, so
+	// there's nothing to scan, and any roots they create during
+	// the concurrent phase will be scanned during mark
+	// termination.
+	work.nStackRoots = int(atomic.Loaduintptr(&allglen))
+
+	work.markrootNext = 0
+	work.markrootJobs = uint32(fixedRootCount + work.nFlushCacheRoots + work.nDataRoots + work.nBSSRoots + work.nSpanRoots + work.nStackRoots)
+}
+```
+
+```go
+func gcMarkTinyAllocs() {
+	for _, p := range allp {
+		c := p.mcache
+		if c == nil || c.tiny == 0 {
+			continue
+		}
+		_, span, objIndex := findObject(c.tiny, 0, 0)
+		gcw := &p.gcw
+		greyobject(c.tiny, 0, 0, span, gcw, objIndex)
+	}
+}
+```
+
+```go
+// gcBlackenEnabled 如果 mutator assists 和 background mark worker 被允许 blacken 对象。
+// 它只有在 gcphase == _GCmark 时才被设置
+var gcBlackenEnabled uint32
 ```
 
 ## 总结

@@ -4362,10 +4362,13 @@ func checkdead() {
 		}
 	}
 
+	// 总共的 m 的数量 - 等待 work 的空闲 m 的数量 - 等待 work 的锁住的 m 的数量 - 不计入死锁的系统 m 的数量
 	run := mcount() - sched.nmidle - sched.nmidlelocked - sched.nmsys
+	// 正常
 	if run > run0 {
 		return
 	}
+	// 计数错误
 	if run < 0 {
 		print("runtime: checkdead: nmidle=", sched.nmidle, " nmidlelocked=", sched.nmidlelocked, " mcount=", mcount(), " nmsys=", sched.nmsys, "\n")
 		throw("checkdead: inconsistent counts")
@@ -4391,7 +4394,7 @@ func checkdead() {
 		}
 	}
 	unlock(&allglock)
-	if grunning == 0 { // possible if main goroutine calls runtime·Goexit()
+	if grunning == 0 { // 如果 main goroutine 调用 runtime·Goexit()
 		throw("no goroutines (main called runtime.Goexit) - deadlock!")
 	}
 

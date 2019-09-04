@@ -1222,7 +1222,6 @@ func gcStart(trigger gcTrigger) {
 		traceGCSTWStart(1)
 	}
 	systemstack(stopTheWorldWithSema)
-	// 在我们开始并发 scan 之前完成 sweep。
 	systemstack(func() {
 		finishsweep_m()
 	})
@@ -2071,6 +2070,9 @@ func gcSweep(mode gcMode) {
 //
 // gcResetMarkState must be called on the system stack because it acquires
 // the heap lock. See mheap for details.
+// gcResetMarkState 在标记（并发或 STW）之前重置全局状态，并重置所有 G 的堆栈扫描状态。
+// 如果没有世界停止，这是安全的，因为在此期间或之后创建的任何 Gs 将在重置状态下开始。
+// 必须在系统堆栈上调用 gcResetMarkState，因为它获取堆锁。 有关详细信息，请参阅 mheap。
 //
 //go:systemstack
 func gcResetMarkState() {
