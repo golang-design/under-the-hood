@@ -13,6 +13,8 @@
 
 ---
 
+<img src="book/assets/cover-cn.png" alt="logo" height="550" align="right" />
+
 ## 致读者
 
 Go 语言从 2009 年诞生之初已有十年的历史。
