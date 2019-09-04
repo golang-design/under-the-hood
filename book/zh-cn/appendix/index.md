@@ -242,8 +242,6 @@ runtime type system / keywords:
     - [ ] sys_wasm.s
     - [ ] sys_x86.go
     - [ ] unaligned1.go
-    - [ ] vdso_elf64.go
-    - [ ] vdso_linux_amd64.go
 
 ## 许可
 

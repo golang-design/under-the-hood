@@ -321,7 +321,7 @@ func sysargs(argc int32, argv **byte) {
 	}
 	// 即便我们无法读取整个文件，也要确保 buf 已经被终止
 	buf[len(buf)-2] = _AT_NULL
-	sysauxv(buf[:]) // 调用并确定物理页的大小，读取 vdso 表
+	sysauxv(buf[:]) // 调用并确定物理页的大小
 }
 
 func sysauxv(auxv []uintptr) int {
@@ -341,33 +341,13 @@ func sysauxv(auxv []uintptr) int {
 			// physPageSize 的大小进行检查，如果读取失败则无法运行程序，从而抛出运行时错误
 		}
 
-		archauxv(tag, val) // amd64 下什么也不做的空函数
-		vdsoauxv(tag, val) // 读取 vdso 表
+		(...)
 	}
 	return i / 2
 }
 ```
 
-其中涉及 mmap、mincore、munmap 等系统调用 [7, 8]。对于 vdso 表，已经超出我们的关注点，
-这里暂不讨论 vdso 的细节，但看 `runtime.vdsoauxv` 函数而言，只是去解析 `_At_SYSINFO_EHDR` 标签对应的值。
-
-```go
-// runtime/vdso_linux.go
-func vdsoauxv(tag, val uintptr) {
-	switch tag {
-	case _AT_SYSINFO_EHDR:
-		if val == 0 {
-			// 出错了
-			return
-		}
-		var info vdsoInfo
-		// 此处可能存在编译器 BUG，这里调用 noescape 的目的仅仅只是让编译器认为此处 info 不是逃逸
-		info1 := (*vdsoInfo)(noescape(unsafe.Pointer(&info)))
-		vdsoInitFromSysinfoEhdr(info1, (*elfEhdr)(unsafe.Pointer(val)))
-		vdsoParseSymbols(info1, vdsoFindVersion(info1, &vdsoLinuxVersion))
-	}
-}
-```
+其中涉及 mmap、mincore、munmap 等系统调用 [7, 8]。
 
 ### 步骤3：runtime.osinit
 

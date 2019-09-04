@@ -249,6 +249,11 @@ G 与 P 的解绑
     + 调步算法的设计
     + 实现
 - [8.6 GC 周期概述](part2runtime/ch08GC/cycle.md)
+    + GC 周期的不同阶段
+    + STW 的启动
+    + STW 的结束
+    + GC 的启动
+    + 标记准备阶段
 - [8.7 扫描标记阶段](part2runtime/ch08GC/mark.md)
 - [8.8 标记终止阶段](part2runtime/ch08GC/termination.md)
 - [8.9 内存清扫阶段](part2runtime/ch08GC/sweep.md)
@@ -261,8 +266,9 @@ G 与 P 的解绑
 
 #### 第九章 调试
 
-- [9.1 race 竞争检测](part2runtime/ch09debug/race.md)
-- [9.2 trace 运行时调试](part2runtime/ch09debug/trace.md)
+- [9.1 数据竞争检测](part2runtime/ch09debug/race.md)
+- [9.2 运行时死锁检测](part2runtime/ch09debug/deadlock.md)
+- [9.3 trace 运行时调试](part2runtime/ch09debug/trace.md)
 
 #### 第十章 兼容与契约
 
