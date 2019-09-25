@@ -5,7 +5,7 @@ Go 语言中的 `interface` 是一组方法的集合，同样的接口定义在 
 方式存在，在 Java 和 php 等语言中以 `interface` 关键字的方式存在。
 大多数语言的接口实现都是显式的，而在 Go 在语言中任何实现了这些方法的值都可以
 认为是这个接口类型，这就是鸭子类型（Duck typing）。
-Go 语言中的 `interface` 还有一个作用是作为通用类型存在，任何类型都可以转换为 
+Go 语言中的 `interface` 还有一个作用是作为通用类型存在，任何类型都可以转换为
 `interface`。
 
 
@@ -42,11 +42,11 @@ type eface struct {
 其中 `_type` 的类型是 `*_type`，`_type` 这个类型是 `Go` 语言中表示绝大多类型的
 表示方式。 这个结构 `_type` 必须要与下面几个文件中的定义保持一致：
 
-- `cmd/link/internal/ld/decodesym.go:/^func.commonsize`：  连接器中解析汇编中
+- `cmd/link/internal/ld/decodesym.go:/^func.commonsize`:  连接器中解析汇编中
    关于类型`type.*`的符号。
-- `cmd/compile/internal/gc/reflect.go:/^func.dcommontype`： 输出关于 `_type` 
+- `cmd/compile/internal/gc/reflect.go:/^func.dcommontype`: 输出关于 `_type` 
   的内容。
-- `reflect/type.go:/^type.rtype` ： 通过反射方式解析 `_type` 类型的信息。
+- `reflect/type.go:/^type.rtype` : 通过反射方式解析 `_type` 类型的信息。
 
 因为在不同的阶段都会用到这些类型，由于这些处理在不同的包中，为了避免包之间相同
 的依赖， 所以在每个包中进行了单独的定义。
@@ -79,7 +79,7 @@ const (
 )
 ```
 
-因为在连接阶段需要对类型做连接处理，所以`kind` 的定义要与 
+因为在连接阶段需要对类型做连接处理，所以`kind` 的定义要与
 `cmd/link/internal/ld/decodesym.go` 中的定义保持同步， 但是不是所有的类型定义
 都需要连接器处理，只有一些复杂类型，比如 `chan` ，`func`， `interface` 等需要处理。
 
@@ -111,7 +111,7 @@ func main() {
  `type.int(SB)` 符号替换掉 `kind` 为 `kindInt` 的 `_type` 类型的表示方式，
 通过寄存器 `AX` Load 到 `num2+32(SP)`，就是 `eface` 类型的 `_type` 字段。 
 常数 `3` 会通过临时变量 `autotmp_2` 赋值到 `num2+40(SP)`，也就是 `eface` 
-类型的 `data` 字段。这两个字段就共同组成了一个 `eface` 类型的变量 `num2`。 
+类型的 `data` 字段。这两个字段就共同组成了一个 `eface` 类型的变量 `num2`。
 执行后的栈如下：
 
 ```
@@ -197,7 +197,7 @@ type itab struct {
     fun   [1]uintptr // 可变大小，func[0]==0 意味着 _type 没有实现相关接口函数
 }
 ```
-- `itab` 是编译器中已知的结构，分配在非废垃圾回收的内存区域 
+- `itab` 是编译器中已知的结构，分配在非废垃圾回收的内存区域。
 - `fun` 表示的 `interface` 里面的 method 的具体实现，这里放置和接口方法对应的
 具体实现的方法地址， 一般在每次给接口赋值发生转换时会更新此表，或者直接拿缓存
 的 `itab`。 
@@ -278,7 +278,7 @@ func convTstring(val string) (x unsafe.Pointer) {
 }
 ```
 
-其作用是申请变量 `x`，将 `x` 的值指向 `s`，然后返回。其实对应的就是 `iface` 的 
+其作用是申请变量 `x`，将 `x` 的值指向 `s`，然后返回。其实对应的就是 `iface` 的
 `data` 字段。 再看 `go.itab."".student，"".Person(SB)` 这个符号，这个符号同样
 会在链接阶段进行替换， 编译器生成的汇编文件中有这个符号代表的含义：
 
@@ -293,7 +293,7 @@ go.itab."".student，"".Person SRODATA dupok size=32
 
 可见这个符号其实时定义的一个变量。这个变量大小为 32 字节，与 `itab` 的定义是一致的，
 计算方式如下：
-32 = 8 (`*interfacetype`) + 8 (`*_type`) + 4 (`uint32`) + 4 (`[4]byte`) + 8 (`[1]uintptr`) 
+32 = 8 (`*interfacetype`) + 8 (`*_type`) + 4 (`uint32`) + 4 (`[4]byte`) + 8 (`[1]uintptr`)
 最终 `data` 与 `itab` 一起组成了 `iface` 类型，作为参数传给了函数 `echoName`。
 
 ### 多方法接口
@@ -334,7 +334,7 @@ func echoPerson(p Person) {
 
 接口 `Pseron` 定义了两个方法，`student` 实现了这个接口，这两个函数是如何通过
 `itab` 的 `fun` 字段表示的呢？ 其实 `fun` 只是代表了第一个函数的地址，继续往
-后的地址就是下一个函数的地址，并且这些函数的排列顺序是按照字母顺序排列的。 
+后的地址就是下一个函数的地址，并且这些函数的排列顺序是按照字母顺序排列的。
 函数的排序及地址确定是在编译阶段完成的。 编译的过程包括语法分析，词法分析，
 中间代码生成和机器码生成的等阶段。 在中间代码生成阶段会对我们定义的代码进行
 优化，按照字母顺序调整函数的定义。生成的 `SSA` 我们可以通过
@@ -361,7 +361,7 @@ package main:
 ...
 ```
 
-可以看到生成的 `SSA` 文件中优化后的函数顺序满足之前的分析。 
+可以看到生成的 `SSA` 文件中优化后的函数顺序满足之前的分析。
 下面看一下`echoPerson` 是如何调用这两个函数的：
 
 ```asm
@@ -462,7 +462,7 @@ main1.go:17:10: cannot use s (type student) as type Person in argument to echoNa
 ...
 ```
 
-所以使用值和指针调用都没有问题。 
+所以使用值和指针调用都没有问题。
 定义为指针接收者时，只有指针接收者的函数实现：
 
 ```asm
@@ -601,7 +601,7 @@ func assertion() {
 ## 总结
 `interface` 在 Go 语言中处于非常重要的地位， 是 Go 语言不同于其它语言的特性之一。
 `interface` 又可以分为包含方法和不包含方法两种类型，两种类型分别对应的两种不通的
-使用场景。 任何类型都可以通过接口类型来传递, 要判断具体的类型则需要类型断言。 
+使用场景。 任何类型都可以通过接口类型来传递, 要判断具体的类型则需要类型断言。
 接口的源码分析需要依赖对编译器和连接器的了解，比较有难度。 建议先了解一下 Go 编译
 的过程及各个阶段所做的工作。
 
