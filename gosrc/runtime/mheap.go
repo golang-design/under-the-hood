@@ -1214,7 +1214,6 @@ HaveSpan:
 		sysUsed(unsafe.Pointer(s.base()), s.npages<<_PageShift)
 		s.scavenged = false
 	}
-	s.unusedsince = 0
 
 	h.setSpans(s.base(), npage, s)
 
@@ -1287,6 +1286,10 @@ func (h *mheap) grow(npage uintptr) bool {
 //
 // h must be locked.
 func (h *mheap) growAddSpan(v unsafe.Pointer, size uintptr) {
+	// Scavenge some pages to make up for the virtual memory space
+	// we just allocated, but only if we need to.
+	h.scavengeIfNeededLocked(size)
+
 	s := (*mspan)(h.spanalloc.alloc())
 	s.init(uintptr(v), size/pageSize)
 	h.setSpans(s.base(), s.npages, s)
