@@ -192,6 +192,8 @@ func setGCPercent(in int32) (out int32) {
 		gcSetTriggerRatio(memstats.triggerRatio)
 		unlock(&mheap_.lock)
 	})
+	// Pacing changed, so the scavenger should be awoken.
+	wakeScavenger()
 
 	// 如果我们刚好禁用了 GC，则等待任何并发 GC 标记完成，从而我们总是能够在没有 GC 的情况下返回
 	if in < 0 {
@@ -1580,8 +1582,15 @@ func gcMarkTermination(nextTriggerRatio float64) {
 		throw("gc done but gcphase != _GCoff")
 	}
 
+	// Record next_gc and heap_inuse for scavenger.
+	memstats.last_next_gc = memstats.next_gc
+	memstats.last_heap_inuse = memstats.heap_inuse
+
 	// Update GC trigger and pacing for the next cycle.
 	gcSetTriggerRatio(nextTriggerRatio)
+
+	// Pacing changed, so the scavenger should be awoken.
+	wakeScavenger()
 
 	// Update timing memstats
 	now := nanotime()
