@@ -61,7 +61,7 @@ func main() {
 ```
 
 ### 声明
-通过生命方式赋值：`var s1 []int`, 得到的汇编如下：
+通过声明方式赋值：`var s1 []int`, 得到的汇编如下：
 
 ```asm
     0x0032 00050 (main1.go:6)   MOVQ    $0, "".s1+208(SP)
@@ -96,12 +96,14 @@ func main() {
 1. 定义 `len = 4` 的数组，地址放到 AX 中
 2. 数组作为参数调用 `runtime.newobject` 申请内存地址
 3. 将申请的内存的起始地址放入寄存器 `""..autotmp_6+88(SP)` 位置，后面使用
-4. 通过变量 `stmp_0` 给寄存器 AX 所在的地址赋值, 复制内容为：
+4. 通过变量 `stmp_0` 给寄存器 AX 所在的地址赋值,  赋值内容为：
+
     ```asm
     ""..stmp_0 SRODATA size=32
         0x0000 01 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00  ................
         0x0010 03 00 00 00 00 00 00 00 04 00 00 00 00 00 00 00  ................
     ```
+
 5. 将之前存储地址的 `""..autotmp_6+88(SP)` 变量再次放到 AX 中
 6. 将 AX 存的数组地址放大变量 `s2.array` 中
 7. 给 `s2.len` 和 `s2.cap` 分别赋值 4
@@ -404,7 +406,8 @@ func growslice(et *_type, old slice, cap int) slice {
 
 ## 拷贝
 
-执行 `copy` 函数后，大部分并不是调用 `slicecopy` 而是对代码进行了优化：
+执行 `copy` 函数后，大部分并不是调用 `slicecopy` 而是对代码进行了优化, 
+下面是对 `copy` 函数编译时的相关代码：
 
 ```go
 // cmd/compile/internal/gc/walk.go
@@ -482,6 +485,9 @@ func copyany(n *Node, init *Nodes, runtimecall bool) *Node {
     return nlen
 }
 ```
+
+经过上面的编译的代码优化，对应的汇编如下:
+
 ```asm
     0x00d1 00209 (main3.go:9)   MOVQ    AX, ""..autotmp_6+240(SP) # s2.array 地址
     0x00d9 00217 (main3.go:9)   MOVQ    $6, ""..autotmp_6+248(SP) # s2.len
@@ -519,7 +525,8 @@ func copyany(n *Node, init *Nodes, runtimecall bool) *Node {
     0x0528 01320 (main3.go:9)   JMP 332
 
 ```
-上面的实现基本上就是：
+上面汇编的逻辑基本对应的就是编译优化后的代码：
+
 ```go
  n := len(a)
  if n > len(b) { n = len(b) }
@@ -587,12 +594,38 @@ func slicecopy(to, fm slice, width uintptr) int {
     return n
 }
 ```
+
 这里 `slicecopy`的逻辑跟前面基本上是一致的，除了：
 1. 长度判断返回为0时直接返回。
 2. width ==0, 直接返回 n, 不用真正执行 copy (width 代表数据类型所占的字节数)
 
 同时 `copy` 还支持 `string` 类型复制到 `[]byte` 类型， 与前面的逻辑基本一致,
-由于每个字符都是占用一个字节，所以不需要判断 `width`。
+由于每个字符都是占用一个字节，所以不需要判断 `width`。 对应的函数实现如下:
+
+```go
+func slicestringcopy(to []byte, fm string) int {
+    if len(fm) == 0 || len(to) == 0 {
+        return 0
+    }
+
+    n := len(fm)
+    if len(to) < n {
+        n = len(to)
+    }
+
+    if raceenabled {
+        callerpc := getcallerpc()
+        pc := funcPC(slicestringcopy)
+        racewriterangepc(unsafe.Pointer(&to[0]), uintptr(n), callerpc, pc)
+    }
+    if msanenabled {
+        msanwrite(unsafe.Pointer(&to[0]), uintptr(n))
+    }
+
+    memmove(unsafe.Pointer(&to[0]), stringStructOf(&fm).str, uintptr(n))
+    return n
+}
+```
 
 ## todo
 * 数组和切片
