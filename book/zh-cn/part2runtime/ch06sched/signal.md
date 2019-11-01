@@ -731,12 +731,21 @@ func oneNewExtraM() {
 
 我们已经看到了用户注册的信号会通过 `sigsend` 进行发送，这就是我们使用 `os/signal` 包的核心。
 
-在使用 `os/signal` 后，会调用 `signal.init` 函数，注册一个用户端的信号处理循环：
+在使用 `os/signal` 后，会调用 `signal.init` 函数，懒惰的注册一个用户端的信号处理循环（当调用 Notify 时启动）：
 
 ```go
+var (
+	// watchSignalLoopOnce guards calling the conditionally
+	// initialized watchSignalLoop. If watchSignalLoop is non-nil,
+	// it will be run in a goroutine lazily once Notify is invoked.
+	// See Issue 21576.
+	watchSignalLoopOnce sync.Once
+	watchSignalLoop     func()
+)
+
 func init() {
 	signal_enable(0) // first call - initialize
-	go loop()
+	watchSignalLoop = loop
 }
 
 func loop() {
@@ -859,6 +868,12 @@ func Notify(c chan<- os.Signal, sig ...os.Signal) {
 	if c == nil {
 		panic("os/signal: Notify using nil channel")
 	}
+
+	watchSignalLoopOnce.Do(func() {
+		if watchSignalLoop != nil {
+			go watchSignalLoop()
+		}
+	})
 
 	handlers.Lock()
 	defer handlers.Unlock()
