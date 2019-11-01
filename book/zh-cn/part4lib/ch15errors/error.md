@@ -277,6 +277,117 @@ main.main
     /path/to/caller/main.go:27
 ```
 
+## 对错误链条进行高层抽象
+
+我们再来看另一种错误处理的哲学，现在我们来考虑下面这个例子：
+
+```go
+conn, err := net.Dial("tcp", "localhost:1234")
+if err != nil {
+    panic(err)
+}
+_, err := conn.Write(command1)
+if err != nil {
+    panic(err)
+}
+
+r := bufio.NewReader(conn)
+status, err := r.ReadString('\n')
+if err != nil {
+    panic(err)
+}
+if status == "ok" {
+    _, err := conn.Write(command2)
+    if err != nil {
+        panic(err)
+    }
+}
+```
+
+我们很明确的能够观察到错误处理带来的问题：为清晰的阅读代码的整体逻辑带来了障碍。我们希望上面的代码能够清晰的展现最重要的代码逻辑：
+
+```go
+conn := net.Dial("tcp", "localhost:1234")
+conn.Write(command1)
+r := bufio.NewReader(conn)
+status := r.ReadString('\n')
+if status == "ok" {
+    conn.Write(command2)
+}
+```
+
+如果我们进一步观察这个问题的现象，可以将整段代码抽象为下面的逻辑结构：
+
+```
+      write         read          write
+conn -------> conn -------> conn -------> conn
+ |             |             |
+ | error       | error       | error
+ |             |             |
+ v             v             v
+ err           err           err
+```
+
+如果我们尝试将这段充满分支的逻辑进行高层抽象，将其转化为一个单一链条：
+
+```
+   +- - - - - - - write(); read(); write();- - - - - - +
+   |                                                   |
+   |                                                   v
+SafeConn ------> SafeConn ------> SafeConn -------> SafeConn
+```
+
+则能够得到下面的代码：
+
+```go
+type SafeConn struct {
+    conn   net.Conn
+    r      *bufio.Reader
+    status string
+    err    error
+}
+func safeDial(n, addr string) SafeConn {
+    conn, err := net.Dial(n, addr)
+    r := bufio.NewReader(conn)
+    return SafeConn{conn, r, "ok", err}
+}
+
+func (c *SafeConn) write(b []byte) {
+    if c.err != nil && status == "ok" {
+        return
+    }
+    _, c.err = c.conn.Write(b)
+}
+func (c *SafeConn) read() {
+    if err != nil {
+        return
+    }
+    c.status, c.err = c.r.ReadString('\n')
+}
+```
+
+则当建立连接时候：
+
+```go
+c := safeDial("tcp", "localhost:1234") // 如果此条指令出错
+c.write(command1) // 不会发生任何事情
+c.read()          // 不会发生任何事情
+c.write(command2) // 不会发生任何事情
+
+// 最后对进行整个流程的错误处理
+if c.err != nil || c.status != "ok" {
+    panic("bad connection")
+}
+```
+
+这种将错误进行高层抽象的方法通常包含以下四个一般性的步骤：
+
+1. 建立一种新的类型
+2. 将原始值进行封装
+3. 将原始行为进行封装
+4. 将分支条件进行封装
+
+
 ## 争议
 
 ### 对错误处理进行改进的反馈
