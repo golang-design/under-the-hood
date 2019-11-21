@@ -2,7 +2,23 @@
 
 [TOC]
 
-## Type 接口
+在计算机科学中，反射是指计算机程序在运行时（Run time）可以访问、检测和修改它本身
+状态或行为的一种能力。这种能力在汇编语言中是天然支持的，因为你可以访问到任何你想
+访问的数据并且对齐进行修改，在高级语言中则需要特殊的支持才能实现，目前主流的语言
+基本都支持反射的特性，但是还有一些语言是不支持这种特性的。 支持反射的语言的反射
+模型并不是相同的，这里对 Go 语言的反射模型及实现原理进行详细的介绍。
+
+##  type 与 interface
+反射是建立在类型系统之上的。Go 语言是静态类型的语言, 每个变量都有一个静态类型，
+既在编译的时候就已知了其类型，并且是固定的。 对于接口类型，很多人认为它是动态
+类型，其实是不对的。接口定义了一组固定的方法，任何实现了这些固定方法的类型都可
+以被认为是这个接口类型，这个定义的接口类型本身就是一个静态的类型，任何通过这个
+类型传递的变量都对应的是这个静态接口类型。
+反射与接口之间有着密切的关系， 接口类型存储是一个变量的具体值及这个变量类型的
+描述符。而反射本质上讲，就是一种检查存储在接口变量中的类型和值对的机制。
+下面会详细间接反射的原理及源码实现。
+
+## Type  类型描述
 
 Type 是一个 Go 语言的类型一个表示，对于可以通过反射获取信息的类型，Type 都可以表示,
 Type 接口的方法并不是所有的类型都适用的, 可以先通过 Kind 方法获取具体的类型，然后再
@@ -25,7 +41,7 @@ type Type interface {
 
 函数包含的比较多，这里就不一一列举，对于一些重要的函数实现，下面会详细介绍。
 
-## TypeOf 获取类型
+### TypeOf 获取类型
 
 `TypeOf` 函数可以获取到一个接口的具体类型信息，以前面说的 `Type` 接口作为返回值。
 `Typeof` 函数的实现比较简单，源码如下：
@@ -673,8 +689,8 @@ func (t *interfaceType) MethodByName(name string) (m Method, ok bool) {
 `interfaceType` 的 `methods` 字段包含了接口定义的方法名，除了方法集所处的位置不一样
 其他逻辑跟第二种情况基本是一致的。
 
-## value
-Value 是一个结构体，其定义如下：
+## Value
+Value 是变量值的描述，其定义如下：
 
 ```go
 type Value struct {
@@ -712,7 +728,7 @@ const (
 |flagRO|只读字段|1100000|
 |other|高 23 位记录了方法的个数||
 
-## ValueOf
+### ValueOf
 ValueOf 获取接口的值相关的信息，前面和 `TypeOf` 一样先转换为 `emptyInterface` 
 类型，然后在这个基础上再对 `flag` 进行赋值，最后返回 `Value` 类型：
 
@@ -923,7 +939,7 @@ func main() {
 }
 ```
 根据运行的结果，可以看出，Elem 其实是获取接口的间接指向的值，但是间接指向的只有
-指针和接口两种类型会存在这种情况，所以只针对这两种情况可以使用，他们之间转换的
+指针和接口两种类型会存在这种情况，所以只针对这两种情况可以使用，它们之间转换的
 关系可以用下面的图表示：
 
 ```
@@ -1037,24 +1053,424 @@ func (v Value) assignTo(context string, dst *rtype, target unsafe.Pointer) Value
 其次再判断要赋值的 `x` 是否是可到导出的，如果不可导出则会出现 `panic`
 然后 `assignTo` 函数 会根据 `v` 的类型对 `x` 的内容进行判断和调整，
 最后返回一个符合 `v` 的值， 如果无法调整，则会出现 `panic`
-最后如果 `v` 的值不是指向一个地址，而是具体的值则会出现内存的 copy， 从 `x.ptr` 到 `v.ptr`
-如果 `v` 指向的是一个地址，则只需要覆盖这个地址的值就行了。
+最后如果 `v` 的值不是指向一个地址，而是具体的值则会出现内存的 copy， 
+从 `x.ptr` 到 `v.ptr`, 如果 `v` 指向的是一个地址，则只需要覆盖这个地址
+的值就行了。
 
-对于具体的类型也可以直接使用其值覆盖 `v.ptr` 的值，比如 `SetInt`, `SetFloat`, `SetString` 等这些函数。
+对于具体的类型也可以直接使用其值覆盖 `v.ptr` 的值，比如 `SetInt`, 
+`SetFloat`, `SetString` 等这些函数。
 
-#### Call
-#### NumField
-#### NumMethod
-#### Method
-#### MethodByName
-#### Type
+## 其它特性
 
-## makefunc
+### MakeFunc 
+这个函数会创建一个依附于给定 `Type` 的新函数。 这个函数的参数有两个，
+第一个是这个函数要依附的类型类型，第二个是创建的函数函数。 先看一下源码:
 
-## swapper
+```go
+// MakeFunc returns a new function of the given Type
+// that wraps the function fn. When called, that new function
+// does the following:
+// ...
+func MakeFunc(typ Type, fn func(args []Value) (results []Value)) Value {
+    if typ.Kind() != Func {
+        panic("reflect: call of MakeFunc with non-Func type")
+    }
 
-## deepequal 
+    t := typ.common()
+    ftyp := (*funcType)(unsafe.Pointer(t))
+
+    // Indirect Go func value (dummy) to obtain
+    // actual code address. (A Go func value is a pointer
+    // to a C function pointer. https://golang.org/s/go11func.)
+    dummy := makeFuncStub
+    code := **(**uintptr)(unsafe.Pointer(&dummy))
+
+    // makeFuncImpl contains a stack map for use by the runtime
+    _, argLen, _, stack, _ := funcLayout(ftyp, nil)
+
+    impl := &makeFuncImpl{code: code, stack: stack, argLen: argLen, ftyp: ftyp, fn: fn}
+
+    return Value{t, unsafe.Pointer(impl), flag(Func)}
+}
+```
+
+makeFuncStub 是为了获取函数的代码地址, 这个函数的实现不同平台不一样，下面是 
+`asm_amd64.s`中的实现:
+
+``` asm
+EXT ·makeFuncStub(SB),(NOSPLIT|WRAPPER),$32
+    NO_LOCAL_POINTERS
+    MOVQ    DX, 0(SP)
+    LEAQ    argframe+0(FP), CX
+    MOVQ    CX, 8(SP)
+    MOVB    $0, 24(SP)
+    LEAQ    24(SP), AX
+    MOVQ    AX, 16(SP)
+    CALL    ·callReflect(SB)
+    RET
+```
+
+可以看到里面调用 `callReflect`  函数，这个函数是 MakeFunc 返回的函数调用实现真正。
+在许多方面，它与上面的 `Value.call` 方法相反。 上面的方法将使用 `Values` 的调用
+转换为带有具体参数框架的函数的调用，而 `callReflect` 将具有具体参数框架的函数调
+用转换为使用Values的调用。 
+`ctxt` 是 `MakeFunc` 生成的“闭包”。 `frame` 是指向堆栈上该闭包的参数的指针。 
+函数的源码如下:
+
+```go
+func callReflect(ctxt *makeFuncImpl, frame unsafe.Pointer, retValid *bool) {
+
+    // Copy argument frame into Values.
+    ptr := frame
+    off := uintptr(0)
+    in := make([]Value, 0, int(ftyp.inCount))
+    for _, typ := range ftyp.in() {
+        ...
+    }
+    ...
+
+    // Copy results back into argument frame.
+    if numOut > 0 {
+    ...
+    }
+}
+```
+
+通过 `makeFuncImpl` 函数又生成了一个完整的闭包函数，然后构建一个 `Value` 进行返回。
+
+这个函数可以实现一种类似于多态的效果:
+
+```go
+package main
+
+import (
+    "fmt"
+    "reflect"
+    "strings"
+)
+
+func main() {
+    var add = func(in []reflect.Value) []reflect.Value {
+        if in[0].Type().Kind() == reflect.String {
+            var s []string
+            for _, v := range in {
+                s = append(s, v.String())
+            }
+            return []reflect.Value{reflect.ValueOf(strings.Join(s, "-"))}
+        }
+
+        if in[0].Type().Kind() == reflect.Int {
+            var s int64
+            for _, v := range in {
+                s += v.Int()
+            }
+            return []reflect.Value{reflect.ValueOf(int(s))}
+        }
+        return []reflect.Value{}
+    }
+
+    var makeAdd = func(fptr interface{}) {
+        var value reflect.Value = reflect.ValueOf(fptr).Elem()
+        var v reflect.Value = reflect.MakeFunc(value.Type(), add)
+        value.Set(v)
+    }
+    var intAdd func(int, int) int
+    var stringAdd func(string, string, string) string
+    makeAdd(&intAdd)
+    fmt.Println(intAdd(1, 3))
+    makeAdd(&stringAdd)
+    fmt.Println(stringAdd("1", "3", "5"))
+}
+```
+输出：
+
+```
+4
+1-3-5
+```
+
+### Swapper
+这个函数用于产生一个切片的两个元素的交换的函数, 用于适配切片值得不同数据类型。
+对于不同的类型其方式元素交换的方式是不一样的，对于指针类型，字符串和整型其值
+其实就是一个对应类型的数组，可以通过下标直接交换值；对于更复杂的类型需要用一
+个 `sliceHeader` 的结构表示其结构，其实就是切片的底层数据类型:
+
+```go
+type sliceHeader struct {
+    Data unsafe.Pointer
+    Len  int
+    Cap  int
+}
+```
+通过 `arrayAt` 函数可以算出某个下标的偏移位置：
+
+```go
+func arrayAt(p unsafe.Pointer, i int, eltSize uintptr, whySafe string) unsafe.Pointer {
+    return add(p, uintptr(i)*eltSize, "i < len")
+}
+```
+最后通过中间变量和内存 copy 来交换两个下标的位置, 完整的代码如下：
+
+```go
+func Swapper(slice interface{}) func(i, j int) {
+    v := ValueOf(slice)
+    if v.Kind() != Slice {
+        panic(&ValueError{Method: "Swapper", Kind: v.Kind()})
+    }
+    // Fast path for slices of size 0 and 1. Nothing to swap.
+    switch v.Len() {
+    case 0:
+        return func(i, j int) { panic("reflect: slice index out of range") }
+    case 1:
+        return func(i, j int) {
+            if i != 0 || j != 0 {
+                panic("reflect: slice index out of range")
+            }
+        }
+    }
+
+    typ := v.Type().Elem().(*rtype)
+    size := typ.Size()
+    hasPtr := typ.ptrdata != 0
+
+    // Some common & small cases, without using memmove:
+    if hasPtr {
+        if size == ptrSize {
+            ps := *(*[]unsafe.Pointer)(v.ptr)
+            return func(i, j int) { ps[i], ps[j] = ps[j], ps[i] }
+        }
+        if typ.Kind() == String {
+            ss := *(*[]string)(v.ptr)
+            return func(i, j int) { ss[i], ss[j] = ss[j], ss[i] }
+        }
+    } else {
+        switch size {
+        case 8:
+            is := *(*[]int64)(v.ptr)
+            return func(i, j int) { is[i], is[j] = is[j], is[i] }
+        case 4:
+            is := *(*[]int32)(v.ptr)
+            return func(i, j int) { is[i], is[j] = is[j], is[i] }
+        case 2:
+            is := *(*[]int16)(v.ptr)
+            return func(i, j int) { is[i], is[j] = is[j], is[i] }
+        case 1:
+            is := *(*[]int8)(v.ptr)
+            return func(i, j int) { is[i], is[j] = is[j], is[i] }
+        }
+    }
+
+    s := (*sliceHeader)(v.ptr)
+    tmp := unsafe_New(typ) // swap scratch space
+
+    return func(i, j int) {
+        if uint(i) >= uint(s.Len) || uint(j) >= uint(s.Len) {
+            panic("reflect: slice index out of range")
+        }
+        val1 := arrayAt(s.Data, i, size, "i < s.Len")
+        val2 := arrayAt(s.Data, j, size, "j < s.Len")
+        typedmemmove(typ, tmp, val1)
+        typedmemmove(typ, val1, val2)
+        typedmemmove(typ, val2, tmp)
+    }
+}
+```
+
+### DeepEqual 
+
+`DeepEqual` 用来判断两个接口是否深度相等，所谓深度是指接口的 `Value` 相等。
+首先`Value` 的类型必须是相同的, 也就是 `v1.Type() == v2.Type()`; 其次是值
+的对比, 值也相同则认为它们是深度相等的。但是对于不同的类型判断的值相等 的
+方式是不一样的:
+
+- Array:  当它们的元素都是深度相等的，则它们也是深度相等的。
+- Struct: 当它们的字段(包括可导出的和不可导出的) 是深度相等的则它们的值
+就是深度相等的。
+- Func: 当它们都是 `nil` 的时候认为值是相等的，否则就是不相等的。
+- Interface: 当它们的值是深度相等的, 它们就是深度相等的
+- Map:  同时满足下面几个条件: 
+    1. 它们都是 nil 或者都不是 nil 
+    2. 它们的长度相同
+    3. 它们有相同的 key 和 value (通过 == 来判断)
+- Pointer: 如果它们能用 `==` 操作符判断相等或者它们指向的是深度相等的值，
+它们就是深度相等的。
+- Slice: 同事满足下面几个条件
+    1. 它们都是 nil 或者都不是 nil 
+    2. 它们的长度相同
+    3. 它们数据字段指向同一个数组或者数组元素是深度相等的
+注意: 零值切片和没有元素的空切片不是深度相等的( 比如：[]byte{} 和 {}byte(nil))
+- 其他类型(例如: numbers, bools, strings 和 channes 等) 只要通过操作符 
+`==` 判断是相等的，那么它们就是深度相等的。
+
+```go
+func DeepEqual(x, y interface{}) bool {
+    if x == nil || y == nil {
+        return x == y
+    }
+    v1 := ValueOf(x)
+    v2 := ValueOf(y)
+    if v1.Type() != v2.Type() {
+        return false
+    }
+    return deepValueEqual(v1, v2, make(map[visit]bool), 0)
+}
+
+func deepValueEqual(v1, v2 Value, visited map[visit]bool, depth int) bool {
+    if !v1.IsValid() || !v2.IsValid() {
+        return v1.IsValid() == v2.IsValid()
+    }
+    if v1.Type() != v2.Type() {
+        return false
+    }
+
+    // if depth > 10 { panic("deepValueEqual") }    // for debugging
+
+    // We want to avoid putting more in the visited map than we need to.
+    // For any possible reference cycle that might be encountered,
+    // hard(t) needs to return true for at least one of the types in the cycle.
+    hard := func(k Kind) bool {
+        switch k {
+        case Map, Slice, Ptr, Interface:
+            return true
+        }
+        return false
+    }
+
+    if v1.CanAddr() && v2.CanAddr() && hard(v1.Kind()) {
+        addr1 := unsafe.Pointer(v1.UnsafeAddr())
+        addr2 := unsafe.Pointer(v2.UnsafeAddr())
+        if uintptr(addr1) > uintptr(addr2) {
+            // Canonicalize order to reduce number of entries in visited.
+            // Assumes non-moving garbage collector.
+            addr1, addr2 = addr2, addr1
+        }
+
+        // Short circuit if references are already seen.
+        typ := v1.Type()
+        v := visit{addr1, addr2, typ}
+        if visited[v] {
+            return true
+        }
+
+        // Remember for later.
+        visited[v] = true
+    }
+
+    switch v1.Kind() {
+    case Array:
+        for i := 0; i < v1.Len(); i++ {
+            if !deepValueEqual(v1.Index(i), v2.Index(i), visited, depth+1) {
+                return false
+            }
+        }
+        return true
+    case Slice:
+        if v1.IsNil() != v2.IsNil() {
+            return false
+        }
+        if v1.Len() != v2.Len() {
+            return false
+        }
+        if v1.Pointer() == v2.Pointer() {
+            return true
+        }
+        for i := 0; i < v1.Len(); i++ {
+            if !deepValueEqual(v1.Index(i), v2.Index(i), visited, depth+1) {
+                return false
+            }
+        }
+        return true
+    case Interface:
+        if v1.IsNil() || v2.IsNil() {
+            return v1.IsNil() == v2.IsNil()
+        }
+        return deepValueEqual(v1.Elem(), v2.Elem(), visited, depth+1)
+    case Ptr:
+        if v1.Pointer() == v2.Pointer() {
+            return true
+        }
+        return deepValueEqual(v1.Elem(), v2.Elem(), visited, depth+1)
+    case Struct:
+        for i, n := 0, v1.NumField(); i < n; i++ {
+            if !deepValueEqual(v1.Field(i), v2.Field(i), visited, depth+1) {
+                return false
+            }
+        }
+        return true
+    case Map:
+        if v1.IsNil() != v2.IsNil() {
+            return false
+        }
+        if v1.Len() != v2.Len() {
+            return false
+        }
+        if v1.Pointer() == v2.Pointer() {
+            return true
+        }
+        for _, k := range v1.MapKeys() {
+            val1 := v1.MapIndex(k)
+            val2 := v2.MapIndex(k)
+            if !val1.IsValid() || !val2.IsValid() || !deepValueEqual(val1, val2, visited, depth+1) {
+                return false
+            }
+        }
+        return true
+    case Func:
+        if v1.IsNil() && v2.IsNil() {
+            return true
+        }
+        // Can't do better than this:
+        return false
+    default:
+        // Normal equality suffices
+        return valueInterface(v1, false) == valueInterface(v2, false)
+    }
+}
+
+func valueInterface(v Value, safe bool) interface{} {
+    if v.flag == 0 {
+        panic(&ValueError{"reflect.Value.Interface", Invalid})
+    }
+    if safe && v.flag&flagRO != 0 {
+        // Do not allow access to unexported values via Interface,
+        // because they might be pointers that should not be
+        // writable or methods or function that should not be callable.
+        panic("reflect.Value.Interface: cannot return value obtained from unexported field or method")
+    }
+    if v.flag&flagMethod != 0 {
+        v = makeMethodValue("Interface", v)
+    }
+
+    if v.kind() == Interface {
+        // Special case: return the element inside the interface.
+        // Empty interface has one layout, all interfaces with
+        // methods have a second layout.
+        if v.NumMethod() == 0 {
+            return *(*interface{})(v.ptr)
+        }
+        return *(*interface {
+            M()
+        })(v.ptr)
+    }
+
+    // TODO: pass safe to packEface so we don't need to copy if safe==true?
+    return packEface(v)
+}
+```
+
+## 总结
+Go 语言的反射原理和实现已经说的差不多了，跟其他语言一样反射可以获取数据内部的各种
+信息，并且可以对他们进行修改。这在编码是有很多优势，比如可以编写更加灵活通用的程序，
+避免了一些硬编码的情况; 还可以在编写单元测试时对变量进行修改，达到构造 Mock 数据
+的效果; 甚至一些更加高级的更加具有想象力的使用方法。
+同时反射也带来了一些负面的影响，由于反射难度大学习的成本也比较高，对开发人员有更
+多的要求。 反射是在运行时完成的，所以过渡使用反射会影响程序的运行性能，比如我们经常
+诟病 Go 语言的 Json 解析性能比较查就是因为里面大量的使用了反射机制。 所以反射虽然
+提供了更加底层的控制和通用性，也需要在使用时非常谨慎，尽量减少反射的使用。
+
+## 进一步阅读的参考文献
+- [Pike, September 2011] Rob Pike, [The Laws of Reflection](https://blog.golang.org/laws-of-reflection), 2011
+- [Wiki, November 2019] Wikipedia, [Reflection(computer programming)](https://en.wikipedia.org/wiki/Reflection_(computer_programming)), accesed November 5, 2019
 
 ## 许可
-
 [Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [two](https://two.github.io)
