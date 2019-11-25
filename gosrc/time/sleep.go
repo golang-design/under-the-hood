@@ -11,10 +11,7 @@ func Sleep(d Duration)
 // Interface to timers implemented in package runtime.
 // Must be in sync with ../runtime/time.go:/^type timer
 type runtimeTimer struct {
-	tb uintptr
-	i  int
-	pp uintptr
-
+	pp       uintptr
 	when     int64
 	period   int64
 	f        func(interface{}, uintptr) // NOTE: must not be closure
@@ -43,10 +40,9 @@ func startTimer(*runtimeTimer)
 func stopTimer(*runtimeTimer) bool
 func resetTimer(*runtimeTimer, int64)
 
-// The Timer type represents a single event.
-// When the Timer expires, the current time will be sent on C,
-// unless the Timer was created by AfterFunc.
-// A Timer must be created with NewTimer or AfterFunc.
+// Timer 类型表示了一个单一的事件。
+// 当 Timer 过期时，除非 Timer 在 AfterFunc 之后创建，当前时间将发送到 C。
+// 一个 Timer 必须通过 NewTimer 或 AfterFunc 进行创建。
 type Timer struct {
 	C <-chan Time
 	r runtimeTimer
