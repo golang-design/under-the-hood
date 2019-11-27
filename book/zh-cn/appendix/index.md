@@ -136,9 +136,9 @@ runtime type system / keywords:
 
 - [ ] src/reflect
 - [ ] src/runtime
-    - [ ] type
-      - [ ] type.go
-      - [ ] typekind.go
+    - [x] type
+      - [x] type.go
+      - [x] typekind.go
     - [x] float
       - [x] softfloat64.go
       - [x] float.go
@@ -158,8 +158,8 @@ runtime type system / keywords:
       - [ ] map_faststr.go
       - [ ] hash64.go
       - [ ] heapdump.go
-    - [ ] interface{}
-      - [ ] iface.go
+    - [x] interface{}
+      - [x] iface.go
     - [ ] slice
       - [ ] slice.go
     - [ ] string
@@ -200,7 +200,7 @@ runtime type system / keywords:
 ## 第十七章
 
 - [ ] src/net
-- [ ] src/time
+- [x] src/time
 - [ ] src/runtime
   - [ ] net
     - [ ] netpoll.go
@@ -208,16 +208,17 @@ runtime type system / keywords:
     - [ ] netpoll_fake.go
     - [ ] netpoll_kqueue.go
     - [ ] netpoll_stub.go
-  - [ ] time
-    - [ ] time.go
-    - [ ] timestub.go
-    - [ ] timestub2.go
+  - [x] time
+    - [x] time.go
+    - [x] timestub.go
+    - [x] timestub2.go
+    - [x] time_fake.go
 
 ## 通用
 
-  - [ ] common
-    - [ ] asm.s
-    - [ ] asm_amd64.s
+  - [x] common
+    - [x] asm.s
+    - [x] asm_amd64.s
     - [ ] asm_wasm.s
   - [ ] stub
     - [ ] extern.go
