@@ -419,7 +419,7 @@ G 与 P 的解绑
 #### [第十七章 其他](part4lib/ch17other/readme.md)
 
 - [17.1 `net.*`](part4lib/ch17other/net.md)
-- [17.2 `time.*`](part4lib/ch17other/time.md)
+- [17.2 `time.*` 的计时器 Timer](part4lib/ch17other/time.md)
 
 ### [结束语](finalwords.md)
 
