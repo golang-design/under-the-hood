@@ -29,14 +29,14 @@ func GOMAXPROCS(n int) int {
 	}
 
 	// 停止一切事物，将 STW 的原因设置为 P 被调整
-	stopTheWorld("GOMAXPROCS")
+	stopTheWorldGC("GOMAXPROCS")
 
 	// STW 后，修改 P 的数量
 	newprocs = int32(n)
 
 	// 重新恢复
 	// 在这个过程中，startTheWorld 会调用 procresize 进而动态的调整 P 的数量
-	startTheWorld()
+	startTheWorldGC()
 	return ret
 }
 

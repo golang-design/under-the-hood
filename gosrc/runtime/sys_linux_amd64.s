@@ -46,6 +46,7 @@
 #define SYS_faccessat		269
 #define SYS_epoll_pwait		281
 #define SYS_epoll_create1	291
+#define SYS_pipe2		293
 
 TEXT runtime·exit(SB),NOSPLIT,$0-4
 	MOVL	code+0(FP), DI
@@ -89,15 +90,12 @@ TEXT runtime·closefd(SB),NOSPLIT,$0-12
 	MOVL	AX, ret+8(FP)
 	RET
 
-TEXT runtime·write(SB),NOSPLIT,$0-28
+TEXT runtime·write1(SB),NOSPLIT,$0-28
 	MOVQ	fd+0(FP), DI
 	MOVQ	p+8(FP), SI
 	MOVL	n+16(FP), DX
 	MOVL	$SYS_write, AX
 	SYSCALL
-	CMPQ	AX, $0xfffffffffffff001
-	JLS	2(PC)
-	MOVL	$-1, AX
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -107,10 +105,24 @@ TEXT runtime·read(SB),NOSPLIT,$0-28
 	MOVL	n+16(FP), DX
 	MOVL	$SYS_read, AX
 	SYSCALL
-	CMPQ	AX, $0xfffffffffffff001
-	JLS	2(PC)
-	MOVL	$-1, AX
 	MOVL	AX, ret+24(FP)
+	RET
+
+// func pipe() (r, w int32, errno int32)
+TEXT runtime·pipe(SB),NOSPLIT,$0-12
+	LEAQ	r+0(FP), DI
+	MOVL	$SYS_pipe, AX
+	SYSCALL
+	MOVL	AX, errno+8(FP)
+	RET
+
+// func pipe2(flags int32) (r, w int32, errno int32)
+TEXT runtime·pipe2(SB),NOSPLIT,$0-20
+	LEAQ	r+8(FP), DI
+	MOVL	flags+0(FP), SI
+	MOVL	$SYS_pipe2, AX
+	SYSCALL
+	MOVL	AX, errno+16(FP)
 	RET
 
 TEXT runtime·usleep(SB),NOSPLIT,$16
@@ -169,6 +181,20 @@ TEXT runtime·pipe_trampoline(SB),NOSPLIT,$0
 	POPQ	BP
 	RET
 
+TEXT ·getpid(SB),NOSPLIT,$0-8
+	MOVL	$SYS_getpid, AX
+	SYSCALL
+	MOVQ	AX, ret+0(FP)
+	RET
+
+TEXT ·tgkill(SB),NOSPLIT,$0
+	MOVQ	tgid+0(FP), DI
+	MOVQ	tid+8(FP), SI
+	MOVQ	sig+16(FP), DX
+	MOVL	$SYS_tgkill, AX
+	SYSCALL
+	RET
+
 TEXT runtime·setitimer(SB),NOSPLIT,$0-24
 	MOVL	mode+0(FP), DI
 	MOVQ	new+8(FP), SI
@@ -186,8 +212,8 @@ TEXT runtime·mincore(SB),NOSPLIT,$0-28
 	MOVL	AX, ret+24(FP)
 	RET
 
-// func walltime() (sec int64, nsec int32)
-TEXT runtime·walltime(SB),NOSPLIT,$0-12
+// func walltime1() (sec int64, nsec int32)
+TEXT runtime·walltime1(SB),NOSPLIT,$0-12
 	// 我们不知道 VDSO 代码需要多少栈空间，因此切换到 g0。
 	// 特别是，配置了 CONFIG_OPTIMIZE_INLINING = n 的内核
 	// 和加固可以再 gettime_sym 中使用整页的栈空间
@@ -243,7 +269,7 @@ fallback:
 	MOVL	DX, nsec+8(FP)
 	RET
 
-TEXT runtime·nanotime(SB),NOSPLIT,$0-8
+TEXT runtime·nanotime1(SB),NOSPLIT,$0-8
 	// Switch to g0 stack. See comment above in runtime·walltime.
 
 	MOVQ	SP, BP	// Save old SP; BP unchanged by C code.
@@ -692,6 +718,20 @@ TEXT runtime·closeonexec(SB),NOSPLIT,$0
 	SYSCALL
 	RET
 
+// func runtime·setNonblock(int32 fd)
+TEXT runtime·setNonblock(SB),NOSPLIT,$0-4
+	MOVL    fd+0(FP), DI  // fd
+	MOVQ    $3, SI  // F_GETFL
+	MOVQ    $0, DX
+	MOVL	$SYS_fcntl, AX
+	SYSCALL
+	MOVL	fd+0(FP), DI // fd
+	MOVQ	$4, SI // F_SETFL
+	MOVQ	$0x800, DX // O_NONBLOCK
+	ORL	AX, DX
+	MOVL	$SYS_fcntl, AX
+	SYSCALL
+	RET
 
 // int access(const char *name, int mode)
 TEXT runtime·access(SB),NOSPLIT,$0

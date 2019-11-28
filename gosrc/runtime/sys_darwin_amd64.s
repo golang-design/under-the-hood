@@ -46,6 +46,12 @@ TEXT runtime·read_trampoline(SB),NOSPLIT,$0
 	MOVL	16(DI), DX		// arg 3 count
 	MOVL	0(DI), DI		// arg 1 fd
 	CALL	libc_read(SB)
+	TESTL	AX, AX
+	JGE	noerr
+	CALL	libc_error(SB)
+	MOVL	(AX), AX
+	NEGL	AX			// caller expects negative errno value
+noerr:
 	POPQ	BP
 	RET
 
@@ -56,6 +62,12 @@ TEXT runtime·write_trampoline(SB),NOSPLIT,$0
 	MOVL	16(DI), DX		// arg 3 count
 	MOVQ	0(DI), DI		// arg 1 fd
 	CALL	libc_write(SB)
+	TESTL	AX, AX
+	JGE	noerr
+	CALL	libc_error(SB)
+	MOVL	(AX), AX
+	NEGL	AX			// caller expects negative errno value
+noerr:
 	POPQ	BP
 	RET
 
@@ -520,6 +532,24 @@ TEXT runtime·dispatch_time_trampoline(SB),NOSPLIT,$0
 	MOVQ	8(BX), SI	// arg 2 delta
 	CALL	libc_dispatch_time(SB)
 	MOVQ	AX, 16(BX)
+	POPQ	BP
+	RET
+
+TEXT runtime·pthread_self_trampoline(SB),NOSPLIT,$0
+	PUSHQ	BP
+	MOVQ	SP, BP
+	MOVQ	DI, BX		// BX is caller-save
+	CALL	libc_pthread_self(SB)
+	MOVQ	AX, 0(BX)	// return value
+	POPQ	BP
+	RET
+
+TEXT runtime·pthread_kill_trampoline(SB),NOSPLIT,$0
+	PUSHQ	BP
+	MOVQ	SP, BP
+	MOVQ	8(DI), SI	// arg 2 sig
+	MOVQ	0(DI), DI	// arg 1 thread
+	CALL	libc_pthread_kill(SB)
 	POPQ	BP
 	RET
 

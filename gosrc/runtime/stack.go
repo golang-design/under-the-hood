@@ -327,7 +327,7 @@ func stackalloc(n uint32) stack {
 
 	// 直接从系统中分配内存，用于调试。
 	if debug.efence != 0 || stackFromSystem != 0 {
-		n = uint32(round(uintptr(n), physPageSize))
+		n = uint32(alignUp(uintptr(n), physPageSize))
 		v := sysAlloc(uintptr(n), &memstats.stacks_sys)
 		if v == nil {
 			throw("out of memory (stackalloc)")
@@ -459,7 +459,7 @@ func stackfree(stk stack) {
 		}
 	} else {
 		s := spanOfUnchecked(uintptr(v))
-		if s.state != mSpanManual {
+		if s.state.get() != mSpanManual {
 			println(hex(s.base()), v)
 			throw("bad span state")
 		}
@@ -619,7 +619,7 @@ func adjustframe(frame *stkframe, arg unsafe.Pointer) bool {
 		print("    adjusting ", funcname(f), " frame=[", hex(frame.sp), ",", hex(frame.fp), "] pc=", hex(frame.pc), " continpc=", hex(frame.continpc), "\n")
 	}
 	if f.funcID == funcID_systemstack_switch {
-		// A special routine at the bottom of stack of a goroutine that does an systemstack call.
+		// A special routine at the bottom of stack of a goroutine that does a systemstack call.
 		// We will allow it to be copied even though we don't
 		// have full GC info for it (because it is written in asm).
 		return true
@@ -727,6 +727,8 @@ func adjustdefers(gp *g, adjinfo *adjustinfo) {
 		adjustpointer(adjinfo, unsafe.Pointer(&d.fn))
 		adjustpointer(adjinfo, unsafe.Pointer(&d.sp))
 		adjustpointer(adjinfo, unsafe.Pointer(&d._panic))
+		adjustpointer(adjinfo, unsafe.Pointer(&d.varp))
+		adjustpointer(adjinfo, unsafe.Pointer(&d.fd))
 	}
 
 	// Adjust defer argument blocks the same way we adjust active stack frames.
@@ -775,10 +777,6 @@ func syncadjustsudogs(gp *g, used uintptr, adjinfo *adjustinfo) uintptr {
 	}
 
 	// Lock channels to prevent concurrent send/receive.
-	// It's important that we *only* do this for async
-	// copystack; otherwise, gp may be in the middle of
-	// putting itself on wait queues and this would
-	// self-deadlock.
 	var lastc *hchan
 	for sg := gp.waiting; sg != nil; sg = sg.waitlink {
 		if sg.c != lastc {
@@ -816,13 +814,7 @@ func syncadjustsudogs(gp *g, used uintptr, adjinfo *adjustinfo) uintptr {
 // 复制 gp 的执行栈到一个新的具有不同大小的栈上
 // 调用方必须将 gp 的状态切换到 Gcopystack 上
 //
-// If sync is true, this is a self-triggered stack growth and, in
-// particular, no other G may be writing to gp's stack (e.g., via a
-// channel operation). If sync is false, copystack protects against
-// concurrent channel operations.
-// 当 sync 为 true 时，为自行出发的栈增长，特别地，没有其他 G 能写入 gp 的栈（例如通过 channel）
-// 当 sync 为 false 时，copystack 会保护当前的并发 channel 操作
-func copystack(gp *g, newsize uintptr, sync bool) {
+func copystack(gp *g, newsize uintptr) {
 	if gp.syscallsp != 0 {
 		throw("stack growth not allowed in system call")
 	}
@@ -848,15 +840,16 @@ func copystack(gp *g, newsize uintptr, sync bool) {
 
 	// 调整 sudogs, 必要时与 channel 操作同步
 	ncopy := used
-	if sync {
+	if !gp.activeStackChans {
 		adjustsudogs(gp, &adjinfo)
 	} else {
-		// sudogs can point in to the stack. During concurrent
-		// shrinking, these areas may be written to. Find the
-		// highest such pointer so we can handle everything
-		// there and below carefully. (This shouldn't be far
-		// from the bottom of the stack, so there's little
-		// cost in handling everything below it carefully.)
+		// sudogs may be pointing in to the stack and gp has
+		// released channel locks, so other goroutines could
+		// be writing to gp's stack. Find the highest such
+		// pointer so we can handle everything there and below
+		// carefully. (This shouldn't be far from the bottom
+		// of the stack, so there's little cost in handling
+		// everything below it carefully.)
 		adjinfo.sghi = findsghi(gp, old)
 
 		// Synchronize with channel ops and copy the part of
@@ -907,7 +900,7 @@ func round2(x int32) int32 {
 // Stack growth is multiplicative, for constant amortized cost.
 //
 // g->atomicstatus will be Grunning or Gscanrunning upon entry.
-// If the GC is trying to stop this g then it will set preemptscan to true.
+// If the scheduler is trying to stop this g, then it will set preemptStop.
 //
 // This must be nowritebarrierrec because it can be called as part of
 // stack growth from other nowritebarrierrec functions, but the
@@ -974,7 +967,7 @@ func newstack() {
 	// it needs a lock held by the goroutine), that small preemption turns
 	// into a real deadlock.
 	if preempt {
-		if thisg.m.locks != 0 || thisg.m.mallocing != 0 || thisg.m.preemptoff != "" || thisg.m.p.ptr().status != _Prunning {
+		if !canPreemptM(thisg.m) {
 			// Let the goroutine keep running for now.
 			// gp->preempt is set, so it will be preempted next time.
 			gp.stackguard0 = gp.stack.lo + _StackGuard
@@ -1008,34 +1001,19 @@ func newstack() {
 		if thisg.m.p == 0 && thisg.m.locks == 0 {
 			throw("runtime: g is running but p is not")
 		}
-		// Synchronize with scang.
-		casgstatus(gp, _Grunning, _Gwaiting)
-		if gp.preemptscan {
-			for !castogscanstatus(gp, _Gwaiting, _Gscanwaiting) {
-				// Likely to be racing with the GC as
-				// it sees a _Gwaiting and does the
-				// stack scan. If so, gcworkdone will
-				// be set and gcphasework will simply
-				// return.
-			}
-			if !gp.gcscandone {
-				// gcw is safe because we're on the
-				// system stack.
-				gcw := &gp.m.p.ptr().gcw
-				scanstack(gp, gcw)
-				gp.gcscandone = true
-			}
-			gp.preemptscan = false
-			gp.preempt = false
-			casfrom_Gscanstatus(gp, _Gscanwaiting, _Gwaiting)
-			// This clears gcscanvalid.
-			casgstatus(gp, _Gwaiting, _Grunning)
-			gp.stackguard0 = gp.stack.lo + _StackGuard
-			gogo(&gp.sched) // 用不返回
+
+		if gp.preemptShrink {
+			// We're at a synchronous safe point now, so
+			// do the pending stack shrink.
+			gp.preemptShrink = false
+			shrinkstack(gp)
+		}
+
+		if gp.preemptStop {
+			preemptPark(gp) // never returns
 		}
 
 		// Act like goroutine called runtime.Gosched.
-		casgstatus(gp, _Gwaiting, _Grunning)
 		gopreempt_m(gp) // 永不返回
 	}
 
@@ -1052,7 +1030,7 @@ func newstack() {
 	casgstatus(gp, _Grunning, _Gcopystack)
 
 	// 因为 gp 处于 Gcopystack 状态，当我们对栈进行复制时并发 GC 不会扫描此栈
-	copystack(gp, newsize, true)
+	copystack(gp, newsize)
 	if stackDebug >= 1 {
 		print("stack grow done\n")
 	}
@@ -1076,16 +1054,46 @@ func gostartcallfn(gobuf *gobuf, fv *funcval) {
 	gostartcall(gobuf, fn, unsafe.Pointer(fv))
 }
 
+// isShrinkStackSafe returns whether it's safe to attempt to shrink
+// gp's stack. Shrinking the stack is only safe when we have precise
+// pointer maps for all frames on the stack.
+func isShrinkStackSafe(gp *g) bool {
+	// We can't copy the stack if we're in a syscall.
+	// The syscall might have pointers into the stack and
+	// often we don't have precise pointer maps for the innermost
+	// frames.
+	//
+	// We also can't copy the stack if we're at an asynchronous
+	// safe-point because we don't have precise pointer maps for
+	// all frames.
+	return gp.syscallsp == 0 && !gp.asyncSafePoint
+}
+
 // Maybe shrink the stack being used by gp.
-// Called at garbage collection time.
-// gp must be stopped, but the world need not be.
+//
+// gp must be stopped and we must own its stack. It may be in
+// _Grunning, but only if this is our own user G.
 func shrinkstack(gp *g) {
-	gstatus := readgstatus(gp)
 	if gp.stack.lo == 0 {
 		throw("missing stack in shrinkstack")
 	}
-	if gstatus&_Gscan == 0 {
-		throw("bad status in shrinkstack")
+	if s := readgstatus(gp); s&_Gscan == 0 {
+		// We don't own the stack via _Gscan. We could still
+		// own it if this is our own user G and we're on the
+		// system stack.
+		if !(gp == getg().m.curg && getg() != getg().m.curg && s == _Grunning) {
+			// We don't own the stack.
+			throw("bad status in shrinkstack")
+		}
+	}
+	if !isShrinkStackSafe(gp) {
+		throw("shrinkstack at bad time")
+	}
+	// Check for self-shrinks while in a libcall. These may have
+	// pointers into the stack disguised as uintptrs, but these
+	// code paths should all be nosplit.
+	if gp == getg().m.curg && gp.m.libcallsp != 0 {
+		throw("shrinking stack in libcall")
 	}
 
 	if debug.gcshrinkstackoff > 0 {
@@ -1115,20 +1123,11 @@ func shrinkstack(gp *g) {
 		return
 	}
 
-	// We can't copy the stack if we're in a syscall.
-	// The syscall might have pointers into the stack.
-	if gp.syscallsp != 0 {
-		return
-	}
-	if sys.GoosWindows != 0 && gp.m != nil && gp.m.libcallsp != 0 {
-		return
-	}
-
 	if stackDebug > 0 {
 		print("shrinking stack ", oldsize, "->", newsize, "\n")
 	}
 
-	copystack(gp, newsize, false)
+	copystack(gp, newsize)
 }
 
 // freeStackSpans frees unused stack spans at the end of GC.

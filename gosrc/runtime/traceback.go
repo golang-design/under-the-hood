@@ -334,7 +334,20 @@ func gentraceback(pc0, sp0, lr0 uintptr, gp *g, skip int, pcbuf *uintptr, max in
 			pc := frame.pc
 			// backup to CALL instruction to read inlining info (same logic as below)
 			tracepc := pc
-			if (n > 0 || flags&_TraceTrap == 0) && frame.pc > f.entry && !waspanic {
+			// Normally, pc is a return address. In that case, we want to look up
+			// file/line information using pc-1, because that is the pc of the
+			// call instruction (more precisely, the last byte of the call instruction).
+			// Callers expect the pc buffer to contain return addresses and do the
+			// same -1 themselves, so we keep pc unchanged.
+			// When the pc is from a signal (e.g. profiler or segv) then we want
+			// to look up file/line information using pc, and we store pc+1 in the
+			// pc buffer so callers can unconditionally subtract 1 before looking up.
+			// See issue 34123.
+			// The pc can be at function entry when the frame is initialized without
+			// actually running code, like runtime.mstart.
+			if (n == 0 && flags&_TraceTrap != 0) || waspanic || pc == f.entry {
+				pc++
+			} else {
 				tracepc--
 			}
 
@@ -456,6 +469,7 @@ func gentraceback(pc0, sp0, lr0 uintptr, gp *g, skip int, pcbuf *uintptr, max in
 		}
 
 		waspanic = f.funcID == funcID_sigpanic
+		injectedCall := waspanic || f.funcID == funcID_asyncPreempt
 
 		// Do not unwind past the bottom of the stack.
 		if !flr.valid() {
@@ -472,7 +486,7 @@ func gentraceback(pc0, sp0, lr0 uintptr, gp *g, skip int, pcbuf *uintptr, max in
 
 		// On link register architectures, sighandler saves the LR on stack
 		// before faking a call to sigpanic.
-		if usesLR && waspanic {
+		if usesLR && injectedCall {
 			x := *(*uintptr)(unsafe.Pointer(frame.sp))
 			frame.sp += sys.MinFrameSize
 			if GOARCH == "arm64" {
@@ -854,6 +868,7 @@ var gStatusStrings = [...]string{
 	_Gwaiting:   "waiting",
 	_Gdead:      "dead",
 	_Gcopystack: "copystack",
+	_Gpreempted: "preempted",
 }
 
 func goroutineheader(gp *g) {
@@ -990,7 +1005,7 @@ func topofstack(f funcInfo, g0 bool) bool {
 }
 
 // isSystemGoroutine 报告 goroutine g 是否在 stack dump 和 deadlock 检测器中忽略
-// 这可以是除了 runtime.main 和某些时刻的 runtime.runfinq 的任何 runtime.* 的入口的 goroutine
+// 这可以是除了 runtime.main, runtime.handleAsyncEvent (wasm only) 和某些时刻的 runtime.runfinq 的任何 runtime.* 的入口的 goroutine
 //
 // If fixed is true, any goroutine that can vary between user and
 // system (that is, the finalizer goroutine) is considered a user
@@ -1001,7 +1016,7 @@ func isSystemGoroutine(gp *g, fixed bool) bool {
 	if !f.valid() {
 		return false
 	}
-	if f.funcID == funcID_runtime_main {
+	if f.funcID == funcID_runtime_main || f.funcID == funcID_handleAsyncEvent {
 		return false
 	}
 	if f.funcID == funcID_runfinq {

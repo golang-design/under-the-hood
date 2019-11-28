@@ -264,9 +264,14 @@ func call1073741824(typ, fn, arg unsafe.Pointer, n, retoffset uint32)
 
 func systemstack_switch()
 
-// 四舍五入 n 到 a 的倍数， a 一定是2的幂
-func round(n, a uintptr) uintptr {
+// 向上入 n 到 a 的倍数， a 一定是2的幂
+func alignUp(n, a uintptr) uintptr {
 	return (n + a - 1) &^ (a - 1)
+}
+
+// 向下舍入 n 到 a 的倍数. a 一定是 2 的幂
+func alignDown(n, a uintptr) uintptr {
+	return n &^ (a - 1)
 }
 
 // checkASM reports whether assembly runtime checks have passed.
