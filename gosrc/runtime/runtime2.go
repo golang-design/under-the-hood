@@ -33,7 +33,7 @@ const (
 	_Grunnable // 1
 
 	// _Grunning 表示 goroutine 可能正在运行用户代码。运行栈被该 goroutine 拥有。
-	// 该 goroutine 不在运行队列中，且被分配了一个 M 和 一个 P。
+	// 该 goroutine 不在运行队列中，且被分配了一个 M 和 一个 P。(g.m 和 g.m.p 均有效)
 	_Grunning // 2
 
 	// _Gsyscall 表示当前 goroutine 正在执行一个系统调用，没有执行用户代码。
@@ -63,6 +63,13 @@ const (
 	// stack is owned by the goroutine that put it in _Gcopystack.
 	_Gcopystack // 8
 
+	// _Gpreempted means this goroutine stopped itself for a
+	// suspendG preemption. It is like _Gwaiting, but nothing is
+	// yet responsible for ready()ing it. Some suspendG must CAS
+	// the status to _Gwaiting to take responsibility for
+	// ready()ing this G.
+	_Gpreempted // 9
+
 	// _Gscan combined with one of the above states other than
 	// _Grunning indicates that GC is scanning the stack. The
 	// goroutine is not executing user code and the stack is owned
@@ -74,11 +81,12 @@ const (
 	//
 	// atomicstatus&~Gscan gives the state the goroutine will
 	// return to when the scan completes.
-	_Gscan         = 0x1000
-	_Gscanrunnable = _Gscan + _Grunnable // 0x1001
-	_Gscanrunning  = _Gscan + _Grunning  // 0x1002
-	_Gscansyscall  = _Gscan + _Gsyscall  // 0x1003
-	_Gscanwaiting  = _Gscan + _Gwaiting  // 0x1004
+	_Gscan          = 0x1000
+	_Gscanrunnable  = _Gscan + _Grunnable  // 0x1001
+	_Gscanrunning   = _Gscan + _Grunning   // 0x1002
+	_Gscansyscall   = _Gscan + _Gsyscall   // 0x1003
+	_Gscanwaiting   = _Gscan + _Gwaiting   // 0x1004
+	_Gscanpreempted = _Gscan + _Gpreempted // 0x1009
 )
 
 const (
@@ -353,31 +361,43 @@ type g struct {
 	// 在其他栈上值为 ~0 用于触发 morestackc (并 crash) 调用
 	stackguard1 uintptr // 偏移量与 liblink 一致
 
-	_panic         *_panic // innermost panic - 偏移量用于 liblink
-	_defer         *_defer // innermost defer
-	m              *m      // 当前的 m; 偏移量对 arm liblink 透明
-	sched          gobuf
-	syscallsp      uintptr        // 如果 status==Gsyscall, 则 syscallsp = sched.sp 并在 GC 期间使用
-	syscallpc      uintptr        // 如果 status==Gsyscall, 则 syscallpc = sched.pc 并在 GC 期间使用
-	stktopsp       uintptr        // 期望 sp 位于栈顶，用于回溯检查
-	param          unsafe.Pointer // wakeup 唤醒时候传递的参数
-	atomicstatus   uint32
-	stackLock      uint32 // sigprof/scang 锁; TODO: fold in to atomicstatus
-	goid           int64
-	schedlink      guintptr
-	waitsince      int64      // g 阻塞的时间
-	waitreason     waitReason // 如果 status==Gwaiting，则记录等待的原因
-	preempt        bool       // 抢占信号，stackguard0 = stackpreempt 的副本
-	paniconfault   bool       // 发生 fault panic （不崩溃）的地址
-	preemptscan    bool       // 为 gc 进行 scan 的被强占的 g
-	gcscandone     bool       // g 执行栈已经 scan 了；此此段受 _Gscan 位保护
-	gcscanvalid    bool       // 在 gc 周期开始时为 false；当 G 从上次 scan 后就没有运行时为 true TODO: remove?
-	throwsplit     bool       // 必须不能进行栈分段
-	raceignore     int8       // 忽略 race 检查事件
-	sysblocktraced bool       // StartTrace 已经出发了此 goroutine 的 EvGoInSyscall
-	sysexitticks   int64      // 当 syscall 返回时的 cputicks（用于跟踪）
-	traceseq       uint64     // trace event sequencer 跟踪事件排序器
-	tracelastp     puintptr   // 最后一个为此 goroutine 触发事件的 P
+	_panic        *_panic // innermost panic - 偏移量用于 liblink
+	_defer        *_defer // innermost defer
+	m             *m      // 当前的 m; 偏移量对 arm liblink 透明
+	sched         gobuf
+	syscallsp     uintptr        // 如果 status==Gsyscall, 则 syscallsp = sched.sp 并在 GC 期间使用
+	syscallpc     uintptr        // 如果 status==Gsyscall, 则 syscallpc = sched.pc 并在 GC 期间使用
+	stktopsp      uintptr        // 期望 sp 位于栈顶，用于回溯检查
+	param         unsafe.Pointer // wakeup 唤醒时候传递的参数
+	atomicstatus  uint32
+	stackLock     uint32 // sigprof/scang 锁; TODO: fold in to atomicstatus
+	goid          int64
+	schedlink     guintptr
+	waitsince     int64      // g 阻塞的时间
+	waitreason    waitReason // 如果 status==Gwaiting，则记录等待的原因
+	preempt       bool       // 抢占信号，stackguard0 = stackpreempt 的副本
+	preemptStop   bool       // transition to _Gpreempted on preemption; otherwise, just deschedule
+	preemptShrink bool       // shrink stack at synchronous safe point
+
+	// asyncSafePoint is set if g is stopped at an asynchronous
+	// safe point. This means there are frames on the stack
+	// without precise pointer information.
+	asyncSafePoint bool
+
+	paniconfault bool // 发生 fault panic （不崩溃）的地址
+	gcscandone   bool // g 执行栈已经 scan 了；此此段受 _Gscan 位保护
+	throwsplit   bool // 必须不能进行栈分段
+	// activeStackChans indicates that there are unlocked channels
+	// pointing into this goroutine's stack. If true, stack
+	// copying needs to acquire channel locks to protect these
+	// areas of the stack.
+	activeStackChans bool
+
+	raceignore     int8     // 忽略 race 检查事件
+	sysblocktraced bool     // StartTrace 已经出发了此 goroutine 的 EvGoInSyscall
+	sysexitticks   int64    // 当 syscall 返回时的 cputicks（用于跟踪）
+	traceseq       uint64   // trace event sequencer 跟踪事件排序器
+	tracelastp     puintptr // 最后一个为此 goroutine 触发事件的 P
 	lockedm        muintptr
 	sig            uint32
 	writebuf       []byte
@@ -456,8 +476,7 @@ type m struct {
 	waittraceskip int
 	startingtrace bool
 	syscalltick   uint32
-	thread        uintptr // 线程处理
-	freelink      *m      // 在 sched.freem 上
+	freelink      *m // 在 sched.freem 上
 
 	// 下面这些字段因为它们太大而不能放在低级的 NOSPLIT 函数的堆栈上。
 	libcall   libcall
@@ -468,6 +487,11 @@ type m struct {
 
 	vdsoSP uintptr // SP 用于 VDSO 调用的回溯 (如果没有产生调用则为 0)
 	vdsoPC uintptr // PC 用于 VDSO 调用的回溯
+
+	// preemptGen counts the number of completed preemption
+	// signals. This is used to detect when a preemption is
+	// requested, but fails. Accessed atomically.
+	preemptGen uint32
 
 	dlogPerM
 
@@ -483,6 +507,7 @@ type p struct {
 	sysmontick  sysmontick // 系统监控观察到的最后一次记录
 	m           muintptr   // 反向链接到关联的 m （nil 则表示 idle）
 	mcache      *mcache
+	pcache      pageCache
 	raceprocctx uintptr
 
 	deferpool    [5][]*_defer // 不同大小的可用的 defer 结构池 (见 panic.go)
@@ -513,6 +538,17 @@ type p struct {
 
 	sudogcache []*sudog
 	sudogbuf   [128]*sudog
+
+	// Cache of mspan objects from the heap.
+	mspancache struct {
+		// We need an explicit length here because this field is used
+		// in allocation codepaths where write barriers are not allowed,
+		// and eliminating the write barrier/keeping it eliminated from
+		// slice updates is tricky, moreso than just managing the length
+		// ourselves.
+		len int
+		buf [128]*mspan
+	}
 
 	tracebuf traceBufPtr
 
@@ -547,13 +583,36 @@ type p struct {
 
 	runSafePointFn uint32 // 如果为 1, 则在下一个 safe-point 运行 sched.safePointFn
 
+	// Lock for timers. We normally access the timers while running
+	// on this P, but the scheduler can also do it from a different P.
+	timersLock mutex
+
+	// Actions to take at some time. This is used to implement the
+	// standard library's time package.
+	// Must hold timersLock to access.
+	timers []*timer
+
+	// Number of timerModifiedEarlier timers on P's heap.
+	// This should only be modified while holding timersLock,
+	// or while the timer status is in a transient state
+	// such as timerModifying.
+	adjustTimers uint32
+
+	// Race context used while executing timer functions.
+	timerRaceCtx uintptr
+
+	// preempt is set to indicate that this P should be enter the
+	// scheduler ASAP (regardless of what G is running on it).
+	preempt bool
+
 	pad cpu.CacheLinePad
 }
 
 type schedt struct {
 	// 应该被原子访问。保持在第一个字段来确保 32 位系统上的对齐
-	goidgen  uint64
-	lastpoll uint64
+	goidgen   uint64
+	lastpoll  uint64
+	pollUntil uint64 // time to which current poll is sleeping
 
 	lock mutex
 
@@ -647,7 +706,7 @@ type _func struct {
 	nameoff int32   // function name
 
 	args        int32  // in/out args size
-	deferreturn uint32 // offset of a deferreturn block from entry, if any.
+	deferreturn uint32 // offset of start of a deferreturn call instruction from entry, if any.
 
 	pcsp      int32
 	pcfile    int32
@@ -672,7 +731,7 @@ type funcinl struct {
 // layout of Itab known to compilers
 // allocated in non-garbage-collected memory
 // Needs to be in sync with
-// ../cmd/compile/internal/gc/reflect.go:/^func.dumptypestructs.
+// ../cmd/compile/internal/gc/reflect.go:/^func.dumptabs.
 type itab struct {
 	inter *interfacetype
 	_type *_type
@@ -719,7 +778,7 @@ func extendRandom(r []byte, n int) {
 }
 
 // _defer 在被推迟调用的列表上保存了一个入口，
-// 如果你在这里增加了一个字段，则需要在 freedefer 中增加清除它的代码
+// 如果你在这里增加了一个字段，则需要在 freedefer 和 deferProStack 中增加清除它的代码
 // This struct must match the code in cmd/compile/internal/gc/reflect.go:deferstruct
 // and cmd/compile/internal/gc/ssa.go:(*state).call.
 // Some defers will be allocated on the stack and some on the heap.
@@ -730,11 +789,15 @@ type _defer struct {
 	siz     int32 // includes both arguments and results
 	started bool
 	heap    bool
-	sp      uintptr // defer 时的 sp
-	pc      uintptr
-	fn      *funcval
-	_panic  *_panic // panic 被 defer
-	link    *_defer
+	// openDefer indicates that this _defer is for a frame with open-coded
+	// defers. We have only one defer record for the entire frame (which may
+	// currently have 0, 1, or more defers active).
+	openDefer bool
+	sp        uintptr  // defer 时的 sp
+	pc        uintptr  // pc at time of defer
+	fn        *funcval // can be nil for open-coded defers
+	_panic    *_panic  // panic 被 defer
+	link      *_defer
 }
 
 // _panic 保存了一个活跃的 panic
@@ -749,8 +812,11 @@ type _panic struct {
 	argp      unsafe.Pointer // panic 期间 defer 调用参数的指针; 无法移动 - liblink 已知
 	arg       interface{}    // panic 的参数
 	link      *_panic        // link 链接到更早的 panic
+	pc        uintptr        // where to return to in runtime if this panic is bypassed
+	sp        unsafe.Pointer // where to return to in runtime if this panic is bypassed
 	recovered bool           // 表明 panic 是否结束
 	aborted   bool           // 表明 panic 是否忽略
+	goexit    bool
 }
 
 // stack traces
@@ -813,6 +879,7 @@ const (
 	waitReasonTraceReaderBlocked                      // "trace reader (blocked)"
 	waitReasonWaitForGCCycle                          // "wait for GC cycle"
 	waitReasonGCWorkerIdle                            // "GC worker (idle)"
+	waitReasonPreempted                               // "preempted"
 )
 
 var waitReasonStrings = [...]string{
@@ -841,6 +908,7 @@ var waitReasonStrings = [...]string{
 	waitReasonTraceReaderBlocked:    "trace reader (blocked)",
 	waitReasonWaitForGCCycle:        "wait for GC cycle",
 	waitReasonGCWorkerIdle:          "GC worker (idle)",
+	waitReasonPreempted:             "preempted",
 }
 
 func (w waitReason) String() string {
@@ -864,7 +932,7 @@ var (
 	// 有关可用的 cpu 功能的信息。
 	// 在 runtime.cpuinit 中启动时设置。
 	// 运行时之外的包不应使用这些包因为它们不是外部 api。
-	// 启动时在 asm_{386,amd64,amd64p32}.s 中设置
+	// 启动时在 asm_{386,amd64}.s 中设置
 	processorVersionInfo uint32
 	isIntel              bool
 	lfenceBeforeRdtsc    bool

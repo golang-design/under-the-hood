@@ -153,7 +153,7 @@ func makechan(t *chantype, size int) *hchan {
 	c.dataqsiz = uint(size)
 
 	if debugChan {
-		print("makechan: chan=", c, "; elemsize=", elem.size, "; elemalg=", elem.alg, "; dataqsiz=", size, "\n")
+		print("makechan: chan=", c, "; elemsize=", elem.size, "; dataqsiz=", size, "\n")
 	}
 	return c
 }
@@ -161,6 +161,20 @@ func makechan(t *chantype, size int) *hchan {
 // chanbuf(c, i) is pointer to the i'th slot in the buffer.
 func chanbuf(c *hchan, i uint) unsafe.Pointer {
 	return add(c.buf, uintptr(i)*uintptr(c.elemsize))
+}
+
+// full 判断向一个 channel 发送消息时是否会发生阻塞（即 channel 满）
+// 它使用了一个可变状态的单字读（single word-sized read），所以尽管结果立刻返回
+// true，正确的结果可能会在调用函数后发生改变。
+func full(c *hchan) bool {
+	// c.dataqsiz 在 channel 被创建后是不可变的
+	// 因此任何时间的读取操作都是安全的
+	if c.dataqsiz == 0 {
+		// 假设指针的读为 relaxed-atomic
+		return c.recvq.first == nil
+	}
+	// 假设 uint 的读为 relaxed-atomic
+	return c.qcount == c.dataqsiz
 }
 
 // entry point for c <- x from compiled code
@@ -202,8 +216,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 	// 注意到 channel 不可能从关闭转换为未关闭状态，因此这里的失败条件为：
 	// buffer 为空（或没有）时 c.recvq.first 为空，或 buffer 已满
 	// 当 c.closed 发生重排在条件之后被读取时，其实已经隐含了上一个条件检查中 channel 未被关闭。
-	if !block && c.closed == 0 && ((c.dataqsiz == 0 && c.recvq.first == nil) ||
-		(c.dataqsiz > 0 && c.qcount == c.dataqsiz)) {
+	if !block && c.closed == 0 && full(c) {
 		return false
 	}
 
@@ -267,7 +280,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 	gp.waiting = mysg
 	gp.param = nil
 	c.sendq.enqueue(mysg)
-	goparkunlock(&c.lock, waitReasonChanSend, traceEvGoBlockSend, 3) // 将当前的 g 从调度队列移出
+	gopark(chanparkcommit, unsafe.Pointer(&c.lock), waitReasonChanSend, traceEvGoBlockSend, 2) // 将当前的 g 从调度队列移出
 	// 因为调度器在停止当前 g 的时候会记录运行现场，当恢复阻塞的发送操作时候，会从此处继续开始执行
 
 	// Ensure the value being sent is kept alive until the
@@ -281,6 +294,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 		throw("G waiting list is corrupted")
 	}
 	gp.waiting = nil
+	gp.activeStackChans = false
 	if gp.param == nil {
 		// 正常唤醒状态，goroutine 应该包含需要传递的参数，但如果没有唤醒时的参数，且 channel 没有被关闭，则为虚假唤醒
 		if c.closed == 0 {
@@ -441,6 +455,16 @@ func closechan(c *hchan) {
 	}
 }
 
+// empty 报告从一个 channel 中读是否会发生阻塞（即 channel 为空）
+// 它使用了一个可变状态的原子读。
+func empty(c *hchan) bool {
+	// c.dataqsiz 是不可变的
+	if c.dataqsiz == 0 {
+		return atomic.Loadp(unsafe.Pointer(&c.sendq.first)) == nil
+	}
+	return atomic.Loaduint(&c.qcount) == 0
+}
+
 // entry points for <- c from compiled code
 //go:nosplit
 func chanrecv1(c *hchan, elem unsafe.Pointer) {
@@ -482,14 +506,39 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	// 此处的 c.closed 必须在条件判断之后进行验证（从而需要 atomic 操作），因为
 	// 如果指令重排后，如果先判断 c.closed，得出 channel 未关闭，无法判断失败条件中
 	// channel 是已关闭还是未关闭，从而得到错误的返回值（原本为 true, false，错误的返回了 false, false）
-	//
-	// FIXME: 此条件有个优化，具体参考 https://go-review.googlesource.com/c/go/+/181543
-	// 优化情形为在一个未关闭的 channel 上进行非阻塞接收比
-	//         在一个已关闭的 channel 上进行非阻塞接收块 700 倍
-	if !block && (c.dataqsiz == 0 && c.sendq.first == nil ||
-		c.dataqsiz > 0 && atomic.Loaduint(&c.qcount) == 0) &&
-		atomic.Load(&c.closed) == 0 {
-		return
+	if !block && empty(c) {
+		// After observing that the channel is not ready for receiving, we observe whether the
+		// channel is closed.
+		//
+		// Reordering of these checks could lead to incorrect behavior when racing with a close.
+		// For example, if the channel was open and not empty, was closed, and then drained,
+		// reordered reads could incorrectly indicate "open and empty". To prevent reordering,
+		// we use atomic loads for both checks, and rely on emptying and closing to happen in
+		// separate critical sections under the same lock.  This assumption fails when closing
+		// an unbuffered channel with a blocked send, but that is an error condition anyway.
+		if atomic.Load(&c.closed) == 0 {
+			// Because a channel cannot be reopened, the later observation of the channel
+			// being not closed implies that it was also not closed at the moment of the
+			// first observation. We behave as if we observed the channel at that moment
+			// and report that the receive cannot proceed.
+			// 因为一个 channel 关闭后不能被重新打开，所以现在对 channel 的观察
+			// 是 channel 没有关闭，则隐含了之前的 channel 也没有关闭。
+			//因此此时表现为我们观察到那个状态的 channel 为空，且不能继续接受数据
+			return
+		}
+		// The channel is irreversibly closed. Re-check whether the channel has any pending data
+		// to receive, which could have arrived between the empty and closed checks above.
+		// Sequential consistency is also required here, when racing with such a send.
+		// channel 已经被不可逆的关闭了，重新检查 channel 是否包含可能发生在
+		// 前面 empty 和 closed 检查之后的任何需要接受的数据。当这种情况的 send 发生时，
+		// 还要求顺序一致性
+		if empty(c) {
+			// channel 被不可逆的关闭且清空了
+			if ep != nil {
+				typedmemclr(c.elemtype, ep)
+			}
+			return true, false
+		}
 	}
 
 	var t0 int64
@@ -561,7 +610,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	mysg.c = c
 	gp.param = nil
 	c.recvq.enqueue(mysg)
-	goparkunlock(&c.lock, waitReasonChanReceive, traceEvGoBlockRecv, 3)
+	gopark(chanparkcommit, unsafe.Pointer(&c.lock), waitReasonChanReceive, traceEvGoBlockRecv, 2)
 
 	// 唤醒
 	if mysg != gp.waiting {
@@ -633,6 +682,15 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 		sg.releasetime = cputicks()
 	}
 	goready(gp, skip+1)
+}
+
+func chanparkcommit(gp *g, chanLock unsafe.Pointer) bool {
+	// There are unlocked sudogs that point into gp's stack. Stack
+	// copying must lock the channels of those sudogs.
+	// 具有未解锁的指向 gp 栈的 sudog。栈的复制必须锁住那些 sudog 的 channel
+	gp.activeStackChans = true
+	unlock((*mutex)(chanLock))
+	return true
 }
 
 // 编译器会将这段语法：
