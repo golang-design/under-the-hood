@@ -111,8 +111,9 @@ retry:
 		unlock(&b.spineLock)
 	}
 
-	// We have a block. Insert the span.
-	block.spans[bottom] = s
+	// We have a block. Insert the span atomically, since there may be
+	// concurrent readers via the block API.
+	atomic.StorepNoWB(unsafe.Pointer(&block.spans[bottom]), unsafe.Pointer(s))
 }
 
 // pop removes and returns a span from buffer b, or nil if b is empty.

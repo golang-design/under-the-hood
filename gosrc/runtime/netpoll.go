@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build aix darwin dragonfly freebsd js,wasm linux nacl netbsd openbsd solaris windows
+// +build aix darwin dragonfly freebsd js,wasm linux netbsd openbsd solaris windows
 
 package runtime
 
@@ -12,12 +12,26 @@ import (
 )
 
 // 集成的网络轮训器（平台无关的部分）
+// A particular implementation (epoll/kqueue/port/AIX/Windows)
+// must define the following functions:
 //
-// 一个特定的实现（epoll/equeue）必须包含下面的函数：
-// func netpollinit()			// 来初始化轮训器
-// func netpollopen(fd uintptr, pd *pollDesc) int32	// 给 arm edge-triggered 通知以及关联 fd 和 pd
-// 一个实现必须调用下面的函数来表明 pd 已经就绪
-// func netpollready(gpp **g, pd *pollDesc, mode int32)
+// func netpollinit()
+//     Initialize the poller. Only called once.
+//
+// func netpollopen(fd uintptr, pd *pollDesc) int32
+//     Arm edge-triggered notifications for fd. The pd argument is to pass
+//     back to netpollready when fd is ready. Return an errno value.
+//
+// func netpoll(delta int64) gList
+//     Poll the network. If delta < 0, block indefinitely. If delta == 0,
+//     poll without blocking. If delta > 0, block for up to delta nanoseconds.
+//     Return a list of goroutines built by calling netpollready.
+//
+// func netpollBreak()
+//     Wake up the network poller, assumed to be blocked in netpoll.
+//
+// func netpollIsPollDescriptor(fd uintptr) bool
+//     Reports whether fd is a file descriptor used by the poller.
 
 // pollDesc 包含两个二进制的信号量: rg 和 wg，分别用于 park reader 和 writer goroutine
 // 信号量可以处于以下状态：
@@ -80,15 +94,27 @@ type pollCache struct {
 }
 
 var (
-	netpollInited  uint32
+	netpollInitLock mutex
+	netpollInited   uint32
+
 	pollcache      pollCache
 	netpollWaiters uint32
 )
 
 //go:linkname poll_runtime_pollServerInit internal/poll.runtime_pollServerInit
 func poll_runtime_pollServerInit() {
-	netpollinit()
-	atomic.Store(&netpollInited, 1)
+	netpollGenericInit()
+}
+
+func netpollGenericInit() {
+	if atomic.Load(&netpollInited) == 0 {
+		lock(&netpollInitLock)
+		if netpollInited == 0 {
+			netpollinit()
+			atomic.Store(&netpollInited, 1)
+		}
+		unlock(&netpollInitLock)
+	}
 }
 
 func netpollinited() bool {
@@ -100,14 +126,7 @@ func netpollinited() bool {
 // poll_runtime_isPollServerDescriptor reports whether fd is a
 // descriptor being used by netpoll.
 func poll_runtime_isPollServerDescriptor(fd uintptr) bool {
-	fds := netpolldescriptor()
-	if GOOS != "aix" {
-		return fd == fds
-	} else {
-		// AIX have a pipe in its netpoll implementation.
-		// Therefore, two fd are returned by netpolldescriptor using a mask.
-		return fd == fds&0xFFFF || fd == (fds>>16)&0xFFFF
-	}
+	return netpollIsPollDescriptor(fd)
 }
 
 //go:linkname poll_runtime_pollOpen internal/poll.runtime_pollOpen
@@ -233,13 +252,12 @@ func poll_runtime_pollSetDeadline(pd *pollDesc, d int64, mode int) {
 	if pd.rt.f == nil {
 		if pd.rd > 0 {
 			pd.rt.f = rtf
-			pd.rt.when = pd.rd
 			// Copy current seq into the timer arg.
 			// Timer func will check the seq against current descriptor seq,
 			// if they differ the descriptor was reused or timers were reset.
 			pd.rt.arg = pd
 			pd.rt.seq = pd.rseq
-			addtimer(&pd.rt)
+			resettimer(&pd.rt, pd.rd)
 		}
 	} else if pd.rd != rd0 || combo != combo0 {
 		pd.rseq++ // invalidate current timers
@@ -256,7 +274,7 @@ func poll_runtime_pollSetDeadline(pd *pollDesc, d int64, mode int) {
 			pd.wt.when = pd.wd
 			pd.wt.arg = pd
 			pd.wt.seq = pd.wseq
-			addtimer(&pd.wt)
+			resettimer(&pd.wt, pd.wd)
 		}
 	} else if pd.wd != wd0 || combo != combo0 {
 		pd.wseq++ // invalidate current timers
@@ -316,8 +334,13 @@ func poll_runtime_pollUnblock(pd *pollDesc) {
 	}
 }
 
-// make pd ready, newly runnable goroutines (if any) are added to toRun.
-// May run during STW, so write barriers are not allowed.
+// netpollready is called by the platform-specific netpoll function.
+// It declares that the fd associated with pd is ready for I/O.
+// The toRun argument is used to build a list of goroutines to return
+// from netpoll. The mode argument is 'r', 'w', or 'r'+'w' to indicate
+// whether the fd is ready for reading or writing or both.
+//
+// This may run while the world is stopped, so write barriers are not allowed.
 //go:nowritebarrier
 func netpollready(toRun *gList, pd *pollDesc, mode int32) {
 	var rg, wg *g

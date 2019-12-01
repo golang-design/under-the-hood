@@ -412,7 +412,7 @@ func releaseSudog(s *sudog) {
 // 为安全起见，不要在任何 == 表达式中使用此函数。它只在作为地址用于执行代码时是安全的。
 //go:nosplit
 func funcPC(f interface{}) uintptr {
-	return **(**uintptr)(add(unsafe.Pointer(&f), sys.PtrSize))
+	return *(*uintptr)(efaceOf(&f).data)
 }
 
 // called from assembly
@@ -510,6 +510,9 @@ func cpuinit() {
 	// 支持 CPU 特性的变量由编译器生成的代码来阻止指令的执行，从而不能假设总是支持的
 	x86HasPOPCNT = cpu.X86.HasPOPCNT
 	x86HasSSE41 = cpu.X86.HasSSE41
+	x86HasFMA = cpu.X86.HasFMA
+
+	armHasVFPv4 = cpu.ARM.HasVFPv4
 	arm64HasATOMICS = cpu.ARM64.HasATOMICS
 }
 
@@ -543,6 +546,8 @@ func schedinit() {
 	// 栈、内存分配器、调度器相关初始化。
 	// 栈初始化，复用管理链表
 	stackinit()
+	// 必须在 mcommoninit 之前运行
+	fastrandinit()
 	// 内存分配器初始化
 	mallocinit()
 	// 初始化当前 M
@@ -646,8 +651,8 @@ func mcommoninit(mp *m) {
 	checkmcount()
 
 	// 用于 fastrand 快速取随机数
-	mp.fastrand[0] = 1597334677 * uint32(mp.id)
-	mp.fastrand[1] = uint32(cputicks())
+	mp.fastrand[0] = uint32(int64Hash(uint64(mp.id), fastrandseed))
+	mp.fastrand[1] = uint32(int64Hash(uint64(cputicks()), ^fastrandseed))
 	if mp.fastrand[0]|mp.fastrand[1] == 0 {
 		mp.fastrand[1] = 1
 	}
@@ -676,6 +681,13 @@ func mcommoninit(mp *m) {
 	if iscgo || GOOS == "solaris" || GOOS == "illumos" || GOOS == "windows" {
 		mp.cgoCallers = new(cgoCallers)
 	}
+}
+
+var fastrandseed uintptr
+
+func fastrandinit() {
+	s := (*[unsafe.Sizeof(fastrandseed)]byte)(unsafe.Pointer(&fastrandseed))[:]
+	getRandomData(s)
 }
 
 // 将 gp 标记为 ready 来运行
@@ -758,8 +770,8 @@ func casfrom_Gscanstatus(gp *g, oldval, newval uint32) {
 	case _Gscanrunnable,
 		_Gscanwaiting,
 		_Gscanrunning,
-		_Gscansyscall:
-	_Gscanpreempted:
+		_Gscansyscall,
+		_Gscanpreempted:
 		if newval == oldval&^_Gscan {
 			success = atomic.Cas(&gp.atomicstatus, oldval, newval)
 		}
@@ -879,6 +891,7 @@ func stopTheWorld(reason string) {
 	// 抢占 worldsema
 	semacquire(&worldsema)
 	gp := getg()
+	gp.m.preemptoff = reason
 	systemstack(func() {
 		// Mark the goroutine which called stopTheWorld preemptible so its
 		// stack may be scanned.

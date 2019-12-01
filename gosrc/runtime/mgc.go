@@ -107,6 +107,10 @@ const (
 	_ConcurrentSweep = true
 	_FinBlockSize    = 4 * 1024
 
+	// debugScanConservative enables debug logging for stack
+	// frames that are scanned conservatively.
+	debugScanConservative = false
+
 	// sweepMinHeapDistance 是为 GC 周期之间的并发扫描保留的堆距离（以字节为单位）的下限。
 	sweepMinHeapDistance = 1024 * 1024
 )
@@ -446,25 +450,23 @@ func (c *gcControllerState) revise() {
 	}
 	live := atomic.Load64(&memstats.heap_live)
 
-	var heapGoal, scanWorkExpected int64
-	if live <= memstats.next_gc {
-		// We're under the soft goal. Pace GC to complete at
-		// next_gc assuming the heap is in steady-state.
-		heapGoal = int64(memstats.next_gc)
-
-		// Compute the expected scan work remaining.
-		//
-		// This is estimated based on the expected
-		// steady-state scannable heap. For example, with
-		// GOGC=100, only half of the scannable heap is
-		// expected to be live, so that's what we target.
-		//
-		// (This is a float calculation to avoid overflowing on
-		// 100*heap_scan.)
-		scanWorkExpected = int64(float64(memstats.heap_scan) * 100 / float64(100+gcpercent))
-	} else {
-		// We're past the soft goal. Pace GC so that in the
-		// worst case it will complete by the hard goal.
+	// Assume we're under the soft goal. Pace GC to complete at
+	// next_gc assuming the heap is in steady-state.
+	heapGoal := int64(memstats.next_gc)
+	// Compute the expected scan work remaining.
+	//
+	// This is estimated based on the expected
+	// steady-state scannable heap. For example, with
+	// GOGC=100, only half of the scannable heap is
+	// expected to be live, so that's what we target.
+	//
+	// (This is a float calculation to avoid overflowing on
+	// 100*heap_scan.)
+	scanWorkExpected := int64(float64(memstats.heap_scan) * 100 / float64(100+gcpercent))
+	if live > memstats.next_gc || c.scanWork > scanWorkExpected {
+		// We're past the soft goal, or we've already done more scan
+		// work than we expected. Pace GC so that in the worst case it
+		// will complete by the hard goal.
 		const maxOvershoot = 1.1
 		heapGoal = int64(float64(memstats.next_gc) * maxOvershoot)
 
@@ -476,7 +478,7 @@ func (c *gcControllerState) revise() {
 	//
 	// Note that we currently count allocations during GC as both
 	// scannable heap (heap_scan) and scan work completed
-	// (scanWork), so allocation will change this difference will
+	// (scanWork), so allocation will change this difference
 	// slowly in the soft regime and not at all in the hard
 	// regime.
 	scanWorkRemaining := scanWorkExpected - c.scanWork
@@ -721,11 +723,25 @@ func gcSetTriggerRatio(triggerRatio float64) {
 		goal = memstats.heap_marked + memstats.heap_marked*uint64(gcpercent)/100
 	}
 
+	// If we let triggerRatio go too low, then if the application
+	// is allocating very rapidly we might end up in a situation
+	// where we're allocating black during a nearly always-on GC.
+	// The result of this is a growing heap and ultimately an
+	// increase in RSS. By capping us at a point >0, we're essentially
+	// saying that we're OK using more CPU during the GC to prevent
+	// this growth in RSS.
+	//
+	// The current constant was chosen empirically: given a sufficiently
+	// fast/scalable allocator with 48 Ps that could drive the trigger ratio
+	// to <0.05, this constant causes applications to retain the same peak
+	// RSS compared to not having this allocator.
+	const minTriggerRatio = 0.6
+
 	// Set the trigger ratio, capped to reasonable bounds.
-	if triggerRatio < 0 {
+	if triggerRatio < minTriggerRatio {
 		// This can happen if the mutator is allocating very
 		// quickly or the GC is scanning very slowly.
-		triggerRatio = 0
+		triggerRatio = minTriggerRatio
 	} else if gcpercent >= 0 {
 		// Ensure there's always a little margin so that the
 		// mutator assist ratio isn't infinity.
@@ -802,7 +818,8 @@ func gcSetTriggerRatio(triggerRatio float64) {
 			heapDistance = _PageSize
 		}
 		pagesSwept := atomic.Load64(&mheap_.pagesSwept)
-		sweepDistancePages := int64(mheap_.pagesInUse) - int64(pagesSwept)
+		pagesInUse := atomic.Load64(&mheap_.pagesInUse)
+		sweepDistancePages := int64(pagesInUse) - int64(pagesSwept)
 		if sweepDistancePages <= 0 {
 			mheap_.sweepPagesPerByte = 0
 		} else {
@@ -1190,6 +1207,7 @@ func gcStart(trigger gcTrigger) {
 	}
 
 	// 好的，我们确实要进行 GC，停止所有其他人！
+	semacquire(&gcsema)
 	semacquire(&worldsema)
 
 	if trace.enabled {
@@ -1280,6 +1298,13 @@ func gcStart(trigger gcTrigger) {
 		work.pauseNS += now - work.pauseStart
 		work.tMark = now
 	})
+
+	// Release the world sema before Gosched() in STW mode
+	// because we will need to reacquire it later but before
+	// this goroutine becomes runnable again, and we could
+	// self-deadlock otherwise.
+	semrelease(&worldsema)
+
 	// 在 STW 模式下，我们可以阻止即时 systemstack 返回，所以这里不要做任何重要的事情。
 	// 确保我们阻止而不是返回用户代码。
 	if mode != gcBackgroundMode {
@@ -1348,6 +1373,10 @@ top:
 		return
 	}
 
+	// forEachP needs worldsema to execute, and we'll need it to
+	// stop the world later, so acquire worldsema now.
+	semacquire(&worldsema)
+
 	// Flush all local buffers and collect flushedWork flags.
 	gcMarkDoneFlushed = 0
 	systemstack(func() {
@@ -1408,6 +1437,7 @@ top:
 		// work to do. Keep going. It's possible the
 		// transition condition became true again during the
 		// ragged barrier, so re-check it.
+		semrelease(&worldsema)
 		goto top
 	}
 
@@ -1484,6 +1514,7 @@ top:
 				now := startTheWorldWithSema(true)
 				work.pauseNS += now - work.pauseStart
 			})
+			semrelease(&worldsema)
 			goto top
 		}
 	}
@@ -1701,6 +1732,7 @@ func gcMarkTermination(nextTriggerRatio float64) {
 	}
 
 	semrelease(&worldsema)
+	semrelease(&gcsema)
 	// Careful: another GC cycle may start now.
 
 	releasem(mp)
@@ -2089,8 +2121,7 @@ func gcResetMarkState() {
 	// allgs doesn't change.
 	lock(&allglock)
 	for _, gp := range allgs {
-		gp.gcscandone = false  // set to true in gcphasework
-		gp.gcscanvalid = false // stack has not been scanned
+		gp.gcscandone = false // set to true in gcphasework
 		gp.gcAssistBytes = 0
 	}
 	unlock(&allglock)

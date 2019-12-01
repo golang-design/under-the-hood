@@ -29,7 +29,7 @@ type mstats struct {
 	nfree       uint64 // number of frees
 
 	// 堆内存分配统计
-	// 受到 mheap.lock 保护
+	// Updated atomically, or with the world stopped.
 	//
 	// 同 MemStats, heap_sys 和 heap_inuse 不包含手动管理的内存内存
 	// in manually-managed spans.
@@ -38,19 +38,22 @@ type mstats struct {
 	heap_idle     uint64 // bytes in idle spans
 	heap_inuse    uint64 // bytes in mSpanInUse spans
 	heap_released uint64 // bytes released to the os
-	heap_objects  uint64 // total number of allocated objects
+
+	// heap_objects is not used by the runtime directly and instead
+	// computed on the fly by updatememstats.
+	heap_objects uint64 // total number of allocated objects
 
 	// 低级固定大小的分配统计
 	// 受 fixalloc 锁保护
-	stacks_inuse uint64 // bytes in manually-managed stack spans
+	stacks_inuse uint64 // bytes in manually-managed stack spans; updated atomically or during STW
 	stacks_sys   uint64 // only counts newosproc0 stack in mstats; differs from MemStats.StackSys
 	mspan_inuse  uint64 // mspan structures
 	mspan_sys    uint64
 	mcache_inuse uint64 // mcache structures
 	mcache_sys   uint64
 	buckhash_sys uint64 // profiling bucket hash table
-	gc_sys       uint64
-	other_sys    uint64
+	gc_sys       uint64 // updated atomically or during STW
+	other_sys    uint64 // updated atomically or during STW
 
 	// 垃圾回收器统计
 	// 受 mheap 或 GC 期间的 STW 保护
