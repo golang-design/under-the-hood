@@ -1313,8 +1313,10 @@ func gccgoPkgpathToSymbolNew(ppath string) string {
 	for _, c := range []byte(ppath) {
 		switch {
 		case 'A' <= c && c <= 'Z', 'a' <= c && c <= 'z',
-			'0' <= c && c <= '9', c == '_', c == '.':
+			'0' <= c && c <= '9', c == '_':
 			bsl = append(bsl, c)
+		case c == '.':
+			bsl = append(bsl, ".x2e"...)
 		default:
 			changed = true
 			encbytes := []byte(fmt.Sprintf("..z%02x", c))
@@ -1520,7 +1522,6 @@ extern char* _cgo_topofstack(void);
   The pragmas and address-of-packed-member are only recognized as warning
   groups in clang 4.0+, so ignore unknown pragmas first.
 */
-
 #pragma GCC diagnostic ignored "-Wunknown-pragmas"
 #pragma GCC diagnostic ignored "-Wpragmas"
 #pragma GCC diagnostic ignored "-Waddress-of-packed-member"

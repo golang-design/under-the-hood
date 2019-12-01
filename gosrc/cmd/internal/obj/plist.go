@@ -137,7 +137,7 @@ func (ctxt *Link) InitTextSym(s *LSym, flag int) {
 	ctxt.Text = append(ctxt.Text, s)
 
 	// Set up DWARF entries for s.
-	info, loc, ranges, _, isstmt := ctxt.dwarfSym(s)
+	info, loc, ranges, _, lines := ctxt.dwarfSym(s)
 	info.Type = objabi.SDWARFINFO
 	info.Set(AttrDuplicateOK, s.DuplicateOK())
 	if loc != nil {
@@ -148,9 +148,9 @@ func (ctxt *Link) InitTextSym(s *LSym, flag int) {
 	ranges.Type = objabi.SDWARFRANGE
 	ranges.Set(AttrDuplicateOK, s.DuplicateOK())
 	ctxt.Data = append(ctxt.Data, info, ranges)
-	isstmt.Type = objabi.SDWARFMISC
-	isstmt.Set(AttrDuplicateOK, s.DuplicateOK())
-	ctxt.Data = append(ctxt.Data, isstmt)
+	lines.Type = objabi.SDWARFLINES
+	lines.Set(AttrDuplicateOK, s.DuplicateOK())
+	ctxt.Data = append(ctxt.Data, lines)
 }
 
 func (ctxt *Link) Globl(s *LSym, size int64, flag int) {
@@ -187,6 +187,13 @@ func (ctxt *Link) Globl(s *LSym, size int64, flag int) {
 // liveness map active at the entry of function s. It returns the last
 // Prog generated.
 func (ctxt *Link) EmitEntryLiveness(s *LSym, p *Prog, newprog ProgAlloc) *Prog {
+	pcdata := ctxt.EmitEntryStackMap(s, p, newprog)
+	pcdata = ctxt.EmitEntryRegMap(s, pcdata, newprog)
+	return pcdata
+}
+
+// Similar to EmitEntryLiveness, but just emit stack map.
+func (ctxt *Link) EmitEntryStackMap(s *LSym, p *Prog, newprog ProgAlloc) *Prog {
 	pcdata := Appendp(p, newprog)
 	pcdata.Pos = s.Func.Text.Pos
 	pcdata.As = APCDATA
@@ -195,8 +202,12 @@ func (ctxt *Link) EmitEntryLiveness(s *LSym, p *Prog, newprog ProgAlloc) *Prog {
 	pcdata.To.Type = TYPE_CONST
 	pcdata.To.Offset = -1 // pcdata starts at -1 at function entry
 
-	// Same, with register map.
-	pcdata = Appendp(pcdata, newprog)
+	return pcdata
+}
+
+// Similar to EmitEntryLiveness, but just emit register map.
+func (ctxt *Link) EmitEntryRegMap(s *LSym, p *Prog, newprog ProgAlloc) *Prog {
+	pcdata := Appendp(p, newprog)
 	pcdata.Pos = s.Func.Text.Pos
 	pcdata.As = APCDATA
 	pcdata.From.Type = TYPE_CONST
@@ -205,4 +216,67 @@ func (ctxt *Link) EmitEntryLiveness(s *LSym, p *Prog, newprog ProgAlloc) *Prog {
 	pcdata.To.Offset = -1
 
 	return pcdata
+}
+
+// StartUnsafePoint generates PCDATA Progs after p to mark the
+// beginning of an unsafe point. The unsafe point starts immediately
+// after p.
+// It returns the last Prog generated.
+func (ctxt *Link) StartUnsafePoint(p *Prog, newprog ProgAlloc) *Prog {
+	pcdata := Appendp(p, newprog)
+	pcdata.As = APCDATA
+	pcdata.From.Type = TYPE_CONST
+	pcdata.From.Offset = objabi.PCDATA_RegMapIndex
+	pcdata.To.Type = TYPE_CONST
+	pcdata.To.Offset = -2 // pcdata -2 marks unsafe point
+
+	return pcdata
+}
+
+// EndUnsafePoint generates PCDATA Progs after p to mark the end of an
+// unsafe point, restoring the stack map index to oldval.
+// The unsafe point ends right after p.
+// It returns the last Prog generated.
+func (ctxt *Link) EndUnsafePoint(p *Prog, newprog ProgAlloc, oldval int64) *Prog {
+	pcdata := Appendp(p, newprog)
+	pcdata.As = APCDATA
+	pcdata.From.Type = TYPE_CONST
+	pcdata.From.Offset = objabi.PCDATA_RegMapIndex
+	pcdata.To.Type = TYPE_CONST
+	pcdata.To.Offset = oldval
+
+	// TODO: register map?
+
+	return pcdata
+}
+
+// MarkUnsafePoints inserts PCDATAs to mark nonpreemptible instruction
+// sequences, based on isUnsafePoint predicate. p0 is the start of the
+// instruction stream.
+func MarkUnsafePoints(ctxt *Link, p0 *Prog, newprog ProgAlloc, isUnsafePoint func(*Prog) bool) {
+	prev := p0
+	oldval := int64(-1) // entry pcdata
+	for p := prev.Link; p != nil; p, prev = p.Link, p {
+		if p.As == APCDATA && p.From.Offset == objabi.PCDATA_RegMapIndex {
+			oldval = p.To.Offset
+			continue
+		}
+		if oldval == -2 {
+			continue // already unsafe
+		}
+		if isUnsafePoint(p) {
+			q := ctxt.StartUnsafePoint(prev, newprog)
+			q.Pc = p.Pc
+			q.Link = p
+			// Advance to the end of unsafe point.
+			for p.Link != nil && isUnsafePoint(p.Link) {
+				p = p.Link
+			}
+			if p.Link == nil {
+				break // Reached the end, don't bother marking the end
+			}
+			p = ctxt.EndUnsafePoint(p, newprog, oldval)
+			p.Pc = p.Link.Pc
+		}
+	}
 }

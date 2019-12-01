@@ -99,7 +99,7 @@ Will be expanded to:
 
 When the Go tool sees that one or more Go files use the special import
 "C", it will look for other non-Go files in the directory and compile
-them as part of the Go package. Any .c, .S, or .sx files will be
+them as part of the Go package. Any .c, .s, .S or .sx files will be
 compiled with the C compiler. Any .cc, .cpp, or .cxx files will be
 compiled with the C++ compiler. Any .f, .F, .for or .f90 files will be
 compiled with the fortran compiler. Any .h, .hh, .hpp, or .hxx files will
@@ -432,7 +432,7 @@ It will replace nil with 0 in the appropriate places.
 The EGLDisplay case were introduced in Go 1.12. Use the egl rewrite
 to auto-update code from Go 1.11 and earlier:
 
- 	go tool fix -r egl <pkg>
+	go tool fix -r egl <pkg>
 
 Using cgo directly
 

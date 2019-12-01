@@ -286,10 +286,12 @@ commas. For example:
 
 	if phase == "check" && flag == "on" {
 		checkEnabled = val != 0
+		debugPoset = checkEnabled // also turn on advanced self-checking in prove's datastructure
 		return ""
 	}
 	if phase == "check" && flag == "off" {
 		checkEnabled = val == 0
+		debugPoset = checkEnabled
 		return ""
 	}
 
@@ -403,11 +405,13 @@ var passes = [...]pass{
 	{name: "short circuit", fn: shortcircuit},
 	{name: "decompose args", fn: decomposeArgs, required: true},
 	{name: "decompose user", fn: decomposeUser, required: true},
+	{name: "pre-opt deadcode", fn: deadcode},
 	{name: "opt", fn: opt, required: true},               // NB: some generic rules know the name of the opt pass. TODO: split required rules and optimizing rules
 	{name: "zero arg cse", fn: zcse, required: true},     // required to merge OpSB values
 	{name: "opt deadcode", fn: deadcode, required: true}, // remove any blocks orphaned during opt
 	{name: "generic cse", fn: cse},
 	{name: "phiopt", fn: phiopt},
+	{name: "gcse deadcode", fn: deadcode, required: true}, // clean out after cse and phiopt
 	{name: "nilcheckelim", fn: nilcheckelim},
 	{name: "prove", fn: prove},
 	{name: "fuse plain", fn: fusePlain},
@@ -424,6 +428,7 @@ var passes = [...]pass{
 	{name: "insert resched checks", fn: insertLoopReschedChecks,
 		disabled: objabi.Preemptibleloops_enabled == 0}, // insert resched checks in loops.
 	{name: "lower", fn: lower, required: true},
+	{name: "lowered deadcode for cse", fn: deadcode}, // deadcode immediately before CSE avoids CSE making dead values live again
 	{name: "lowered cse", fn: cse},
 	{name: "elim unread autos", fn: elimUnreadAutos},
 	{name: "lowered deadcode", fn: deadcode, required: true},

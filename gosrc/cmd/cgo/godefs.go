@@ -160,6 +160,7 @@ var gofmtLineReplacer = strings.NewReplacer(
 	",\n", ",",
 	".\n", ". ",
 	":\n", ": ", // not possible in gofmt today
+
 	"\n", ";",
 )
 
