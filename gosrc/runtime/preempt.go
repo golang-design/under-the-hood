@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Goroutine preemption
+// Goroutine 抢占
 //
 // A goroutine can be preempted at any safe-point. Currently, there
 // are a few categories of safe-points:
@@ -49,6 +49,36 @@
 // would consume an M for every preempted G, and the scheduler itself
 // is not designed to run from a signal handler, as it tends to
 // allocate memory and start threads in the preemption path.)
+
+// Goroutine 可以在任何安全点被抢占。当前，安全点具有不同的类别：
+//
+// 1. 在对 goroutine 进行调度，在同步时或在系统调用中进行阻塞的过程中，
+//    将发生阻塞安全点（blocked safe-points）。
+//
+// 2. 当运行的 goroutine 检查抢占请求时，会发生同步安全点（synchronous safe-points）。
+//
+// 3. 异步安全点（asynchronous safe-points）出现在用户代码中的任何指令中，
+//    可以安全地暂停 goroutine，保守的堆栈和寄存器扫描可以找到栈的根集合。运行时
+//    可以使用信号在异步安全点停止 goroutine。
+//
+// 在阻塞和同步安全点上，goroutine 的 CPU 状态都为最小，并且垃圾回收器具有
+// 有关其整个堆栈的完整信息。这使得可以以最小的空间调度 goroutine，并精确扫描
+// goroutine 的堆栈。
+//
+// 同步安全点通过重载函数序言中的堆栈绑定检查来实现。要在下一个同步安全点抢占
+// goroutine，运行时会毒害 goroutine 的堆栈，绑定到一个值，该值将导致下一个堆栈
+// 绑定检查失败并进入堆栈增长实现，这将检测到它实际上是抢占并重定向抢占处理。
+//
+// 通过使用 OS 机制（例如信号）挂起线程并检查其状态以确定 goroutine 是否处于异步
+// 安全点来实现异步安全点的抢占。由于线程挂起本身通常是异步的，因此它还会检查是否
+// 要抢占正在运行的 goroutine，因为这可能已更改。如果满足所有条件，它将调整信号
+// 上下文，使其看起来像刚好被称为 asyncPreempt 的信号线程，然后恢复该线程。
+// asyncPreempt 溢出所有寄存器并进入调度程序。
+//
+// （一种替代方法是在信号处理程序本身中抢占。这将使OS保存并恢复寄存器状态，
+// 并且运行时仅需要知道如何从信号上下文中提取可能包含指针的寄存器。但是，
+// 这会消耗很多时间。每个被抢占的G都有一个M，并且调度程序本身不旨在从信号处理程序运行，
+// 因为它倾向于在抢占路径中分配内存并启动线程。）
 
 package runtime
 
@@ -279,7 +309,7 @@ func resumeG(state suspendGState) {
 	}
 }
 
-// canPreemptM reports whether mp is in a state that is safe to preempt.
+// canPreemptM 报告 mp 是否处于可抢占的安全状态。
 //
 // It is nosplit because it has nosplit callers.
 //

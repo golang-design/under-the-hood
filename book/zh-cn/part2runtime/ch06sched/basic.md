@@ -2,8 +2,7 @@
 
 [TOC]
 
-在详细进入代码之前，我们需要提前了解一下调度器的设计原则及一些基本概念来建立对调度器较为宏观的认识。
-
+我们需要提前了解一下调度器的设计原则及一些基本概念来建立对调度器较为宏观的认识。
 理解调度器涉及的主要概念包括以下三个：
 
 - G: **G**oroutine，即我们在 Go 程序中使用 `go` 关键字创建的执行体；
@@ -174,8 +173,12 @@ type m struct {
 	waitlock      unsafe.Pointer
 	(...)
 	syscalltick   uint32
-	thread        uintptr // 线程处理
-	freelink      *m      // 在 sched.freem 上
+	freelink      *m // 在 sched.freem 上
+	(...)
+	// preemptGen counts the number of completed preemption
+	// signals. This is used to detect when a preemption is
+	// requested, but fails. Accessed atomically.
+	preemptGen uint32
 	(...)
 }
 ```
@@ -214,6 +217,7 @@ type p struct {
 	sysmontick  sysmontick // 系统监控观察到的最后一次记录
 	m           muintptr   // 反向链接到关联的 m （nil 则表示 idle）
 	mcache      *mcache
+	pcache      pageCache
 	(...)
 
 	deferpool    [5][]*_defer // 不同大小的可用的 defer 结构池 (见 panic.go)
@@ -245,6 +249,17 @@ type p struct {
 	sudogcache []*sudog
 	sudogbuf   [128]*sudog
 
+	// Cache of mspan objects from the heap.
+	mspancache struct {
+		// We need an explicit length here because this field is used
+		// in allocation codepaths where write barriers are not allowed,
+		// and eliminating the write barrier/keeping it eliminated from
+		// slice updates is tricky, moreso than just managing the length
+		// ourselves.
+		len int
+		buf [128]*mspan
+	}
+
 	(...)
 
 	palloc persistentAlloc // per-P，用于避免 mutex
@@ -268,7 +283,30 @@ type p struct {
 	wbBuf wbBuf
 
 	runSafePointFn uint32 // 如果为 1, 则在下一个 safe-point 运行 sched.safePointFn
-	(...)
+
+	// Lock for timers. We normally access the timers while running
+	// on this P, but the scheduler can also do it from a different P.
+	timersLock mutex
+
+	// Actions to take at some time. This is used to implement the
+	// standard library's time package.
+	// Must hold timersLock to access.
+	timers []*timer
+
+	// Number of timerModifiedEarlier timers on P's heap.
+	// This should only be modified while holding timersLock,
+	// or while the timer status is in a transient state
+	// such as timerModifying.
+	adjustTimers uint32
+
+	// Race context used while executing timer functions.
+	timerRaceCtx uintptr
+
+	// preempt is set to indicate that this P should be enter the
+	// scheduler ASAP (regardless of what G is running on it).
+	preempt bool
+
+	pad cpu.CacheLinePad
 }
 ```
 
@@ -292,29 +330,40 @@ type g struct {
 	// 在其他栈上值为 ~0 用于触发 morestackc (并 crash) 调用
 	stackguard1 uintptr // 偏移量与 liblink 一致
 
-	_panic         *_panic // innermost panic - 偏移量用于 liblink
-	_defer         *_defer // innermost defer
-	m              *m      // 当前的 m; 偏移量对 arm liblink 透明
-	sched          gobuf
-	syscallsp      uintptr        // 如果 status==Gsyscall, 则 syscallsp = sched.sp 并在 GC 期间使用
-	syscallpc      uintptr        // 如果 status==Gsyscall, 则 syscallpc = sched.pc 并在 GC 期间使用
-	stktopsp       uintptr        // 期望 sp 位于栈顶，用于回溯检查
-	param          unsafe.Pointer // wakeup 唤醒时候传递的参数
-	atomicstatus   uint32
-	stackLock      uint32 // sigprof/scang 锁;
-	goid           int64
-	schedlink      guintptr
-	waitsince      int64      // g 阻塞的时间
-	waitreason     waitReason // 如果 status==Gwaiting，则记录等待的原因
-	preempt        bool       // 抢占信号，stackguard0 = stackpreempt 的副本
-	paniconfault   bool       // 发生 fault panic （不崩溃）的地址
-	preemptscan    bool       // 为 gc 进行 scan 的被强占的 g
-	gcscandone     bool       // g 执行栈已经 scan 了；此此段受 _Gscan 位保护
-	gcscanvalid    bool       // 在 gc 周期开始时为 false；当 G 从上次 scan 后就没有运行时为 true
-	throwsplit     bool       // 必须不能进行栈分段
+	_panic        *_panic // innermost panic - 偏移量用于 liblink
+	_defer        *_defer // innermost defer
+	m             *m      // 当前的 m; 偏移量对 arm liblink 透明
+	sched         gobuf
+	syscallsp     uintptr        // 如果 status==Gsyscall, 则 syscallsp = sched.sp 并在 GC 期间使用
+	syscallpc     uintptr        // 如果 status==Gsyscall, 则 syscallpc = sched.pc 并在 GC 期间使用
+	stktopsp      uintptr        // 期望 sp 位于栈顶，用于回溯检查
+	param         unsafe.Pointer // wakeup 唤醒时候传递的参数
+	atomicstatus  uint32
+	stackLock     uint32 // sigprof/scang 锁; TODO: fold in to atomicstatus
+	goid          int64
+	schedlink     guintptr
+	waitsince     int64      // g 阻塞的时间
+	waitreason    waitReason // 如果 status==Gwaiting，则记录等待的原因
+	preempt       bool       // 抢占信号，stackguard0 = stackpreempt 的副本
+	preemptStop   bool       // transition to _Gpreempted on preemption; otherwise, just deschedule
+	preemptShrink bool       // shrink stack at synchronous safe point
+
+	// asyncSafePoint is set if g is stopped at an asynchronous
+	// safe point. This means there are frames on the stack
+	// without precise pointer information.
+	asyncSafePoint bool
+
+	paniconfault bool // 发生 fault panic （不崩溃）的地址
+	gcscandone   bool // g 执行栈已经 scan 了；此此段受 _Gscan 位保护
+	throwsplit   bool // 必须不能进行栈分段
 	(...)
 	sysblocktraced bool       // StartTrace 已经出发了此 goroutine 的 EvGoInSyscall
 	sysexitticks   int64      // 当 syscall 返回时的 cputicks（用于跟踪）
+	// activeStackChans indicates that there are unlocked channels
+	// pointing into this goroutine's stack. If true, stack
+	// copying needs to acquire channel locks to protect these
+	// areas of the stack.
+	activeStackChans bool
 	(...)
 	lockedm        muintptr
 	sig            uint32
@@ -330,7 +379,7 @@ type g struct {
 	cgoCtxt        []uintptr      // cgo 回溯上下文
 	labels         unsafe.Pointer // profiler 的标签
 	timer          *timer         // 为 time.Sleep 缓存的计时器
-	selectDone     uint32         // 我们是否正在参与 select 且某个 goroutine 胜出？
+	selectDone     uint32         // 我们是否正在参与 select 且某个 goroutine 胜出
 
 	// Per-G GC 状态
 
