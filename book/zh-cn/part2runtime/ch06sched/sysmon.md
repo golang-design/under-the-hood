@@ -36,14 +36,6 @@ func sysmon() {
 	checkdead()
 	unlock(&sched.lock)
 
-	// 如果一个堆 span 在 GC 超过五分钟没有被使用
-	// 则回收交于操作系统
-	scavengelimit := int64(5 * 60 * 1e9)
-	(...)
-	lastscavenge := nanotime()
-	nscavenge := 0
-
-	lasttrace := int64(0)
 	idle := 0 // 没有 wokeup 的周期数
 	delay := uint32(0)
 	for {
@@ -57,42 +49,35 @@ func sysmon() {
 		}
 		// 休眠
 		usleep(delay)
+		now := nanotime()
+		next := timeSleepUntil()
 
 		// 如果在 STW，则暂时休眠
 		if debug.schedtrace <= 0 && (sched.gcwaiting != 0 || atomic.Load(&sched.npidle) == uint32(gomaxprocs)) {
 			lock(&sched.lock)
 			if atomic.Load(&sched.gcwaiting) != 0 || atomic.Load(&sched.npidle) == uint32(gomaxprocs) {
-				// 标识休眠状态
-				atomic.Store(&sched.sysmonwait, 1)
-				unlock(&sched.lock)
-				// 确保 wake-up 周期足够小从而进行正确的采样
-				maxsleep := forcegcperiod / 2      // 一分钟
-				if scavengelimit < forcegcperiod { // 两分钟
-					maxsleep = scavengelimit / 2
-				}
-				shouldRelax := true
-				if osRelaxMinNS > 0 {
-					next := timeSleepUntil()
-					now := nanotime()
-					if next-now < osRelaxMinNS {
-						shouldRelax = false
+				if next > now {
+					atomic.Store(&sched.sysmonwait, 1)
+					unlock(&sched.lock)
+					// 确保 wake-up 周期足够小从而进行正确的采样
+					sleep := forcegcperiod / 2
+					if next-now < sleep {
+						sleep = next - now
 					}
+					shouldRelax := sleep >= osRelaxMinNS
+					if shouldRelax {
+						osRelax(true)
+					}
+					notetsleep(&sched.sysmonnote, sleep)
+					if shouldRelax {
+						osRelax(false)
+					}
+					now = nanotime()
+					next = timeSleepUntil()
+					lock(&sched.lock)
+					atomic.Store(&sched.sysmonwait, 0)
+					noteclear(&sched.sysmonnote)
 				}
-				if shouldRelax {
-					osRelax(true)
-				}
-				// 设置休眠超时，在此阻塞
-				notetsleep(&sched.sysmonnote, maxsleep)
-				if shouldRelax {
-					osRelax(false)
-				}
-
-				// 休眠结束
-				lock(&sched.lock)
-				atomic.Store(&sched.sysmonwait, 0)
-
-				// 清除休眠超时通知
-				noteclear(&sched.sysmonnote)
 				idle = 0
 				delay = 20
 			}
@@ -104,19 +89,24 @@ func sysmon() {
 		}
 		// 如果超过 10ms 没有 poll，则 poll 一下网络
 		lastpoll := int64(atomic.Load64(&sched.lastpoll))
-		now := nanotime()
 		if netpollinited() && lastpoll != 0 && lastpoll+10*1000*1000 < now {
 			atomic.Cas64(&sched.lastpoll, uint64(lastpoll), uint64(now))
-			gp := netpoll(false) // 非阻塞，返回 goroutine 列表
-			if gp != nil {
+			list := netpoll(0) // 非阻塞，返回 goroutine 列表
+			if !list.empty() {
 				// 需要在插入 g 列表前减少空闲锁住的 m 的数量（假装有一个正在运行）
 				// 否则会导致这些情况：
 				// injectglist 会绑定所有的 p，但是在它开始 M 运行 P 之前，另一个 M 从 syscall 返回，
 				// 完成运行它的 G ，注意这时候没有 work 要做，且没有其他正在运行 M 的死锁报告。
 				incidlelocked(-1)
-				injectglist(gp)
+				injectglist(&list)
 				incidlelocked(1)
 			}
+		}
+		if next < now {
+			// There are timers that should have already run,
+			// perhaps because there is an unpreemptible P.
+			// Try to start an M to run them.
+			startm(nil, false)
 		}
 		// 抢夺在 syscall 中阻塞的 P、运行时间过长的 G
 		if retake(now) != 0 {
@@ -126,14 +116,12 @@ func sysmon() {
 		}
 		// 检查是否需要强制触发 GC
 		if t := (gcTrigger{kind: gcTriggerTime, now: now}); t.test() && atomic.Load(&forcegc.idle) != 0 {
-			(...) // 触发 GC 的操作
-		}
-	
-		// 检查是否需要清理堆内存
-		if lastscavenge+scavengelimit/2 < now {
-			mheap_.scavenge(int32(nscavenge), uint64(now), uint64(scavengelimit))
-			lastscavenge = now
-			nscavenge++
+			lock(&forcegc.lock)
+			forcegc.idle = 0
+			var list gList
+			list.push(forcegc.g)
+			injectglist(&list)
+			unlock(&forcegc.lock)
 		}
 		(...)
 	}

@@ -4724,7 +4724,8 @@ type sysmontick struct {
 	syscallwhen int64
 }
 
-// forcePreemptNS is the time slice given to a G before it is
+// forcePreemptNS 是抢占给 G 之前的时间片。
+// is the time slice given to a G before it is
 // preempted.
 const forcePreemptNS = 10 * 1000 * 1000 // 10ms
 
@@ -4751,8 +4752,8 @@ func retake(now int64) uint32 {
 				pd.schedwhen = now
 			} else if pd.schedwhen+forcePreemptNS <= now {
 				preemptone(_p_)
-				// In case of syscall, preemptone() doesn't
-				// work, because there is no M wired to P.
+				// 对于 syscall 的情况，因为 M 没有与 P 绑定，
+				// preemptone() 不工作
 				sysretake = true
 			}
 		}
@@ -4835,7 +4836,7 @@ func preemptone(_p_ *p) bool {
 	// 设置 gp.stackgard0 为 StackPreempt 来将抢占转换为正常的栈溢出检查。
 	gp.stackguard0 = stackPreempt
 
-	// Request an async preemption of this P.
+	// 请求该 P 的异步抢占
 	if preemptMSupported && debug.asyncpreemptoff == 0 {
 		_p_.preempt = true
 		preemptM(mp)
