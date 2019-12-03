@@ -30,6 +30,5 @@ jobs:
       run: |
         cd website
         make
-        mkdir -p ~/.ssh
-        echo $SERVER_KEY > ~/.ssh/id_rsa
-        scp -r public/* $SERVER_USER@changkun.de:$SERVER_PATH
+        echo $SERVER_KEY > go-under-the-hood.key
+        scp -i go-under-the-hood.key -r public/* $SERVER_USER@changkun.de:$SERVER_PATH
