@@ -34,4 +34,4 @@ jobs:
       run: |
         cd website
         make
-        scp -i go-under-the-hood.key -r public/* $SERVER_USER@changkun.de:$SERVER_PATH
+        scp -r public/* $SERVER_USER@changkun.de:$SERVER_PATH
