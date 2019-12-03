@@ -1,3 +1,8 @@
+---
+weight: 1302
+bookHidden: true
+---
+
 # 基于工作窃取的多线程计算调度
 
 Robert D. Blumofe, Charles E. Leiserson

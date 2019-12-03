@@ -1,3 +1,8 @@
+---
+weight: 1502
+title: "5.3 主 goroutine"
+---
+
 # 5.3 主 goroutine
 
 [TOC]

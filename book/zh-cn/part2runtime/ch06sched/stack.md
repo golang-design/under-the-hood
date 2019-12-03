@@ -1,4 +1,9 @@
-# 调度器: goroutine 及其执行栈管理
+---
+weight: 2104
+title: "6.6 goroutine 及其执行栈管理"
+---
+
+# 6.6 goroutine 及其执行栈管理
 
 [TOC]
 
@@ -829,8 +834,6 @@ func shrinkstack(gp *g) {
 ## 总结
 
 TODO:
-
-[返回目录](./readme.md) | [上一节](./signal.md) | [下一节 协作与抢占](./preemptive.md)
 
 ## 许可
 

@@ -1,4 +1,9 @@
-# sync 包: Once
+---
+weight: 4202
+title: "16.2 sync.Once"
+---
+
+# 16.2 `sync.Once`
 
 [TOC]
 

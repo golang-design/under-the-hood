@@ -1,4 +1,9 @@
-# 11.5 关键字: chan 与 select
+---
+weight: 3105
+title: "11.5 chan 与 select"
+---
+
+# 11.5 chan 与 select
 
 [TOC]
 
@@ -41,7 +46,7 @@ ch <- v
 
 直观上我们很好理解他们之间的差异，
 对于 buffered channel 而言，内部有一个缓冲队列，数据会优先进入缓冲队列，而后被消费，即 `ch <- v` < `v <- ch`；
-对于 unbuffered channel 而言，内部没有缓冲队列，`v <- ch` 会一直阻塞到 `ch <- v` 执行完毕，因此 `ch <- v` > `v <- ch`
+对于 unbuffered channel 而言，内部没有缓冲队列，`v <- ch` 会一直阻塞到 `ch <- v` 执行完毕，因此 `ch <- v` > `v <- ch`（注意，`<`: happens before; `>`: happens after）。
 
 Go 内建了 `close()` 函数来关闭一个 channel，但：
 

@@ -1,11 +1,12 @@
 ---
-bookHidden: true
+weight: 5000
+title: "附录"
 ---
 
+# 附录
 
-# 编译器：逃逸分析
-
-TODO: 1.13
+- [附录A：源码文件分配索引及完成情况](./index.md)
+- [附录B：术语表](./glossary.md)
 
 ## 许可
 

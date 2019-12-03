@@ -1,4 +1,9 @@
-# 调度器: 系统监控
+---
+weight: 2109
+title: "6.9 系统监控"
+---
+
+# 6.9 系统监控
 
 [TOC]
 
@@ -159,8 +164,6 @@ func sysmon() {
 2. `gcTrigger` 如何触发 GC？在 [垃圾回收器：初始化](../ch08GC/init.md) 一节中详细讨论。
 3. `scavenge` 如何清理堆 span？
 4. `netpoll` 如何 poll 网络数据？
-
-[返回目录](./readme.md) | [上一节](./exec.md) | [下一节 线程管理](./thread.md)
 
 ## 许可
 

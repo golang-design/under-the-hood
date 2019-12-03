@@ -1,3 +1,8 @@
+---
+weight: 2300
+title: "第八章 垃圾回收器"
+---
+
 # 第八章 垃圾回收器
 
 - [8.1 基本知识](./basic.md)
@@ -33,11 +38,11 @@
 - [8.8 标记终止阶段](./termination.md)
 - [8.9 内存清扫阶段](./sweep.md)
 - [9.10 内存归还阶段](./scavenge.md)
-- [8.11 过去、现在与未来](./history.md)
-- [8.12 用户层 APIs](./finalizer.md)
+- [8.11 用户层 APIs](./finalizer.md)
     + 存活与终结
       + SetFinalizer
       + KeepAlive
+- [8.12 过去、现在与未来](./history.md)
 
 垃圾回收是一个相当困难且复杂的系统工程。
 

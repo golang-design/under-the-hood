@@ -1,4 +1,9 @@
-# 调度器：运行时同步原语
+---
+weight: 2108
+title: "6.8 运行时同步原语"
+---
+
+# 6.8 运行时同步原语
 
 [TOC]
 
@@ -554,8 +559,6 @@ TODO:
 
 - [Russ Cox, Semaphores in Plan 9](https://swtch.com/semaphore.pdf)
 - [U. Drepper, Futexes are Tricky](http://people.redhat.com/drepper/futex.pdf)
-
-[返回目录](./readme.md) | [上一节](./preemptive.md) | [下一节 过去、现在与未来](./history.md)
 
 ## 许可
 

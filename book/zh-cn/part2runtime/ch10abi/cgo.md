@@ -1,4 +1,9 @@
-# 兼容与契约：cgo
+---
+weight: 2503
+title: "10.3 cgo"
+---
+
+# 10.3 cgo
 
 [TOC]
 

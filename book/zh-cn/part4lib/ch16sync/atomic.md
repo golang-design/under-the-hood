@@ -1,4 +1,9 @@
-# sync 包: atomic
+---
+weight: 4207
+title: "16.7 sync/atomic"
+---
+
+# 16.7 sync/atomic
 
 [TOC]
 

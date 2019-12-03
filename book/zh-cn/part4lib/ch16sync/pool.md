@@ -1,4 +1,9 @@
-# sync 包: Pool
+---
+weight: 4201
+title: "16.1 sync.Pool"
+---
+
+# 16.1 `sync.Pool`
 
 [TOC]
 

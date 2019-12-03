@@ -1,7 +1,12 @@
+---
+weight: 1400
+title: "第四章 内存管理工程"
+---
+
 # 第四章 内存管理工程
 
-- [内存屏障技术](barrier.md)
-- [垃圾回收统一理论](unifiedgc.md)
+- [4.1 内存屏障技术](barrier.md)
+- [4.2 垃圾回收统一理论](unifiedgc.md)
 
 ## 许可
 

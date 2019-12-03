@@ -1,4 +1,9 @@
-# sync 包: Cond
+---
+weight: 4206
+title: "16.6 sync.Cond"
+---
+
+# 16.6 `sync.Cond`
 
 [TOC]
 

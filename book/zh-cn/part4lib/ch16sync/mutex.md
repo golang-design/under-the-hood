@@ -1,4 +1,9 @@
-# sync 包: Mutex 与 RWMutex
+---
+weight: 4205
+title: "16.5 sync.Mutex 与 sync.RWMutex"
+---
+
+# 16.5 `sync.Mutex` 与 `sync.RWMutex`
 
 [TOC]
 

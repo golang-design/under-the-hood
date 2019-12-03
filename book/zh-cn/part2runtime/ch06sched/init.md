@@ -1,4 +1,9 @@
-# 调度器: 初始化
+---
+weight: 2102
+title: "6.2 初始化"
+---
+
+# 6.2 初始化
 
 [TOC]
 
@@ -660,8 +665,6 @@ func globrunqputbatch(batch *gQueue, n int32) {
 最后通过 `newproc` 创建包含可以运行要执行函数的执行栈、运行现场的 G，并将创建的 G
 放入刚创建好的 P 的本地可运行队列（第一个入队的 G，也就是主 goroutine 要执行的函数体），
 完成 G 的创建。
-
-[返回目录](./readme.md) | [上一节](./basic.md) | [下一节 调度循环](./exec.md)
 
 ## 许可
 

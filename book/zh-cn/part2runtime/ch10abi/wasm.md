@@ -1,4 +1,9 @@
-# 兼容与契约：WebAssembly
+---
+weight: 2504
+title: "10.4 WebAssembly"
+---
+
+# 10.4 WebAssembly
 
 [TOC]
 

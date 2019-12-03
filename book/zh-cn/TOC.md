@@ -173,7 +173,8 @@ G 与 P 的解绑
 - [6.9 系统监控](part2runtime/ch06sched/sysmon.md)
     + 监控循环
     + 总结
-- [6.10 过去、现在与未来](part2runtime/ch06sched/history.md)
+- [6.10 用户层 APIs](part2runtime/ch06sched/calls.md)
+- [6.11 过去、现在与未来](part2runtime/ch06sched/history.md)
     + 演进史
       + 单线程版调度器
       + 多线程版调度器
@@ -181,7 +182,6 @@ G 与 P 的解绑
     + 改进展望：非均匀访存感知的调度器设计
     + 总结
     + 进一步阅读的参考文献
-- [6.11 用户层 APIs](part2runtime/ch06sched/calls.md)
 
 #### [第七章 内存分配器](part2runtime/ch07alloc/readme.md)
 
@@ -262,11 +262,11 @@ G 与 P 的解绑
 - [8.8 标记终止阶段](part2runtime/ch08GC/termination.md)
 - [8.9 内存清扫阶段](part2runtime/ch08GC/sweep.md)
 - [9.10 内存归还阶段](part2runtime/ch08GC/scavenge.md)
-- [8.11 过去、现在与未来](part2runtime/ch08GC/history.md)
-- [8.12 用户层 APIs](part2runtime/ch08GC/finalizer.md)
+- [8.11 用户层 APIs](part2runtime/ch08GC/finalizer.md)
     + 存活与终结
       + SetFinalizer
       + KeepAlive
+- [8.12 过去、现在与未来](part2runtime/ch08GC/history.md)
 
 #### 第九章 调试
 
@@ -294,8 +294,8 @@ G 与 P 的解绑
       + 实际代码
     + 总结
     + 进一步阅读的参考文献
-- [10.4 WebAssembly](part2runtime/ch10abi/syscall-wasm.md)
-- [10.5 系统调用包 syscall](part2runtime/ch10abi/syscall-pkg.md)
+- [10.4 WebAssembly](part2runtime/ch10abi/wasm.md)
+- [10.5 用户态系统调用](part2runtime/ch10abi/syscall-pkg.md)
     + 由运行时提供支持的系统调用
     + 通用型系统调用
       + `runtime.entersyscall` 和 `runtime.exitsyscall`
@@ -402,13 +402,13 @@ G 与 P 的解绑
     + 结构
     + Add/Done
     + Wait
-- [16.5 `sync.Mutex`](part4lib/ch16sync/mutex.md)
+- [16.5 `sync.Mutex` 与 `sync.RWMutex`](part4lib/ch16sync/mutex.md)
 - [16.6 `sync.Cond`](part4lib/ch16sync/cond.md)
     + 结构
     + copyChecker
     + Wait/Signal/Broadcast
     + notifyList
-- [16.7 `sync/atomic.*`](part4lib/ch16sync/atomic.md)
+- [16.7 `sync/atomic`](part4lib/ch16sync/atomic.md)
     + 公共包方法
       + atomic.Value
       + atomic.CompareAndSwapPointer
@@ -418,7 +418,7 @@ G 与 P 的解绑
 
 #### [第十七章 其他](part4lib/ch17other/readme.md)
 
-- [17.1 `net.*`](part4lib/ch17other/net.md)
+- [17.1 `net` 的网络轮询器 NetPoller](part4lib/ch17other/net.md)
 - [17.2 `time.*` 的计时器 Timer](part4lib/ch17other/time.md)
 
 ### [结束语](finalwords.md)

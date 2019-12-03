@@ -1,3 +1,8 @@
+---
+weight: 4200
+title: "第十六章 sync 与 atomic 包"
+---
+
 # 第十六章 sync 与 atomic 包
 
 - [16.1 `sync.Pool`](./pool.md)
@@ -27,13 +32,13 @@
     + 结构
     + Add/Done
     + Wait
-- [16.5 `sync.Mutex`](./mutex.md)
+- [16.5 `sync.Mutex` 与 `sync.RWMutex`](./mutex.md)
 - [16.6 `sync.Cond`](./cond.md)
     + 结构
     + copyChecker
     + Wait/Signal/Broadcast
     + notifyList
-- [16.7 `sync/atomic.*`](./atomic.md)
+- [16.7 `sync/atomic`](./atomic.md)
     + 公共包方法
       + atomic.Value
       + atomic.CompareAndSwapPointer

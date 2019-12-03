@@ -1,3 +1,7 @@
+---
+bookHidden: true
+---
+
 # unsafe 范式
 
 [TOC]

@@ -1,3 +1,8 @@
+---
+weight: 3100
+title: "第十一章 关键字与类型系统"
+---
+
 # 第十一章 关键字与类型系统
 
 - [11.1 `go`](./go.md)
@@ -29,8 +34,6 @@
 comes with code complexity increase._
 >
 > -- Dmitry Vyukov
-
-[返回目录](../readme.md) | [阅读本章](./go.md)
 
 ## 许可
 

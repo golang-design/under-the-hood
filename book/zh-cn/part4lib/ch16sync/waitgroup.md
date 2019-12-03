@@ -1,4 +1,9 @@
-# sync 包: WaitGroup
+---
+weight: 4204
+title: "16.4 sync.WaitGroup"
+---
+
+# 16.4 `sync.WaitGroup`
 
 [TOC]
 

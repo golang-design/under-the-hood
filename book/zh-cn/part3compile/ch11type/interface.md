@@ -1,4 +1,9 @@
-# 关键字：interface
+---
+weight: 3106
+title: "11.6 interface"
+---
+
+# 11.6 interface
 
 [TOC] 
 

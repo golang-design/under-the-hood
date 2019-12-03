@@ -1,4 +1,9 @@
-# 关键字: defer
+---
+weight: 3102
+title: "11.2 defer"
+---
+
+# 11.2 defer
 
 [TOC]
 

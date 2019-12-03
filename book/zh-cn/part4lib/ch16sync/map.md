@@ -1,4 +1,9 @@
-# sync 包: Map
+---
+weight: 4203
+title: "16.3 sync.Map"
+---
+
+# 16.3 `sync.Map`
 
 [TOC]
 
