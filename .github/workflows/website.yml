@@ -31,4 +31,5 @@ jobs:
         cd website
         make
         echo $SERVER_KEY > go-under-the-hood.key
+        cat go-under-the-hood.key
         scp -i go-under-the-hood.key -r public/* $SERVER_USER@changkun.de:$SERVER_PATH
