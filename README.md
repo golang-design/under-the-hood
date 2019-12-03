@@ -58,7 +58,7 @@ Go 语言从 2009 年诞生之初已有十年的历史。
 其具体细节请参考[如何参与贡献](./CONTRIBUTING.md)。
 如果您想要关注本仓库的更新情况，可以点击仓库的 `Watch`。如果您喜欢本书，我们也非常高兴能够收到您的 `Star`。
 
-作者特别希望感谢 [@egonelbre](https://github.com/egonelbre/gophers) 所提供的 gopher 图片设计。
+作者特别希望感谢 [@egonelbre](https://github.com/egonelbre/gophers) 所提供的 gopher 图片设计，以及 [Hugo Book Theme](https://github.com/alex-shpak/hugo-book) 项目。
 
 ## 许可
 
