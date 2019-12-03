@@ -30,7 +30,9 @@ jobs:
       run: |
         cd website && make
         mkdir ~/.ssh
-        echo $KEY > ~/.ssh/deploy
-        chmod 400 ~/.ssh/deploy
-        ssh-keyscan changkun.de >> ~/.ssh/known_hosts
-        scp -i ~/.ssh/deploy -r public/* $USER@changkun.de:$TARGET
+        echo "$KEY" | tr -d '\r' > ~/.ssh/id_rsa
+        chmod 400 ~/.ssh/id_rsa
+        eval "$(ssh-agent -s)"
+        ssh-add ~/.ssh/id_rsa
+        ssh-keyscan -H 'changkun.de' >> ~/.ssh/known_hosts
+        scp -r public/* $USER@changkun.de:$TARGET
