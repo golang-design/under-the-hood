@@ -63,5 +63,3 @@ Go 语言从 2009 年诞生之初已有十年的历史。
 ## 许可
 
 [Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)
-
-
