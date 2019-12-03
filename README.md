@@ -49,8 +49,8 @@ Go 语言从 2009 年诞生之初已有十年的历史。
 
 ## 开始阅读
 
-- [🇨🇳 Github 在线](./book/zh-cn/TOC.md)
-- [🌐 网站](https://changkun.de/golang/)
+- [🇨🇳 Github 在线](https://github.com/changkun/go-under-the-hood/blob/master/book/zh-cn/TOC.md)
+- [🌐 网站](https://changkun.de/golang/zh-cn/preface/)
 
 ## 致谢
 
