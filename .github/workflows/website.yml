@@ -25,7 +25,7 @@ jobs:
     - name: Setup SSH
       uses: webfactory/ssh-agent@v0.1.1
       with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          ssh-private-key: ${{ secrets.SERVER_KEY }}
 
     - name: Build Website
       env:
