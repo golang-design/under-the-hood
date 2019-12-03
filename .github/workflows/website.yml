@@ -31,6 +31,7 @@ jobs:
         HOST: changkun.de
         USERNAME: ${{ secrets.SERVER_USER }}
         KEY: ${{ secrets.SERVER_KEY }}
+      run: cd website/public
       with:
-        source: "website/public"
+        source: "*"
         target: ${{ secrets.SERVER_PATH }}
