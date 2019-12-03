@@ -23,13 +23,13 @@ jobs:
       uses: actions/checkout@v1
 
     - name: Build Website
+      uses: webfactory/ssh-agent@v0.1.1
+      with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
       env:
         SERVER_USER: ${{ secrets.SERVER_USER }}
         SERVER_PATH: ${{ secrets.SERVER_PATH }}
-        SERVER_KEY:  ${{ secrets.SERVER_KEY  }}
       run: |
         cd website
         make
-        echo $SERVER_KEY > go-under-the-hood.key
-        cat go-under-the-hood.key
         scp -i go-under-the-hood.key -r public/* $SERVER_USER@changkun.de:$SERVER_PATH
