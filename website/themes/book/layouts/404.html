@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="{{ .Site.Language.Lang }}">
+
+<head>
+  {{ partial "zh-cn/html-head" . }}
+  {{ partial "zh-cn/inject/head" . }}
+</head>
+
+<body>
+  <main class="flex justify-center">
+    <h1>404 Not Found</h1>
+  </main>
+
+  {{ partial "zh-cn/inject/body" . }}
+  {{ template "_internal/google_analytics_async.html" . }}
+</body>
+
+</html>

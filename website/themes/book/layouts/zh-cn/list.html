@@ -1,0 +1,9 @@
+{{ define "main" }}
+<article class="markdown">
+  {{- .Content -}}
+</article>
+{{ end }}
+
+{{ define "toc" }}
+  {{ partial "zh-cn/toc" . }}
+{{ end }}

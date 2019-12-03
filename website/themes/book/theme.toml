@@ -1,0 +1,13 @@
+# theme.toml template for a Hugo theme
+name = "Book"
+license = "MIT"
+licenselink = "https://github.com/changkun/go-under-the-hood/blob/master/LICENSE"
+description = "Go Under The Hood: A source code study"
+homepage = "https://github.com/changkun/go-under-the-hood"
+tags = ["responsive", "clean", "book"]
+features = []
+min_version = "0.10"
+
+[author]
+  name = "Changkun Ou"
+  homepage = "https://changkun.de/"

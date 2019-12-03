@@ -1,0 +1,344 @@
+html {
+  font-size: $font-size-base;
+  letter-spacing: 0.33px;
+  scroll-behavior: smooth;
+}
+
+html,
+body {
+  min-width: $body-min-width;
+  overflow-x: hidden;
+}
+
+body {
+  color: $body-font-color;
+  background: $body-background;
+
+  font-weight: $body-font-weight;
+
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  box-sizing: border-box;
+  * {
+    box-sizing: inherit;
+  }
+}
+
+h1,
+h2,
+h3,
+h4,
+h5 {
+  font-weight: $body-font-weight;
+}
+
+a {
+  text-decoration: none;
+  color: $color-link;
+
+  &:visited {
+    color: $color-visited-link;
+  }
+}
+
+img {
+  vertical-align: baseline;
+}
+
+aside nav ul {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+
+  li {
+    margin: 1em 0;
+  }
+
+  a {
+    display: block;
+  }
+
+  a:hover {
+    opacity: 0.5;
+  }
+
+  ul {
+    padding-left: $padding-16;
+  }
+}
+
+// Classes to hide nested levels of ToC/Menu
+.levels-1 ul ul,
+.levels-2 ul ul ul,
+.levels-3 ul ul ul ul,
+.levels-4 ul ul ul ul ul,
+.levels-5 ul ul ul ul ul ul,
+.levels-6 ul ul ul ul ul ul ul {
+  display: none;
+}
+
+ul.pagination {
+  display: flex;
+  justify-content: center;
+  list-style-type: none;
+
+  .page-item a {
+    padding: $padding-16;
+  }
+}
+
+.container {
+  max-width: $container-max-width;
+  margin: 0 auto;
+}
+
+.book-brand {
+  margin-top: 0;
+
+  img {
+    height: 1.5em;
+    width: auto;
+    vertical-align: middle;
+    margin-right: $padding-8;
+  }
+}
+
+.book-menu {
+  flex: 0 0 $menu-width;
+  font-size: $font-size-14;
+
+  nav {
+    width: $menu-width;
+    padding: $padding-16;
+
+    @include fixed;
+  }
+
+  a {
+    color: inherit;
+  }
+
+  a.active {
+    color: $color-link;
+  }
+}
+
+.book-section-flat {
+  margin-bottom: $padding-16 * 2;
+
+  &:not(:first-child) {
+    margin-top: $padding-16 * 2;
+  }
+
+  > a,
+  > span {
+    font-weight: bolder;
+  }
+
+  > ul {
+    padding-left: 0;
+  }
+}
+
+.book-page {
+  min-width: $body-min-width;
+  flex-grow: 1;
+  padding: $padding-16;
+}
+
+.book-header {
+  margin-bottom: $padding-16;
+  display: none;
+}
+
+.book-search {
+  position: relative;
+  margin: $padding-16 0;
+  border-bottom: 1px solid transparent;
+
+  &::after {
+    display: block;
+    content: "";
+    clear: both;
+  }
+
+  input {
+    width: 100%;
+    padding: $padding-8;
+
+    border: 0;
+    border-radius: $padding-4;
+
+    background: $gray-100;
+    color: $body-font-color;
+
+    &:required + .book-search-spinner {
+      display: block;
+    }
+  }
+
+  .book-search-spinner {
+    position: absolute;
+    margin: $padding-8;
+    right: 0;
+    top: 0;
+
+    width: $padding-16;
+    height: $padding-16;
+
+    border: $padding-1 solid transparent;
+    border-top-color: $body-font-color;
+    border-radius: 50%;
+
+    @include spin(1s);
+  }
+}
+
+.book-toc {
+  flex: 0 0 $toc-width;
+  font-size: $font-size-12;
+
+  nav {
+    width: $toc-width;
+    padding: $padding-16;
+
+    @include fixed;
+  }
+
+  img {
+    height: 1em;
+  }
+
+  nav > ul > li:first-child {
+    margin-top: 0;
+  }
+}
+
+.book-footer {
+  display: flex;
+  padding-top: $padding-16;
+  font-size: $font-size-14;
+
+  img {
+    height: 1em;
+    margin-right: $padding-8;
+  }
+}
+
+
+.book-languages {
+  position: relative;
+  overflow: visible;
+
+  padding: $padding-16;
+  margin: -$padding-16;
+
+  &:hover .book-languages-list {
+    display: block;
+  }
+
+  .book-languages-list {
+    display: none;
+
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    padding: $padding-8 0;
+
+    background: $body-background;
+    box-shadow: 0 0 $padding-4 rgba(0, 0, 0, 0.1);
+
+    li {
+      padding: $padding-8 $padding-16;
+      white-space: nowrap;
+    }
+
+    img {
+      opacity: .1;
+    }
+
+    li.active img {
+      opacity: 1;
+    }
+
+    a {
+      color: inherit;
+    }
+  }
+
+  ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+}
+
+.book-posts {
+  min-width: $body-min-width;
+  max-width: $body-min-width * 2;
+  flex-grow: 1;
+  padding: $padding-16;
+
+  article {
+    padding-bottom: $padding-16;
+  }
+}
+
+.book-home {
+  padding: $padding-16;
+}
+
+// Responsive styles
+aside nav,
+.book-page,
+.book-posts,
+.markdown {
+  transition: 0.2s ease-in-out;
+  transition-property: transform, margin-left, opacity;
+  will-change: transform, margin-left;
+}
+
+@media screen and (max-width: $md-breakpoint) {
+  .book-toc {
+    display: none;
+  }
+}
+
+@media screen and (max-width: $sm-breakpoint) {
+  .book-menu {
+    margin-left: -$menu-width;
+    font-size: $font-size-base;
+  }
+
+  .book-header {
+    display: flex;
+  }
+
+  #menu-control:checked + main {
+    .book-menu nav,
+    .book-page,
+    .book-posts {
+      transform: translateX($menu-width);
+    }
+
+    .book-header label {
+      transform: rotate(90deg);
+    }
+
+    .markdown {
+      opacity: 0.25;
+    }
+  }
+}
+
+// Extra space for big screens
+@media screen and (min-width: $container-max-width) {
+  .book-page,
+  .book-posts,
+  .book-menu nav,
+  .book-toc nav {
+    padding: $padding-16 * 2 $padding-16;
+  }
+}

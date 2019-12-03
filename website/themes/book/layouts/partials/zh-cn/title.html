@@ -1,0 +1,12 @@
+{{ $title := "" }}
+
+{{ if .Title }}
+  {{ $title = .Title }}
+{{ else if and .IsSection .File }}
+  {{ $sections := split (trim .File.Dir "/") "/" }}
+  {{ $title = index ($sections | last 1) 0 | humanize | title }}
+{{ else if and .IsPage .File }}
+  {{ $title = .File.BaseFileName | humanize | title }}
+{{ end }}
+
+{{ return $title }}

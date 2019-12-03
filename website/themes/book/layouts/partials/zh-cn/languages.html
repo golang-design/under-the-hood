@@ -1,0 +1,30 @@
+<!-- Merge home and current page translations -->
+{{ $langs := dict }}
+{{ range .Site.Home.AllTranslations }}
+  {{ $langs = merge $langs (dict .Language.Lang .) }}
+{{ end }}
+{{ range .Translations }}
+  {{ $langs = merge $langs (dict .Language.Lang .) }}
+{{ end }}
+
+<div class="book-languages">
+
+  <ul>
+    <li class="flex">
+      <img src="{{ "svg/translate.svg" | relURL }}" alt="Languages" />
+      {{ $.Site.Language.LanguageName }}
+    </li> 
+  </ul>
+
+  <ul class="book-languages-list">
+    {{ range sort $langs }}
+    <li class="{{ if (eq $.Site.Language .Language ) }}active{{ end }}">
+      <a href="{{ .Permalink }}" class="flex">
+        <img src="{{ "svg/translate.svg" | relURL }}" alt="Languages" />
+        {{ .Language.LanguageName }}
+      </a>
+    </li>
+    {{ end }}
+  </ul>
+
+</div>

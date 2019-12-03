@@ -1,0 +1,16 @@
+{{ define "main" }}
+{{ $dateFormat := default "January 2, 2006" .Site.Params.BookDateFormat }}
+<header class="markdown">
+  <h1>{{ .Title }}</h1>
+  <h5>
+    <strong>{{ .Date.Format $dateFormat }}</strong>
+  </h5>
+</header>
+<article class="markdown">
+  {{- .Content -}}
+</article>
+{{ end }}
+
+{{ define "toc" }}
+  {{ partial "zh-cn/toc" . }}
+{{ end }}

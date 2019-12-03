@@ -1,0 +1,11 @@
+- id: Search
+  translation: Поиск
+
+- id: Edit this page
+  translation: Редактировать эту сраницу
+
+- id: Last modified by
+  translation: Last modified by
+
+- id: bookSearchConfig
+  translation: '{ split: /[^a-zа-яё0-9\w]/gi }'

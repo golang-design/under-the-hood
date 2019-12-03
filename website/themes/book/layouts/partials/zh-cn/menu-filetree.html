@@ -1,0 +1,66 @@
+{{ $bookSection := default "zh-cn" .Site.Params.BookSection  }}
+{{ if eq $bookSection "*" }}
+  {{ .Scratch.Set "BookSections" .Site.Sections }}
+{{ else }}
+  {{ $bookSections := where .Site.Sections "Section" $bookSection }}
+  {{ .Scratch.Set "BookSections" $bookSections }}
+{{ end }}
+
+
+{{ $sections := .Scratch.Get "BookSections" }}
+{{/* If there is only one section to render then render its children, else render all sections */}}
+{{ if eq (len $sections) 1 }} 
+  {{ with index $sections 0 }}
+    {{ template "book-section-children" (dict "Section" . "CurrentPage" $) }}
+  {{ end }}
+{{ else }}
+  <ul>
+  {{ range where $sections "Params.bookHidden" "!=" true }}
+    {{ template "book-section" (dict "Section" . "CurrentPage" $) }}
+  {{ end }}
+  </ul>
+{{ end }}
+
+{{ define "book-section" }}
+{{ with .Section }}
+  <li {{ if .Params.BookFlatSection }} class="book-section-flat" {{ end }}>
+    {{ if .Content }}
+      {{ template "book-page-link" (dict "Page" . "CurrentPage" $.CurrentPage) }}
+    {{ else }}
+      <span>{{ partial "zh-cn/title" . }}</span>
+    {{ end }}
+
+    {{ template "book-section-children" (dict "Section" . "CurrentPage" $.CurrentPage) }}
+  </li>
+{{ end }}
+{{ end }}
+
+{{ define "book-section-children" }}
+{{ $ancestor := .Section.IsAncestor .CurrentPage }}
+{{ $collapsed := .Section.Params.bookCollapseSection }}
+
+{{ if or $ancestor (not $collapsed) }}
+  {{ with .Section }}
+  <ul>
+    {{ range where .Pages "Params.bookhidden" "!=" "true" }}
+      {{ if eq .Kind "section" }}
+        {{ template "book-section" (dict "Section" . "CurrentPage" $.CurrentPage) }}
+      {{ else if and (eq .Kind "page") .Content }}
+        <li>
+        {{- template "book-page-link" (dict "Page" . "CurrentPage" $.CurrentPage) -}}
+        </li>
+      {{ end }}
+    {{ end }}
+  </ul>
+  {{ end }}
+{{ end }}
+
+{{ end }}
+
+{{ define "book-page-link" }}
+{{ with .Page }}
+  <a href="{{ .RelPermalink }}" {{ if eq $.CurrentPage . }} class="active"{{ end }}>
+      {{ partial "zh-cn/title" . }}
+  </a>
+{{ end }}
+{{ end }}

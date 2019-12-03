@@ -1,0 +1,24 @@
+<nav>
+{{ partial "zh-cn/brand" . }}
+{{ partial "zh-cn/search" . }}
+{{ partial "zh-cn/inject/menu-before" . }}
+
+{{ if .Site.Params.BookMenuBundle }}
+    {{ partial "zh-cn/menu-bundle" . }}
+{{ else }}
+    {{ partial "zh-cn/menu-filetree" . }}
+{{ end }}
+
+{{ partial "zh-cn/inject/menu-after" . }}
+</nav>
+
+<!-- Restore menu position as soon as possible to avoid flickering -->
+<script>
+(function() {
+  var menu = document.querySelector("aside.book-menu nav");
+  addEventListener("beforeunload", function(event) {
+    localStorage.setItem("menu.scrollTop", menu.scrollTop);
+  });
+  menu.scrollTop = localStorage.getItem("menu.scrollTop");
+})();
+</script>
