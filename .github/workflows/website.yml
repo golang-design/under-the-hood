@@ -22,10 +22,12 @@ jobs:
     - name: Check out code into the Go module directory
       uses: actions/checkout@v1
 
-    - name: Build Website
+    - name: Setup SSH
       uses: webfactory/ssh-agent@v0.1.1
       with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+    - name: Build Website
       env:
         SERVER_USER: ${{ secrets.SERVER_USER }}
         SERVER_PATH: ${{ secrets.SERVER_PATH }}
