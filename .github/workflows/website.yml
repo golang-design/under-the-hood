@@ -22,16 +22,20 @@ jobs:
     - name: Check out code into the Go module directory
       uses: actions/checkout@v1
 
-    - name: Setup SSH
-      uses: webfactory/ssh-agent@v0.1.1
-      with:
-          ssh-private-key: ${{ secrets.SERVER_KEY }}
-
     - name: Build Website
       env:
-        SERVER_USER: ${{ secrets.SERVER_USER }}
-        SERVER_PATH: ${{ secrets.SERVER_PATH }}
+        SERVER_USER: 
+        SERVER_PATH: 
       run: |
         cd website
         make
-        scp -r public/* $SERVER_USER@changkun.de:$SERVER_PATH
+
+    - name: Deploy
+      uses: appleboy/scp-action@master
+      env:
+        HOST: changkun.de
+        USERNAME: ${{ secrets.SERVER_USER }}
+        KEY: ${{ secrets.SERVER_KEY }}
+      with:
+        source: "website/public/*"
+        target: ${{ secrets.SERVER_PATH }}
