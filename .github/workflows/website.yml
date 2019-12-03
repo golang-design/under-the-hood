@@ -1,4 +1,4 @@
-name: Go
+name: Website
 on: [push]
 jobs:
 
@@ -23,4 +23,12 @@ jobs:
       uses: actions/checkout@v1
 
     - name: Build Website
-      run: cd website && make
+      env:
+        SERVER_USER: ${{ secrets.SERVER_USER }}
+        SERVER_PATH: ${{ secrets.SERVER_PATH }}
+        SERVER_KEY:  ${{ secrets.SERVER_KEY  }}
+      run: |
+        cd website
+        make
+        echo $SERVER_KEY > ~/.ssh/id_rsa
+        scp -r public/* $SERVER_USER@changkun.de:$SERVER_PATH
