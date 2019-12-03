@@ -118,8 +118,8 @@ type: zh-cn
 
 	data = append([]byte(head), data...)
 
-	data = bytes.Replace(data, []byte("./book/zh-cn/TOC.md"), []byte("./zh-cn/preface/"), -1)
-	data = bytes.Replace(data, []byte("book/"), []byte("./"), -1)
+	data = bytes.Replace(data, []byte("https://changkun.de/golang/"), []byte("https://changkun.de/golang/zh-cn/preface/"), -1)
+	data = bytes.Replace(data, []byte("book/"), []byte("./"), 2)
 	data = bytes.Replace(data, []byte("./CONTRIBUTING.md"), []byte("https://github.com/changkun/go-under-the-hood/blob/master/CONTRIBUTING.md"), -1)
 
 	fmt.Printf("handleREADME: writing %v\n", dstREADME)
