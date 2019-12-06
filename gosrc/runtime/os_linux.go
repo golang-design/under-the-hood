@@ -303,6 +303,7 @@ func getHugePageSize() uintptr {
 func osinit() {
 	ncpu = getproccount()
 	physHugePageSize = getHugePageSize()
+	osArchInit()
 }
 
 var urandom_dev = []byte("/dev/urandom\x00")
@@ -332,11 +333,20 @@ func libpreinit() {
 	initsig(true)
 }
 
+// gsignalInitQuirk, if non-nil, is called for every allocated gsignal G.
+//
+// TODO(austin): Remove this after Go 1.15 when we remove the
+// mlockGsignal workaround.
+var gsignalInitQuirk func(gsignal *g)
+
 // 调用此方法来初始化一个新的 m (包含引导 m)
 // 从一个父线程上进行调用（引导时为主线程），可以分配内存
 func mpreinit(mp *m) {
 	mp.gsignal = malg(32 * 1024) // Linux 需要 >= 2K
 	mp.gsignal.m = mp
+	if gsignalInitQuirk != nil {
+		gsignalInitQuirk(mp.gsignal)
+	}
 }
 
 func gettid() uint32
