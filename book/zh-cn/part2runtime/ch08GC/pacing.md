@@ -66,8 +66,7 @@ TODO: 求解的具体数学建模过程
 设第 n 次触发 GC 时，估计得到的堆增长率为 $h_T(n)$、运行过程中的实际堆增长率为 $h_a(n)$、标记辅助花费的时间 $t_A$，用户设置的增长率为 $\rho = \text{GOGC}/100$（ $\rho > 0$）则第 $n+1$ 次出触发 GC 时候，估计的堆增长率为：
 
 $$
-h_T(n+1) =
-	h_T(n) + 0.5\left\{\rho - h_T(n) - \frac{0.25 t_A}{0.3} \left[h_a(n) - h_T(n)\right] \right\}
+h_T(n+1) = h_T(n) + 0.5\left\{\rho - h_T(n) - \frac{0.25 t_A}{0.3} \left[h_a(n) - h_T(n)\right] \right\}
 $$
 
 特别的，当 $n=0$ 时，标记辅助的时间 $t_A = 0$，且令 $h_t(0) = 0.875$，即第一次触发 GC 时：

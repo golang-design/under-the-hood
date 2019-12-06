@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"runtime/trace"
 	"time"
 )
@@ -31,10 +32,9 @@ func mkMessage(n int) []byte {
 	return m
 }
 
-func pushMsg(c *channel, highID int) {
+func sendMessage(c *channel, highID int) {
 	start := time.Now()
-	m := mkMessage(highID)
-	(*c)[highID%windowSize] = m
+	(*c)[highID%windowSize] = mkMessage(highID)
 	end := time.Now()
 	elapsed := end.Sub(start)
 	if elapsed > worst {
@@ -50,7 +50,7 @@ func pushMsg(c *channel, highID int) {
 func measure() {
 	var c channel
 	for i := 0; i < msgCount; i++ {
-		pushMsg(&c, i)
+		sendMessage(&c, i)
 	}
 	fmt.Printf("Best push time %v at %v, worst push time: %v at %v. Wall clock: %v \n", best, bestAt.Sub(start), worst, worstAt.Sub(start), time.Since(start))
 }
@@ -65,5 +65,6 @@ func main() {
 		measure()
 		worst = 0
 		best = time.Second
+		runtime.GC()
 	}
 }
