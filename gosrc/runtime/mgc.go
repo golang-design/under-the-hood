@@ -509,7 +509,7 @@ func (c *gcControllerState) revise() {
 	c.assistBytesPerWork = float64(heapRemaining) / float64(scanWorkRemaining)
 }
 
-// endCycle computes the trigger ratio for the next cycle.
+// endCycle 计算了下一个周期的触发比率
 func (c *gcControllerState) endCycle() float64 {
 	if work.userForced {
 		// Forced GC means this cycle didn't start at the
