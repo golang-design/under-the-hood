@@ -80,8 +80,8 @@ func walkDocs(path string, info os.FileInfo, err error) error {
 
 func walkAssets(path string, info os.FileInfo, err error) error {
 	// rules:
-	//   - skip dirs
-	if info.IsDir() {
+	//   - skip dirs and raw files
+	if info.IsDir() || strings.Contains(path, "raw") {
 		fmt.Printf("walkAssets: skip dir %v\n", path)
 		return nil
 	}
