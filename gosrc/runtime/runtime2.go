@@ -488,9 +488,7 @@ type m struct {
 	vdsoSP uintptr // SP 用于 VDSO 调用的回溯 (如果没有产生调用则为 0)
 	vdsoPC uintptr // PC 用于 VDSO 调用的回溯
 
-	// preemptGen counts the number of completed preemption
-	// signals. This is used to detect when a preemption is
-	// requested, but fails. Accessed atomically.
+	// preemptGen 记录了完成的抢占信号，用于检测一个抢占失败次数，原子递增
 	preemptGen uint32
 
 	dlogPerM

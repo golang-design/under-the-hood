@@ -180,9 +180,7 @@ type m struct {
 	syscalltick   uint32
 	freelink      *m // 在 sched.freem 上
 	(...)
-	// preemptGen counts the number of completed preemption
-	// signals. This is used to detect when a preemption is
-	// requested, but fails. Accessed atomically.
+	// preemptGen 记录了完成的抢占信号，用于检测一个抢占失败次数，原子递增
 	preemptGen uint32
 	(...)
 }

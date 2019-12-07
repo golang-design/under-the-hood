@@ -321,16 +321,15 @@ func sigpipe() {
 	dieFromSignal(_SIGPIPE)
 }
 
-// doSigPreempt handles a preemption signal on gp.
+// doSigPreempt 处理了 gp 上的抢占信号
 func doSigPreempt(gp *g, ctxt *sigctxt) {
-	// Check if this G wants to be preempted and is safe to
-	// preempt.
+	// 检查 G 是否需要被抢占、抢占是否安全
 	if wantAsyncPreempt(gp) && isAsyncSafePoint(gp, ctxt.sigpc(), ctxt.sigsp(), ctxt.siglr()) {
-		// Inject a call to asyncPreempt.
+		// 插入抢占调用
 		ctxt.pushCall(funcPC(asyncPreempt))
 	}
 
-	// Acknowledge the preemption.
+	// 记录抢占失败
 	atomic.Xadd(&gp.m.preemptGen, 1)
 }
 
@@ -342,6 +341,9 @@ const preemptMSupported = pushCallSupported
 // marked for preemption and the goroutine is at an asynchronous
 // safe-point, it will preempt the goroutine. It always atomically
 // increments mp.preemptGen after handling a preemption request.
+// preemptM 向 mp 发送抢占请求。该请求可以异步处理，也可以与对 M 的其他请求合并。
+// 接收到该请求后，如果正在运行的 G 或 P 被标记为抢占，并且 goroutine 处于异步安全点，
+// 它将抢占 goroutine。在处理抢占请求后，它始终以原子方式递增 mp.preemptGen。
 func preemptM(mp *m) {
 	if !pushCallSupported {
 		// This architecture doesn't support ctxt.pushCall
@@ -489,10 +491,11 @@ func adjustSignalStack(sig uint32, mp *m, gsigStack *gsignalStack) bool {
 // GOTRACEBACK=crash when a signal is received.
 var crashing int32
 
-// testSigtrap is used by the runtime tests. If non-nil, it is called
-// on SIGTRAP. If it returns true, the normal behavior on SIGTRAP is
-// suppressed.
+// testSigtrap and testSigusr1 are used by the runtime tests. If
+// non-nil, it is called on SIGTRAP/SIGUSR1. If it returns true, the
+// normal behavior on this signal is suppressed.
 var testSigtrap func(info *siginfo, ctxt *sigctxt, gp *g) bool
+var testSigusr1 func(gp *g) bool
 
 // sighandler is invoked when a signal occurs. The global g will be
 // set to a gsignal goroutine and we will be running on the alternate
@@ -880,11 +883,22 @@ func signalDuringFork(sig uint32) {
 	throw("signal received during fork")
 }
 
+var badginsignalMsg = "fatal: bad g in signal handler\n"
+
 // This runs on a foreign stack, without an m or a g. No stack split.
 //go:nosplit
 //go:norace
 //go:nowritebarrierrec
 func badsignal(sig uintptr, c *sigctxt) {
+	if !iscgo && !cgoHasExtraM {
+		// There is no extra M. needm will not be able to grab
+		// an M. Instead of hanging, just crash.
+		// Cannot call split-stack function as there is no G.
+		s := stringStructOf(&badginsignalMsg)
+		write(2, s.str, int32(s.len))
+		exit(2)
+		*(*uintptr)(unsafe.Pointer(uintptr(123))) = 2
+	}
 	needm(0)
 	if !sigsend(uint32(sig)) {
 		// A foreign thread received the signal sig, and the
@@ -928,6 +942,13 @@ func sigfwdgo(sig uint32, info *siginfo, ctx unsafe.Pointer) bool {
 		return true
 	}
 
+	// This function and its caller sigtrampgo assumes SIGPIPE is delivered on the
+	// originating thread. This property does not hold on macOS (golang.org/issue/33384),
+	// so we have no choice but to ignore SIGPIPE.
+	if GOOS == "darwin" && sig == _SIGPIPE {
+		return true
+	}
+
 	// If there is no handler to forward to, no need to forward.
 	if fwdFn == _SIG_DFL {
 		return false
@@ -942,9 +963,10 @@ func sigfwdgo(sig uint32, info *siginfo, ctx unsafe.Pointer) bool {
 		return false
 	}
 	// Determine if the signal occurred inside Go code. We test that:
-	//   (1) we were in a goroutine (i.e., m.curg != nil), and
-	//   (2) we weren't in CGO.
-	g := getg()
+	//   (1) we weren't in VDSO page,
+	//   (2) we were in a goroutine (i.e., m.curg != nil), and
+	//   (3) we weren't in CGO.
+	g := sigFetchG(c)
 	if g != nil && g.m != nil && g.m.curg != nil && !g.m.incgo {
 		return false
 	}
@@ -1012,14 +1034,16 @@ func minitSignals() {
 // 初始化新 m 以设置备用信号栈时调用 minitSignalStack。
 // 如果没有为线程设置备用信号栈（正常情况），则将备用信号栈设置为 gsignal 栈。
 // 如果为线程设置了备用信号栈（非 Go 线程设置备用信号栈然后调用 Go 函数的情况），
-// 则将 gsignal 栈设置为备用信号栈。记录在 newSigstack 中做出的选择，
+// 则将 gsignal 栈设置为备用信号栈。
+// 如果没有使用 cgo 我们还设置了额外的 gsignal 信号栈（无论其是否已经被设置）
+// 记录在 newSigstack 中做出的选择，
 // 以便可以在 unminit 中撤消。
 func minitSignalStack() {
 	_g_ := getg()
 	// 获取现有的信号栈
 	var st stackt
 	sigaltstack(nil, &st)
-	if st.ss_flags&_SS_DISABLE != 0 {
+	if st.ss_flags&_SS_DISABLE != 0 || !iscgo {
 		// 如果禁用了当前的信号栈
 		// 则将 gsignal 的执行栈设置为备用信号栈
 		signalstack(&_g_.m.gsignal.stack)

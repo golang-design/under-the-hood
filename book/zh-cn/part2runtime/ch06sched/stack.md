@@ -597,7 +597,7 @@ TEXT runtime·morestack(SB),NOSPLIT,$0-0
 	RET
 ```
 
-`newstack` 在前半部分承担了对 goroutine 进行抢占的任务（见 [调度器：协作与抢占](./preemptive.md)），
+`newstack` 在前半部分承担了对 goroutine 进行抢占的任务（见 [6.7 协作与抢占](./preemption.md)），
 而在后半部分则是真正的栈扩张。
 
 ```go

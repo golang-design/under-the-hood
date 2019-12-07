@@ -106,6 +106,9 @@ type suspendGState struct {
 // suspendG suspends goroutine gp at a safe-point and returns the
 // state of the suspended goroutine. The caller gets read access to
 // the goroutine until it calls resumeG.
+// suspendG 在安全点挂起 goroutine gp 并返回
+// 暂停的goroutine的状态。呼叫者获得对的读取权限
+// goroutine，直到它调用resumeG。
 //
 // It is safe for multiple callers to attempt to suspend the same
 // goroutine at the same time. The goroutine may execute between
@@ -113,12 +116,23 @@ type suspendGState struct {
 // implementation grants exclusive access to the goroutine, and hence
 // multiple callers will serialize. However, the intent is to grant
 // shared read access, so please don't depend on exclusive access.
+// 多个呼叫者尝试中止相同呼叫是安全的
+// 同时进行goroutine。该goroutine可以在
+// 随后成功的挂起操作。目前
+// 实现授予对goroutine的独占访问权限，因此
+// 多个调用者将序列化。但是，目的是要授予
+// 共享读取访问权限，因此请不要依赖于独占访问权限。
 //
 // This must be called from the system stack and the user goroutine on
 // the current M (if any) must be in a preemptible state. This
 // prevents deadlocks where two goroutines attempt to suspend each
 // other and both are in non-preemptible states. There are other ways
 // to resolve this deadlock, but this seems simplest.
+// 必须从系统堆栈和用户goroutine上调用
+// 当前的M（如果有）必须处于可抢占状态。这个
+// 防止两个goroutine尝试分别挂起的死锁
+// 其他都处于不可抢占状态。还有其他方法
+// 解决此僵局，但这似乎最简单。
 //
 // TODO(austin): What if we instead required this to be called from a
 // user goroutine? Then we could deschedule the goroutine while
@@ -130,6 +144,16 @@ type suspendGState struct {
 // kernel context switch in the synchronous case because we could just
 // directly schedule the waiter. The context switch is unavoidable in
 // the signal case.
+// TODO（奥斯汀）：如果我们相反要求从
+// 用户goroutine？然后我们可以安排goroutine的时间
+// 等待而不是阻塞线程。如果两个goroutines试图
+// 互相暂停，其中一个将获胜而另一个则不会
+// 完成暂停，直到恢复为止。我们将不得不
+// 小心，他们实际上无法将对方暂停
+// 然后都被暂停。这也将避免需要
+// 在同步情况下进行内核上下文切换，因为我们可以
+// 直接安排服务员。上下文切换是不可避免的
+// 信号情况。
 //
 //go:systemstack
 func suspendG(gp *g) suspendGState {
@@ -245,17 +269,11 @@ func suspendG(gp *g) suspendGState {
 
 			casfrom_Gscanstatus(gp, _Gscanrunning, _Grunning)
 
-			// Send asynchronous preemption. We do this
-			// after CASing the G back to _Grunning
-			// because preemptM may be synchronous and we
-			// don't want to catch the G just spinning on
-			// its status.
+			// 发送异步抢占。我们在将 G 的状态改为 _Grunning 后进行，因为 preemptM
+			// 可能会同步执行，且我们不希望在 G 在其状态自旋时进行捕获。
 			if preemptMSupported && debug.asyncpreemptoff == 0 && needAsync {
-				// Rate limit preemptM calls. This is
-				// particularly important on Windows
-				// where preemptM is actually
-				// synchronous and the spin loop here
-				// can lead to live-lock.
+				// 当 preemptM 同步执行，且这里的自旋循环将导致活锁时，对
+				// preemptM 调用的速率限制。这一点在 Windows 上非常重要。
 				now := nanotime()
 				if now >= nextPreemptM {
 					nextPreemptM = now + yieldDelay/2
@@ -320,12 +338,11 @@ func canPreemptM(mp *m) bool {
 
 //go:generate go run mkpreempt.go
 
-// asyncPreempt saves all user registers and calls asyncPreempt2.
+// asyncPreempt 保存了所有用户寄存器，并调用 asyncPreempt2
 //
-// When stack scanning encounters an asyncPreempt frame, it scans that
-// frame and its parent frame conservatively.
+// 当栈扫描遭遇 asyncPreempt 栈帧时，将会保守的扫描调用方栈帧
 //
-// asyncPreempt is implemented in assembly.
+// asyncPreempt 由汇编实现
 func asyncPreempt()
 
 //go:nosplit
@@ -367,10 +384,9 @@ func init() {
 	}
 }
 
-// wantAsyncPreempt returns whether an asynchronous preemption is
-// queued for gp.
+// wantAsyncPreempt 返回异步抢占是否被 gp 请求
 func wantAsyncPreempt(gp *g) bool {
-	// Check both the G and the P.
+	// 同时检查 G 和 P
 	return (gp.preempt || gp.m.p != 0 && gp.m.p.ptr().preempt) && readgstatus(gp)&^_Gscan == _Grunning
 }
 

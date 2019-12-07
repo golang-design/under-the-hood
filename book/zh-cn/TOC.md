@@ -147,7 +147,7 @@ G 与 P 的解绑
       + 栈的拷贝
       + 栈的收缩
     + 总结
-- [6.7 抢占](part2runtime/ch06sched/preemption.md)
+- [6.7 协作与抢占](part2runtime/ch06sched/preemption.md)
     + 协作式调度
       + 主动用户让权: Gosched
       + 主动调度弃权: 栈扩张与抢占标记
