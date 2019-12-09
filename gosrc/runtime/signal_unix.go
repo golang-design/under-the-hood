@@ -68,6 +68,21 @@ const (
 // useless), and even if it is, the application has to be ready for
 // spurious SIGURG. SIGIO wouldn't be a bad choice either, but is more
 // likely to be used for real.
+//
+// sigPreempt 是用于非合作式抢占的信号。没有选择此信号的好方法，但是有一些启发式方法：
+// 1.默认情况下，它应该是调试器传递的信号。在Linux上，这是SIGALRM，SIGURG，
+//   SIGCHLD，SIGIO，SIGVTALRM，SIGPROF和SIGWINCH，以及一些glibc内部信号。
+// 2. libc不应在混合的Go / C二进制文件中内部使用它，因为libc可能会认为它是唯一
+//    可以处理这些信号的东西。例如SIGCANCEL或SIGSETXID。
+// 3.它应该是可以不加选择地虚假发生的信号。例如，SIGALRM是一个错误的选择，因为
+//   信号处理程序无法分辨它是否是由实际过程警报引起的（可以说这意味着信号已损坏，
+//   但我离题了）。 SIGUSR1和SIGUSR2也很糟糕，因为应用程序经常以有意义的方式使用它们。
+// 4.我们需要处理没有实时信号的平台（例如 macOS），所以这些都没有了。
+//
+// 我们使用 SIGURG 是因为它满足所有这些条件，极不可能因其“真实”含义而被应用程序使用
+//（两者都是因为带外数据基本上未使用，并且因为SIGURG不会报告哪个套接字具有条件），
+// 使其变得毫无用处），即使是这样，该应用程序也必须已准备好接受伪造的SIGURG。
+// SIGIO也不是一个不好的选择，但更可能用于实际。
 const sigPreempt = _SIGURG
 
 // Stores the signal handlers registered before Go installed its own.

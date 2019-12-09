@@ -16,6 +16,4 @@ func main() {
 	time.Sleep(time.Millisecond)
 	println("OK")
 	runtime.Gosched()
-	for {
-	}
 }

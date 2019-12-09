@@ -331,8 +331,6 @@ goroutine 被停止时，保存充足的上下文信息（例如 GC 标记阶段
 这就给中断信号带来了麻烦，如果中断信号恰好发生在一些关键阶段（例如写屏障期间），
 则无法保证程序的正确性。这也就要求我们需要严格考虑触发异步抢占的时机。
 
-TODO: go1.14，解释执行栈映射补充寄存器映射，中断信号 SIGURG
-
 异步抢占式调度的一种方式就与运行时系统监控有关，
 监控循环会将发生阻塞的 goroutine 抢占，解绑 P 与 M，从而让其他的线程能够获得 P 继续
 执行其他的 goroutine。这得益于 `sysmon` 中调用的 `retake` 方法。
@@ -469,9 +467,18 @@ func preemptone(_p_ *p) bool {
 
 #### 抢占信号的选取
 
-我们来仔细研究 preemptM。
+preemptM 完成了信号的发送，其实现也非常直接，直接向需要进行抢占的 M 发送 SIGURG 信号
+即可。但是真正的重要的问题是，为什么是 SIGURG 信号而不是其他的信号？如何才能保证该信号
+不与用户态产生的信号产生冲突？这里面有几个原因：
 
-TODO: 讨论信号选择的原因
+1. 默认情况下，SIGURG 已经用于调试器传递信号。
+2. SIGRUURG 可以不加选择地虚假发生的信号。例如，我们不能选择 SIGALRM，因为
+  信号处理程序无法分辨它是否是由实际过程引起的（可以说这意味着信号已损坏）。 
+  而常见的用户自定义信号 SIGUSR1 和 SIGUSR2 也不够好，因为用户态代码可能会将其进行使用
+3. 需要处理没有实时信号的平台（例如 macOS）
+
+考虑以上的观点，SIGURG 其实是一个很好的、满足所有这些条件、且极不可能因被用户态代码
+进行使用的一种信号。
 
 ```go
 const sigPreempt = _SIGURG
@@ -492,7 +499,12 @@ func signalM(mp *m, sig int) {
 
 我们在信号处理一节中已经知道，每个运行的 M 都会设置一个系统信号的处理的回调，当出现系统
 信号时，操作系统将负责将运行代码进行中断，并安全的保护其执行现场，进而 Go 运行时能
-将针对信号的类型进行处理。
+将针对信号的类型进行处理，当信号处理函数执行结束后，程序会再次进入内核空间，进而恢复到
+被中断的位置。
+
+但是这里面又一个很巧妙的用法，因为 sighandler 能够获得操作系统所提供的执行上下文参数
+（例如寄存器 `rip`, `rep` 等），如果在 sighandler 中修改了这个上下文参数，OS 会
+根据就该的寄存器进行恢复，这也就为抢占提供了机会。
 
 ```go
 //go:nowritebarrierrec
@@ -520,79 +532,81 @@ func doSigPreempt(gp *g, ctxt *sigctxt) {
 	atomic.Xadd(&gp.m.preemptGen, 1)
 ```
 
-TODO: 此时如何切换到异步抢占？？ctxt.pushCall 的原理？
+在 `ctxt.pushCall` 之前， `ctxt.rip()` 和 `ctxt.rep()` 都保存了被中断的 goroutine 所在的位置，
+但是 `pushCall` 直接修改了这些寄存器，进而当从 sighandler 返回用户态 goroutine 时，
+能够从注入的 `asyncPreempt` 开始执行：
 
-注意，插入的抢占调用不会发生在信号发出方。我们梳理以下异步的调用逻辑：
-
-```
-TODO: 从实际的print来看，结果似乎是这样：
-M1 signal --> M2 recieved, sighandler --> push asyncpreempt call
---> keep handle signals --> sighandler 结束后怎么切换到其他 goroutine 的??? --> 然后才是执行 asyncPreempt2 ???
-
-- 根据调试发现的情况是会在 newstack 中调用 gopreempt_m
-- 那么为什么 sighandler 结束调用后会调用 morestack?
-
-func main() {
-	runtime.GOMAXPROCS(1)
-
-	go func() {
-		for {
-		}
-	}()
-
-	time.Sleep(time.Millisecond)
-	println("OK")
-	runtime.Gosched()
+```go
+func (c *sigctxt) pushCall(targetPC uintptr) {
+	pc := uintptr(c.rip())
+	sp := uintptr(c.rsp())
+	sp -= sys.PtrSize
+	*(*uintptr)(unsafe.Pointer(sp)) = pc
+	c.set_rsp(uint64(sp))
+	c.set_rip(uint64(targetPC))
 }
-
-mstart1 call schedule()
-enter schedule
-park_m call schedule()
-enter schedule
-mstart1 call schedule()
-enter schedule
-mstart1 call schedule()
-enter schedule
-sighandler finished
-calling newstack
-park_m call schedule()
-enter schedule
-park_m call schedule()
-enter schedule
-park_m call schedule()
-enter schedule
-park_m call schedule()
-enter schedule
-mstart1 call schedule()
-enter schedule
-park_m call schedule()
-enter schedule
-before asyncpreempt
-after asyncpreempt
-sighandler finished
-calling newstack
-newstack call gopreempt_m
-gopreempt_m call goschedImpl
-goschedImpl call schedule()
-enter schedule
-OK
-gosched_m call goschedImpl
-goschedImpl call schedule()
-enter schedule
-asyncPreempt2
-asyncPreempt2
-asyncPreempt2
-asyncPreempt2
-preemptPark
-gopreempt_m call goschedImpl
-goschedImpl call schedule()
-enter schedule
 ```
+
+完成 sighandler 之，我们成功恢复到 asyncPreempt 调用：
+
+```go
+// asyncPreempt 保存了所有用户寄存器，并调用 asyncPreempt2
+//
+// 当栈扫描遭遇 asyncPreempt 栈帧时，将会保守的扫描调用方栈帧
+func asyncPreempt()
+```
+
+该函数的主要目的是保存用户态寄存器，并且在调用完毕前恢复所有的寄存器上下文，
+就好像什么事情都没有发生过一样：
+
+```asm
+TEXT ·asyncPreempt(SB),NOSPLIT|NOFRAME,$0-0
+	(...)
+	MOVQ AX, 0(SP)
+	(...)
+	MOVUPS X15, 352(SP)
+	CALL ·asyncPreempt2(SB)
+	MOVUPS 352(SP), X15
+	(...)
+	MOVQ 0(SP), AX
+	(...)
+	RET
+```
+
+当调用 `asyncPreempt2` 时，会根据 preemptPark 或者 gopreempt_m 重新切换回
+调度循环，从而打断密集循环的继续执行。
+
+```go
+//go:nosplit
+func asyncPreempt2() {
+	gp := getg()
+	gp.asyncSafePoint = true
+	if gp.preemptStop {
+		mcall(preemptPark)
+	} else {
+		mcall(gopreempt_m)
+	}
+	// 异步抢占过程结束
+	gp.asyncSafePoint = false
+}
+```
+
+至此，异步抢占过程结束。
+
+我们总结一下抢占调用的整体逻辑：
+
+1. M1 发送中断信号 `signalM(mp, sigPreempt)`
+2. M2 收到信号，操作系统中断其执行代码，并切换到信号处理函数 `sighandler(signum, info, ctxt, gp)`
+3. M2 修改执行的上下文，并恢复到修改后的位置 `asyncPreempt`
+4. 重新进入调度循环进而调度其他 goroutine `preemptPark` `gopreempt_m`
 
 #### 抢占的安全区
 
 什么时候才能进行抢占呢？如何才能区分该抢占信号是运行时发出的还是用户代码发出的呢？
 TODO:
+
+
+TODO: 解释执行栈映射补充寄存器映射，中断信号 SIGURG
 
 ```go
 // wantAsyncPreempt 返回异步抢占是否被 gp 请求
@@ -670,59 +684,6 @@ func isAsyncSafePoint(gp *g, pc, sp, lr uintptr) bool {
 	return true
 }
 ```
-
-抢占已经结束了，我们需要恢复到 asyncPreempt 调用：
-
-```go
-// asyncPreempt 保存了所有用户寄存器，并调用 asyncPreempt2
-//
-// 当栈扫描遭遇 asyncPreempt 栈帧时，将会保守的扫描调用方栈帧
-func asyncPreempt()
-```
-
-该函数的主要目的是保存用户态寄存器，并且在调用完毕前恢复所有的寄存器上下文，就好像什么事情都没有发生过一样：
-
-```asm
-TEXT ·asyncPreempt(SB),NOSPLIT|NOFRAME,$0-0
-	PUSHQ BP
-	MOVQ SP, BP
-	// 在破坏 flag 之前保存他们
-	PUSHFQ
-	// obj 不理解 SP 上的 ADD/SUB，但理解 ADJSP
-	ADJSP $368
-	// 不过 vec 不知道 ADJSP，因此阻止 vet 栈检查
-	NOP SP
-	MOVQ AX, 0(SP)
-	(...)
-	MOVUPS X15, 352(SP)
-	CALL ·asyncPreempt2(SB)
-	MOVUPS 352(SP), X15
-	(...)
-	MOVQ 0(SP), AX
-	ADJSP $-368
-	POPFQ
-	POPQ BP
-	RET
-```
-
-在这期间，异步抢占真正发生在：
-
-```go
-//go:nosplit
-func asyncPreempt2() {
-	gp := getg()
-	gp.asyncSafePoint = true
-	if gp.preemptStop {
-		mcall(preemptPark)
-	} else {
-		mcall(gopreempt_m)
-	}
-	// 异步抢占过程结束
-	gp.asyncSafePoint = false
-}
-```
-
-至此，异步抢占过程结束。
 
 #### 其他抢占触发点
 
