@@ -475,13 +475,7 @@ func setsig(i uint32, fn uintptr) {
 
 ```asm
 TEXT runtime·sigtramp(SB),NOSPLIT,$72
-	// 保存被调用方的 C 寄存器，因为调用方可能是一个 C signal handler
-	MOVQ	BX,  bx-8(SP)
-	MOVQ	BP,  bp-16(SP)  // save in case GOEXPERIMENT=noframepointer is set
-	MOVQ	R12, r12-24(SP)
-	MOVQ	R13, r13-32(SP)
-	MOVQ	R14, r14-40(SP)
-	MOVQ	R15, r15-48(SP)
+	(...)
 
 	MOVQ	DX, ctx-56(SP)
 	MOVQ	SI, info-64(SP)
@@ -489,12 +483,7 @@ TEXT runtime·sigtramp(SB),NOSPLIT,$72
 	MOVQ	$runtime·sigtrampgo(SB), AX
 	CALL AX
 
-	MOVQ	r15-48(SP), R15
-	MOVQ	r14-40(SP), R14
-	MOVQ	r13-32(SP), R13
-	MOVQ	r12-24(SP), R12
-	MOVQ	bp-16(SP),  BP
-	MOVQ	bx-8(SP),   BX
+	(...)
 	RET
 ```
 
@@ -509,25 +498,9 @@ func sigtrampgo(sig uint32, info *siginfo, ctx unsafe.Pointer) {
 	if sigfwdgo(sig, info, ctx) {
 		return
 	}
-	c := &sigctxt{info, ctx}
-	g := sigFetchG(c)
-	setg(g)
-	g := getg()
-	if g == nil {
-		c := &sigctxt{info, ctx}
-		if sig == _SIGPROF {
-			sigprofNonGoPC(c.sigpc())
-			return
-		}
-		c.fixsigcode(sig)
-		badsignal(uintptr(sig), c)
-		return
-	}
+	(...)
 
-	(...)
 	setg(g.m.gsignal)
-	(...)
-	c := &sigctxt{info, ctx}
 	(...)
 	sighandler(sig, info, ctx, g)
 	setg(g)
