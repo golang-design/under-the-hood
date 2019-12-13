@@ -289,20 +289,19 @@ import (
 	"time"
 )
 func main() {
-	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
-		go func() {
-			for {
-			}
-		}()
-	}
+	runtime.GOMAXPROCS(1)
+	go func() {
+		for {
+		}
+	}()
 	time.Sleep(time.Millisecond)
 	println("OK")
 }
 ```
 
-这段代码中处于死循环的 goroutine 永远无法被抢占，在 for 循环中创建的 goroutine
+这段代码中处于死循环的 goroutine 永远无法被抢占，其中创建的 goroutine
 会执行一个不产生任何调用、不主动放弃执行权的死循环。由于 main goroutine 优先调用了
-休眠，此时所有的 P 都会转去执行 for 循环所创建的 goroutine。进而 main goroutine
+休眠，此时唯一的 P 会转去执行 for 循环所创建的 goroutine。进而 main goroutine
 永远不会再被调度，进而程序彻底阻塞在了这四个 goroutine 上，永远无法退出。这样的例子
 非常多，但追根溯源，均为此问题导致。
 
