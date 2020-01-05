@@ -14,6 +14,7 @@ title: "第二章 并行、并发与分布式计算"
 - [2.3 性能模型](./perfs.md)
 - [2.4 分布式计算的基本概念](./distributed.md)
 - [2.5 共识技术](./consensus.md)
+- [2.6 顺序进程通讯 CSP](./csp.md)
 
 > _640KB [of memory] ought to be enough for anybody._
 >
