@@ -213,7 +213,8 @@ TEXT runtime·mincore(SB),NOSPLIT,$0-28
 	RET
 
 // func walltime1() (sec int64, nsec int32)
-TEXT runtime·walltime1(SB),NOSPLIT,$0-12
+// non-zero frame-size means bp is saved and restored
+TEXT runtime·walltime1(SB),NOSPLIT,$8-12
 	// 我们不知道 VDSO 代码需要多少栈空间，因此切换到 g0。
 	// 特别是，配置了 CONFIG_OPTIMIZE_INLINING = n 的内核
 	// 和加固可以再 gettime_sym 中使用整页的栈空间
@@ -269,7 +270,9 @@ fallback:
 	MOVL	DX, nsec+8(FP)
 	RET
 
-TEXT runtime·nanotime1(SB),NOSPLIT,$0-8
+// func nanotime1() int64
+// non-zero frame-size means bp is saved and restored
+TEXT runtime·nanotime1(SB),NOSPLIT,$8-8
 	// Switch to g0 stack. See comment above in runtime·walltime.
 
 	MOVQ	SP, BP	// Save old SP; BP unchanged by C code.

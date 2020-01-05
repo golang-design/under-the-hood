@@ -182,6 +182,10 @@ type pageAlloc struct {
 	// runtime segmentation fault, we get a much friendlier out-of-bounds
 	// error.
 	//
+	// To iterate over a summary level, use inUse to determine which ranges
+	// are currently available. Otherwise one might try to access
+	// memory which is only Reserved which may result in a hard fault.
+	//
 	// We may still get segmentation faults < len since some of that
 	// memory may not be committed yet.
 	summary [summaryLevels][]pallocSum
@@ -212,12 +216,9 @@ type pageAlloc struct {
 	// making the impact on BSS too high (note the L1 is stored directly
 	// in pageAlloc).
 	//
-	// summary[len(s.summary)-1][i] should always be checked, at least
-	// for a zero max value, before accessing chunks[i]. It's possible the
-	// bitmap at that index is mapped in and zeroed, indicating that it
-	// contains free space, but in actuality it is unused since its
-	// corresponding summary was never updated. Tests may ignore this
-	// and assume the zero value (and that it is mapped).
+	// To iterate over the bitmap, use inUse to determine which ranges
+	// are currently available. Otherwise one might iterate over unused
+	// ranges.
 	//
 	// TODO(mknyszek): Consider changing the definition of the bitmap
 	// such that 1 means free and 0 means in-use so that summaries and
@@ -245,6 +246,19 @@ type pageAlloc struct {
 	// currently ready to use.
 	start, end chunkIdx
 
+	// inUse is a slice of ranges of address space which are
+	// known by the page allocator to be currently in-use (passed
+	// to grow).
+	//
+	// This field is currently unused on 32-bit architectures but
+	// is harmless to track. We care much more about having a
+	// contiguous heap in these cases and take additional measures
+	// to ensure that, so in nearly all cases this should have just
+	// 1 element.
+	//
+	// All access is protected by the mheapLock.
+	inUse addrRanges
+
 	// mheap_.lock. This level of indirection makes it possible
 	// to test pageAlloc indepedently of the runtime allocator.
 	mheapLock *mutex
@@ -268,6 +282,9 @@ func (s *pageAlloc) init(mheapLock *mutex, sysStat *uint64) {
 	}
 	s.sysStat = sysStat
 
+	// Initialize s.inUse.
+	s.inUse.init(sysStat)
+
 	// System-dependent initialization.
 	s.sysInit()
 
@@ -279,53 +296,6 @@ func (s *pageAlloc) init(mheapLock *mutex, sysStat *uint64) {
 
 	// Set the mheapLock.
 	s.mheapLock = mheapLock
-}
-
-// extendMappedRegion ensures that all the memory in the range
-// [base+nbase, base+nlimit) is in the Ready state.
-// base must refer to the beginning of a memory region in the
-// Reserved state. extendMappedRegion assumes that the region
-// [base+mbase, base+mlimit) is already mapped.
-//
-// Note that extendMappedRegion only supports extending
-// mappings in one direction. Therefore,
-// nbase < mbase && nlimit > mlimit is an invalid input
-// and this function will throw.
-func extendMappedRegion(base unsafe.Pointer, mbase, mlimit, nbase, nlimit uintptr, sysStat *uint64) {
-	if uintptr(base)%physPageSize != 0 {
-		print("runtime: base = ", base, "\n")
-		throw("extendMappedRegion: base not page-aligned")
-	}
-	// Round the offsets to a physical page.
-	mbase = alignDown(mbase, physPageSize)
-	nbase = alignDown(nbase, physPageSize)
-	mlimit = alignUp(mlimit, physPageSize)
-	nlimit = alignUp(nlimit, physPageSize)
-
-	// If none of the region is mapped, don't bother
-	// trying to figure out which parts are.
-	if mlimit-mbase != 0 {
-		// Determine which part of the region actually needs
-		// mapping.
-		if nbase < mbase && nlimit > mlimit {
-			// TODO(mknyszek): Consider supporting this case. It can't
-			// ever happen currently in the page allocator, but may be
-			// useful in the future. Also, it would make this function's
-			// purpose simpler to explain.
-			throw("mapped region extended in two directions")
-		} else if nbase < mbase && nlimit <= mlimit {
-			nlimit = mbase
-		} else if nbase >= mbase && nlimit > mlimit {
-			nbase = mlimit
-		} else {
-			return
-		}
-	}
-
-	// Transition from Reserved to Ready.
-	rbase := add(base, nbase)
-	sysMap(rbase, nlimit-nbase, sysStat)
-	sysUsed(rbase, nlimit-nbase)
 }
 
 // compareSearchAddrTo compares an address against s.searchAddr in a linearized
@@ -381,6 +351,10 @@ func (s *pageAlloc) grow(base, size uintptr) {
 	if end > s.end {
 		s.end = end
 	}
+	// Note that [base, limit) will never overlap with any existing
+	// range inUse because grow only ever adds never-used memory
+	// regions to the page allocator.
+	s.inUse.add(addrRange{base, limit})
 
 	// A grow operation is a lot like a free operation, so if our
 	// chunk ends up below the (linearized) s.searchAddr, update
