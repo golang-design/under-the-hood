@@ -304,8 +304,7 @@ type p struct {
 	// such as timerModifying.
 	adjustTimers uint32
 
-	// Race context used while executing timer functions.
-	timerRaceCtx uintptr
+	(...)
 
 	// preempt is set to indicate that this P should be enter the
 	// scheduler ASAP (regardless of what G is running on it).
@@ -362,7 +361,6 @@ type g struct {
 	gcscandone   bool // g 执行栈已经 scan 了；此此段受 _Gscan 位保护
 	throwsplit   bool // 必须不能进行栈分段
 	(...)
-	sysblocktraced bool       // StartTrace 已经出发了此 goroutine 的 EvGoInSyscall
 	sysexitticks   int64      // 当 syscall 返回时的 cputicks（用于跟踪）
 	// activeStackChans indicates that there are unlocked channels
 	// pointing into this goroutine's stack. If true, stack
@@ -377,7 +375,7 @@ type g struct {
 	sigcode1       uintptr
 	sigpc          uintptr
 	gopc           uintptr         // 当前创建 goroutine go 语句的 pc 寄存器
-	ancestors      *[]ancestorInfo // 创建此 goroutine 的 ancestor goroutine 的信息(debug.tracebackancestors 调试用)
+	(...)
 	startpc        uintptr         // goroutine 函数的 pc 寄存器
 	(...)
 	waiting        *sudog         // 如果 g 发生阻塞（且有有效的元素指针）sudog 会将当前 g 按锁住的顺序组织起来

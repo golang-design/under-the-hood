@@ -34,7 +34,7 @@ go build -gcflags "-N -l" -ldflags=-compressdwarf=false -o main main.go
 
 并使用通过 gdb 调试来确定程序的入口地址：
 
-```gdb
+```bash
 $ gdb main
 (...)
 (gdb) info files
