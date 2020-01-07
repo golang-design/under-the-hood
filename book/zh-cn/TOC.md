@@ -289,17 +289,15 @@
     + 返回的错误处理
     + 进一步阅读的参考文献
 
-### [第三部分：编译系统](part3compile/readme.md)
+#### [第 11 章 关键字与类型系统](part2runtime/ch11type/readme.md)
 
-#### [第 11 章 关键字与类型系统](part3compile/ch11type/readme.md)
-
-- [11.1 `go`](part3compile/ch11type/go.md)
-- [11.2 `defer`](part3compile/ch11type/defer.md)
-- [11.3 `panic` 与 `recover`](part3compile/ch11type/panic.md)
+- [11.1 `go`](part2runtime/ch11type/go.md)
+- [11.2 `defer`](part2runtime/ch11type/defer.md)
+- [11.3 `panic` 与 `recover`](part2runtime/ch11type/panic.md)
     + gopanic 和 gorecover
     + 总结
-- [11.4 `map`](part3compile/ch11type/map.md)
-- [11.5 `chan` 与 `select`](part3compile/ch11type/chan.md)
+- [11.4 `map`](part2runtime/ch11type/map.md)
+- [11.5 `chan` 与 `select`](part2runtime/ch11type/chan.md)
     + channel 的本质
       + 基本使用
       + channel 的创生
@@ -313,10 +311,12 @@
     + channel 的 lock-free 实现
     + 总结
     + 进一步阅读的参考文献
-- [11.6 `interface{}`](part3compile/ch11type/interface.md)
-- [11.7 slice](part3compile/ch11type/slice.md)
-- [11.8 string](part3compile/ch11type/string.md)
-- [11.9 运行时类型系统与 reflect 包](part3compile/ch11type/type.md)
+- [11.6 `interface{}`](part2runtime/ch11type/interface.md)
+- [11.7 slice](part2runtime/ch11type/slice.md)
+- [11.8 string](part2runtime/ch11type/string.md)
+- [11.9 运行时类型系统与 reflect 包](part2runtime/ch11type/type.md)
+
+### [第三部分：编译系统](part3compile/readme.md)
 
 #### 第 12 章 泛型
 
