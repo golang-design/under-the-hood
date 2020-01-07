@@ -49,6 +49,20 @@ sched, runtime sync:
     - [x] lock_js.go
     - [x] lock_sema.go
     - [ ] rwmutex.go
+- [ ] src/net
+- [x] src/time
+- [ ] src/runtime
+  - [ ] net
+    - [ ] netpoll.go
+    - [ ] netpoll_epoll.go
+    - [ ] netpoll_fake.go
+    - [ ] netpoll_kqueue.go
+    - [ ] netpoll_stub.go
+  - [x] time
+    - [x] time.go
+    - [x] timestub.go
+    - [x] timestub2.go
+    - [x] time_fake.go
 
 ## 第七章
 
@@ -75,6 +89,7 @@ allocator:
   - [x] memclr_wasm.s
   - [x] memmove_amd64.s
   - [x] memmove_wasm.s
+  - [ ] mscavenger.go
 
 ## 第八章
 
@@ -173,14 +188,17 @@ runtime type system / keywords:
 
 ## 第十二章
 
-## 第十三章
+- [ ] src/go/types
 
-## 第十四章
+## 第十三章
 
 - [x] src/unsafe
 - [ ] src/cmd
   - [ ] /compile
   - [ ] /internal/obj
+
+## 第十四章
+
 
 ## 第十五章
 
@@ -201,23 +219,6 @@ runtime type system / keywords:
   - [ ] Cond
   - [ ] Mutex
   - [ ] Rwmutex
-
-## 第十七章
-
-- [ ] src/net
-- [x] src/time
-- [ ] src/runtime
-  - [ ] net
-    - [ ] netpoll.go
-    - [ ] netpoll_epoll.go
-    - [ ] netpoll_fake.go
-    - [ ] netpoll_kqueue.go
-    - [ ] netpoll_stub.go
-  - [x] time
-    - [x] time.go
-    - [x] timestub.go
-    - [x] timestub2.go
-    - [x] time_fake.go
 
 ## 通用
 
