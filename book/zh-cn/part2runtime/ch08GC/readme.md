@@ -34,15 +34,14 @@ title: "第 8 章 垃圾回收器"
     + STW 的结束
     + GC 的启动
     + 标记准备阶段
-- [8.7 扫描标记阶段](./mark.md)
+- [8.7 扫描标记与标记辅助](./mark.md)
 - [8.8 标记终止阶段](./termination.md)
 - [8.9 内存清扫阶段](./sweep.md)
-- [9.10 内存归还阶段](./scavenge.md)
-- [8.11 用户层 APIs](./finalizer.md)
+- [8.10 用户层 APIs](./finalizer.md)
     + 存活与终结
       + SetFinalizer
       + KeepAlive
-- [8.12 过去、现在与未来](./history.md)
+- [8.11 过去、现在与未来](./history.md)
 
 垃圾回收是一个相当困难且复杂的系统工程。
 

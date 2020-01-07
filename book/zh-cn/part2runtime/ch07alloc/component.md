@@ -1,5 +1,5 @@
 ---
-weight: 2201
+weight: 2202
 title: "7.2 组件"
 ---
 

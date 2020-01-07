@@ -254,7 +254,7 @@
       + KeepAlive
 - [8.11 过去、现在与未来](part2runtime/ch08GC/history.md)
 
-#### 第 9 章 调试
+#### [第 9 章 调试工具](part2runtime/ch09debug/readme.md)
 
 - [9.1 数据竞争检测](part2runtime/ch09debug/race.md)
 - [9.2 运行时死锁检测](part2runtime/ch09debug/deadlock.md)

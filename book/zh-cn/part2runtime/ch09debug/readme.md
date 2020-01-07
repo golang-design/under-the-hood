@@ -1,13 +1,13 @@
 ---
 weight: 2400
-title: "第九章 调试"
+title: "第 9 章 调试"
 ---
 
-# 第九章 调试
+# 第 9 章 调试
 
-- 死锁检测
-- 竞争检查
-- 性能追踪
+- [9.1 数据竞争检测](part2runtime/ch09debug/race.md)
+- [9.2 运行时死锁检测](part2runtime/ch09debug/deadlock.md)
+- [9.3 trace 运行时调试](part2runtime/ch09debug/trace.md)
 
 ## 许可
 

@@ -44,8 +44,9 @@ title: "第 7 章 内存分配器"
     + 从 mecentral 获取
     + 从 mheap 获取
 - [7.6 微对象分配](./tinyalloc.md)
-- [7.7 内存统计](./mstats.md)
-- [7.8 过去、现在与未来](./history.md)
+- [7.7 清道夫及其调步算法](./scavenge.md)
+- [7.8 内存统计](./mstats.md)
+- [7.9 过去、现在与未来](./history.md)
 
 ## 许可
 
