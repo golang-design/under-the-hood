@@ -35,8 +35,6 @@
 - [3.4 工作窃取调度理论](part1basic/ch03scheduling/theory.md)
 - [3.5 中断与抢占](part1basic/ch03scheduling/interrupt.md)
 
-<!-- - [工作窃取调度](papers/sched/work-steal-sched.md) -->
-
 #### [第 4 章 内存管理工程](part1basic/ch04memory/readme.md)
 
 - [4.1 内存分配器](part1basic/ch04memory/alloc.md)
