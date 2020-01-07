@@ -102,7 +102,6 @@
       + M 的死亡
     + 总结
     + 进一步阅读的参考文献
-
 - [6.4 线程管理](part2runtime/ch06sched/thread.md)
     + LockOSThread
     + UnlockOSThread
@@ -211,8 +210,9 @@
     + 从 mecentral 获取
     + 从 mheap 获取
 - [7.6 微对象分配](part2runtime/ch07alloc/tinyalloc.md)
-- [7.7 内存统计](part2runtime/ch07alloc/mstats.md)
-- [7.8 过去、现在与未来](part2runtime/ch07alloc/history.md)
+- [7.7 清道夫及其调步算法](part2runtime/ch08GC/scavenge.md)
+- [7.8 内存统计](part2runtime/ch07alloc/mstats.md)
+- [7.9 过去、现在与未来](part2runtime/ch07alloc/history.md)
 
 #### [第 8 章 垃圾回收器](part2runtime/ch08GC/readme.md)
 
@@ -221,7 +221,7 @@
     + 原始的标记清扫算法
     + 内存模型
     + 进一步阅读的参考文献
-- [8.2 混合写屏障技术](part2runtime/ch08GC/barrier.md)
+- [8.2 混合写屏障](part2runtime/ch08GC/barrier.md)
     + 基本思想
     + 可靠性、完备性和有界性的证明
     + 实现细节
@@ -235,7 +235,7 @@
 - [8.4 初始化](part2runtime/ch08GC/init.md)
     + 引导阶段的 GC 初始化
     + GC 的后台工作
-- [8.5 触发机制与调步算法](part2runtime/ch08GC/pacing.md)
+- [8.5 触发机制及其调步算法](part2runtime/ch08GC/pacing.md)
     + GC 的调控方式
     + 调步算法的设计
     + 实现
@@ -245,15 +245,14 @@
     + STW 的结束
     + GC 的启动
     + 标记准备阶段
-- [8.7 扫描标记阶段](part2runtime/ch08GC/mark.md)
+- [8.7 扫描标记与标记辅助](part2runtime/ch08GC/mark.md)
 - [8.8 标记终止阶段](part2runtime/ch08GC/termination.md)
 - [8.9 内存清扫阶段](part2runtime/ch08GC/sweep.md)
-- [9.10 内存归还阶段](part2runtime/ch08GC/scavenge.md)
-- [8.11 用户层 APIs](part2runtime/ch08GC/finalizer.md)
+- [8.10 用户层 APIs](part2runtime/ch08GC/finalizer.md)
     + 存活与终结
       + SetFinalizer
       + KeepAlive
-- [8.12 过去、现在与未来](part2runtime/ch08GC/history.md)
+- [8.11 过去、现在与未来](part2runtime/ch08GC/history.md)
 
 #### 第 9 章 调试
 
@@ -261,32 +260,33 @@
 - [9.2 运行时死锁检测](part2runtime/ch09debug/deadlock.md)
 - [9.3 trace 运行时调试](part2runtime/ch09debug/trace.md)
 
-#### 第 10 章 兼容与契约
+#### [第 10 章 兼容与契约](part2runtime/ch10abi/readme.md)
 
-- [10.1 参与运行时的系统调用: Linux 篇](part2runtime/ch10abi/syscall-linux.md)
-    + 案例研究 runtime.clone
-    + 运行时实现的系统调用清单
+- [10.1 参与运行时的系统调用](part2runtime/ch10abi/syscall.md)
+    + Linux
+      + 案例研究 runtime.clone
+      + 运行时实现的系统调用清单
+    + Darwin
+      + libcCall 调用
+      + 案例研究: runtime.pthread_create
+      + 运行时实现的 libc 调用清单
     + 进一步阅读的参考文献
-- [10.2 参与运行时的系统调用: Darwin 篇](part2runtime/ch10abi/syscall-darwin.md)
-    + libcCall 调用
-    + 案例研究: runtime.pthread_create
-    + 运行时实现的 libc 调用清单
-- [10.3 cgo](part2runtime/ch10abi/cgo.md)
+- [10.2 cgo](part2runtime/ch10abi/cgo.md)
     + 入口
     + cgocall
-      + 原理概述: Go 调用 C
+      + Go 调用 C
       + 实际代码
     + cgocallbackg
-      + 原理概述: C 调用 Go
+      + C 调用 Go
       + 实际代码
     + 总结
     + 进一步阅读的参考文献
-- [10.4 WebAssembly](part2runtime/ch10abi/wasm.md)
-- [10.5 用户态系统调用](part2runtime/ch10abi/syscall-pkg.md)
+- [10.3 WebAssembly](part2runtime/ch10abi/wasm.md)
+- [10.4 用户态系统调用](part2runtime/ch10abi/syscall-pkg.md)
     + 由运行时提供支持的系统调用
     + 通用型系统调用
-      + `runtime.entersyscall` 和 `runtime.exitsyscall`
-      + 返回的错误处理
+    + `runtime.entersyscall` 和 `runtime.exitsyscall`
+    + 返回的错误处理
     + 进一步阅读的参考文献
 
 ### [第三部分：编译系统](part3compile/readme.md)
