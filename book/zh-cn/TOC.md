@@ -419,7 +419,7 @@
     + 原子操作的内存模型
     + 进一步阅读的参考文献
 
-### [第 17 章 Go 去向何方？](ch17end/readme.md)
+### [结束语：Go 去向何方？](ch17end/readme.md)
 
 ### [参考文献](../bibliography/list.md)
 ### [附录A: 源码索引](appendix/all.md)
