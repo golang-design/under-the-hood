@@ -1,9 +1,9 @@
 ---
-weight: 1502
-title: "5.3 主 goroutine"
+weight: 1503
+title: "5.3 主 goroutine 的生与死"
 ---
 
-# 5.3 主 goroutine
+# 5.3 主 goroutine 的生与死
 
 [TOC]
 

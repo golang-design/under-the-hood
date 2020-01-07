@@ -1,9 +1,11 @@
 ---
-weight: 1103
-bookHidden: true
+weight: 1105
+title: "1.5 CPU 设计与架构"
 ---
 
-## 8 运行时组件：平台
+## 1.5 CPU 设计与架构
+
+TODO: 请不要阅读此小节，内容编排中
 
 - 此处暂时记录平台相关差异
 - 考虑成书时要么加入所有平台的比较、要么只考虑 darwin/linux,amd64

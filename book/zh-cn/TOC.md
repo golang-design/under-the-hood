@@ -2,18 +2,20 @@
 
 ### [引言](preface.md)
 
-### 第一部分: 基础知识
+### [第一部分: 基础知识](part1basic/readme.md)
 
-#### 第一章 程序基础
+#### [第 1 章 程序基础](part1basic/ch01proc/readme.md)
 
-<!-- CPU 架构与操作系统? -->
-<!-- 程序堆栈布局？ -->
-<!-- - [Plan 9 汇编(asm.md)? -->
-<!-- [Linux 系统调用]? -->
+- [1.1 Go 语言综述](./part1basic/ch01proc/go.md)
+- [1.2 传统程序堆栈](./part1basic/ch01proc/stack.md)
+- [1.3 系统内核与系统调用](./part1basic/ch01proc/os.md)
+- [1.4 Plan 9 汇编语言](./part1basic/ch01proc/asm.md)
+- [1.5 CPU 设计与架构](./part1basic/ch01proc/cpu.md)
+- [1.6 编译与链接](./part1basic/ch01proc/compile.md)
 
-#### [第二章 并行、并发与分布式计算](part1basic/ch02parallel/readme.md)
+#### [第 2 章 并行、并发与分布式计算](part1basic/ch02parallel/readme.md)
 
-- [2.1 并行、并发的基本概念](part1basic/ch02parallel/define.md)
+- [2.1 并行与并发的基本概念](part1basic/ch02parallel/define.md)
 - [2.2 缓存技术](part1basic/ch02parallel/cache.md)
     + UMA
     + NUMA
@@ -22,17 +24,24 @@
 - [2.3 性能模型](part1basic/ch02parallel/perfs.md)
 - [2.4 分布式计算的基本概念](part1basic/ch02parallel/distributed.md)
 - [2.5 共识技术](part1basic/ch02parallel/consensus.md)
+- [2.6 顺序进程通讯 CSP](part1basic/ch02parallel/csp.md)
+- [2.7 同步锁](part1basic/ch02parallel/locks.md)
 
-#### [第三章 排队与调度理论](part1basic/ch03scheduling/readme.md)
+#### [第 3 章 排队与调度理论](part1basic/ch03scheduling/readme.md)
 
-- [单机调度模型](part1basic/ch03scheduling/single.md)
+- [3.1 排队理论](part1basic/ch03scheduling/queue.md)
+- [3.2 单机调度模型](part1basic/ch03scheduling/single.md)
+- [3.3 随机调度模型](part1basic/ch03scheduling/stochastic.md)
+- [3.4 工作窃取调度理论](part1basic/ch03scheduling/theory.md)
+- [3.5 中断与抢占](part1basic/ch03scheduling/interrupt.md)
 
-<!-- - [工作窃取调度](papers/sched/work-steal-sched.md)
-- [调度理论](4-sched/theory.md) -->
+<!-- - [工作窃取调度](papers/sched/work-steal-sched.md) -->
 
-#### [第四章 内存管理工程](part1basic/ch04memory/readme.md)
+#### [第 4 章 内存管理工程](part1basic/ch04memory/readme.md)
 
-- [内存屏障技术](part1basic/ch04memory/barrier.md)
+- [4.1 内存分配器](part1basic/ch04memory/alloc.md)
+- [4.2 标记清扫法与三色抽象](part1basic/ch04memory/cms.md)
+- [4.3 屏障技术](part1basic/ch04memory/barrier.md)
     + 三色不变性原理
       + 强、弱不变性
       + 赋值器的颜色
@@ -41,29 +50,29 @@
       + 灰色赋值器的 Dijkstra 插入屏障
       + 黑色赋值器的 Yuasa 删除屏障
     + 进一步阅读的参考文献
-- [垃圾回收统一理论](part1basic/ch04memory/unifiedgc.md)
+- [4.4 垃圾回收统一理论](part1basic/ch04memory/unifiedgc.md)
 
-#### [第五章 Go 程序生命周期](part1basic/ch05boot/readme.md)
+#### [第 5 章 Go 程序生命周期](part1basic/ch05boot/readme.md)
 
-- [5.1 程序引导](part1basic/ch05boot/boot.md)
+- [5.1 Go 程序引导](part1basic/ch05boot/boot.md)
     + 入口
     + 引导
     + 总结
     + 进一步阅读的参考文献
-- [5.2 初始化概览](part1basic/ch05boot/init.md)
+- [5.2 运行时初始化概览](part1basic/ch05boot/init.md)
     + CPU 相关信息的初始化
     + 运行时算法初始化
     + 模块链接初始化
     + 核心组件的初始化
     + 总结
-- [5.3 主 goroutine](part1basic/ch05boot/main.md)
+- [5.3 主 goroutine 的生与死](part1basic/ch05boot/main.md)
     + 概览
     + pkg.init 顺序
     + 何去何从？
 
 ### [第二部分：运行时机制](part2runtime/readme.md)
 
-#### [第六章 调度器](part2runtime/ch06sched/readme.md)
+#### [第 6 章 调度器](part2runtime/ch06sched/readme.md)
 
 - [6.1 基本结构](part2runtime/ch06sched/basic.md)
     + 工作线程的暂止和复始
@@ -95,26 +104,6 @@
       + M 的死亡
     + 总结
     + 进一步阅读的参考文献
-
-<!-- 
-按以下逻辑重新组织本章？
-M 的创建
-M 的休眠
-M 的唤醒
-M 的死亡
-G 的创建
-G 的休眠
-G 的唤醒
-G 的死亡
-P 的创建
-P 的死亡
-M 与 G 的绑定
-M 与 G 的解绑
-M 与 P 的绑定
-M 与 P 的解绑
-G 与 P 的绑定
-G 与 P 的解绑
- -->
 
 - [6.4 线程管理](part2runtime/ch06sched/thread.md)
     + LockOSThread
@@ -183,7 +172,7 @@ G 与 P 的解绑
     + 总结
     + 进一步阅读的参考文献
 
-#### [第七章 内存分配器](part2runtime/ch07alloc/readme.md)
+#### [第 7 章 内存分配器](part2runtime/ch07alloc/readme.md)
 
 - [7.1 基本知识](part2runtime/ch07alloc/basic.md)
     + 主要结构
@@ -227,7 +216,7 @@ G 与 P 的解绑
 - [7.7 内存统计](part2runtime/ch07alloc/mstats.md)
 - [7.8 过去、现在与未来](part2runtime/ch07alloc/history.md)
 
-#### [第八章 垃圾回收器](part2runtime/ch08GC/readme.md)
+#### [第 8 章 垃圾回收器](part2runtime/ch08GC/readme.md)
 
 - [8.1 基本知识](part2runtime/ch08GC/basic.md)
     + 并发三色回收一瞥
@@ -268,13 +257,13 @@ G 与 P 的解绑
       + KeepAlive
 - [8.12 过去、现在与未来](part2runtime/ch08GC/history.md)
 
-#### 第九章 调试
+#### 第 9 章 调试
 
 - [9.1 数据竞争检测](part2runtime/ch09debug/race.md)
 - [9.2 运行时死锁检测](part2runtime/ch09debug/deadlock.md)
 - [9.3 trace 运行时调试](part2runtime/ch09debug/trace.md)
 
-#### 第十章 兼容与契约
+#### 第 10 章 兼容与契约
 
 - [10.1 参与运行时的系统调用: Linux 篇](part2runtime/ch10abi/syscall-linux.md)
     + 案例研究 runtime.clone
@@ -304,7 +293,7 @@ G 与 P 的解绑
 
 ### [第三部分：编译系统](part3compile/readme.md)
 
-#### [第十一章 关键字与类型系统](part3compile/ch11type/readme.md)
+#### [第 11 章 关键字与类型系统](part3compile/ch11type/readme.md)
 
 - [11.1 `go`](part3compile/ch11type/go.md)
 - [11.2 `defer`](part3compile/ch11type/defer.md)
@@ -331,17 +320,17 @@ G 与 P 的解绑
 - [11.8 string](part3compile/ch11type/string.md)
 - [11.9 运行时类型系统与 reflect 包](part3compile/ch11type/type.md)
 
-#### 第十二章 泛型
+#### 第 12 章 泛型
 
 - [12.1 泛型的历史及其演化]
 - [12.2 泛型的实现]
 
-#### 第十三章 模块链接器
+#### 第 13 章 模块链接器
 
 - [初始化](part3compile/ch13link/init.md)
 - [模块链接](part3compile/ch13link/link.md)
 
-#### 第十四章 编译器
+#### 第 14 章 编译器
 
 - [逃逸分析](part3compile/ch14gc/escape.md)
 - [`unsafe`](part3compile/ch14gc/unsafe.md)
@@ -354,7 +343,7 @@ G 与 P 的解绑
 
 ### [第四部分：标准库](part4lib/readme.md)
 
-#### [第十五章 错误处理](part4lib/ch15errors/readme.md)
+#### [第 15 章 错误处理](part4lib/ch15errors/readme.md)
 
 - [15.1 错误处理的历史及其演化](part4lib/ch15errors/error.md)
     + `error` 类型的历史形态
@@ -367,13 +356,13 @@ G 与 P 的解绑
       + 对错误处理进行改进的反馈
       + check/handle 关键字
       + 内建函数 try
-- [16.2 `errors` 包与错误检查](part4lib/ch15errors/errors.md)
+- [15.2 `errors` 包与错误检查](part4lib/ch15errors/errors.md)
     + 错误检查
       + Unwrap
       + As 与 Is
       + fmt.Errorf 中的 `%w`
 
-#### [第十六章 sync 与 atomic 包](part4lib/ch16sync/readme.md)
+#### [第 16 章 sync 与 atomic 包](part4lib/ch16sync/readme.md)
 
 - [16.1 `sync.Pool`](part4lib/ch16sync/pool.md)
     + 底层结构
@@ -416,7 +405,7 @@ G 与 P 的解绑
     + 原子操作的内存模型
     + 进一步阅读的参考文献
 
-#### [第十七章 其他](part4lib/ch17other/readme.md)
+#### [第 17 章 其他](part4lib/ch17other/readme.md)
 
 - [17.1 `net` 的网络轮询器 NetPoller](part4lib/ch17other/net.md)
 - [17.2 `time.*` 的计时器 Timer](part4lib/ch17other/time.md)
