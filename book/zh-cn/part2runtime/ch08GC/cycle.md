@@ -506,7 +506,7 @@ func gcMarkTinyAllocs() {
 var gcBlackenEnabled uint32
 ```
 
-## 总结
+## 小结
 
 TODO:
 

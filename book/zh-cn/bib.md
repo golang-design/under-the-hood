@@ -1,3 +1,8 @@
+---
+weight: 5000
+title: "附录A：源码文件分配索引及完成情况"
+---
+
 # 参考文献
 
 ## scheduler
@@ -33,3 +38,7 @@
 - Pekka P. Pirinen. 1998. Barrier techniques for incremental tracing. In Proceedings of the 1st international symposium on Memory management (ISMM '98). ACM, New York, NY, USA, 20-25.
 - T. Yuasa. 1990. Real-time garbage collection on general-purpose machines. J. Syst. Softw. 11, 3 (March 1990), 181-198.
 - Edsger W. Dijkstra, Leslie Lamport, A. J. Martin, C. S. Scholten, and E. F. M. Steffens. 1978. On-the-fly garbage collection: an exercise in cooperation. *Commun. ACM* 21, 11 (November 1978), 966-975.
+
+## 许可
+
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

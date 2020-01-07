@@ -8,7 +8,7 @@
 <a href="https://www.paypal.me/changkunde/4.99eur"><img src="https://img.shields.io/badge/donate-PayPal-104098.svg?style=popout-square&logo=PayPal"/></a>
 <a href="https://t.me/joinchat/FEeulA4zgj2DsBbudBqMcQ"><img src="https://img.shields.io/badge/chat-telegram-%232CA5E0.svg?logo=telegram&logoColor=white&style=flat-square"/></a>
 <br/><br/>
-<p>A source code study of Go | Based on <code>go1.13</code></p>
+<p>A source code study of Go | Based on <code>go1.14</code></p>
 </div>
 
 ## To Readers
@@ -53,7 +53,7 @@ The author would like to thank [@egonelbre](https://github.com/egonelbre/gophers
 
 <div align="center">
 <p></p>
-<p><a href="https://github.com/changkun/go-under-the-hood">Go under the hood</a> &copy; 2018 - 2019 <a href="https://changkun.de">Changkun Ou</a></p>
+<p><a href="https://github.com/changkun/go-under-the-hood">Go under the hood</a> &copy; 2018 - 2020 <a href="https://changkun.de">Changkun Ou</a></p>
 </div>
 
 

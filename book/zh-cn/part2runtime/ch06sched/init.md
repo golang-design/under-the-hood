@@ -656,7 +656,7 @@ func globrunqputbatch(batch *gQueue, n int32) {
 还会将本地队列中一半的 work 给拿走，然后将他们的执行顺序重新打乱。
 再放入全局队列。
 
-## 总结
+## 小结
 
 我们已经分析完了整个运行链条：`mcommoninit` --> `procresize` --> `newproc`。
 

@@ -353,7 +353,7 @@ func fatalpanic(msgs *_panic) {
 }
 ```
 
-## 总结
+## 小结
 
 从 panic 和 recover 这对关键字的实现上可以看出，可恢复的 panic 必须要 recover 的配合。
 而且，这个 recover 必须位于同一 goroutine 的直接调用链上（例如，如果 A 依次调用了 B 和 C，而

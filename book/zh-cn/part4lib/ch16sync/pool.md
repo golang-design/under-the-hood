@@ -645,7 +645,7 @@ func (*noCopy) Lock()   {}
 func (*noCopy) Unlock() {}
 ```
 
-## 总结
+## 小结
 
 至此，我们完整分析了 sync.Pool 的所有代码。总结：
 

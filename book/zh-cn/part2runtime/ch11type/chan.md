@@ -1192,7 +1192,7 @@ func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool
 
 第二个原因则在于：lockfree 版本的 channel 可维护性大打折扣。这里我们简单提一个由于 lock-free 实现导致的维护性大打折扣的教训 [Randall, 2015b]，在 [Randall, 2015a] 的简化 channel 实现的过程中，由于没有考虑到发送数据过程中对要发送数据的指针进行读取会与调度器对执行栈的伸缩发生冲突，从而导致这个间隙没有被考虑到：直接读分为两个过程 1. 读取发送方的值的指针 2. 拷贝到要接受的位置；在 1 和 2 这两个步骤之间，发送方的执行栈可能发生收缩，进而指针失效。虽然有人提出使用 lock-free programing 形式化验证工具 [Bell Labs, 1980] 让调度器代码与形式验证的模型进行同步，但显然这需要更多的工作量。
 
-## 总结
+## 小结
 
 channel 的实现是一个典型的环形队列+mutex锁的实现，与 channel 同步出现的 select 更像是一个语法糖，其本质仍然是一个 `chansend` 和 `chanrecv` 的两个通用实现。但为了支持 select 在不同分支上的非阻塞操作，`selectgo` 完成了这一需求。
 

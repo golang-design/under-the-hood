@@ -1,9 +1,9 @@
 ---
 weight: 2500
-title: "第十章 兼容与契约"
+title: "第 10 章 兼容与契约"
 ---
 
-# 第十章 兼容与契约
+# 第 10 章 兼容与契约
 
 - [10.1 参与运行时的系统调用](./syscall.md)
     + Linux
@@ -22,7 +22,7 @@ title: "第十章 兼容与契约"
     + cgocallbackg
       + C 调用 Go
       + 实际代码
-    + 总结
+    + 小结
     + 进一步阅读的参考文献
 - [10.3 WebAssembly](./wasm.md)
 - [10.4 用户态系统调用](./syscall-pkg.md)

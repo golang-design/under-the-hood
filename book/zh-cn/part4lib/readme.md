@@ -5,9 +5,8 @@ title: "第四部分 标准库"
 
 # 第四部分 标准库
 
-- [第十五章 错误处理](ch15errors/readme.md)
-- [第十六章 sync 与 atomic](ch16sync/readme.md)
-- [第十七章 其他](ch17other/readme.md)
+- [第 15 章 错误处理](ch15errors/readme.md)
+- [第 16 章 sync 与 atomic 包](ch16sync/readme.md)
 
 ## 许可
 

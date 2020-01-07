@@ -220,7 +220,7 @@ func wakeScavengerLocked() {
 以及设定 scavenger 能够被周期性唤醒的 timer。此外，从 `scavenger.lock` 可以看出，
 该锁确保了 scavenger 不会被并发的被 timer 唤醒而执行。
 
-## 总结
+## 小结
 
 从两个初始化过程中我们可以明确知道，GC 的具体实现中，在执行用户态代码时有以下几个辅助任务：
 

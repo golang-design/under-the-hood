@@ -551,7 +551,7 @@ func semrelease1(addr *uint32, handoff bool, skipframes int) {
 依然抢不到锁，则会进入 goparkunlock，将当前的 G1 放到等待队列中，进而让 M1 切换并执行其他 G。
 当 M2 上的 G2 开始调用 semrelease1 时，只是单纯的将等待队列的 G1 重新放到调度队列中，而当 G1 重新被调度时（假设运气好又在 M1 上被调度），代码仍然会从 goparkunlock 之后开始执行，并再次尝试竞争信号量，如果成功，则会归还 sudog。
 
-## 总结
+## 小结
 
 TODO:
 

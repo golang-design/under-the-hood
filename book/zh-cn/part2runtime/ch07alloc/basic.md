@@ -348,7 +348,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 
 大对象分配非常粗暴，不与 mcache 和 mcentral 沟通，直接绕过并通过 mheap 进行分配。
 
-## 总结
+## 小结
 
 图 1 展示了所有结构的关系。
 

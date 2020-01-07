@@ -524,7 +524,7 @@ func (m *Map) LoadOrStore(key, value interface{}) (actual interface{}, loaded bo
 我们已经看过 Load 或 Store 的单独过程了，`LoadOrStore` 方法无非是两则的结合，比较简单，这里就不再细说了。
 
 
-## 总结
+## 小结
 
 我们来回顾一下 sync.Map 中 read map 和 dirty map 的同步过程：
 

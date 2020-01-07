@@ -1,8 +1,9 @@
 ---
-bookHidden: true
+weight: 3301
+title: "14.1 初始化"
 ---
 
-# 链接器：初始化
+# 14.1 初始化
 
 [TOC]
 
@@ -63,3 +64,7 @@ type moduledata struct {
 	next *moduledata
 }
 ```
+
+## 许可
+
+[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

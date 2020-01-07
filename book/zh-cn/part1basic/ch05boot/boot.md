@@ -435,7 +435,7 @@ loop:
 3. `runtime.mstart`
 4. `runtime.main`
 
-## 总结
+## 小结
 
 Go 程序既不是从 `main.main` 直接启动，也不是从 `runtime.main` 直接启动。
 相反，我们通过 GDB 调试寻找 Go 程序的入口地址，在 `darwin/amd64` 上发现实际的入口地址

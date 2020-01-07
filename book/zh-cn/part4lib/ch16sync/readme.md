@@ -1,9 +1,9 @@
 ---
 weight: 4200
-title: "第十六章 sync 与 atomic 包"
+title: "第 16 章 sync 与 atomic 包"
 ---
 
-# 第十六章 sync 与 atomic 包
+# 第 16 章 sync 与 atomic 包
 
 - [16.1 `sync.Pool`](./pool.md)
     + 底层结构
@@ -17,7 +17,7 @@ title: "第十六章 sync 与 atomic 包"
       + poolChain 的 popHead, pushHead 和 popTail
       + poolDequeue 的 popHead, pushHead popTail
     + noCopy
-    + 总结
+    + 小结
     + 进一步阅读的参考文献
 - [16.2 `sync.Once`](./once.md)
 - [16.3 `sync.Map`](./map.md)
@@ -27,7 +27,7 @@ title: "第十六章 sync 与 atomic 包"
     + Delete
     + Range
     + LoadOrStore
-    + 总结
+    + 小结
 - [16.4 `sync.WaitGroup`](./waitgroup.md)
     + 结构
     + Add/Done

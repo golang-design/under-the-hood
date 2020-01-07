@@ -6,7 +6,7 @@
 
 # Go 语言原本
 
-内容基于 `go1.13`
+内容基于 `go1.14`
 
 ![](https://img.shields.io/badge/lang-简体中文-red.svg?longCache=true&style=flat-square)
 ![](https://img.shields.io/github/license/changkun/go-under-the-hood.svg?style=flat-square)
@@ -39,7 +39,7 @@ Go 语言从 2009 年诞生之初已有十年的历史。
 ## 组织结构
 
 本书内容涵盖整个 Go 语言的核心源码，这包括但不限于用户端能直接接触的 Go 运行时 `runtime`、与关键语言特性相关的编译器 `cmd/compile`、
-诸多重要的标准库 `sync`/`reflect`/`errors` 等等。
+诸多重要的标准库 `sync`、`reflect`、`errors` 等等。
 在极少数情况下，本书会讨论不同平台下的实现差异，主要以 Linux/Darwin amd64，以及 Go 1.11 中引入的 WebAssembly 为主。
 
 本书共分为四个部分，第一部分简要回顾了与 Go 运行时及编译器相关的基础理论，并在其最后一章中简要讨论了 Go 程序的生命周期。

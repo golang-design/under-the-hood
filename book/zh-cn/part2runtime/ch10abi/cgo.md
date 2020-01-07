@@ -437,7 +437,7 @@ func cgocallbackg1(ctxt uintptr) {
 }
 ```
 
-## 总结
+## 小结
 
 TODO:
 

@@ -1,9 +1,9 @@
 ---
-bookHidden: true
+weight: 3202
+title: "13.2 逃逸分析"
 ---
 
-
-# 编译器：逃逸分析
+# 13.2 逃逸分析
 
 TODO: 1.13
 

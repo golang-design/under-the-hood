@@ -55,14 +55,14 @@
 - [5.1 Go 程序引导](part1basic/ch05boot/boot.md)
     + 入口
     + 引导
-    + 总结
+    + 小结
     + 进一步阅读的参考文献
 - [5.2 运行时初始化概览](part1basic/ch05boot/init.md)
     + CPU 相关信息的初始化
     + 运行时算法初始化
     + 模块链接初始化
     + 核心组件的初始化
-    + 总结
+    + 小结
 - [5.3 主 goroutine 的生与死](part1basic/ch05boot/main.md)
     + 概览
     + pkg.init 顺序
@@ -79,14 +79,14 @@
       + P 的结构
       + G 的结构
       + 调度器 sched 的结构
-    + 总结
+    + 小结
     + 进一步阅读的参考文献
 - [6.2 调度器初始化](part2runtime/ch06sched/init.md)
     + M 的初始化
     + P 的初始化
     + G 的初始化
       + 一些细节
-    + 总结
+    + 小结
 - [6.3 调度循环](part2runtime/ch06sched/exec.md)
     + 执行前的准备
       + mstart 和 mstart1
@@ -100,14 +100,14 @@
         + 系统线程的创建 (linux)
       + M/G 解绑
       + M 的死亡
-    + 总结
+    + 小结
     + 进一步阅读的参考文献
 - [6.4 线程管理](part2runtime/ch06sched/thread.md)
     + LockOSThread
     + UnlockOSThread
     + lockedg/lockedm 与调度循环
     + 模板线程
-    + 总结
+    + 小结
     + 进一步阅读的参考文献
 - [6.5 信号处理机制](part2runtime/ch06sched/signal.md)
     + 信号与软中断
@@ -117,7 +117,7 @@
     + 初始化信号屏蔽字
     + 信号处理
     + Extra M
-    + 总结
+    + 小结
     + 进一步阅读的参考文献
 - [6.6 执行栈管理](part2runtime/ch06sched/stack.md)
     + goroutine 栈结构
@@ -132,14 +132,14 @@
       + 栈的扩张
       + 栈的拷贝
       + 栈的收缩
-    + 总结
+    + 小结
 - [6.7 协作与抢占](part2runtime/ch06sched/preemption.md)
     + 协作式调度
       + 主动用户让权: Gosched
       + 主动调度弃权: 栈扩张与抢占标记
       + 被动监控弃权: 阻塞监控
     + 抢占式调度
-    + 总结
+    + 小结
     + 进一步阅读的参考文献
 - [6.8 运行时同步原语](part2runtime/ch06sched/sync.md)
     + 运行时通知机制 note
@@ -154,19 +154,31 @@
     + 运行时信号量机制 semaphore
       + sudog 缓存
       + 基于 goroutine 抽象的信号量
-    + 总结
+    + 小结
     + 进一步阅读的参考文献
 - [6.9 系统监控](part2runtime/ch06sched/sysmon.md)
     + 监控循环
-    + 总结
-- [6.10 用户层 APIs](part2runtime/ch06sched/calls.md)
-- [6.11 过去、现在与未来](part2runtime/ch06sched/history.md)
+    + 小结
+- [6.10 网络轮询器](part2runtime/ch06sched/poller.md)
+- [6.11 计时器](part2runtime/ch06sched/timer.md)
+    + Timer 状态机
+      + Timer 的启动
+      + Timer 的终止
+      + Timer 的重置
+      + Timer 的执行
+    + Timer 的触发时机
+      + 从调度循环中直接触发
+      + 从系统监控中触发
+    + 小结
+    + 进一步阅读的参考文献
+- [6.12 用户层 APIs](part2runtime/ch06sched/calls.md)
+- [6.13 过去、现在与未来](part2runtime/ch06sched/history.md)
     + 演进史
       + 单线程版调度器
       + 多线程版调度器
       + 工作窃取调度器
     + 改进展望：非均匀访存感知的调度器设计
-    + 总结
+    + 小结
     + 进一步阅读的参考文献
 
 #### [第 7 章 内存分配器](part2runtime/ch07alloc/readme.md)
@@ -185,7 +197,7 @@
       + 小对象分配
       + 微对象分配
       + 大对象分配
-    + 总结
+    + 小结
     + 进一步阅读的参考文献
 - [7.2 组件](part2runtime/ch07alloc/component.md)
     + fixalloc
@@ -225,7 +237,7 @@
     + 基本思想
     + 可靠性、完备性和有界性的证明
     + 实现细节
-    + 总结
+    + 小结
     + 进一步阅读的参考文献
 - [8.3 并发标记清扫](part2runtime/ch08GC/concurrent.md)
     + 并发标记
@@ -279,7 +291,7 @@
     + cgocallbackg
       + C 调用 Go
       + 实际代码
-    + 总结
+    + 小结
     + 进一步阅读的参考文献
 - [10.3 WebAssembly](part2runtime/ch10abi/wasm.md)
 - [10.4 用户态系统调用](part2runtime/ch10abi/syscall-pkg.md)
@@ -295,7 +307,7 @@
 - [11.2 `defer`](part2runtime/ch11type/defer.md)
 - [11.3 `panic` 与 `recover`](part2runtime/ch11type/panic.md)
     + gopanic 和 gorecover
-    + 总结
+    + 小结
 - [11.4 `map`](part2runtime/ch11type/map.md)
 - [11.5 `chan` 与 `select`](part2runtime/ch11type/chan.md)
     + channel 的本质
@@ -309,7 +321,7 @@
       + 发送数据的分支
       + 接收数据的分支
     + channel 的 lock-free 实现
-    + 总结
+    + 小结
     + 进一步阅读的参考文献
 - [11.6 `interface{}`](part2runtime/ch11type/interface.md)
 - [11.7 slice](part2runtime/ch11type/slice.md)
@@ -318,32 +330,35 @@
 
 ### [第三部分：编译系统](part3compile/readme.md)
 
-#### 第 12 章 泛型
+#### [第 12 章 泛型](part3compile/ch12generics/readme.md)
 
-- [12.1 泛型的历史及其演化]
-- [12.2 泛型的实现]
+- [12.1 泛型的历史及其演化](part3compile/ch12generics/history.md)
+- [12.2 泛型的实现](part3compile/ch12generics/implement.md)
+- [12.3 泛型的未来？](part3compile/ch12generics/future.md)
 
-#### 第 13 章 模块链接器
+#### [第 13 章 编译器](part3compile/ch13gc/readme.md)
 
-- [初始化](part3compile/ch13link/init.md)
-- [模块链接](part3compile/ch13link/link.md)
-
-#### 第 14 章 编译器
-
-- [逃逸分析](part3compile/ch14gc/escape.md)
-- [`unsafe`](part3compile/ch14gc/unsafe.md)
+- [13.1 unsafe](part3compile/ch13gc/unsafe.md)
     + 任意类型 `ArbitraryType`
     + Go 指针 `Pointer`
     + 指针操作
-- [词法与文法](part3compile/ch14gc/parse.md)
-- [编译后端 SSA](part3compile/ch14gc/ssa.md)
-- [过去、现在与未来]
+- [13.2 逃逸分析](part3compile/ch13gc/escape.md)
+- [13.3 词法与文法](part3compile/ch13gc/parse.md)
+- [13.4 编译后端 SSA](part3compile/ch13gc/ssa.md)
+- [13.5 语言的自举](part3compile/ch13gc/bootstrap.md)
+- [13.6 过去、现在与未来](part3compile/ch13gc/future.md)
+
+#### [第 14 章 链接器](part3compile/ch14linker/readme.md)
+
+- [14.1 初始化](part3compile/ch14linker/init.md)
+- [14.2 模块链接](part3compile/ch14linker/link.md)
+- [14.3 目标文件](part3compile/ch14linker/obj.md)
 
 ### [第四部分：标准库](part4lib/readme.md)
 
 #### [第 15 章 错误处理](part4lib/ch15errors/readme.md)
 
-- [15.1 错误处理的历史及其演化](part4lib/ch15errors/error.md)
+- [15.1 错误处理的历史及其演化](part4lib/ch15errors/history.md)
     + `error` 类型的历史形态
     + 错误处理的基本策略
       + 哨兵错误
@@ -359,6 +374,7 @@
       + Unwrap
       + As 与 Is
       + fmt.Errorf 中的 `%w`
+- [15.3 错误处理的未来？](part4lib/ch15errors/future.md)
 
 #### [第 16 章 sync 与 atomic 包](part4lib/ch16sync/readme.md)
 
@@ -374,7 +390,7 @@
       + poolChain 的 popHead, pushHead 和 popTail
       + poolDequeue 的 popHead, pushHead popTail
     + noCopy
-    + 总结
+    + 小结
     + 进一步阅读的参考文献
 - [16.2 `sync.Once`](part4lib/ch16sync/once.md)
 - [16.3 `sync.Map`](part4lib/ch16sync/map.md)
@@ -384,7 +400,7 @@
     + Delete
     + Range
     + LoadOrStore
-    + 总结
+    + 小结
 - [16.4 `sync.WaitGroup`](part4lib/ch16sync/waitgroup.md)
     + 结构
     + Add/Done
@@ -403,16 +419,8 @@
     + 原子操作的内存模型
     + 进一步阅读的参考文献
 
-#### [第 17 章 其他](part4lib/ch17other/readme.md)
-
-- [17.1 `net` 的网络轮询器 NetPoller](part4lib/ch17other/net.md)
-- [17.2 `time.*` 的计时器 Timer](part4lib/ch17other/time.md)
-
-### [结束语](finalwords.md)
+### [第 17 章 Go 去向何方？](ch17end/readme.md)
 
 ### [参考文献](../bibliography/list.md)
-
-### 附录
-
-- [附录A: 源码索引](appendix/index.md)
-- [附录B: 术语表](appendix/glossary.md)
+### [附录A: 源码索引](appendix/all.md)
+### [附录B: 术语表](appendix/glossary.md)

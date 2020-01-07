@@ -1,5 +1,5 @@
 ---
-weight: 1
+weight: 1000
 title: "引言"
 ---
 
@@ -44,7 +44,7 @@ Go 语言从 2009 年诞生之初已有十年的历史。
 
 ```bash
 → go version
-go version go1.13 linux/amd64
+go version go1.14 linux/amd64
 ```
 
 ## 致谢
