@@ -49,7 +49,7 @@ Go 语言从 2009 年诞生之初已有十余年的历史。
 ## 全书的组织结构
 
 本书内容涵盖整个 Go 语言的核心源码，这包括用户代码能直接接触的 Go 运行时 `runtime`、
-与关键语言特性相关的编译器 `cmd/compile`、诸多重要的标准库 `sync`/`reflect`/`errors` 等等。
+与关键语言特性相关的编译器 `cmd/compile`、诸多重要的标准库 `sync`、`reflect` 和 `errors` 等等。
 在极少数情况下，本书会讨论不同平台下的实现差异，主要以 Linux amd64 为主，只在独立设计的章节中讨论其他平台，例如 macOS 的 darwin 平台、WebAssembly 等。
 
 本书共分为四个主要部分：
