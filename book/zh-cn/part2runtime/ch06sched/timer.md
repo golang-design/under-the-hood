@@ -7,6 +7,8 @@ title: "6.11 计时器"
 
 [TOC]
 
+> 本节内容提供一个线上演讲：[YouTube 在线](https://www.youtube.com/watch?v=XJx0eTP-y9I)，[Google Slides 讲稿](https://docs.google.com/presentation/d/1c2mRWA-FiihgpbGsE4uducou7X5d4WoiiLVab-ewsT8/edit?usp=sharing)。
+
 time 是一个很有意思的包，除去需要获取当前时间的 Now 这一平淡无奇、直接对系统调用进行
 封装（ `runtime·nanotime` ）的函数外，其中最有意思的莫过于它所提供的 Timer 和 Ticker 了。
 他们的实现，驱动了诸如 `time.After`, `time.AfterFunc`, `time.Tick`, `time.Sleep` 等方法。

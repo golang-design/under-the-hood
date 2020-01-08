@@ -5,6 +5,9 @@ title: "2.6 顺序进程通讯 CSP"
 
 [TOC]
 
+> 本节内容提供一个线上演讲：[YouTube 在线](https://www.youtube.com/watch?v=Z8ZpWVuEx8c)，[Google Slides 讲稿](https://docs.google.com/presentation/d/1N5skL6vR9Wxk-I82AYs3dlsOsJkUAGJCsb5NGpXWpqo/edit?usp=sharing)。
+
+
 TODO: 待完善
 
 早在上个世纪七十年代，多核处理器还是一个科研主题，并没有进入普通程序员的视野。
