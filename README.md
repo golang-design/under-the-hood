@@ -1,7 +1,3 @@
-<div align="center">
-<img src="book/assets/header.png" alt="logo" />
-</div>
-
 <img src="book/assets/cover-cn.png" alt="logo" height="550" align="right" />
 
 # Go 语言原本

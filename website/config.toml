@@ -2,3 +2,5 @@ baseURL = "http://changkun.de/golang"
 languageCode = "zh-cn"
 title = "Go Under The Hood"
 theme = "book"
+[markup.goldmark.renderer]
+    unsafe= true

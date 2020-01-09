@@ -1,8 +1,3 @@
-<h2 class="book-brand">
-  <a href="{{ .Site.BaseURL }}">
-    {{- with .Site.Params.BookLogo -}}
-    <img src="{{ . | relURL }}" alt="Logo" />
-    {{- end -}}
-    <span>{{ .Site.Title }}</span>
-  </a>
-</h2>
+<a href="{{ .Site.BaseURL }}">
+  <img src="/golang/assets/header.png" alt="logo" style="width: 100%;" />
+</a>
