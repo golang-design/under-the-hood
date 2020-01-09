@@ -7,70 +7,29 @@ title: "5.1 Go 程序引导"
 
 [TOC]
 
-本节讨论 Go 程序的引导流程。
-
-## 入口
-
-首先，我们需要寻找程序的入口，一个通常的做法是编写一个非常基本的程序：
-
-```go
-package main
-
-func main() {
-	println("hello, world!")
-}
-```
-
-然后编译：
-
-```bash
-go build -gcflags "-N -l" -ldflags=-compressdwarf=false -o main main.go
-```
-
-> `-gcflags "-N -l"` 用于关闭编译器代码优化与函数内联。
-> 
-> 此外还需注意，Go 1.11 开始将调试信息压缩为 DWARF，macOS 下的 gdb 不能解释 DWARF。
-因此需要使用 GDB 调试需要增加 `-ldflags=-compressdwarf=false`。
-
-并使用通过 gdb 调试来确定程序的入口地址：
-
-```bash
-$ gdb main
-(...)
-(gdb) info files
-Symbols from "/Users/changkun/dev/go-under-the-hood/demo/1-boot/main".
-Local exec file:
-        `/Users/changkun/dev/go-under-the-hood/demo/1-boot/main', file type mach-o-x86-64.
-        Entry point: 0x1049e20
-        0x0000000001001000 - 0x000000000104dfcf is .text
-        (...)
-(gdb) b *0x1049e20
-Breakpoint 1 at 0x1049e20: file /usr/local/Cellar/go/1.11/libexec/src/runtime/rt0_darwin_amd64.s, line 8.
-```
-
-可以看到，程序的入口在 `rt0_darwin_amd64.s` 第八行，即：
+Go 程序启动后需要对自身运行时进行初始化，其真正的程序入口由 runtime 包控制。
+以 AMD64 架构上的 Linux 和 macOS 为例，分别位于：`src/runtime/rt0_linux_amd64.s` 和 `src/runtime/rt0_darwin_amd64.s`。
 
 ```asm
+TEXT _rt0_amd64_linux(SB),NOSPLIT,$-8
+	JMP	_rt0_amd64(SB)
 TEXT _rt0_amd64_darwin(SB),NOSPLIT,$-8
 	JMP	_rt0_amd64(SB)
 ```
 
-进而跳转到 `asm_amd64.s`：
+可见，两者均跳转到了 `_rt0_amd64` 函数。这种做法符合直觉，在程序编译为机器码之后，
+依赖特定 CPU 架构的指令集，而操作系统的差异则是直接反应在运行时进行不同的系统级操作上，
+例如：系统调用。
+
+> `rt0` 其实是 `runtime0` 的缩写，意为运行时的创生，随后所有创建的都是 `1` 为后缀。
+
+## 5.1.1 入口参数
 
 ```asm
-// _rt0_amd64 是 amd64 系统上使用内部链接时候常见的引导代码。
-// 这是该程序从内核到普通 -buildmode=exe 程序的入口。
-// 栈保存了参数的数量以及 C 风格的 argv
 TEXT _rt0_amd64(SB),NOSPLIT,$-8
 	MOVQ	0(SP), DI	// argc
 	LEAQ	8(SP), SI	// argv
 	JMP	runtime·rt0_go(SB)
-```
-
-从汇编的 `JMP` 指令可以看出，程序会立即跳转到 `runtime.rt0_go`，它便完成了整个
-运行时的调用：
-
-```asm
 TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	// 将参数向前复制到一个偶数栈上
 	MOVQ	DI, AX		// argc
@@ -89,17 +48,20 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	MOVQ	BX, (g_stack+stack_lo)(DI)
 	MOVQ	SP, (g_stack+stack_hi)(DI)
 
-	// 寻找正在运行的处理器信息
+	// 确定 CPU 处理器的信息
 	MOVL	$0, AX
 	CPUID
 	MOVL	AX, SI
-	
-	// CPU 相关的一些检测
 	(...)
+```
 
+## 5.1.2 线程本地存储 TLS
+
+```asm
+TEXT runtime·rt0_go(SB),NOSPLIT,$0
+	(...)
 #ifdef GOOS_darwin
-	// 跳过 TLS 设置 on Darwin
-	JMP ok
+	JMP ok // 在 darwin 系统上跳过 TLS 设置
 #endif
 
 	LEAQ	runtime·m0+m_tls(SB), DI
@@ -109,21 +71,20 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	get_tls(BX)
 	MOVQ	$0x123, g(BX)
 	MOVQ	runtime·m0+m_tls(SB), AX
-	CMPQ	AX, $0x123
-	JEQ 2(PC)
-	CALL	runtime·abort(SB)
+	CMPQ	AX, $0x123			// 判断 TLS 是否设置成功
+	JEQ 2(PC)		 			// 如果相等则向后跳转两条指令
+	CALL	runtime·abort(SB)	// 使用 INT 指令执行中断
 ok:
-	// 程序刚刚启动，此时位于主 OS 线程
-	// 设置 per-goroutine 和 per-mach 寄存器
+	// 程序刚刚启动，此时位于主线程
+	// 当前栈与资源保存在 g0
+	// 该线程保存在 m0
 	get_tls(BX)
 	LEAQ	runtime·g0(SB), CX
 	MOVQ	CX, g(BX)
 	LEAQ	runtime·m0(SB), AX
 
-	// 保存 m->g0 = g0
-	MOVQ	CX, m_g0(AX)
-	// 保存 m0 to g0->m
-	MOVQ	AX, g_m(CX)
+	MOVQ	CX, m_g0(AX) // m->g0 = g0
+	MOVQ	AX, g_m(CX)  // g0->m = m0
 
 	CLD				// 约定 D 总是被清除
 	CALL	runtime·check(SB)
@@ -137,44 +98,40 @@ ok:
 	CALL	runtime·schedinit(SB)
 
 	// 创建一个新的 goroutine 来启动程序
-	MOVQ	$runtime·mainPC(SB), AX		// 入口
+	MOVQ	$runtime·mainPC(SB), AX
 	PUSHQ	AX
 	PUSHQ	$0			// 参数大小
 	CALL	runtime·newproc(SB)
 	POPQ	AX
 	POPQ	AX
 
-	// 启动这个 M
+	// 启动这个 M，mstart 应该永不返回
 	CALL	runtime·mstart(SB)
-
-	CALL	runtime·abort(SB)	// mstart 应该永不返回
-	RET
-
 	(...)
 	RET
+```
 
+其中，编译器负责生成了 main 函数的入口地址，`runtime.mainPC` 
+在数据段中被定义为 `runtime.main` 保存主 goroutine 入口地址：
+
+```
 DATA	runtime·mainPC+0(SB)/8,$runtime·main(SB)
 GLOBL	runtime·mainPC(SB),RODATA,$8
 ```
 
-对于 Linux 而言，这个过程基本类似，这里不再赘述。
+而 `g0` 和 `m0` 是一组全局变量，在程序运行之初就已经存在。
+除了程序参数外，会首先将 m0 与 g0 通过指针互相关联。
 
-## 引导
+TODO: TLS details
 
-从上面的汇编代码我们可以看出，整个准备过程按照如下顺序进行：
+## 5.1.3 早期校验与系统级初始化
 
-`runtime.g0`、`runtime.m0` 是一组全局变量，在程序运行之初就已经存在。
-除了程序参数外，会首先将 m0 与 g0 互相关联（在[调度器：基本结构](../../part2runtime/ch06sched/basic.md)中讨论 M 与 G 之间的关系）。
+### 5.1.3.1 运行时类型检查
 
-### 步骤1：runtime.check
-
-`runtime.check` 位于进行类型检查，
-基本上属于对编译器翻译工作的一个校验，确保运行时类型正确。
-这里粗略展示整个函数的内容：
+`runtime.check` 本质上基本上属于对编译器翻译工作的一个校验，确保运行时类型正确。这里粗略展示整个函数的内容：
 
 ```go
 // runtime/runtime1.go
-
 func check() {
 	var (
 		a     int8
@@ -184,23 +141,18 @@ func check() {
 	(...)
 
 	// 校验 int8 类型 sizeof 是否为 1，下同
-	if unsafe.Sizeof(a) != 1 {
-		throw("bad a")
-	}
-	if unsafe.Sizeof(b) != 1 {
-		throw("bad b")
-	}
+	if unsafe.Sizeof(a) != 1 { throw("bad a") }
+	if unsafe.Sizeof(b) != 1 { throw("bad b") }
 	(...)
 }
 ```
 
-### 步骤2：runtime.args
+### 5.1.3.2 系统参数处理
 
-接下来我们看到 `argc, argv` 作为参数传递给 `runtime.args` 处理程序参数的相关事宜。
+`argc, argv` 作为来自操作系统的参数传递给 `runtime.args` 处理程序参数的相关事宜。
 
 ```go
 // runtime/runtime1.go
-
 func args(c int32, v **byte) {
 	argc = c
 	argv = v
@@ -244,7 +196,7 @@ func sysargs(argc int32, argv **byte) {
 这个参数用于设置 `os` 包中的 `executablePath` 变量。
 
 而在 Linux 平台中，这个过程就变得复杂起来了。
-与 darwin 使用 `mach-o` 不同，Linux 使用 ELF 格式 [4, 6]。
+与 darwin 使用 `mach-o` 不同，Linux 使用 ELF 格式 [1, 3]。
 
 ELF 除了 argc, argv, envp 之外，会携带辅助向量（auxiliary vector）将某些内核级的信息
 传递给用户进程。具体结构如图 1 所示。
@@ -352,12 +304,12 @@ func sysauxv(auxv []uintptr) int {
 }
 ```
 
-其中涉及 mmap、mincore、munmap 等系统调用 [7, 8]。
+其中涉及 mmap、mincore、munmap 等系统调用 [4, 5]。
 
-### 步骤3：runtime.osinit
+### 5.1.3.3 内存与 CPU 常量
 
-`runtime.osinit`（`runtime/os_darwin.go`）在不同平台上实现略有不同，
-但所有的平台都会做的一件事情是：获得 CPU 核心数，这与调度器有关。
+`runtime.osinit`在不同平台上实现略有不同，
+但所有的平台都会做的一件事情是：获得 CPU 核心数，因为这与调度器有关。
 darwin 上由于使用的是 `mach-o` 格式，在此前的 `runtime.sysargs` 上还没有确定内存页的大小，
 因而在这个函数中，还会额外使用 `sysctl` 完成物理页大小的查询。
 
@@ -372,18 +324,7 @@ func osinit() {
 // darwin
 func osinit() {
 	ncpu = getncpu()
-	physPageSize = getPageSize()
-}
-func getPageSize() uintptr {
-	// 使用 sysctl 来获取 hw.pagesize.
-	mib := [2]uint32{_CTL_HW, _HW_PAGESIZE}
-	out := uint32(0)
-	nout := unsafe.Sizeof(out)
-	ret := sysctl(&mib[0], 2, (*byte)(unsafe.Pointer(&out)), &nout, nil, 0)
-	if ret >= 0 && int32(out) > 0 {
-		return uintptr(out)
-	}
-	return 0
+	physPageSize = getPageSize() // 使用 sysctl 来获取 hw.pagesize.
 }
 ```
 
@@ -391,71 +332,33 @@ func getPageSize() uintptr {
 macOS 系统调用的特殊之处在于它提供了两套调用接口，一个是 Mach 调用，另一个则是 POSIX 调用。
 Mach 是 NeXTSTEP 遗留下来的产物，BSD 层本质上是堆 Mach 内核的一层封装。尽管用户态进程
 可以直接访问 Mach 调用，但出于通用性的考虑，
-这里的物理页大小获取的方式是通过 POSIX `sysctl` 这个系统调用进行获取 [9, 10]。
+这里的物理页大小获取的方式是通过 POSIX `sysctl` 这个系统调用进行获取 [6, 7]。
 
-事实上 `linux` 与 `darwin` 下的系统调用如何参与到 Go 程序中去稍有不同，我们暂时不做深入讨论，留到
-[参与运行时的系统调用: darwin](../../part2runtime/ch10abi/syscall-darwin.md) 中再统一分析。
+> 事实上 `linux` 与 `darwin` 下的系统调用如何参与到 Go 程序中去稍有不同，我们暂时不做深入讨论，留到兼容与契约一章中再统一分析。
 
-### 步骤4：runtime.schedinit
-
-`runtime.schedinit` 来进行各种初始化工作，这包括我们的内存分配器、垃圾回收与调度器的初始化，
-我们在 [初始化概览](./init.md) 中进行详细讨论。
-
-### 步骤5：runtime.newproc
-
-`runtime.mainPC` 在数据段中被定义为 `runtime.main` 保存主 goroutine 入口地址：
-
-```c
-DATA	runtime·mainPC+0(SB)/8,$runtime·main(SB)
-```
-
-其具体过程我们放在 [主 goroutine 生命周期](./main.md) 中详细讨论。
-
-简单来说，`runtime.newproc` 则负责根据主 goroutine 入口地址创建 G 并放至 G 队列中，
-这一过程我们在 [调度器：初始化](../../part2runtime/ch06sched/init.md) 中详细讨论。
-
-### 步骤6：runtime.mstart
-
-`runtime.mstart` 开始启动调度循环，我们在 [调度器：调度循环](../../part2runtime/ch06sched/exec.md) 中详细讨论。
-
-`runtime.abort` 这个使用 INT 指令执行中断，最终退出程序，loop 后的无限循环永远不会被执行。
-  
-```c
-TEXT runtime·abort(SB),NOSPLIT,$0-0
-	INT	$3
-loop:
-	JMP	loop
-```
+## 5.1.4 运行时组件核心
 
 在整个准备过程中，对于 Go 运行时而言，下面这四个函数及其后续调用关系完整
 实现了整个 Go 程序的全部运行时机制：
 
-1. `runtime.schedinit`
-2. `runtime.newproc`
-3. `runtime.mstart`
-4. `runtime.main`
+1. `runtime.schedinit`：进行各种初始化工作，这包括我们的内存分配器、回收器与调度器的初始化
+2. `runtime.newproc`：负责根据主 goroutine （即 `runtime.main`）入口地址创建可被运行时调度的执行单元
+3. `runtime.mstart`：开始启动调度器的调度循环
 
 ## 小结
 
 Go 程序既不是从 `main.main` 直接启动，也不是从 `runtime.main` 直接启动。
-相反，我们通过 GDB 调试寻找 Go 程序的入口地址，在 `darwin/amd64` 上发现实际的入口地址
-位于 `runtime._rt0_amd64_darwin`。随后经过一系列的跳转最终来到 `runtime.rt0_go`。
-
-而在这个过程中会完成整个 Go 程序运行时的初始化、内存分配、调度器以及垃圾回收的初始化。
-进而开始由调度器转为执行主 goroutine。
+相反，其实际的入口位于 `runtime._rt0_amd64`。随后会转到 `runtime.rt0_go` 调用，并在这个过程中会完成整个 Go 程序运行时的初始化，包括调度器以及内存分配器与回收器等组件的初始化，进而开始由调度器转为执行主 goroutine。
 
 ## 进一步阅读的参考文献
 
-1. [A Quick Guide to Go's Assembler](https://golang.org/doc/asm)
-2. [A Manual for the Plan 9 assembler](https://9p.io/sys/doc/asm.html)
-3. [Debugging Go Code with GDB](https://golang.org/doc/gdb)
-4. [System V Application Binary Interface: AMD64 Architecture Processor Supplement](https://www.uclibc.org/docs/psABI-x86_64.pdf)
-5. [About ELF Auxiliary Vectors](http://articles.manugarg.com/aboutelfauxiliaryvectors.html)
-6. [Comparison of executable file formats](https://en.wikipedia.org/wiki/Comparison_of_executable_file_formats)
-7. [mmap - Linux Programmer's Manual](http://man7.org/linux/man-pages/man2/mmap.2.html)
-8. [mincore - Linux Programmer's Manual](http://man7.org/linux/man-pages/man2/mincore.2.html)
-9. [sysctl - freebsd](https://www.freebsd.org/cgi/man.cgi?sysctl(3))
-10. [UNIX family tree](https://www.cl.cam.ac.uk/teaching/0708/OSFounds/P04-4.pdf)
+1. [System V Application Binary Interface: AMD64 Architecture Processor Supplement](https://www.uclibc.org/docs/psABI-x86_64.pdf)
+2. [About ELF Auxiliary Vectors](http://articles.manugarg.com/aboutelfauxiliaryvectors.html)
+3. [Comparison of executable file formats](https://en.wikipedia.org/wiki/Comparison_of_executable_file_formats)
+4. [mmap - Linux Programmer's Manual](http://man7.org/linux/man-pages/man2/mmap.2.html)
+5. [mincore - Linux Programmer's Manual](http://man7.org/linux/man-pages/man2/mincore.2.html)
+6. [sysctl - freebsd](https://www.freebsd.org/cgi/man.cgi?sysctl(3))
+7. [UNIX family tree](https://www.cl.cam.ac.uk/teaching/0708/OSFounds/P04-4.pdf)
 
 ## 许可
 
