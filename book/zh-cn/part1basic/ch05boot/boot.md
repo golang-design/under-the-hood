@@ -314,10 +314,62 @@ DATA	runtime·mainPC+0(SB)/8,$runtime·main(SB)
 GLOBL	runtime·mainPC(SB),RODATA,$8
 ```
 
-## 小结
+最后我们来大致浏览一下 `schedinit` 的全貌。
+`schedinit` 函数名表面上是调度器的初始化，但实际上它包含了所有核心组件的初始化工作。
 
-Go 程序既不是从 `main.main` 直接启动，也不是从 `runtime.main` 直接启动。
-相反，其实际的入口位于 `runtime._rt0_amd64`。随后会转到 `runtime.rt0_go` 调用。在这个调用中，除了进行运行时类型检查外，还确定了两个很重要的运行时常量，即处理器核心数以及内存物理页大小。在这随后的调用过程，还会完成整个 Go 程序运行时的初始化，包括调度器以及内存分配器与回收器等组件的初始化，进而开始由调度器转为执行主 goroutine。
+
+```go
+// src/runtime/proc.go
+func schedinit() {
+	_g_ := getg()
+	(...)
+
+	// 栈、内存分配器、调度器相关初始化
+	sched.maxmcount = 10000	// 限制最大系统线程数量
+	stackinit()			// 初始化执行栈
+	mallocinit()		// 初始化内存分配器
+	mcommoninit(_g_.m)	// 初始化当前系统线程
+	(...)
+
+	gcinit()	// 垃圾回收器初始化
+	(...)
+
+	// 创建 P
+	// 通过 CPU 核心数和 GOMAXPROCS 环境变量确定 P 的数量
+	procs := ncpu
+	if n, ok := atoi32(gogetenv("GOMAXPROCS")); ok && n > 0 {
+		procs = n
+	}
+	procresize(procs)
+	(...)
+}
+```
+
+我们最感兴趣的三大运行时组件在如下函数签名中进行大量初始化工作：
+
+- `stackinit()` goroutine 执行栈初始化 
+- `mallocinit()` 内存分配器初始化 
+- `mcommoninit()` 系统线程的部分初始化工作
+- `gcinit()` 垃圾回收器初始化
+- `procresize()` 根据 CPU 核心数，初始化系统线程的本地缓存
+
+## 5.1.5 小结
+
+我们通过一个简化的调用关系图来对本节中我们观察到的程序启动流程，如图 5-2 所示。
+
+![](../../../assets/boot.png)
+
+_图 5-2：Go 程序引导过程调用关系_
+
+根据分析我们可以看到，Go 程序既不是从 `main.main` 直接启动，也不是从 `runtime.main` 直接启动。
+相反，其实际的入口位于 `runtime._rt0_amd64_*`。随后会转到 `runtime.rt0_go` 调用。在这个调用中，除了进行运行时类型检查外，还确定了两个很重要的运行时常量，即处理器核心数以及内存物理页大小。
+
+程序引导和初始化工作是整个运行时最关键的基础步骤之一。在 `schedinit` 这个函数的调用过程中，
+还会完成整个程序运行时的初始化，包括调度器、执行栈、内存分配器、调度器、垃圾回收器等组件的初始化。
+最后通过 `newproc` 和 `mstart` 调用进而开始由调度器转为执行主 goroutine。
+
+运行时组件的内容我们留到组件各自的章节中进行讨论，我们在下一节中着先着重讨论当一切都初始化好后，
+程序的正式启动过程，即 `runtime.main`。
 
 ## 进一步阅读的参考文献
 

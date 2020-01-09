@@ -1,40 +1,18 @@
 ---
-weight: 1503
-title: "5.3 主 goroutine 的生与死"
+weight: 1502
+title: "5.2 主 goroutine 的生与死"
 ---
 
-# 5.3 主 goroutine 的生与死
+# 5.2 主 goroutine 的生与死
 
 [TOC]
 
-`schedinit` 完成初始化工作后并不会立即执行 `runtime.main`（即主 goroutine 运行的地方）。
-相反，会在后续的 `mstart` 调用中被调度器调度执行。
-
-```asm
-TEXT runtime·rt0_go(SB),NOSPLIT,$0
-	(...)
-	// 调度器初始化
-	CALL	runtime·schedinit(SB)
-
-	// 创建一个新的 goroutine 来启动程序
-	MOVQ	$runtime·mainPC(SB), AX
-	PUSHQ	AX
-	PUSHQ	$0			// 参数大小
-	CALL	runtime·newproc(SB)
-	POPQ	AX
-	POPQ	AX
-
-	// 启动这个 M，mstart 应该永不返回
-	CALL	runtime·mstart(SB)
-	(...)
-	RET
-```
-
+上一节中我们已经知道 `schedinit` 完成初始化工作后并不会立即执行 `runtime.main`（即主 goroutine 运行的地方）。相反，会在后续的 `mstart` 调用中被调度器调度执行。
 这个过程中，只会将 `runtime.main` 的入口地址压栈，进而将其传递给 `newproc` 进行使用，
 而后 `newproc` 完成 G 的创建保存到 G 的运行现场中，因此真正执行会等到 `mstart` 后才会被调度执行。
-我们在调度器一章中详细讨论这个启动过程，现在我们先将目光聚焦在 `runtime.main` 已经开始执行时的情况。
+我们在调度器一章中详细讨论调度器的调度过程，现在我们先将目光聚焦在 `runtime.main` 已经开始执行时的情况。
 
-## 主 goroutine 的一生
+## 5.2.1 主 goroutine 的一生
 
 `runtime.main` 承载了 `main.main`，并在同一个 goroutine 上执行：
 
@@ -88,7 +66,7 @@ func main() {
 4. `main_init` 开始执行用户态 `main.init` 函数，这意味着所有的 `main.init` 均在同一个主 goroutine 中执行
 5. `main_main` 开始执行用户态 `main.main` 函数，这意味着 `main.main` 和 `main.init` 均在同一个 goroutine 中执行。
 
-## `pkg.init` 的执行顺序
+## 5.2.2 `pkg.init` 的执行顺序
 
 运行时的 `runtime_init` 则由编译器将多个 `runtime.init` 进行链接，我们可以从
 函数的声明中看到：
@@ -260,7 +238,7 @@ func (p *noder) decls(decls []syntax.Decl) (l []*Node) {
 这是没有顺序保证的。换句话说，不同的包之间的 init 调用顺序是依靠包的导入顺序，
 但一个包内的 init 函数的调用顺序并没有确定的顺序的保障。
 
-## 小结
+## 5.2.3 小结
 
 看到这里我们已经结束了整个 Go 程序的执行，但仍有海量的细节还没有被敲定，完全还没有深入
 运行时的三大核心组件，运行时各类机制也都还没有接触。总结一下这节讨论中遗留下来的问题：
