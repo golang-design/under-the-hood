@@ -189,7 +189,7 @@ func sysargs(argc int32, argv **byte) {
 这个参数用于设置 `os` 包中的 `executablePath` 变量。
 
 而在 Linux 平台中，这个过程就变得复杂起来了。
-与 Darwin 使用 `mach-o` 不同，Linux 使用 ELF 格式 [Matz et al. 2014] [Grag, 2006]。
+与 Darwin 使用 `mach-o` 不同，Linux 使用 ELF 格式 [Matz et al. 2014]。
 ELF 除了 argc, argv, envp 之外，会携带辅助向量（auxiliary vector）
 将某些内核级的信息传递给用户进程，例如**内存物理页大小**。具体结构如图 5-1 所示。
 
@@ -322,7 +322,6 @@ Go 程序既不是从 `main.main` 直接启动，也不是从 `runtime.main` 直
 ## 进一步阅读的参考文献
 
 - [Matz et al. 2014] Michael Matz, Jan Hubicka, Andreas Jaeger, Mark Mitchell. System V Application Binary Interface: AMD64 Architecture Processor Supplement. Nov, 2017. https://www.uclibc.org/docs/psABI-x86_64.pdf
-- [Grag, 2006] Manu Garg. About ELF Auxiliary Vectors. Last access: Jan, 2020
 - [Bacon, 2007] Jean Bacon. UNIX family tree. Operating System Foundations Lecture Notes, part 4. Last access: Jan, 2020. https://www.cl.cam.ac.uk/teaching/0708/OSFounds/P04-4.pdf
 
 ## 许可
