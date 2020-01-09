@@ -26,7 +26,7 @@ TEXT _rt0_amd64_darwin(SB),NOSPLIT,$-8
 ## 5.1.1 入口参数
 
 操作系统通过入口参数的约定与应用程序进行沟通，为了支持从系统给运行时传递参数，Go 程序
-在进行引导时将对这部分参数进行处理：
+在进行引导时将对这部分参数进行处理。程序刚刚启动时，栈指针 SP 的前两个值分别对应 `argc` 和 `argv`，分别存储参数的数量和具体的参数的值：
 
 ```asm
 TEXT _rt0_amd64(SB),NOSPLIT,$-8
@@ -36,24 +36,24 @@ TEXT _rt0_amd64(SB),NOSPLIT,$-8
 
 TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	// 将参数向前复制到一个偶数栈上
-	MOVQ	DI, AX		// argc
-	MOVQ	SI, BX		// argv
-	SUBQ	$(4*8+7), SP		// 2args 2auto
+	MOVQ	DI, AX			// argc
+	MOVQ	SI, BX			// argv
+	SUBQ	$(4*8+7), SP	// 2args 2auto
 	ANDQ	$~15, SP
 	MOVQ	AX, 16(SP)
 	MOVQ	BX, 24(SP)
 
-	// 从给定（操作系统）栈中创建 istack
-	MOVQ	$runtime·g0(SB), DI
+	// 初始化 g0 执行栈
+	MOVQ	$runtime·g0(SB), DI			// DI = g0
 	LEAQ	(-64*1024+104)(SP), BX
-	MOVQ	BX, g_stackguard0(DI)
-	MOVQ	BX, g_stackguard1(DI)
-	MOVQ	BX, (g_stack+stack_lo)(DI)
-	MOVQ	SP, (g_stack+stack_hi)(DI)
+	MOVQ	BX, g_stackguard0(DI)		// g0.stackguard0 = SP + (-64*1024+104)
+	MOVQ	BX, g_stackguard1(DI)		// g0.stackguard1 = SP + (-64*1024+104)
+	MOVQ	BX, (g_stack+stack_lo)(DI)	// g0.stack.lo    = SP + (-64*1024+104)
+	MOVQ	SP, (g_stack+stack_hi)(DI)	// g0.stack.hi    = SP
 
 	// 确定 CPU 处理器的信息
 	MOVL	$0, AX
-	CPUID
+	CPUID			// CPUID 会设置 AX 的值
 	MOVL	AX, SI
 	(...)
 ```
@@ -70,11 +70,11 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	JMP ok // 在 Darwin 系统上跳过 TLS 设置
 #endif
 
-	LEAQ	runtime·m0+m_tls(SB), DI
-	CALL	runtime·settls(SB)	// 将 TLS 地址设置到 DI
+	LEAQ	runtime·m0+m_tls(SB), DI	// DI = m0.tls
+	CALL	runtime·settls(SB)			// 将 TLS 地址设置到 DI
 
 	// 使用它进行存储，确保能正常运行
-	get_tls(BX)
+	MOVQ	TLS, BX
 	MOVQ	$0x123, g(BX)
 	MOVQ	runtime·m0+m_tls(SB), AX
 	CMPQ	AX, $0x123			// 判断 TLS 是否设置成功
@@ -84,7 +84,7 @@ ok:
 	// 程序刚刚启动，此时位于主线程
 	// 当前栈与资源保存在 g0
 	// 该线程保存在 m0
-	get_tls(BX)
+	MOVQ	TLS, BX
 	LEAQ	runtime·g0(SB), CX
 	MOVQ	CX, g(BX)
 	LEAQ	runtime·m0(SB), AX
@@ -99,14 +99,14 @@ ok:
 
 ```asm
 TEXT runtime·settls(SB),NOSPLIT,$32
-	ADDQ	$8, DI	// ELF wants to use -8(FS)
-	MOVQ	DI, SI
-	MOVQ	$0x1002, DI	// ARCH_SET_FS
+	ADDQ	$8, DI	// DI = DI + 8, ELF 格式使用 -8(FS)
+	MOVQ	DI, SI					// SI = DI
+	MOVQ	$0x1002, DI				// 0x1002 == ARCH_SET_FS
 	MOVQ	$SYS_arch_prctl, AX
 	SYSCALL
-	CMPQ	AX, $0xfffffffffffff001
-	JLS	2(PC)				// 返回
-	MOVL	$0xf1, 0xf1		// 崩溃
+	CMPQ	AX, $0xfffffffffffff001	// 验证是否成功
+	JLS	2(PC)					
+	MOVL	$0xf1, 0xf1				// 崩溃
 	RET
 ```
 
@@ -202,8 +202,8 @@ ELF 除了 argc, argv, envp 之外，会携带辅助向量（auxiliary vector）
 ```go
 // runtime/os_linux.go
 
-// physPageSize 是操作系统的物理页字节大小。内存页的映射和反映射操作必须以
-// physPageSize 的整数倍完成
+// physPageSize 是操作系统的内存物理页字节大小。
+// 内存页的映射和反映射操作必须以 physPageSize 的整数倍完成
 var physPageSize uintptr
 
 func sysargs(argc int32, argv **byte) {
