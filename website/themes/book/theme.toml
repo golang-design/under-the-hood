@@ -1,10 +1,10 @@
 # theme.toml template for a Hugo theme
 name = "Book"
-license = "MIT"
+license = "CC-BY-ND-NC 4.0 & MIT"
 licenselink = "https://github.com/changkun/go-under-the-hood/blob/master/LICENSE"
 description = "Go Under The Hood: A source code study"
 homepage = "https://github.com/changkun/go-under-the-hood"
-tags = ["responsive", "clean", "book"]
+tags = ["Go 语言原本", "Go", "源码分析", "Source code study", "书", "book", "responsive", "clean"]
 features = []
 min_version = "0.10"
 
