@@ -38,11 +38,11 @@
 - [4.3 屏障技术](part1basic/ch04memory/barrier.md)
 - [4.4 垃圾回收统一理论](part1basic/ch04memory/unifiedgc.md)
 
-#### [第 5 章 Go 程序生命周期](part1basic/ch05boot/readme.md)
+#### [第 5 章 Go 程序生命周期](part1basic/ch05life/readme.md)
 
-- [5.1 Go 程序引导](part1basic/ch05boot/boot.md)
-- [5.2 运行时初始化概览](part1basic/ch05boot/init.md)
-- [5.3 主 goroutine 的生与死](part1basic/ch05boot/main.md)
+- [5.1 Go 程序编译流程](part1basic/ch05life/compile.md)
+- [5.2 Go 程序启动引导](part1basic/ch05life/boot.md)
+- [5.3 主 goroutine 的生与死](part1basic/ch05life/main.md)
 
 ### [第二部分：运行时机制](part2runtime/readme.md)
 
