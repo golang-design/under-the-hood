@@ -70,6 +70,11 @@ import (
 type cgoCallers [32]uintptr
 
 // 从 Go 调用 C
+//
+// This must be nosplit because it's used for syscalls on some
+// platforms. Syscalls may have untyped arguments on the stack, so
+// it's not safe to grow or scan the stack.
+//
 //go:nosplit
 func cgocall(fn, arg unsafe.Pointer) int32 {
 	if !iscgo && GOOS != "solaris" && GOOS != "illumos" && GOOS != "windows" {
@@ -103,6 +108,13 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 	// PC 和 SP 寄存器
 	entersyscall()
 
+	// Tell asynchronous preemption that we're entering external
+	// code. We do this after entersyscall because this may block
+	// and cause an async preemption to fail, but at this point a
+	// sync preemption will succeed (though this is not a matter
+	// of correctness).
+	osPreemptExtEnter(mp)
+
 	// 将 m 标记为正在 cgo
 	mp.incgo = true
 
@@ -116,6 +128,8 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 	mp.incgo = false
 	// 正在进行的 cgo 数量减少
 	mp.ncgo--
+
+	osPreemptExtExit(mp)
 
 	// 宣告退出系统调用
 	exitsyscall()
@@ -163,10 +177,14 @@ func cgocallbackg(ctxt uintptr) {
 	exitsyscall() // 离开 cgo 调用
 	gp.m.incgo = false
 
+	osPreemptExtExit(gp.m)
+
 	cgocallbackg1(ctxt)
 
 	// 这时，unlockOSThread 已经被调用，下面的代码不能修改到其他的 m 上。
 	// incgo 检查位于 schedule 函数中，这是强制的
+
+	osPreemptExtEnter(gp.m)
 
 	gp.m.incgo = true
 	// 返回到 cgo 调用going back to cgo call
@@ -323,6 +341,7 @@ func unwindm(restore *bool) {
 		if mp.ncgo > 0 {
 			mp.incgo = false
 			mp.ncgo--
+			osPreemptExtExit(mp)
 		}
 
 		releasem(mp)
