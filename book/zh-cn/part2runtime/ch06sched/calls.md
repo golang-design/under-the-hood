@@ -21,7 +21,7 @@ title: "6.12 用户层 APIs"
 // 机器上的逻辑 CPU 的个数可以从 NumCPU 调用上获取。
 // 该调用会在调度器进行改进后被移除。
 func GOMAXPROCS(n int) int {
-	(...)
+	...
 
 	// 当调整 P 的数量时，调度器会被锁住
 	lock(&sched.lock)
@@ -57,6 +57,10 @@ runtime.GOMAXPROCS(runtime.GOMAXPROCS(0))
 ```
 
 ### TODO:
+
+## 进一步阅读的参考文献
+
+- runtime: scheduler work stealing slow for high GOMAXPROCS https://github.com/golang/go/issues/28808
 
 ## 许可
 

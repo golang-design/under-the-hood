@@ -1,5 +1,5 @@
 ---
-weight: 2104
+weight: 2106
 title: "6.6 goroutine 及其执行栈管理"
 ---
 

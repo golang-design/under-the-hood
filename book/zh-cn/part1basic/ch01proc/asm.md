@@ -135,11 +135,9 @@ PC
 FP, Frame Pointer：帧指针，参数和本地
 PC, Program Counter: 程序计数器，跳转和分支
 SB, Static Base: 静态基指针, 全局符号
-SP, Stack Pointer: 栈顶
+SP, Stack Pointer: 当前栈帧开始的地方
 
 所有用户定义的符号都作为偏移量写入伪寄存器 FP 和 SB。
-
-
 
 ## 寻址模式
 
@@ -163,6 +161,11 @@ $name<>+o(SB)   局部地址
 o(A0)           
 o()(R0.s)
 
+symbol+offset(SP) 引用函数的局部变量，offset 的合法取值是 [-framesize, 0)
+    局部变量都是 8 字节，那么第一个局部变量就可以用 localvar0-8(SP) 来表示
+
+如果是 symbol+offset(SP) 形式，则表示伪寄存器 SP
+如果是 offset(SP) 则表示硬件寄存器 SP
 ```
 
 ```asm
@@ -176,6 +179,7 @@ TEXT pkgname·funcname(SB),NOSPLIT,$-8
 - [A Quick Guide to Go's Assembler](https://golang.org/doc/asm)
 - [Rob Pike, How to Use the Plan 9 C Compiler](http://doc.cat-v.org/plan_9/2nd_edition/papers/comp)
 - [Rob Pike, A Manual for the Plan 9 assembler](https://9p.io/sys/doc/asm.html)
+- [Debugging Go Code with GDB](https://golang.org/doc/gdb)
 
 ## 许可
 

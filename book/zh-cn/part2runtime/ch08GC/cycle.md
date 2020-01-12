@@ -1,9 +1,9 @@
 ---
-weight: 2306
-title: "8.6 GC 周期概述"
+weight: 2305
+title: "8.5 GC 周期概述"
 ---
 
-# 8.6 GC 周期概述
+# 8.5 GC 周期概述
 
 ## GC 周期的不同阶段
 
@@ -43,34 +43,24 @@ func setGCPhase(x uint32) {
 // src/runtime/mgc.go
 
 func gcStart(trigger gcTrigger) {
-	(...)
 	systemstack(stopTheWorldWithSema) // STW 开始
-	(...)
 	setGCPhase(_GCmark)
-	(...)
 	systemstack(func() {
 		now = startTheWorldWithSema(trace.enabled) // STW 结束
-		(...)
 	})
-	(...)
+	...
 }
 func gcMarkDone() {
-	(...)
 	systemstack(stopTheWorldWithSema)  // STW 开始
-	(...)
+	...
 }
 func gcMarkTermination(nextTriggerRatio float64) {
-	(...)
 	setGCPhase(_GCmarktermination)
-	(...)
 	systemstack(func() {
-		(...)
 		setGCPhase(_GCoff)
-		(...)
 	}
-	(...)
 	systemstack(func() { startTheWorldWithSema(true) })  // STW 结束
-	(...)
+	...
 }
 ```
 
@@ -94,8 +84,6 @@ STW 要确保所有被调度器调度执行的用户代码停止执行，一个�
 ```go
 func stopTheWorldWithSema() {
 	_g_ := getg()
-	(...)
-
 	lock(&sched.lock)
 	// 停止调度器需要停止的线程数
 	sched.stopwait = gomaxprocs
@@ -110,7 +98,6 @@ func stopTheWorldWithSema() {
 	for _, p := range allp {
 		s := p.status
 		if s == _Psyscall && atomic.Cas(&p.status, s, _Pgcstop) {
-			(...)
 			p.syscalltick++
 			sched.stopwait--
 		}
@@ -139,7 +126,7 @@ func stopTheWorldWithSema() {
 		}
 	}
 
-	(...)
+	...
 }
 
 func preemptall() bool {

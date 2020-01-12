@@ -1,9 +1,9 @@
 ---
-weight: 2502
-title: "10.2 cgo"
+weight: 2504
+title: "10.4 cgo"
 ---
 
-# 10.2 cgo
+# 10.4 cgo
 
 [TOC]
 

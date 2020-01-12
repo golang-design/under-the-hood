@@ -1,9 +1,9 @@
 ---
-weight: 2304
-title: "8.4 初始化"
+weight: 2303
+title: "8.3 初始化"
 ---
 
-# 8.4 初始化
+# 8.3 初始化
 
 [TOC]
 
@@ -50,25 +50,18 @@ func gcinit() {
 
 ```go
 // src/runtime/proc.go
-
 func main() {
-	(...)
+	...
 
 	// 系统后台监控
 	// 在一个新的 m 的 g0 上执行系统监控
 	systemstack(func() {
 		newm(sysmon, nil)
 	})
-	(...)
-
 	// 执行 runtime.init
 	doInit(&runtime_inittask)
-	(...)
-
 	// 启动垃圾回收器后台
 	gcenable()
-	(...)
-
 	// 用户代码 main.init 和 main.main 入口
 	doInit(&main_inittask)
 	fn := main_main
@@ -83,12 +76,11 @@ func main() {
 
 ```go
 // src/runtime/proc.go
-
 //go:nowritebarrierrec
 func sysmon() {
-	(...)
+	...
 	for {
-		(...)
+		...
 		// delay 根据一定策略调整
 		usleep(delay)
 
@@ -107,7 +99,7 @@ func sysmon() {
 			injectglist(&list)
 			unlock(&forcegc.lock)
 		}
-		(...)
+		...
 	}
 }
 ```
@@ -222,10 +214,11 @@ func wakeScavengerLocked() {
 
 ## 小结
 
-从两个初始化过程中我们可以明确知道，GC 的具体实现中，在执行用户态代码时有以下几个辅助任务：
+从两个初始化过程中我们可以明确知道，GC 的具体实现中，
+在执行用户态代码时有以下几个辅助任务：
 
-1. 初始化 GC 步调，确定合适开始触发下一个 GC 周期;
-2. 启动系统监控，监控合适必须强制执行 GC；
+1. 初始化 GC 步调，即确定合适开始触发下一个 GC 周期;
+2. 启动系统监控，用于监控必须强制执行的 GC；
 3. 启动后台清扫器，与用户态代码并发被调度器调度，归还从内存分配器中申请的内存；
 4. 启动后台清理器，与用户态代码并发被调度，归还从操作系统中申请的内存。
 

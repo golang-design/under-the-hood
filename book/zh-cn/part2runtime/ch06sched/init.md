@@ -7,7 +7,7 @@ title: "6.2 初始化"
 
 [TOC]
 
-我们已经在 [初始化概览](../../part1basic/ch05boot/init.md) 中粗略了解到 `schedinit` 函数，
+我们已经在 [初始化概览](../../part1basic/ch05life/init.md) 中粗略了解到 `schedinit` 函数，
 现在我们来仔细分析里面真正关于调度器的初始化步骤。
 
 ```go
@@ -280,9 +280,8 @@ func (pp *p) destroy() {
 
 ## G 初始化
 
-运行完 `runtime.procresize` 之后，我们已经在 [程序引导](../../part1basic/ch05boot/boot.md) 
-和 [主 goroutine 生命周期](../../part1basic/ch05boot/main.md) 中已经看到，
-主 goroutine 会以被调度器调度的方式进行运行，这将由 `runtime.newproc` 来完成主 goroutine 的初始化工作。
+运行完 `runtime.procresize` 之后，我们知道，主 goroutine 会以被调度器调度的方式进行运行，
+这将由 `runtime.newproc` 来完成主 goroutine 的初始化工作。
 
 在看 `runtime.newproc` 之前，我们先大致浏览一下 G 的各个状态，如图 2 所示。
 
@@ -295,9 +294,10 @@ func (pp *p) destroy() {
 ```go
 //go:nosplit
 func newproc(siz int32, fn *funcval) {
+	// 从 fn 的地址增加一个指针的长度，从而获取第一参数地址
 	argp := add(unsafe.Pointer(&fn), sys.PtrSize)
 	gp := getg()
-	pc := getcallerpc()
+	pc := getcallerpc() // 获取调用方 PC/IP 寄存器值
 
 	// 用 g0 系统栈创建 goroutine 对象
 	// 传递的参数包括 fn 函数入口地址, argp 参数起始地址, siz 参数长度, gp（g0），调用方 pc（goroutine）
@@ -305,10 +305,62 @@ func newproc(siz int32, fn *funcval) {
 		newproc1(fn, (*uint8)(argp), siz, gp, pc)
 	})
 }
+type funcval struct {
+	fn uintptr
+	// 变长大小，fn 的数据在应在 fn 之后
+}
+// getcallerpc 返回它调用方的调用方程序计数器 PC program conter
+//go:noescape
+func getcallerpc() uintptr
 ```
 
-详细的参数获取过程需要编译器的配合，我们在 [关键字: go](../../part3compile/ch11keyword/go.md) 中讨论，现在我们只需要
-知道 `newproc` 会获取需要执行的 goroutine 要执行的函数体的地址、参数起始地址、参数长度、以及 goroutine 的调用地址。
+详细的参数获取过程需要编译器的配合，也是实现 goroutine 的关键。我们来看一下具体的传参过程：
+
+```go
+package main
+
+func hello(msg string) {
+	println(msg)
+}
+
+func main() {
+	go hello("hello world")
+}
+```
+
+```asm
+LEAQ go.string.*+1874(SB), AX // 将 "hello world" 的地址给 AX
+MOVQ AX, 0x10(SP)             // 将 AX 的值放到 0x10
+MOVL $0x10, 0(SP)             // 将最后一个参数的位置存到栈顶 0x00
+LEAQ go.func.*+67(SB), AX     // 将 go 语句调用的函数入口地址给 AX
+MOVQ AX, 0x8(SP)              // 将 AX 存入 0x08
+CALL runtime.newproc(SB)      // 调用 newproc
+```
+
+这个过程里我们基本上可以看到栈是这样排布的：
+
+```
+             栈布局
+      |                 |       高地址
+      |                 |
+      +-----------------+ 
+      | &"hello world"  |
+0x10  +-----------------+ <--- fn + sys.PtrSize
+      |      hello      |
+0x08  +-----------------+ <--- fn
+      |       siz       |
+0x00  +-----------------+ SP
+      |    newproc PC   |  
+      +-----------------+ callerpc: 要运行的 goroutine 的 PC
+      |                 |
+      |                 |       低地址
+```
+从而当 `newproc` 开始运行时，先获得 siz 作为第一个参数，再获得 fn 作为第二个参数，
+然后通过 `add` 计算出 `fn` 参数开始的位置。
+
+
+现在我们知道 `newproc` 会获取需要执行的 goroutine 要执行的函数体的地址、
+参数起始地址、参数长度、以及 goroutine 的调用地址。
 然后在 g0 系统栈上通过 `newproc1` 创建并初始化新的 goroutine ，下面我们来看 `newproc1`。
 
 ```go

@@ -97,6 +97,70 @@ func isBlack(ref interface{}) bool {
 }
 ```
 
+## 4.2.3 并发标记清扫
+
+并发标记的思想可以简要描述如下：
+
+```go
+func markSome() bool {
+    if worklist.empty() {       // 初始化回收过程
+        scan(Roots)             // 赋值器不持有任何白色对象的引用
+        if worklist.empty() {   // 此时灰色对象已经全部处理完毕
+            sweep()             // 标记结束，立即清扫
+            return false
+        }
+    }
+    // 回收过程尚未完成，后续过程仍需标记
+    ref = worklist.remove()
+    scan(ref)
+    return true
+}
+
+func scan(ref interface{}) {
+    for fld := range Pointers(ref) {
+        child := *fld
+        if child != nil {
+            shade(child)
+        }
+    }
+}
+
+func shade(ref interface{}) {
+    if !isMarked(ref) {
+        setMarked(ref)
+        worklist.add(ref)
+    }
+}
+```
+
+在这个过程中，回收器会首先扫描 worklist，而后对根集合进行扫描并重新建立 worklist。
+在根集合扫描过程中赋值器现场被挂起时，扫描完成后则不会再存在白色对象。
+
+并发清扫的思想可以简要描述如下：
+
+```go
+func New() (interface{}, error) {
+    collectEnough()
+    ref := allocate()
+    if ref == nil {
+        return nil, errors.New("Out of memory")
+    }
+    return ref, nil
+}
+
+func collectEnough() {
+    stopTheWorld()
+    defer startTheWorld()
+    
+    for behind() { // behind() 控制回收工作每次的执行量
+        if !markSome() {
+            return
+        }
+    }
+}
+```
+
+
 ## 进一步阅读的参考文献
 
 - [Dijkstra et al., 1978] Edsger W. Dijkstra, Leslie Lamport, A. J. Martin, C. S. Scholten, and E. F. M. Steffens. 1978. On-the-fly garbage collection: an exercise in cooperation. Commun. ACM 21, 11 (November 1978), 966–975. DOI:https://doi.org/10.1145/359642.359655

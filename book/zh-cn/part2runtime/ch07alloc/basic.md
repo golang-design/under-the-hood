@@ -1,9 +1,9 @@
 ---
 weight: 2201
-title: "7.1 基本知识"
+title: "7.1 设计原则"
 ---
 
-# 7.1 基本知识
+# 7.1 设计原则
 
 [TOC]
 
@@ -55,10 +55,11 @@ const (
 
 //go:notinheap
 type heapArena struct {
-	bitmap [heapArenaBitmapBytes]byte
-	spans [pagesPerArena]*mspan
-	pageInUse [pagesPerArena / 8]uint8
-	pageMarks [pagesPerArena / 8]uint8
+	bitmap     [heapArenaBitmapBytes]byte
+	spans      [pagesPerArena]*mspan
+	pageInUse  [pagesPerArena / 8]uint8
+	pageMarks  [pagesPerArena / 8]uint8
+	zeroedBase uintptr
 }
 ```
 
@@ -89,12 +90,15 @@ type arenaHint struct {
 type mspan struct { // 双向链表
 	next *mspan     // 链表中的下一个 span，如果为空则为 nil
 	prev *mspan     // 链表中的前一个 span，如果为空则为 nil
-    (...)
-	startAddr uintptr // span 的第一个字节的地址，即 s.base()
-	npages    uintptr // 一个 span 中的 page 数量
-    (...)
-	freeindex uintptr
-    (...)
+	(...)
+	startAddr      uintptr // span 的第一个字节的地址，即 s.base()
+	npages         uintptr // 一个 span 中的 page 数量
+	manualFreeList gclinkptr // mSpanManual span 的释放对象链表
+	(...)
+	freeindex  uintptr
+	nelems     uintptr // span 中对象的数量
+	allocCache uint64
+	(...)
 	allocCount  uint16     // 分配对象的数量
 	spanclass   spanClass  // 大小等级与 noscan (uint8)
 	incache     bool       // 是否被 mcache 使用
@@ -115,8 +119,8 @@ type mcache struct {
 	tiny             uintptr
 	tinyoffset       uintptr
 	local_tinyallocs uintptr
-	alloc [numSpanClasses]*mspan // 用来分配的 spans，由 spanClass 索引
-	stackcache [_NumStackOrders]stackfreelist
+	alloc            [numSpanClasses]*mspan // 用来分配的 spans，由 spanClass 索引
+	stackcache       [_NumStackOrders]stackfreelist
 	(...)
 }
 ```
@@ -149,18 +153,25 @@ type mcentral struct {
 ```go
 //go:notinheap
 type mheap struct {
-	lock      mutex
-	free      mTreap // free 和 non-scavenged spans
-	scav      mTreap // free 和 scavenged spans
-	(...)
-	arenas [1 << arenaL1Bits]*[1 << arenaL2Bits]*heapArena
-	(...)
-	arenaHints *arenaHint
-	(...)
-	central [numSpanClasses]struct {
+	lock           mutex
+	pages          pageAlloc
+	allspans       []*mspan // 所有 spans 从这里分配出去
+	scavengeGoal   uint64
+	reclaimIndex   uint64
+	reclaimCredit  uintptr
+	arenas         [1 << arenaL1Bits]*[1 << arenaL2Bits]*heapArena
+	heapArenaAlloc linearAlloc
+	arenaHints     *arenaHint
+	arena          linearAlloc
+	allArenas      []arenaIdx
+	curArena       struct {
+		base, end uintptr
+	}
+	central       [numSpanClasses]struct {
 		mcentral mcentral
 		pad      [cpu.CacheLinePadSize - unsafe.Sizeof(mcentral{})%cpu.CacheLinePadSize]byte
 	}
+	(...)
 
 	// 各种分配器
 	spanalloc             fixalloc // span* 分配器
@@ -293,16 +304,14 @@ func newobject(typ *_type) unsafe.Pointer {
 
 ```go
 func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
-	(...)
 	// 创建大小为零的对象，例如空结构体
 	if size == 0 {
 		return unsafe.Pointer(&zerobase)
 	}
-	(...)
 	mp := acquirem()
-	(...)
 	mp.mallocing = 1
 	(...)
+
 	// 获取当前 g 所在 M 所绑定 P 的 mcache
 	c := gomcache()
 	var x unsafe.Pointer
