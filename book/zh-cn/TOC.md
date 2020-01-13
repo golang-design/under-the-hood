@@ -158,7 +158,7 @@
 
 - [17.1 错误处理的历史及其演化](part4lib/ch17errors/history.md)
 - [17.2 错误检查 与 errors 包](part4lib/ch17errors/errors.md)
-- [1.3 错误处理的未来](part4lib/ch17errors/future.md)
+- [17.3 错误处理的未来](part4lib/ch17errors/future.md)
 
 #### [第 18 章 泛型与合约](part4lib/ch18generics/readme.md)
 
