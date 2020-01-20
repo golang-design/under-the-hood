@@ -561,6 +561,11 @@ type p struct {
 
 	_ uint32 // Alignment for atomic fields below
 
+	// The when field of the first entry on the timer heap.
+	// This is updated using atomic functions.
+	// This is 0 if the timer heap is empty.
+	timer0When uint64
+
 	// Per-P GC 状态
 	gcAssistTime         int64    // assistAlloc 时间 (纳秒) 原子操作
 	gcFractionalMarkTime int64    // fractional mark worker 的时间 (纳秒) 原子操作
@@ -595,6 +600,10 @@ type p struct {
 	// or while the timer status is in a transient state
 	// such as timerModifying.
 	adjustTimers uint32
+
+	// Number of timerDeleted times in P's heap.
+	// Modified using atomic instructions.
+	deletedTimers uint32
 
 	// Race context used while executing timer functions.
 	timerRaceCtx uintptr
