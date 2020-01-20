@@ -388,7 +388,7 @@ package main:
 指针都能够实现对应的接口。 这句话看上去有点儿绕，还以上面的代码为例，分别实现不同接
 收者：
 
-- 值接收者：
+- 指针接收者：
 
     ```go
     func (s *student) Name() string {
@@ -396,7 +396,7 @@ package main:
     }
     ```
 
-- 指针接收者：
+- 值接收者：
 
     ```go
     func (s student) Name() string {
