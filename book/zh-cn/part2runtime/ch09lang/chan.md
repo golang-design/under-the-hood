@@ -105,7 +105,7 @@ type waitq struct { // 等待队列 sudog 双向队列
 
 > 更多关于 sudog 的细节，请参考 [6.8 运行时同步原语](../../part2runtime/ch06sched/sync.md)。
 
-### channel 的创生
+### channel 的创建
 
 channel 的创建由编译器完成翻译工作：
 
@@ -131,6 +131,7 @@ func makechan(t *chantype, size int) *hchan {
 		panic("makechan: size out of range")
 	}
 
+	// TODO: 以下文字描述不好理解
 	// hchan 在当元素存储在 buf 且不包含指针时，不则不会包含需要被 GC 进行处理的指针，
 	// buf 指向了相同的分配区，elemtype 则是恒定的。
 	// SudoG 则被他们拥有的线程索引，因此他们无法被搜集。
@@ -173,7 +174,7 @@ func makechan64(t *chantype, size int64) *hchan {
 }
 ```
 
-所以创建一个 channel 最重要的操作就是 channel 自身以及所需创建的 `buf` 的大小分配内存。
+所以创建一个 channel 最重要的操作就是创建 `hchan` 以及分配所需的 `buf` 大小的内存空间。
 
 ### 向 channel 发送数据
 
@@ -192,16 +193,13 @@ func chansend1(c *hchan, elem unsafe.Pointer) {
 }
 ```
 
-注意，到目前为止，我们尚未发现有缓存 channel 和无缓存 channel 之间的区别。
-
 下面我们来关注 chansend 的具体实现的第一个部分：
 
 ```go
 func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
 	// 当向 nil channel 发送数据时，会调用 gopark
-	// 而 gopark 会将当前的 goroutine 休眠，并用过第一个参数的 unlockf 来回调唤醒
-	// 但此处传递的参数为 nil，因此向 channel 发送数据的 goroutine 和接收数据的 goroutine 都会阻塞，
-	// 进而死锁
+	// 而 gopark 会将当前的 goroutine 休眠 
+	// TODO: gopark 的 unlockf 主要作用并不是用来作为回调唤醒
 	if c == nil {
 		if !block {
 			return false
@@ -214,12 +212,8 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
 }
 ```
 
-在这个部分中，我们可以看到，如果一个 channel 为空（比如没有初始化），
-这时候的发送操作会尝试暂止当前的 goroutine（`gopark`）。
-在调度器中，我们了解到 `gopark` 的第一个参数用于提供唤醒当前 goroutine 的回调函数，
-但此处为 `nil`。这时，尝试发送数据的 goroutine 会休眠，而等待接收数据的 goroutine 
-由于接收不到任何数据，也会休眠，进而使得这两者产生永久性的休眠，
-从而产生死锁，并泄露 goroutine。
+在这个部分中，我们可以看到，如果一个 channel 为零值（比如没有初始化），这时候的发送操作会暂止当前的 goroutine（`gopark`）。
+// TODO: gopark 的 unlockf 主要作用并不是用来作为回调唤醒
 
 现在我们来看一切已经准备就绪，开始对 channel 加锁：
 
@@ -235,15 +229,15 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
 		panic(plainError("send on closed channel"))
 	}
 
-	// 1. 找到了阻塞在 channel 上的读者，直接发送
+	// 1. channel 上有阻塞的接收方，直接发送
 	if sg := c.recvq.dequeue(); sg != nil {
 		send(c, sg, ep, func() { unlock(&c.lock) })
 		return true
 	}
 
-	// 2. 判断 channel 中缓存是否仍然有空间剩余
+	// 2. 判断 channel 中缓存是否有剩余空间
 	if c.qcount < c.dataqsiz {
-		// 有空间剩余，存入 buffer
+		// 有剩余空间，存入 c.buf
 		qp := chanbuf(c, c.sendx)
 		(...)
 		typedmemmove(c.elemtype, qp, ep) // 将要发送的数据拷贝到 buf 中
@@ -264,8 +258,8 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
 }
 ```
 
-到目前位置，代码中考虑了当 channel 上直接有接收方等待，可以直接将数据发送走，并返回（情况 1）；或没有接收方
-但还有剩余缓存来存放没有读取的数据（情况 2）。对于直接发送数据的情况，由 `send` 调用完成：
+到目前位置，代码中考虑了当 channel 上有接收方等待，可以直接将数据发送走，并返回（情况 1）；或没有接收方
+但缓存中还有剩余空间来存放没有读取的数据（情况 2）。对于直接发送数据的情况，由 `send` 调用完成：
 
 ```go
 func send(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func()) {
@@ -279,7 +273,7 @@ func send(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func()) {
 	gp.param = unsafe.Pointer(sg)
 	(...)
 	// 复始一个 goroutine，放入调度队列等待被后续调度
-	goready(gp) // 将 gp 放入下一个立即被执行的 goroutine
+	goready(gp) // 将 gp 作为下一个立即被执行的 goroutine
 }
 func sendDirect(t *_type, sg *sudog, src unsafe.Pointer) {
 	dst := sg.elem
@@ -369,11 +363,11 @@ func chanrecv2(c *hchan, elem unsafe.Pointer) (received bool) {
 }
 ```
 
-chansend 的具体实现如下，由于我们已经仔细分析过发送过程了，
+chanrecv 的具体实现如下，由于我们已经仔细分析过发送过程了，
 我们不再详细分拆下面代码的步骤，其处理方式基本一致：
 
 1. 上锁
-2. 从缓存中出队，拷贝要接受的数据
+2. 从缓存中出队，拷贝要接收的数据
 3. 解锁
 
 其中第二个步骤包含三个子步骤：
@@ -406,17 +400,17 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 		// 
 		if atomic.Load(&c.closed) == 0 {
 			// 因为一个 channel 关闭后不能被重新打开，所以现在对 channel 的观察
-			// 是 channel 没有关闭，则隐含了之前的 channel 也没有关闭。
-			//因此此时表现为我们观察到那个状态的 channel 为空，且不能继续接受数据
+			// 是 channel 没有关闭，则隐含了之前观察到的 channel 也没有关闭。
+			// 所以此时表现为我们观察到的 channel 是未就绪的（即不能接收数据）
 			return 
 		}
 		// channel 已经被不可逆的关闭了，重新检查 channel 是否包含可能发生在
-		// 前面 empty 和 closed 检查之后的任何需要接受的数据。当这种情况的 send 发生时，
+		// 前面 empty 和 closed 检查之后的任何需要接收的数据。当这种情况的 send 发生时，
 		// 还要求顺序一致性
 		//
-		// 这里是对从一个已经关闭的 channel 上接受数据的一种优化。
+		// 这里是对从一个已经关闭的 channel 上接收数据的一种优化。
 		if empty(c) {
-			// channel 被不可逆的关闭且清空了
+			// channel 被不可逆的关闭且缓存中没有数据了
 			if ep != nil {
 				typedmemclr(c.elemtype, ep)
 			}
@@ -438,7 +432,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 		return true, false
 	}
 
-	// 2. 找到发送方，直接接收
+	// 2. channel 上有阻塞的发送方，直接接收
 	if sg := c.sendq.dequeue(); sg != nil {
 		recv(c, sg, ep, func() { unlock(&c.lock) })
 		return true, true
@@ -467,7 +461,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 		return false, false
 	}
 
-	// 4. 没有更多的发送方，阻塞 channel
+	// 4. 没有数据可以接收，阻塞当前 goroutine
 	gp := getg()
 	mysg := acquireSudog()
 	(...)
@@ -475,7 +469,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	gopark(chanparkcommit, unsafe.Pointer(&c.lock), waitReasonChanReceive)
 
 	(...)
-	// 唤醒
+	// 被唤醒
 	gp.waiting = nil
 	(...)
 	closed := gp.param == nil
@@ -484,7 +478,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	releaseSudog(mysg)
 	return true, !closed
 }
-// empty 报告从一个 channel 中读是否会发生阻塞（即 channel 为空）
+// empty 判断从一个 channel 接收数据时是否会发生阻塞
 // 它使用了一个可变状态的原子读。
 func empty(c *hchan) bool {
 	// c.dataqsiz 是不可变的
@@ -495,8 +489,7 @@ func empty(c *hchan) bool {
 }
 ```
 
-接受数据同样包含直接从接收方的执行栈中拷贝要发送的数据，但这种情况当且仅当缓存中数据为空时。
-那么什么时候一个 channel 的缓存为空，且会阻塞呢？没错，无缓存 channel 就是如此。
+接收数据同样包含直接往接收方的执行栈中拷贝要发送的数据，但这种情况当且仅当缓存大小为0时（即无缓冲 channel）。
 
 ```go
 func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
@@ -531,8 +524,8 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 }
 ```
 
-到目前为止我们终于明白了为什么无缓存 channel 而言 `v <- ch` happens before `ch <- v` 了，
-因为**无缓存 channel 的接收方会先从发送方栈重拷贝数据，但这时发送方会阻塞到重新被调度**。
+到目前为止我们终于明白了为什么无缓冲 channel 而言 `v <- ch` happens before `ch <- v` 了，
+因为**无缓冲 channel 的接收方会先从发送方栈拷贝数据后，发送方才会被放回调度队列中，等待重新调度**。
 
 ### channel 的死亡
 
@@ -542,7 +535,7 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 close(ch) => closechan(ch)
 ```
 
-具体的实现中，首先将 channel 阻塞自身的锁上，而后依次将阻塞在 channel 的 g 添加到一个
+具体的实现中，首先对 channel 上锁，而后依次将阻塞在 channel 的 g 添加到一个
 gList 中，当所有的 g 均从 channel 上移除时，可释放锁，并唤醒 gList 中的所有接收方和发送方：
 
 ```go
@@ -562,8 +555,7 @@ func closechan(c *hchan) {
 
 	var glist gList
 
-	// 释放所有的读者
-	// 此处的接收方都是阻塞在 channel 上的，先统一将他们加到一个 gList 上
+	// 释放所有的接收方
 	for {
 		sg := c.recvq.dequeue()
 		if sg == nil { // 队列已空
@@ -580,8 +572,7 @@ func closechan(c *hchan) {
 		glist.push(gp)
 	}
 
-	// 释放所有的写者 (panic)
-	// 写者同理
+	// 释放所有的发送方
 	for {
 		sg := c.sendq.dequeue()
 		if sg == nil { // 队列已空
@@ -594,9 +585,10 @@ func closechan(c *hchan) {
 		(...)
 		glist.push(gp)
 	}
-	// 就绪所有的 G 时可释放 channel 的锁
+	// 释放 channel 的锁
 	unlock(&c.lock)
 
+    // 就绪所有的 G
 	for !glist.empty() {
 		gp := glist.pop()
 		gp.schedlink = 0
@@ -606,7 +598,7 @@ func closechan(c *hchan) {
 ```
 
 当 channel 关闭时，我们必须让所有阻塞的接收方重新被调度，让所有的发送方也重新被调度，这时候
-的实现先将 goroutine 统一添加到一个列表中（需要锁），然后一个一个的进行读取（不需要锁）。
+的实现先将 goroutine 统一添加到一个列表中（需要锁），然后逐个地进行复始（不需要锁）。
 
 ## select 的本质
 
@@ -632,7 +624,7 @@ func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
 	pollorder := order1[:ncases:ncases]
 	lockorder := order1[ncases:][:ncases:ncases]
 
-	// 替换 closed channel
+	// 替换零值的 channel
 	for i := range scases {
 		cas := &scases[i]
 		if cas.c == nil && cas.kind != caseDefault {
@@ -650,7 +642,7 @@ func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
 		pollorder[j] = uint16(i)
 	}
 
-	// 根据 channel 的地址进行堆排序，决定获取锁的顺序
+	// 根据 channel 的地址进行堆排序，决定加锁的顺序，避免死锁
 	for i := 0; i < ncases; i++ {
 		(...)
 	}
@@ -671,7 +663,7 @@ func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
 	)
 
 loop:
-	// 1 检查是否有正在等待
+	// 1 遍历 channel，检查是否就绪（可发送/可接收）
 	var dfli int
 	var dfl *scase
 	var casi int
@@ -919,7 +911,7 @@ func selectnbsend(c *hchan, elem unsafe.Pointer) (selected bool) {
 我们现在来关注 chansend 中当 block 为 `false` 的情况：
 
 ```go
-// full 判断向一个 channel 发送消息时是否会发生阻塞（即 channel 满）
+// full 判断向一个 channel 发送数据时是否会发生阻塞
 // 它使用了一个可变状态的单字读（single word-sized read），所以尽管结果立刻返回
 // true，正确的结果可能会在调用函数后发生改变。
 func full(c *hchan) bool {
@@ -950,6 +942,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 }
 ```
 
+// TODO: 源码里说的是 c.closed 和 full(c) 的顺序 reorder 也没问题
 这里的快速路径是一个优化，它发生在持有 channel 锁之前，而且这个检查顺序非常重要。
 当 select 语句需要发送数据时，处于非阻塞状态发送数据，如果 channel 处于未初始化状态，
 
@@ -1028,6 +1021,7 @@ goroutine 1 [chan send]:
 main.main()
 ```
 
+// TODO: 这里的因果说的感觉怪怪的，出现 panic 的原因是调度器发现所有的 goroutine 都暂止了
 似乎与源码中发生的行为并不一致，因为按照调用，当锁被解除后，并没有任何 panic。
 这是为什么呢？事实上，通过对程序进行反编译，我们能够观察到，
 **当 select 语句只有一个 case 时，`select` 关键字是没有被翻译成 `selectgo` 的。**
@@ -1072,7 +1066,7 @@ func block() {
 ### 接收数据的分支
 
 
-对于接受数据而言，编译器会将这段语法：
+对于接收数据而言，编译器会将这段语法：
 
 ```go
 select {
@@ -1135,7 +1129,7 @@ func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool
 但这一决定基本上抹杀了无锁 channel 的实现机制 [Randall, 2015a]。
 这是目前未使用 lock-free 实现 channel 的一个最主要的原因。
 
-那在这个决定之前，lock-free channel 造就已经实现了，为什么当时没有接收使用 lock-free 实现 channel 呢？
+那在这个决定之前，lock-free channel 早就已经实现了，为什么当时没有接受使用 lock-free 实现 channel 呢？
 
 第一个原因是提出的 lock-free channel 并非 wait-free，是否能有效提高 channel 在大规模应用的性能并没有强有力的证据；与此同时，运行时调度器不是 NUMA-aware 的，在核心较多时，
 一个外部实现的 lock-free channel [OneOfOne, 2016] 的性能测试结果 [Gjengset, 2016] 表明：
@@ -1147,7 +1141,7 @@ lock-free 版本甚至比 futex 版本还要慢。
 这里我们简单提一个由于 lock-free 实现导致的维护性大打折扣的教训 [Randall, 2015b]。
 在早年简化 channel 实现的过程中，由于没有考虑到发送数据过程中，
 对要发送数据的指针进行读取，将会与调度器对执行栈的伸缩发生竞争。这是因为
-直接读取 channel 的数据分为两个过程：1. 读取发送方的值的指针 2. 拷贝到要接受的位置。
+直接读取 channel 的数据分为两个过程：1. 读取发送方的值的指针 2. 拷贝到要接收的位置。
 然而在 1 和 2 这两个步骤之间，发送方的执行栈可能发生收缩，进而指针失效，成为竞争的源头。
 
 虽然后来有人提出使用 lock-free 编程的形式化验证工具 spin [Bell Labs, 1980] 
