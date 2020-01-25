@@ -88,7 +88,7 @@ func makechan(t *chantype, size int) *hchan {
 	case mem == 0:
 		// 队列或元素大小为零
 		c = (*hchan)(mallocgc(hchanSize, nil, true))
-		(...)
+		...
 	case elem.ptrdata == 0:
 		// 元素不包含指针
 		// 在一个调用中分配 hchan 和 buf
@@ -104,7 +104,7 @@ func makechan(t *chantype, size int) *hchan {
 	c.elemtype = elem
 	c.dataqsiz = uint(size)
 
-	(...)
+	...
 	return c
 }
 ```
@@ -168,7 +168,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
 
 ```go
 func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
-	(...)
+	...
 	lock(&c.lock)
 
 	// 持有锁之前我们已经检查了锁的状态，
@@ -189,7 +189,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
 	if c.qcount < c.dataqsiz {
 		// 有剩余空间，存入 c.buf
 		qp := chanbuf(c, c.sendx)
-		(...)
+		...
 		typedmemmove(c.elemtype, qp, ep) // 将要发送的数据拷贝到 buf 中
 		c.sendx++
 		if c.sendx == c.dataqsiz { // 如果 sendx 索引越界则设为 0
@@ -204,7 +204,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
 		return false
 	}
 
-	(...)
+	...
 }
 ```
 
@@ -213,7 +213,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
 
 ```go
 func send(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func()) {
-	(...)
+	...
 	if sg.elem != nil {
 		sendDirect(c.elemtype, sg, ep)
 		sg.elem = nil
@@ -221,13 +221,13 @@ func send(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func()) {
 	gp := sg.g
 	unlockf() // unlock(&c.lock)
 	gp.param = unsafe.Pointer(sg)
-	(...)
+	...
 	// 复始一个 Goroutine，放入调度队列等待被后续调度
 	goready(gp) // 将 gp 作为下一个立即被执行的 Goroutine
 }
 func sendDirect(t *_type, sg *sudog, src unsafe.Pointer) {
 	dst := sg.elem
-	(...) // 为了确保发送的数据能够被立刻观察到，需要写屏障支持，执行写屏障，保证代码正确性
+	... // 为了确保发送的数据能够被立刻观察到，需要写屏障支持，执行写屏障，保证代码正确性
 	memmove(dst, src, t.size) // 直接写入接收方的执行栈！
 }
 ```
@@ -245,17 +245,17 @@ func sendDirect(t *_type, sg *sudog, src unsafe.Pointer) {
 
 ```go
 func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
-	(...)
+	...
 
 	// 3. 阻塞在 channel 上，等待接收方接收数据
 	gp := getg()
 	mysg := acquireSudog()
-	(...)
+	...
 	c.sendq.enqueue(mysg)
 	gopark(chanparkcommit, unsafe.Pointer(&c.lock)) // 将当前的 g 从调度队列移出
 
 	// 因为调度器在停止当前 g 的时候会记录运行现场，当恢复阻塞的发送操作时候，会从此处继续开始执行
-	(...)
+	...
 	gp.waiting = nil
 	gp.activeStackChans = false
 	if gp.param == nil {
@@ -265,7 +265,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
 		panic(plainError("send on closed channel"))
 	}
 	gp.param = nil
-	(...)
+	...
 	mysg.c = nil // 取消与之前阻塞的 channel 的关联
 	releaseSudog(mysg) // 从 sudog 中移除
 	return true
@@ -329,7 +329,7 @@ chanrecv 的具体实现如下，由于我们已经仔细分析过发送过程�
 
 ```go
 func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool) {
-	(...)
+	...
 	// nil channel，同 send，会导致两个 Goroutine 的死锁
 	if c == nil {
 		if !block {
@@ -352,13 +352,13 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 		return
 	}
 
-	(...)
+	...
 
 	lock(&c.lock)
 
 	// 1. channel 已经 close，且 channel 中没有数据，则直接返回
 	if c.closed != 0 && c.qcount == 0 {
-		(...)
+		...
 		unlock(&c.lock)
 		if ep != nil {
 			typedmemclr(c.elemtype, ep)
@@ -376,7 +376,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	if c.qcount > 0 {
 		// 直接从队列中接收
 		qp := chanbuf(c, c.recvx)
-		(...)
+		...
 		if ep != nil {
 			typedmemmove(c.elemtype, ep, qp)
 		}
@@ -398,14 +398,14 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	// 4. 没有数据可以接收，阻塞当前 Goroutine
 	gp := getg()
 	mysg := acquireSudog()
-	(...)
+	...
 	c.recvq.enqueue(mysg)
 	gopark(chanparkcommit, unsafe.Pointer(&c.lock), waitReasonChanReceive)
 
-	(...)
+	...
 	// 被唤醒
 	gp.waiting = nil
-	(...)
+	...
 	closed := gp.param == nil
 	gp.param = nil
 	mysg.c = nil
@@ -419,7 +419,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 ```go
 func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 	if c.dataqsiz == 0 {
-		(...)
+		...
 		if ep != nil {
 			// 直接从对方的栈进行拷贝
 			recvDirect(c.elemtype, sg, ep)
@@ -427,7 +427,7 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 	} else {
 		// 从缓存队列拷贝
 		qp := chanbuf(c, c.recvx)
-		(...)
+		...
 		// 从队列拷贝数据到接收方
 		if ep != nil {
 			typedmemmove(c.elemtype, ep, qp)
@@ -444,7 +444,7 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 	gp := sg.g
 	unlockf()
 	gp.param = unsafe.Pointer(sg)
-	(...)
+	...
 	goready(gp, skip+1)
 }
 ```
@@ -452,7 +452,7 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 到目前为止我们终于明白了为什么无缓冲 Channel 而言 `v <- ch` happens before `ch <- v` 了，
 因为**无缓冲 Channel 的接收方会先从发送方栈拷贝数据后，发送方才会被放回调度队列中，等待重新调度**。
 
-### Channel 的死亡
+### Channel 的关闭
 
 关闭 Channel 主要是完成以下翻译工作：
 
@@ -475,7 +475,7 @@ func closechan(c *hchan) {
 		panic(plainError("close of closed channel"))
 	}
 
-	(...)
+	...
 	c.closed = 1
 
 	var glist gList
@@ -490,10 +490,10 @@ func closechan(c *hchan) {
 			typedmemclr(c.elemtype, sg.elem) // 清零
 			sg.elem = nil
 		}
-		(...)
+		...
 		gp := sg.g
 		gp.param = nil
-		(...)
+		...
 		glist.push(gp)
 	}
 
@@ -504,10 +504,10 @@ func closechan(c *hchan) {
 			break
 		}
 		sg.elem = nil
-		(...)
+		...
 		gp := sg.g
 		gp.param = nil
-		(...)
+		...
 		glist.push(gp)
 	}
 	// 释放 channel 的锁
@@ -537,10 +537,10 @@ type scase struct {
 	c           *hchan         // chan
 	elem        unsafe.Pointer // 数据元素
 	kind        uint16
-	(...)
+	...
 }
 func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
-	(...)
+	...
 
 	cas1 := (*[1 << 16]scase)(unsafe.Pointer(cas0))
 	order1 := (*[1 << 17]uint16)(unsafe.Pointer(order0))
@@ -557,9 +557,9 @@ func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
 		}
 	}
 
-	(...)
+	...
 
-	(...)
+	...
 	// 生成随机顺序
 	for i := 1; i < ncases; i++ {
 		j := fastrandn(uint32(i + 1))
@@ -569,9 +569,9 @@ func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
 
 	// 根据 channel 的地址进行堆排序，决定加锁的顺序，避免死锁
 	for i := 0; i < ncases; i++ {
-		(...)
+		...
 	}
-	(...)
+	...
 
 	// 依次加锁
 	sellock(scases, lockorder)
@@ -613,7 +613,7 @@ loop:
 				goto rclose
 			}
 		case caseSend:
-			(...)
+			...
 			if c.closed != 0 {
 				goto sclose
 			}
@@ -639,7 +639,7 @@ loop:
 
 	// 2 入队所有的 channel
 	gp = getg()
-	(...)
+	...
 	nextp = &gp.waiting
 	for _, casei := range lockorder {
 		casi = int(casei)
@@ -653,7 +653,7 @@ loop:
 		sg.isSelect = true
 		// 在 gp.waiting 上分配 elem 和入队 sg 之间没有栈分段，copystack 可以在其中找到它。
 		sg.elem = cas.elem
-		(...)
+		...
 		sg.c = c
 		// 按锁的顺序创建等待链表
 		*nextp = sg
@@ -699,7 +699,7 @@ loop:
 		if k.kind == caseNil {
 			continue
 		}
-		(...)
+		...
 		if sg == sglist {
 			// sg 已经被唤醒我们的 G 出队了。
 			casi = int(casei)
@@ -729,17 +729,17 @@ loop:
 	}
 
 	c = cas.c
-	(...)
+	...
 	if cas.kind == caseRecv {
 		recvOK = true
 	}
-	(...)
+	...
 	selunlock(scases, lockorder)
 	goto retc
 
 bufrecv:
 	// 可以从 buf 接收
-	(...)
+	...
 	recvOK = true
 	qp = chanbuf(c, c.recvx)
 	if cas.elem != nil {
@@ -756,7 +756,7 @@ bufrecv:
 
 bufsend:
 	// 可以发送到 buf
-	(...)
+	...
 	typedmemmove(c.elemtype, chanbuf(c, c.sendx), cas.elem)
 	c.sendx++
 	if c.sendx == c.dataqsiz {
@@ -769,7 +769,7 @@ bufsend:
 recv:
 	// 可以从一个休眠的发送方 (sg)直接接收
 	recv(c, sg, cas.elem, func() { selunlock(scases, lockorder) }, 2)
-	(...)
+	...
 	recvOK = true
 	goto retc
 
@@ -780,18 +780,18 @@ rclose:
 	if cas.elem != nil {
 		typedmemclr(c.elemtype, cas.elem)
 	}
-	(...)
+	...
 	goto retc
 
 send:
 	// 可以向一个休眠的接收方 (sg) 发送
-	(...)
+	...
 	send(c, sg, cas.elem, func() { selunlock(scases, lockorder) }, 2)
-	(...)
+	...
 	goto retc
 
 retc:
-	(...)
+	...
 	return casi, recvOK
 
 sclose:
@@ -808,17 +808,17 @@ Select 的诸多用法其实本质上仍然是 Channel 操作，编译器会完�
 ```go
 select {
 case c <- v:
-	(...)
+	...
 default:
-	(...)
+	...
 }
 
 =>
 
 if selectnbsend(c, v) {
-	(...)
+	...
 } else {
-	(...)
+	...
 }
 ```
 
@@ -838,7 +838,7 @@ func selectnbsend(c *hchan, elem unsafe.Pointer) (selected bool) {
 ```go
 func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 
-	(...)
+	...
 
 	// 快速路径: 检查不需要加锁时失败的非阻塞操作
 	if !block && c.closed == 0 && ((c.dataqsiz == 0 && c.recvq.first == nil) ||
@@ -846,11 +846,11 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 		return false
 	}
 
-	(...)
+	...
 
 	lock(&c.lock)
 
-	(...)
+	...
 }
 ```
 
@@ -866,16 +866,16 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 ```go
 func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 
-	(...)
+	...
 
 	lock(&c.lock)
 
-	(...)
+	...
 
 	// 2. 判断 channel 中缓存是否仍然有空间剩余
 	if c.qcount < c.dataqsiz {
 		// 有空间剩余，存入 buffer
-		(...)
+		...
 		unlock(&c.lock)
 		return true
 	}
@@ -884,7 +884,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 		return false
 	}
 
-	(...)
+	...
 }
 ```
 
@@ -944,19 +944,19 @@ func walkselectcases(cases *Nodes) []*Node {
 	// 优化: 没有 case 的情况
 	if n == 0 {
 		// 翻译为：block()
-		(...)
+		...
 		return
 	}
 
 	// 优化: 只有一个 case 的情况
 	if n == 1 {
 		// 翻译为：if ch == nil { block() }; n;
-		(...)
+		...
 		return
 	}
 
 	// 一般情况，调用 selecggo
-	(...)
+	...
 }
 ```
 
@@ -978,17 +978,17 @@ func block() {
 ```go
 select {
 case v = <-c:
-	(...)
+	...
 default:
-	(...)
+	...
 }
 
 =>
 
 if selectnbrecv(&v, c) {
-	(...)
+	...
 } else {
-	(...)
+	...
 }
 ```
 
