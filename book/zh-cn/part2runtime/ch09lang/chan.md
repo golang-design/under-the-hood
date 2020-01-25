@@ -340,40 +340,23 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	}
 
 	// 快速路径: 在不需要锁的情况下检查失败的非阻塞操作
-	// TODO: 这里的代码有 Bug https://github.com/golang/go/issues/36714
 	//
 	// 注意到 channel 不能由已关闭转换为未关闭，则
 	// 失败的条件是：1. 无 buf 时发送队列为空 2. 有 buf 时，buf 为空
-	// 此处的 c.closed 必须在条件判断之后进行验证（从而需要 atomic 操作），因为
-	// 如果指令重排后，如果先判断 c.closed，得出 channel 未关闭，无法判断失败条件中
-	// channel 是已关闭还是未关闭，从而得到错误的返回值（原本为 true, false，错误的返回了 false, false）
-	if !block && empty(c) {
-		// 
-		if atomic.Load(&c.closed) == 0 {
-			// 因为一个 channel 关闭后不能被重新打开，所以现在对 channel 的观察
-			// 是 channel 没有关闭，则隐含了之前观察到的 channel 也没有关闭。
-			// 所以此时表现为我们观察到的 channel 是未就绪的（即不能接收数据）
-			return 
-		}
-		// channel 已经被不可逆的关闭了，重新检查 channel 是否包含可能发生在
-		// 前面 empty 和 closed 检查之后的任何需要接收的数据。当这种情况的 send 发生时，
-		// 还要求顺序一致性
-		//
-		// 这里是对从一个已经关闭的 channel 上接收数据的一种优化。
-		if empty(c) {
-			// channel 被不可逆的关闭且缓存中没有数据了
-			if ep != nil {
-				typedmemclr(c.elemtype, ep)
-			}
-			return true, false
-		}
+	// 此处的 c.closed 必须在条件判断之后进行验证，
+	// 因为指令重排后，如果先判断 c.closed，得出 channel 未关闭，无法判断失败条件中
+	// channel 是已关闭还是未关闭（从而需要 atomic 操作）
+	if !block && (c.dataqsiz == 0 && c.sendq.first == nil ||
+		c.dataqsiz > 0 && atomic.Loaduint(&c.qcount) == 0) &&
+		atomic.Load(&c.closed) == 0 {
+		return
 	}
 
 	(...)
 
 	lock(&c.lock)
 
-    // 1. channel 已经 close，且 channel 中没有数据，则直接返回
+	// 1. channel 已经 close，且 channel 中没有数据，则直接返回
 	if c.closed != 0 && c.qcount == 0 {
 		(...)
 		unlock(&c.lock)
@@ -428,15 +411,6 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	mysg.c = nil
 	releaseSudog(mysg)
 	return true, !closed
-}
-// empty 判断从一个 channel 接收数据时是否会发生阻塞
-// 它使用了一个可变状态的原子读。
-func empty(c *hchan) bool {
-	// c.dataqsiz 是不可变的
-	if c.dataqsiz == 0 {
-		return atomic.Loadp(unsafe.Pointer(&c.sendq.first)) == nil
-	}
-	return atomic.Loaduint(&c.qcount) == 0
 }
 ```
 
@@ -861,27 +835,14 @@ func selectnbsend(c *hchan, elem unsafe.Pointer) (selected bool) {
 
 我们现在来关注 `chansend` 中当 block 为 `false` 的情况：
 
-TODO: 这里有一个引入的 Bug，官方已经撤销这次更改 https://github.com/golang/go/issues/36714
-
 ```go
-// full 判断向一个 Channel 发送数据时是否会发生阻塞
-func full(c *hchan) bool {
-	// c.dataqsiz 在 Channel 被创建后是不可变的
-	// 因此任何时间的读取操作都是安全的
-	if c.dataqsiz == 0 {
-		// 假设指针的读为 relaxed-atomic
-		return c.recvq.first == nil
-	}
-	// 假设 uint 的读为 relaxed-atomic
-	return c.qcount == c.dataqsiz
-}
-
 func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 
 	(...)
 
 	// 快速路径: 检查不需要加锁时失败的非阻塞操作
-	if !block && c.closed == 0 && full(c) {
+	if !block && c.closed == 0 && ((c.dataqsiz == 0 && c.recvq.first == nil) ||
+		(c.dataqsiz > 0 && c.qcount == c.dataqsiz)) {
 		return false
 	}
 

@@ -163,20 +163,6 @@ func chanbuf(c *hchan, i uint) unsafe.Pointer {
 	return add(c.buf, uintptr(i)*uintptr(c.elemsize))
 }
 
-// full 判断向一个 channel 发送消息时是否会发生阻塞（即 channel 满）
-// 它使用了一个可变状态的单字读（single word-sized read），所以尽管结果立刻返回
-// true，正确的结果可能会在调用函数后发生改变。
-func full(c *hchan) bool {
-	// c.dataqsiz 在 channel 被创建后是不可变的
-	// 因此任何时间的读取操作都是安全的
-	if c.dataqsiz == 0 {
-		// 假设指针的读为 relaxed-atomic
-		return c.recvq.first == nil
-	}
-	// 假设 uint 的读为 relaxed-atomic
-	return c.qcount == c.dataqsiz
-}
-
 // entry point for c <- x from compiled code
 //go:nosplit
 func chansend1(c *hchan, elem unsafe.Pointer) {
@@ -215,8 +201,10 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 	//
 	// 注意到 channel 不可能从关闭转换为未关闭状态，因此这里的失败条件为：
 	// buffer 为空（或没有）时 c.recvq.first 为空，或 buffer 已满
-	// 当 c.closed 发生重排在条件之后被读取时，其实已经隐含了上一个条件检查中 channel 未被关闭。
-	if !block && c.closed == 0 && full(c) {
+	// 当 c.closed 发生重排在条件之后被读取时，
+	// 其实已经隐含了上一个条件检查中 channel 未被关闭。
+	if !block && c.closed == 0 && ((c.dataqsiz == 0 && c.recvq.first == nil) ||
+		(c.dataqsiz > 0 && c.qcount == c.dataqsiz)) {
 		return false
 	}
 
@@ -455,16 +443,6 @@ func closechan(c *hchan) {
 	}
 }
 
-// empty 报告从一个 channel 中读是否会发生阻塞（即 channel 为空）
-// 它使用了一个可变状态的原子读。
-func empty(c *hchan) bool {
-	// c.dataqsiz 是不可变的
-	if c.dataqsiz == 0 {
-		return atomic.Loadp(unsafe.Pointer(&c.sendq.first)) == nil
-	}
-	return atomic.Loaduint(&c.qcount) == 0
-}
-
 // entry points for <- c from compiled code
 //go:nosplit
 func chanrecv1(c *hchan, elem unsafe.Pointer) {
@@ -503,42 +481,13 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	//
 	// 注意到 channel 不能由已关闭转换为未关闭，则
 	// 失败的条件是：1. 无 buf 时发送队列为空 2. 有 buf 时，buf 为空
-	// 此处的 c.closed 必须在条件判断之后进行验证（从而需要 atomic 操作），因为
-	// 如果指令重排后，如果先判断 c.closed，得出 channel 未关闭，无法判断失败条件中
-	// channel 是已关闭还是未关闭，从而得到错误的返回值（原本为 true, false，错误的返回了 false, false）
-	if !block && empty(c) {
-		// After observing that the channel is not ready for receiving, we observe whether the
-		// channel is closed.
-		//
-		// Reordering of these checks could lead to incorrect behavior when racing with a close.
-		// For example, if the channel was open and not empty, was closed, and then drained,
-		// reordered reads could incorrectly indicate "open and empty". To prevent reordering,
-		// we use atomic loads for both checks, and rely on emptying and closing to happen in
-		// separate critical sections under the same lock.  This assumption fails when closing
-		// an unbuffered channel with a blocked send, but that is an error condition anyway.
-		if atomic.Load(&c.closed) == 0 {
-			// Because a channel cannot be reopened, the later observation of the channel
-			// being not closed implies that it was also not closed at the moment of the
-			// first observation. We behave as if we observed the channel at that moment
-			// and report that the receive cannot proceed.
-			// 因为一个 channel 关闭后不能被重新打开，所以现在对 channel 的观察
-			// 是 channel 没有关闭，则隐含了之前的 channel 也没有关闭。
-			//因此此时表现为我们观察到那个状态的 channel 为空，且不能继续接受数据
-			return
-		}
-		// The channel is irreversibly closed. Re-check whether the channel has any pending data
-		// to receive, which could have arrived between the empty and closed checks above.
-		// Sequential consistency is also required here, when racing with such a send.
-		// channel 已经被不可逆的关闭了，重新检查 channel 是否包含可能发生在
-		// 前面 empty 和 closed 检查之后的任何需要接受的数据。当这种情况的 send 发生时，
-		// 还要求顺序一致性
-		if empty(c) {
-			// channel 被不可逆的关闭且清空了
-			if ep != nil {
-				typedmemclr(c.elemtype, ep)
-			}
-			return true, false
-		}
+	// 此处的 c.closed 必须在条件判断之后进行验证，
+	// 因为指令重排后，如果先判断 c.closed，得出 channel 未关闭，无法判断失败条件中
+	// channel 是已关闭还是未关闭（从而需要 atomic 操作）
+	if !block && (c.dataqsiz == 0 && c.sendq.first == nil ||
+		c.dataqsiz > 0 && atomic.Loaduint(&c.qcount) == 0) &&
+		atomic.Load(&c.closed) == 0 {
+		return
 	}
 
 	var t0 int64
