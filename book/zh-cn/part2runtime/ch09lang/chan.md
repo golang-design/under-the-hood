@@ -45,15 +45,15 @@ type waitq struct { // 等待队列 sudog 双向队列
 }
 ```
 
-其中 recvq 和 sendq 分别是 sudog 的一个链式队列，
-其元素是一个包含当前包含队 goroutine 及其要在 channel 中发送的数据的一个封装，
+其中 `recvq` 和 `sendq` 分别是 `sudog` 的一个链式队列，
+其元素是一个包含当前包含队 Goroutine 及其要在 Channel 中发送的数据的一个封装，
 如图所示。
 
 ![](./assets/../../../../assets/chan.png)
 
 > 更多关于 sudog 的细节，请参考 [6.8 运行时同步原语](../../part2runtime/ch06sched/sync.md)。
 
-### channel 的创建
+### Channel 的创建
 
 Channel 的创建语句由编译器完成如下翻译工作：
 
@@ -148,7 +148,7 @@ func chansend1(c *hchan, elem unsafe.Pointer) {
 ```go
 func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
 	// 当向 nil channel 发送数据时，会调用 gopark
-	// 而 gopark 会将当前的 goroutine 休眠，从而发生死锁崩溃
+	// 而 gopark 会将当前的 Goroutine 休眠，从而发生死锁崩溃
 	if c == nil {
 		if !block {
 			return false
@@ -208,7 +208,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
 }
 ```
 
-到目前位置，代码中考虑了当 channel 上有接收方等待，可以直接将数据发送走，并返回（情况 1）；或没有接收方
+到目前位置，代码中考虑了当 Channel 上有接收方等待，可以直接将数据发送走，并返回（情况 1）；或没有接收方
 但缓存中还有剩余空间来存放没有读取的数据（情况 2）。对于直接发送数据的情况，由 `send` 调用完成：
 
 ```go
@@ -222,8 +222,8 @@ func send(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func()) {
 	unlockf() // unlock(&c.lock)
 	gp.param = unsafe.Pointer(sg)
 	(...)
-	// 复始一个 goroutine，放入调度队列等待被后续调度
-	goready(gp) // 将 gp 作为下一个立即被执行的 goroutine
+	// 复始一个 Goroutine，放入调度队列等待被后续调度
+	goready(gp) // 将 gp 作为下一个立即被执行的 Goroutine
 }
 func sendDirect(t *_type, sg *sudog, src unsafe.Pointer) {
 	dst := sg.elem
@@ -232,16 +232,16 @@ func sendDirect(t *_type, sg *sudog, src unsafe.Pointer) {
 }
 ```
 
-`send` 操作其实是隐含了有接收方阻塞在 channel 上，换句话说有接收方已经被暂止，
+`send` 操作其实是隐含了有接收方阻塞在 Channel 上，换句话说有接收方已经被暂止，
 当我们发送完数据后，应该让该接收方就绪（让调度器继续开始调度接收方）。
 
-这个 `send` 操作其实是一种优化。原因在于，已经处于等待状态的 goroutine 是没有被执行的，
+这个 `send` 操作其实是一种优化。原因在于，已经处于等待状态的 Goroutine 是没有被执行的，
 因此用户态代码不会与当前所发生数据发生任何竞争。我们也更没有必要冗余的将数据写入到缓存，
 再让接收方从缓存中进行读取。因此我们可以看到， `sendDirect` 的调用，
 本质上是将数据直接写入接收方的执行栈。
 
 最后我们来看第三种情况，如果既找不到接收方，`buf` 也已经存满，
-这时我们就应该阻塞当前的 goroutine 了：
+这时我们就应该阻塞当前的 Goroutine 了：
 
 ```go
 func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
@@ -259,7 +259,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
 	gp.waiting = nil
 	gp.activeStackChans = false
 	if gp.param == nil {
-		if c.closed == 0 { // 正常唤醒状态，goroutine 应该包含需要传递的参数，但如果没有唤醒时的参数，且 channel 没有被关闭，则为虚假唤醒
+		if c.closed == 0 { // 正常唤醒状态，Goroutine 应该包含需要传递的参数，但如果没有唤醒时的参数，且 channel 没有被关闭，则为虚假唤醒
 			throw("chansend: spurious wakeup")
 		}
 		panic(plainError("send on closed channel"))
@@ -322,15 +322,15 @@ chanrecv 的具体实现如下，由于我们已经仔细分析过发送过程�
 
 其中第二个步骤包含三个子步骤：
 
-1. 如果 channel 已被关闭，且 channel 没有数据，立刻返回
+1. 如果 Channel 已被关闭，且 Channel 没有数据，立刻返回
 2. 如果存在正在阻塞的发送方，说明缓存已满，从缓存队头取一个数据，再复始一个阻塞的发送方
 3. 否则，检查缓存，如果缓存中仍有数据，则从缓存中读取，读取过程会将队列中的数据拷贝一份到接收方的执行栈中
-4. 没有能接受的数据，阻塞当前的接收方 goroutine
+4. 没有能接受的数据，阻塞当前的接收方 Goroutine
 
 ```go
 func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool) {
 	(...)
-	// nil channel，同 send，会导致两个 goroutine 的死锁
+	// nil channel，同 send，会导致两个 Goroutine 的死锁
 	if c == nil {
 		if !block {
 			return
@@ -340,6 +340,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	}
 
 	// 快速路径: 在不需要锁的情况下检查失败的非阻塞操作
+	// TODO: 这里的代码有 Bug https://github.com/golang/go/issues/36714
 	//
 	// 注意到 channel 不能由已关闭转换为未关闭，则
 	// 失败的条件是：1. 无 buf 时发送队列为空 2. 有 buf 时，buf 为空
@@ -411,7 +412,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 		return false, false
 	}
 
-	// 4. 没有数据可以接收，阻塞当前 goroutine
+	// 4. 没有数据可以接收，阻塞当前 Goroutine
 	gp := getg()
 	mysg := acquireSudog()
 	(...)
@@ -439,7 +440,7 @@ func empty(c *hchan) bool {
 }
 ```
 
-接收数据同样包含直接往接收方的执行栈中拷贝要发送的数据，但这种情况当且仅当缓存大小为0时（即无缓冲 channel）。
+接收数据同样包含直接往接收方的执行栈中拷贝要发送的数据，但这种情况当且仅当缓存大小为0时（即无缓冲 Channel）。
 
 ```go
 func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
@@ -474,19 +475,19 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 }
 ```
 
-到目前为止我们终于明白了为什么无缓冲 channel 而言 `v <- ch` happens before `ch <- v` 了，
-因为**无缓冲 channel 的接收方会先从发送方栈拷贝数据后，发送方才会被放回调度队列中，等待重新调度**。
+到目前为止我们终于明白了为什么无缓冲 Channel 而言 `v <- ch` happens before `ch <- v` 了，
+因为**无缓冲 Channel 的接收方会先从发送方栈拷贝数据后，发送方才会被放回调度队列中，等待重新调度**。
 
 ### Channel 的死亡
 
-关闭 channel 主要是完成以下翻译工作：
+关闭 Channel 主要是完成以下翻译工作：
 
 ```go
 close(ch) => closechan(ch)
 ```
 
-具体的实现中，首先对 channel 上锁，而后依次将阻塞在 channel 的 g 添加到一个
-gList 中，当所有的 g 均从 channel 上移除时，可释放锁，并唤醒 gList 中的所有接收方和发送方：
+具体的实现中，首先对 Channel 上锁，而后依次将阻塞在 Channel 的 g 添加到一个
+gList 中，当所有的 g 均从 Channel 上移除时，可释放锁，并唤醒 gList 中的所有接收方和发送方：
 
 ```go
 func closechan(c *hchan) {
@@ -547,14 +548,14 @@ func closechan(c *hchan) {
 }
 ```
 
-当 channel 关闭时，我们必须让所有阻塞的接收方重新被调度，让所有的发送方也重新被调度，这时候
-的实现先将 goroutine 统一添加到一个列表中（需要锁），然后逐个地进行复始（不需要锁）。
+当 Channel 关闭时，我们必须让所有阻塞的接收方重新被调度，让所有的发送方也重新被调度，这时候
+的实现先将 Goroutine 统一添加到一个列表中（需要锁），然后逐个地进行复始（不需要锁）。
 
 ## Select 语句的本质
 
 ### 分支的随机化
 
-select 本身会被编译为 `selectgo` 调用。这与普通的多个 if 分支不同。
+Select 本身会被编译为 `selectgo` 调用。这与普通的多个 if 分支不同。
 `selectgo` 则用于随机化每条分支的执行顺序，普通多个 if 分支的执行顺序始终是一致的。
 
 ```go
@@ -828,7 +829,7 @@ sclose:
 
 ### 发送数据的分支
 
-select 的诸多用法其实本质上仍然是 channel 操作，编译器会完成如下翻译工作：
+Select 的诸多用法其实本质上仍然是 Channel 操作，编译器会完成如下翻译工作：
 
 ```go
 select {
@@ -855,10 +856,12 @@ func selectnbsend(c *hchan, elem unsafe.Pointer) (selected bool) {
 }
 ```
 
-注意，这时 chansend 的第三个参数为 `false`，这与前面的普通 channel 发送操作不同，
-说明这时 select 的操作是非阻塞的。
+注意，这时 `chansend` 的第三个参数为 `false`，这与前面的普通 Channel 发送操作不同，
+说明这时 Select 的操作是非阻塞的。
 
-我们现在来关注 chansend 中当 block 为 `false` 的情况：
+我们现在来关注 `chansend` 中当 block 为 `false` 的情况：
+
+TODO: 这里有一个引入的 Bug，官方已经撤销这次更改 https://github.com/golang/go/issues/36714
 
 ```go
 // full 判断向一个 Channel 发送数据时是否会发生阻塞
@@ -968,7 +971,7 @@ main.main()
 
 似乎与源码中发生的行为并不一致，因为按照之前的分析，当锁被解除后，并不会出现任何 panic。
 这是为什么呢？事实上，编译器会特殊处理
-**当 select 语句只有一个分支的情况，即 `select` 关键字在只有一个分支时，没有被翻译成 `selectgo`。**
+**当 Select 语句只有一个分支的情况，即 `select` 关键字在只有一个分支时，没有被翻译成 `selectgo`。**
 只有一个分支的情况下，`select` 与 `if` 是没有区别的，这种优化消除了只有一个分支情况下调用 `selectgo` 的性能开销：
 
 ```go
@@ -996,7 +999,7 @@ func walkselectcases(cases *Nodes) []*Node {
 }
 ```
 
-根据编译器的代码，我们甚至可以看到没有分支的 select 会被编译成 `block` 的调用：
+根据编译器的代码，我们甚至可以看到没有分支的 Select 会被编译成 `block` 的调用：
 
 ```go
 func block() {
@@ -1004,7 +1007,7 @@ func block() {
 }
 ```
 
-即让整个 goroutine 暂止。
+即让整个 Goroutine 暂止。
 
 ### 接收数据的分支
 
@@ -1060,41 +1063,49 @@ func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool
 }
 ```
 
-## Channel 的 lock-free 实现
+## Channel 的无锁实现
 
-早在 2014 年时，Dmitry Vyukov 就已经提出实现 lock-free 版本的 channel [Vyukov, 2014a] [Vyukov, 2014b]，但这提案至今未被接受，其未被接收这一现实可以总结为以下三个原因。
+早在 2014 年时，Dmitry Vyukov 就已经提出实现无锁版本的 Channel [Vyukov, 2014a] [Vyukov, 2014b]，
+但这提案虽然早年已经实现，但至今未被接受，其未被接收这一现实可以总结为以下三个原因。
 
-早年的 channel 实现基于 CAS 的重试机制，换句话说：多个阻塞在同一 channel 的 goroutine 被唤醒时，
-需要重新持有锁，这时谁抢到锁谁就能拿到数据。所以这些 goroutine 被唤醒的顺序不是 FIFO，而是随机的，
-最坏情况下可能存在一个 goroutine 始终不会接受到数据。
+早年的 Channel 实现基于比较交换的重试机制，换句话说：多个阻塞在同一 Channel 的 Goroutine 被唤醒时，
+需要重新持有锁，这时谁抢到锁谁就能拿到数据。所以这些 Goroutine 被唤醒的顺序不是 FIFO，而是随机的，
+最坏情况下可能存在一个 Goroutine 始终不会接受到数据。
 
-后来 Russ Cox 希望 [Cox, 2015] 阻塞的 goroutine 能够按照 FIFO 的顺序被唤醒（虽然在语言层面上未定义多个 goroutine 的唤醒顺序），保证得到数据的公平性，参与讨论的人中也表示支持。
-但这一决定基本上抹杀了无锁 channel 的实现机制 [Randall, 2015a]。
-这是目前未使用 lock-free 实现 channel 的一个最主要的原因。
+后来 Russ Cox 希望 [Cox, 2015] 阻塞的 Goroutine 能够按照 FIFO 的顺序被唤醒
+（虽然在语言层面上未定义多个 Goroutine 的唤醒顺序），保证得到数据的公平性，参与讨论的人中也表示支持这一提案。
+但这一决定基本上抹杀了无锁 Channel 的实现机制 [Randall, 2015a]。
+这是目前未使用无锁实现 Channel 的一个最主要的原因。
 
-那在这个决定之前，lock-free channel 早就已经实现了，为什么当时没有接受使用 lock-free 实现 channel 呢？
+那在这个决定之前，无锁 Channel 早就已经实现了，为什么当时没有接受使用无锁版本的 Channel 呢？
 
-第一个原因是提出的 lock-free channel 并非 wait-free，是否能有效提高 channel 在大规模应用的性能并没有强有力的证据；与此同时，运行时调度器不是 NUMA-aware 的，在核心较多时，
-一个外部实现的 lock-free channel [OneOfOne, 2016] 的性能测试结果 [Gjengset, 2016] 表明：
-lock-free 版本甚至比 futex 版本还要慢。
-在后续对 channel 性能优化的跟进中虽然没有采用 lock-free 实现，
+第一个原因是提出的无锁 Channel 并非无等待算法，是否能有效提高 Channel 在大规模应用的性能并没有大规模测试的强有力的证据，
+支撑性能表现的只有 Dmitry Vyukov 提交的性能测试；
+与此同时，运行时调度器不是 NUMA-aware 的实现，在 CPU 核心与调度器 P 数量较多时，
+一个社区实现的无锁 Channel [OneOfOne, 2016] 的性能测试结果 [Gjengset, 2016] 表明：
+无锁版本的 Channel 甚至比基于 futex 加锁版本的 Channel 还要慢。
+在后续对 Channel 性能优化的跟进中虽然没有采用无锁实现，
 但仍然跟进了两个小成本的优化 [Vyukov, 2014d]：增加不需要锁时的快速路径和减少互斥锁的粒度。
 
-第二个原因导致没有被接受的原因则在于：lockfree 版本的 channel 可维护性大打折扣。
-这里我们简单提一个由于 lock-free 实现导致的维护性大打折扣的教训 [Randall, 2015b]。
-在早年简化 channel 实现的过程中，由于没有考虑到发送数据过程中，
+第二个原因导致没有被接受的原因则在于：无锁版本的 Channel 可维护性大打折扣。
+这里我们简单提一个由于无锁实现导致的维护性大打折扣的教训 [Randall, 2015b]。
+在早年简化 Channel 实现的过程中，由于没有考虑到发送数据过程中，
 对要发送数据的指针进行读取，将会与调度器对执行栈的伸缩发生竞争。这是因为
-直接读取 channel 的数据分为两个过程：1. 读取发送方的值的指针 2. 拷贝到要接收的位置。
+直接读取 Channel 的数据分为两个过程：1. 读取发送方的值的指针 2. 拷贝到要接收的位置。
 然而在 1 和 2 这两个步骤之间，发送方的执行栈可能发生收缩，进而指针失效，成为竞争的源头。
 
-虽然后来有人提出使用 lock-free 编程的形式化验证工具 spin [Bell Labs, 1980] 
+虽然后来有人提出使用无锁编程的形式化验证工具 spin [Bell Labs, 1980] 
 来让调度器代码与形式验证的模型进行同步，但显然这需要更多的工作量，并没有人采取任何行动。
 
 ## 小结
 
-channel 的实现是一个典型的环形队列加上 `mutex` 锁的实现，与 channel 同步出现的 select 更像是一个语法糖，其本质仍然是一个 `chansend` 和 `chanrecv` 的两个通用实现。但为了支持 select 在不同分支上的非阻塞操作，`selectgo` 完成了这一需求。
+Channel 的实现是一个典型的环形队列加上 `mutex` 锁的实现，
+与 Channel 同步出现的 Select 更像是一个语法糖，
+其本质仍然是一个 `chansend` 和 `chanrecv` 的两个通用实现。
+但为了支持 Select 在不同分支上的非阻塞操作，`selectgo` 完成了这一需求。
 
-考虑到整个 channel 操作带锁的成本加高，官方也曾考虑过使用无锁 channel 的设计，但由于年代久远，该改进目前处于搁置状态 [Vyukov, 2014b]。
+考虑到整个 Channel 操作带锁的成本较高，官方也曾考虑过使用无锁 Channel 的设计，
+但由于年代久远，该改进仍处于搁置状态 [Vyukov, 2014b]。
 
 ## 进一步阅读的参考文献
 
