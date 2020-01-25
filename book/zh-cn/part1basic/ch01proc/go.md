@@ -51,8 +51,7 @@ Go 语言本身只有 25 个关键字，涵盖了包管理、常量与变量、�
 ### 函数
 
 ```go
-func foo(argc int, argv ) float {
-
+func foo(argc int, argv []string) float64 {
 }
 ```
 
@@ -65,11 +64,11 @@ Go 语言以包为代码组织的最小单位，不允许产生包与包之间�
 ```go
 package foo
 import (
-    "go/types"
-    "golang.org/x/syscall"
-    "errors"
-    xerrors "golang.org/x/errors"
-    _ "os/signal"
+	"go/types"
+	"golang.org/x/syscall"
+	"errors"
+	xerrors "golang.org/x/errors"
+	_ "os/signal"
 )
 ```
 
@@ -113,8 +112,8 @@ go chan select
 ```go
 const (
 	true  = 0 == 0 
-    false = 0 != 0
-    iota  = 0
+	false = 0 != 0
+	iota  = 0
 )
 var nil T
 ```
@@ -154,12 +153,14 @@ Channel 主要有两种形式：
 其中 `T` 为 Channel 传递数据的类型，`n` 为缓存的大小，这两种 Channel 的读写操作都非常简单：
 
 ```go
+// 创建有缓存 Channel
 ch := make(chan interface{}, 10)
+// 创建无缓存 Channel
 ch := make(chan struct{})
-// 读
-v := <- ch
-// 写
+// 发送
 ch <- v
+// 接受
+v := <- ch
 ```
 
 他们之间的本质区别在于其内存模型的差异，这种内存模型在 Channel 上体现为：
@@ -177,7 +178,13 @@ ch <- v
 因此从通道接受数据 `v <- ch` 发生在向通道发送数据 `ch <- v` 之前。
 我们随后再根据实际实现来深入理解这一内存模型。
 
-Go 语言还内建了 `close()` 函数来关闭一个 Channel，但从语言规范中我们知道：
+Go 语言还内建了 `close()` 函数来关闭一个 Channel：
+
+```go
+close(ch)
+```
+
+但语言规范规定了一些要求：
 
 - 关闭一个已关闭的 Channel 会导致 panic
 - 向已经关闭的 Channel 发送数据会导致 panic
@@ -186,7 +193,7 @@ Go 语言还内建了 `close()` 函数来关闭一个 Channel，但从语言规�
   ```go
   v, ok := <- ch
   if !ok {
-      ... // Channel 已经关闭
+  	... // Channel 已经关闭
   }
   ```
 
@@ -195,9 +202,9 @@ Select 语句伴随 Channel 一起出现，常见的用法是：
 ```go
 select {
 case ch <- v:
-    ...
+	...
 default:
-    ...
+	...
 }
 ```
 
@@ -206,13 +213,38 @@ default:
 ```go
 select {
 case v := <- ch:
-    ...
+	...
 default:
-    ...
+	...
 }
 ```
 
 用于处理多个不同类型的 `v` 的发送与接收，并提供默认处理方式。
+
+## 错误处理
+
+Go 语言的错误处理被设计为值类型，任何实现了 `error` 接口的类型均可以以 `error` 的类型返回：
+
+```go
+type CustomErr struct {
+	err error
+}
+func (c CustomErr) Error() string {
+	return fmt.Sprintf("err: %v", c.err)
+}
+```
+
+上面的 `CustomErr` 类型实现了 `Error()` 方法，于是可以以 `error` 类型返回给上层调用：
+
+```go
+func foo() error {
+	return CustomErr{errors.New("this is an error")}
+}
+func main() {
+	err := foo()
+	if err != nil { panic(err) }
+}
+```
 
 ## 许可
 
