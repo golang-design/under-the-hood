@@ -8,12 +8,13 @@ title: "第 9 章 语言核心"
 - [9.1 for 语句](./for.md)
 - [9.2 defer 语句](./defer.md)
 - [9.3 panic 与 recover 语句](./panic.md)
-- [9.4 channel 与 select](./chan.md)
+- [9.4 Channel 与 Select](./chan.md)
 - [9.5 运行时类型系统](./type.md)
 - [9.6 数组、切片与字符串](./slice.md)
 - [9.7 散列表](./map.md)
 - [9.8 接口](./interface.md)
 
+> _性能提升不会凭空出现，它总是伴随着代码复杂性的提升。_
 > _The performance improvement does not materialize from the air, it 
 comes with code complexity increase._
 >
