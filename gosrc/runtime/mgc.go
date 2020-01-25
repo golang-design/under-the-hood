@@ -1207,7 +1207,6 @@ func gcStart(trigger gcTrigger) {
 	}
 
 	// 好的，我们确实要进行 GC，停止所有其他人！
-	semacquire(&gcsema)
 	semacquire(&worldsema)
 
 	if trace.enabled {
@@ -1299,12 +1298,6 @@ func gcStart(trigger gcTrigger) {
 		work.tMark = now
 	})
 
-	// Release the world sema before Gosched() in STW mode
-	// because we will need to reacquire it later but before
-	// this goroutine becomes runnable again, and we could
-	// self-deadlock otherwise.
-	semrelease(&worldsema)
-
 	// 在 STW 模式下，我们可以阻止即时 systemstack 返回，所以这里不要做任何重要的事情。
 	// 确保我们阻止而不是返回用户代码。
 	if mode != gcBackgroundMode {
@@ -1373,10 +1366,6 @@ top:
 		return
 	}
 
-	// forEachP needs worldsema to execute, and we'll need it to
-	// stop the world later, so acquire worldsema now.
-	semacquire(&worldsema)
-
 	// Flush all local buffers and collect flushedWork flags.
 	gcMarkDoneFlushed = 0
 	systemstack(func() {
@@ -1437,7 +1426,6 @@ top:
 		// work to do. Keep going. It's possible the
 		// transition condition became true again during the
 		// ragged barrier, so re-check it.
-		semrelease(&worldsema)
 		goto top
 	}
 
@@ -1514,7 +1502,6 @@ top:
 				now := startTheWorldWithSema(true)
 				work.pauseNS += now - work.pauseStart
 			})
-			semrelease(&worldsema)
 			goto top
 		}
 	}
