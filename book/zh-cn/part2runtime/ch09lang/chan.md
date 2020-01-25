@@ -1,83 +1,31 @@
 ---
 weight: 2404
-title: "9.4 channel 与 select"
+title: "9.4 Channel 与 Select"
 ---
 
-# 9.4 channel 与 select
+# 9.4 Channel 与 Select
 
 [TOC]
 
 > 本节内容提供一个线上演讲：[YouTube 在线](https://www.youtube.com/watch?v=d7fFCGGn0Wc)，[Google Slides 讲稿](https://docs.google.com/presentation/d/18_9LcMc8u93aITZ6DqeUfRvOcHQYj2gwxhskf0XPX2U/edit?usp=sharing)。
 
-Go 语言受到 CSP 理论的启发，在语言设计中，goroutine 就是 CSP 理论中的并发实体，
-而 channel 则对应 CSP 中的 channel。
-其中的区别在于 CSP 理论中通信是隐式的，而 Go 的通信则是显式的由程序员进行控制，
-channel 是 Go 提供的除了 `sync` 这种基于共享内存的同步原语之外的，基于消息传递的同步原语。
+Go 语言中 Channel 与 Select 语句受到 1978 年 CSP 原始理论的启发。
+在语言设计中，Goroutine 就是 CSP 理论中的并发实体，
+而 Channel 则对应 CSP 中输入输出指令的消息信道，Select 语句则是 CSP 中守卫和选择指令的组合。
+他们的区别在于 CSP 理论中通信是隐式的，而 Go 的通信则是显式的由程序员进行控制；
+CSP 理论中守卫指令只充当 Select 语句的一个分支，多个分支的 Select 语句由选择指令进行实现。
 
-## channel 的本质
+Channel 与 Select 是 Go 语言中提供的语言级的、基于消息传递的同步原语。
 
-### 基本使用
+## Channel 的本质
 
-channel 主要有两种：**有缓存 channel（buffered channel**，
-使用 `make(chan interface{}, n)` 创建）和**无缓存 channel（unbuffered channel**，使用 `make(chan interface{})` 创建）。这两种 channel 的读写操作都非常简单：
+### Channel 底层结构
 
-```go
-ch := make(chan interface{}, 10)
-// 读
-v := <- ch
-// 写
-ch <- v
-```
-
-他们之间的本质区别在于其内存模型的差异，在垃圾回收器中我们讨论过了这些 Go 内存模型的差异：
-
-- 有缓存 channel: `ch <- v` < `v <- ch`
-- 有缓存 channel: `close(ch)` < `v <- ch & v == isZero(v)`
-- 无缓存 channel: `ch <- v` > `v <- ch`
-- 无缓存 channel: `len(ch) == C` => `从 channel 中收到第 k 个值` < `k+C 个值得发送完成`
-
-直观上我们很好理解他们之间的差异，
-对于有缓存 channel 而言，内部有一个缓冲队列，数据会优先进入缓冲队列，而后被消费，即 `ch <- v` < `v <- ch`；
-对于无缓存 channel 而言，内部没有缓冲队列，`v <- ch` 会一直阻塞到 `ch <- v` 执行完毕，因此 `ch <- v` > `v <- ch`
-
-> 注意，`<` 表示 happens before; `>` 表示 happens after
-
-Go 内建了 `close()` 函数来关闭一个 channel，但：
-
-- 关闭一个已关闭的 channel 会导致 panic
-- 向关闭的 channel 发送数据会导致 panic
-- 向关闭的 channel 读取数据不会导致 panic，但读取的值为 channel 缓存数据的零值，可以通过第二个返回值来检查 channel 是否关闭
-
-select 语句伴随 channel 一起出现，常见的用法是：
-
-```go
-select {
-case ch <- v:
-    // ...
-default:
-    // ...
-}
-```
-
-或者：
-
-```go
-select {
-case v := <- ch:
-    // ...
-default:
-    // ...
-}
-```
-
-用于处理多个不同类型的 `v` 的发送与接收，并提供默认处理方式。
-
-### channel 底层结构
-
-实现 channel 的结构并不神秘，本质上就是一个 `mutex` 锁加上一个环状缓存、
+实现 Channel 的结构并不神秘，本质上就是一个 `mutex` 锁加上一个环状缓存、
 一个发送方队列和一个接收方队列：
 
 ```go
+// src/runtime/chan.go
 type hchan struct {
 	qcount   uint           // 队列中的所有数据数
 	dataqsiz uint           // 环形队列的大小
@@ -107,23 +55,27 @@ type waitq struct { // 等待队列 sudog 双向队列
 
 ### channel 的创建
 
-channel 的创建由编译器完成翻译工作：
+Channel 的创建语句由编译器完成如下翻译工作：
 
 ```go
 make(chan type, n) => makechan(type, n)
 ```
 
-而具体的 `makechan` 实现的本质是根据需要创建的元素大小，对 `mallocgc` 进行封装，
-因此，**channel 总是在堆上进行分配，它们会被垃圾回收器进行回收**，
-这也是为什么 channel 不一定总是需要调用 `close(ch)` 进行显式地关闭。
+将一个 `make` 语句转换为 `makechan` 调用。
+而具体的 `makechan` 实现的本质是根据需要创建的元素大小，
+对 `mallocgc` 进行封装，
+因此，Channel 总是在堆上进行分配，它们会被垃圾回收器进行回收，
+这也是为什么 Channel 不一定总是需要调用 `close(ch)` 进行显式地关闭。
 
 ```go
+// src/runtime/chan.go
+
 // 将 hchan 的大小对齐
 const hchanSize = unsafe.Sizeof(hchan{}) + uintptr(-int(unsafe.Sizeof(hchan{}))&7)
 
 func makechan(t *chantype, size int) *hchan {
 	elem := t.elem
-	(...)
+	...
 
 	// 检查确认 channel 的容量不会溢出
 	mem, overflow := math.MulUintptr(elem.size, uintptr(size))
@@ -131,10 +83,6 @@ func makechan(t *chantype, size int) *hchan {
 		panic("makechan: size out of range")
 	}
 
-	// TODO: 以下文字描述不好理解
-	// hchan 在当元素存储在 buf 且不包含指针时，不则不会包含需要被 GC 进行处理的指针，
-	// buf 指向了相同的分配区，elemtype 则是恒定的。
-	// SudoG 则被他们拥有的线程索引，因此他们无法被搜集。
 	var c *hchan
 	switch {
 	case mem == 0:
@@ -161,10 +109,12 @@ func makechan(t *chantype, size int) *hchan {
 }
 ```
 
-channel 并不严格支持 `int64` 大小的缓冲，当 `make(chan type, n)` 中 n 为 `int64` 类型时，
+Channel 并不严格支持 `int64` 大小的缓冲，当 `make(chan type, n)` 中 n 为 `int64` 类型时，
 运行时的实现仅仅只是将其强转为 `int`，提供了对 `int` 转型是否成功的检查：
 
 ```go
+// src/runtime/chan.go
+
 func makechan64(t *chantype, size int64) *hchan {
 	if int64(int(size)) != size {
 		panic("makechan: size out of range")
@@ -174,9 +124,9 @@ func makechan64(t *chantype, size int64) *hchan {
 }
 ```
 
-所以创建一个 channel 最重要的操作就是创建 `hchan` 以及分配所需的 `buf` 大小的内存空间。
+所以创建一个 Channel 最重要的操作就是创建 `hchan` 以及分配所需的 `buf` 大小的内存空间。
 
-### 向 channel 发送数据
+### 向 Channel 发送数据
 
 发送数据完成的是如下的翻译过程：
 
@@ -193,13 +143,12 @@ func chansend1(c *hchan, elem unsafe.Pointer) {
 }
 ```
 
-下面我们来关注 chansend 的具体实现的第一个部分：
+下面我们来关注 `chansend` 的具体实现的第一个部分：
 
 ```go
 func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
 	// 当向 nil channel 发送数据时，会调用 gopark
-	// 而 gopark 会将当前的 goroutine 休眠 
-	// TODO: gopark 的 unlockf 主要作用并不是用来作为回调唤醒
+	// 而 gopark 会将当前的 goroutine 休眠，从而发生死锁崩溃
 	if c == nil {
 		if !block {
 			return false
@@ -208,21 +157,22 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
 		throw("unreachable")
 	}
 
-	(...)
+	...
 }
 ```
 
-在这个部分中，我们可以看到，如果一个 channel 为零值（比如没有初始化），这时候的发送操作会暂止当前的 goroutine（`gopark`）。
-// TODO: gopark 的 unlockf 主要作用并不是用来作为回调唤醒
+在这个部分中，我们可以看到，如果一个 Channel 为零值（比如没有初始化），这时候的发送操作会暂止当前的 Goroutine（`gopark`）。
+而 gopark 会将当前的 Goroutine 休眠，从而发生死锁崩溃。
 
-现在我们来看一切已经准备就绪，开始对 channel 加锁：
+现在我们来看一切已经准备就绪，开始对 Channel 加锁：
 
 ```go
 func chansend(c *hchan, ep unsafe.Pointer, block bool) bool {
 	(...)
 	lock(&c.lock)
 
-	// 持有锁之前我们已经检查了锁的状态，但这个状态可能在持有锁之前、该检查之后发生变化，
+	// 持有锁之前我们已经检查了锁的状态，
+	// 但这个状态可能在持有锁之前、该检查之后发生变化，
 	// 因此还需要再检查一次 channel 的状态
 	if c.closed != 0 { // 不允许向已经 close 的 channel 发送数据
 		unlock(&c.lock)
@@ -340,7 +290,7 @@ func chanparkcommit(gp *g, chanLock unsafe.Pointer) bool {
 2. 找到是否有空余的缓存，是则存入
 3. 阻塞直到被唤醒
 
-### 从 channel 接收数据
+### 从 Channel 接收数据
 
 接收数据主要是完成以下翻译工作：
 
@@ -527,7 +477,7 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 到目前为止我们终于明白了为什么无缓冲 channel 而言 `v <- ch` happens before `ch <- v` 了，
 因为**无缓冲 channel 的接收方会先从发送方栈拷贝数据后，发送方才会被放回调度队列中，等待重新调度**。
 
-### channel 的死亡
+### Channel 的死亡
 
 关闭 channel 主要是完成以下翻译工作：
 
@@ -600,9 +550,9 @@ func closechan(c *hchan) {
 当 channel 关闭时，我们必须让所有阻塞的接收方重新被调度，让所有的发送方也重新被调度，这时候
 的实现先将 goroutine 统一添加到一个列表中（需要锁），然后逐个地进行复始（不需要锁）。
 
-## select 的本质
+## Select 语句的本质
 
-### 随机化分支
+### 分支的随机化
 
 select 本身会被编译为 `selectgo` 调用。这与普通的多个 if 分支不同。
 `selectgo` 则用于随机化每条分支的执行顺序，普通多个 if 分支的执行顺序始终是一致的。
@@ -911,11 +861,9 @@ func selectnbsend(c *hchan, elem unsafe.Pointer) (selected bool) {
 我们现在来关注 chansend 中当 block 为 `false` 的情况：
 
 ```go
-// full 判断向一个 channel 发送数据时是否会发生阻塞
-// 它使用了一个可变状态的单字读（single word-sized read），所以尽管结果立刻返回
-// true，正确的结果可能会在调用函数后发生改变。
+// full 判断向一个 Channel 发送数据时是否会发生阻塞
 func full(c *hchan) bool {
-	// c.dataqsiz 在 channel 被创建后是不可变的
+	// c.dataqsiz 在 Channel 被创建后是不可变的
 	// 因此任何时间的读取操作都是安全的
 	if c.dataqsiz == 0 {
 		// 假设指针的读为 relaxed-atomic
@@ -942,19 +890,14 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 }
 ```
 
-// TODO: 源码里说的是 c.closed 和 full(c) 的顺序 reorder 也没问题
-这里的快速路径是一个优化，它发生在持有 channel 锁之前，而且这个检查顺序非常重要。
-当 select 语句需要发送数据时，处于非阻塞状态发送数据，如果 channel 处于未初始化状态，
+这里的快速路径是一个优化，它发生在持有 Channel 锁之前。
+这一连串检查不需要加锁有以下原因：
 
-在检查 channel 还未就绪后，在检查 channel 是否关闭。
-每个检查都是一个 单字 的读操作 (首先 c.recvq.first 或者 c.qcount（取决于 channel 的类型）
-因为即使 channel 在两次观察之间被关闭，关闭的 channel 的状态也不可能从已经「就绪可以发送」
-转移到「尚未就绪」。
-这就隐含了当 channel 在「既没有被关闭，也没有 ready for send」之间的瞬间。
-因此表现为那个时候我们观察到 channel 并报告接收数据不能继续进行。换句话说，这段优化对变量的读取顺序不能调整。
+1. Channel 没有被关闭与 Channel 是否满的检查没有因果关系。换句话说，无论 Channel 是否被关闭，都不能得出 Channel 是否已满；Channel 是否满，也与 Channel 是否关闭无关，从而当发生指令重排时，这个检查也不会出错。
+2. 当 Channel 已经被关闭、且缓存已满时，发送操作一定失败。
 
-第二个关于 select 的处理则是在当判断完 channel 是否有 buf 可缓存当前的数据后，如果没有读者阻塞在 channel 上
-则会立即返回失败：
+第二个关于 Select 的处理则是在当判断完 Channel 是否有 `buf` 可缓存当前的数据后，
+如果没有读者阻塞在 Channel 上则会立即返回失败：
 
 ```go
 func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
@@ -981,7 +924,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 }
 ```
 
-因此这也是为什么，我们在没有配合 for 循环使用 select 时，需要对发送失败进行处理，例如：
+因此这也是为什么，我们在没有配合 for 循环使用 Select 时，需要对发送失败进行处理，例如：
 
 ```go
 func main() {
@@ -1000,6 +943,8 @@ func main() {
 如果读者进一步尝试没有 default 的例子：
 
 ```go
+// main.go
+package main
 func main() {
 	ch := make(chan interface{})
 	x := 1
@@ -1021,12 +966,10 @@ goroutine 1 [chan send]:
 main.main()
 ```
 
-// TODO: 这里的因果说的感觉怪怪的，出现 panic 的原因是调度器发现所有的 goroutine 都暂止了
-似乎与源码中发生的行为并不一致，因为按照调用，当锁被解除后，并没有任何 panic。
-这是为什么呢？事实上，通过对程序进行反编译，我们能够观察到，
-**当 select 语句只有一个 case 时，`select` 关键字是没有被翻译成 `selectgo` 的。**
-因为只有一个 `case` 的情况下，`select` 与 `if` 是没有区别的，这也是编译器本身对代码的一个优化，
-消除了这种情况下调用 `selectgo` 的性能开销：
+似乎与源码中发生的行为并不一致，因为按照之前的分析，当锁被解除后，并不会出现任何 panic。
+这是为什么呢？事实上，编译器会特殊处理
+**当 select 语句只有一个分支的情况，即 `select` 关键字在只有一个分支时，没有被翻译成 `selectgo`。**
+只有一个分支的情况下，`select` 与 `if` 是没有区别的，这种优化消除了只有一个分支情况下调用 `selectgo` 的性能开销：
 
 ```go
 // src/cmd/compile/internal/gc/select.go
@@ -1117,7 +1060,7 @@ func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool
 }
 ```
 
-## channel 的 lock-free 实现
+## Channel 的 lock-free 实现
 
 早在 2014 年时，Dmitry Vyukov 就已经提出实现 lock-free 版本的 channel [Vyukov, 2014a] [Vyukov, 2014b]，但这提案至今未被接受，其未被接收这一现实可以总结为以下三个原因。
 
