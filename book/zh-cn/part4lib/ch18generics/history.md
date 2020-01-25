@@ -7,6 +7,9 @@ title: "18.1 泛型的历史及其演化"
 
 [TOC]
 
+TODO: 请不要阅读此小节，内容编排中
+
+
 ## 进一步阅读的参考文献
 
 - [Taylor, 2010] [Type functions](https://go.googlesource.com/proposal/+/master/design/15292/2010-06-type-functions.md)

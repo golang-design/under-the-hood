@@ -10,7 +10,6 @@ title: "第 12 章 依赖管理"
 - [12.3 最小版本选择算法](./minimum.md)
 - [12.4 vgo 与 dep 之争](./fight.md)
 
-
 ## 许可
 
 [Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

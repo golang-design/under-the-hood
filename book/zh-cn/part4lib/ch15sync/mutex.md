@@ -7,7 +7,7 @@ title: "15.5 互斥锁"
 
 [TOC]
 
-TODO:
+TODO: 请不要阅读此小节，内容编排中
 
 ```go
 type Mutex struct {

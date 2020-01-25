@@ -5,9 +5,9 @@ title: "第 9 章 语言核心"
 
 # 第 9 章 语言核心
 
-- [9.1 for 语句](./for.md)
-- [9.2 defer 语句](./defer.md)
-- [9.3 panic 与 recover 语句](./panic.md)
+- [9.1 循环语句](./for.md)
+- [9.2 延迟语句](./defer.md)
+- [9.3 恐慌与恢复语句](./panic.md)
 - [9.4 Channel 与 Select](./chan.md)
 - [9.5 运行时类型系统](./type.md)
 - [9.6 数组、切片与字符串](./slice.md)

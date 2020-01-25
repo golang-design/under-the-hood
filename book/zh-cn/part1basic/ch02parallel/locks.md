@@ -5,6 +5,9 @@ title: "2.7 同步锁"
 
 # 2.7 同步锁
 
+TODO: 请不要阅读此小节，内容编排中
+
+
 TODO: mutex, spin lock, transactional memory
 
 TODO: obstruction-free, lock-free, wait-free, wait-free bounded, wait-free population oblivious

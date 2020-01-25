@@ -3,7 +3,6 @@ weight: 4302
 title: "17.2 错误检查 与 errors 包"
 ---
 
-
 # 17.2 错误检查 与 errors 包
 
 在 Go 1.13 以前，标准库中的 error 包仅包含一个 `New` 函数：

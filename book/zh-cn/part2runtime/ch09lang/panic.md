@@ -1,9 +1,9 @@
 ---
 weight: 2403
-title: "9.3 panic 与 recover 语句"
+title: "9.3 恐慌与恢复语句"
 ---
 
-# 9.3 panic 与 recover 语句
+# 9.3 恐慌与恢复语句
 
 [TOC]
 

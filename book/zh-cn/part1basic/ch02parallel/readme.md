@@ -13,6 +13,8 @@ title: "第 2 章 并行、并发与分布式计算"
 - [2.6 顺序进程通讯](./csp.md)
 - [2.7 同步锁](./locks.md)
 
+> _640KB（内存）对于任何人都应该足够了。_
+> 
 > _640KB [of memory] ought to be enough for anybody._
 >
 > -- Bill Gates
