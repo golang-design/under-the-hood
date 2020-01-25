@@ -559,7 +559,6 @@ func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
 
 	...
 
-	...
 	// 生成随机顺序
 	for i := 1; i < ncases; i++ {
 		j := fastrandn(uint32(i + 1))

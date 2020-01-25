@@ -69,15 +69,16 @@ type timer struct {
 //   timerNoStatus   -> timerWaiting
 //   anything else   -> panic: invalid value
 // deltimer:
-//   timerWaiting    -> timerDeleted
-//   timerModifiedXX -> timerDeleted
-//   timerNoStatus   -> do nothing
-//   timerDeleted    -> do nothing
-//   timerRemoving   -> do nothing
-//   timerRemoved    -> do nothing
-//   timerRunning    -> wait until status changes
-//   timerMoving     -> wait until status changes
-//   timerModifying  -> panic: concurrent deltimer/modtimer calls
+//   timerWaiting         -> timerDeleted
+//   timerModifiedEarlier -> timerModifying -> timerDeleted
+//   timerModifiedLater   -> timerDeleted
+//   timerNoStatus        -> do nothing
+//   timerDeleted         -> do nothing
+//   timerRemoving        -> do nothing
+//   timerRemoved         -> do nothing
+//   timerRunning         -> wait until status changes
+//   timerMoving          -> wait until status changes
+//   timerModifying       -> panic: concurrent deltimer/modtimer calls
 // modtimer:
 //   timerWaiting    -> timerModifying -> timerModifiedXX
 //   timerModifiedXX -> timerModifying -> timerModifiedYY
