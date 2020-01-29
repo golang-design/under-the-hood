@@ -641,6 +641,7 @@ type Pcdata struct {
 
 // Link holds the context for writing object code from a compiler
 // to be linker input or for reading that input into the linker.
+// Link 写入对象代码的上下文
 type Link struct {
 	Headtype           objabi.HeadType
 	Arch               *LinkArch

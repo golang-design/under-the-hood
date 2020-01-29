@@ -5280,7 +5280,7 @@ func runqgrab(_p_ *p, batch *[256]guintptr, batchHead uint32, stealRunNextG bool
 	}
 }
 
-// 从 p2 runnable 队列中偷取一般的元素并将其放入 p 的 runnable 队列中
+// 从 p2 runnable 队列中偷取一半的元素并将其放入 p 的 runnable 队列中
 // 返回其中一个偷取的元素（如果失败则返回 nil）
 func runqsteal(_p_, p2 *p, stealRunNextG bool) *g {
 	t := _p_.runqtail

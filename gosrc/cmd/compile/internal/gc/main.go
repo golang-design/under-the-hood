@@ -506,6 +506,8 @@ func Main(archInit func(*Arch)) {
 	// initialize types package
 	// (we need to do this to break dependencies that otherwise
 	// would lead to import cycles)
+	// 初始化 type 包
+	// 该操作打破依赖否则将出现循环引用
 	types.Widthptr = Widthptr
 	types.Dowidth = dowidth
 	types.Fatalf = Fatalf
@@ -1064,6 +1066,7 @@ func findpkg(name string) (file string, ok bool) {
 // loadsys loads the definitions for the low-level runtime functions,
 // so that the compiler can generate calls to them,
 // but does not make them visible to user code.
+// loadsys 家在底层运行时函数，进而编译器可以生成他们的调用，不对用户代码可见
 func loadsys() {
 	types.Block = 1
 
