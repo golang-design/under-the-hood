@@ -15,9 +15,9 @@ Go 的内存分配器基于 Thread-Cache Malloc (tcmalloc) [1]，tcmalloc 为每
 
 我们不再介绍更多 tcmalloc 的具体细节，因为 Go 的内存分配器与 tcmalloc 存在一定差异。
 这个差异来源于 Go 语言被设计为没有显式的内存分配与释放，
-完全依靠编译器与运行时的配合来自动处理，因此也就造就为了内存分配器、垃圾回收器两大组件。
+完全依靠编译器与运行时的配合来自动处理，因此也就造就了内存分配器、垃圾回收器两大组件。
 
-我们知道，在计算机领域中，无外乎时间换空间、空间换时间。统一管理内存会提前分配或一次性释放一大块内存，
+我们知道，在计算机领域中，无外乎时间换空间、空间换时间。统一管理内存会提前分配或一次性释放一大块内存，
 进而减少与操作系统沟通造成的开销，进而提高程序的运行性能。
 支持内存管理另一个优势就是能够更好的支持垃圾回收，这一点我们留到垃圾回收器一节中进行讨论。
 
@@ -28,10 +28,10 @@ Go 的内存分配器主要包含以下几个核心组件：
 - heapArena: 保留整个虚拟地址空间
 - mheap：分配的堆，在页大小为 8KB 的粒度上进行管理
 - mspan：是 mheap 上管理的一连串的页
-- mcentral：搜集了给定大小等级的所有 span
+- mcentral：收集了给定大小等级的所有 span
 - mcache：为 per-P 的缓存。
 
-其中页是向操作系统申请内存的最小单位，目前设计为 8kb。
+其中页是向操作系统申请内存的最小单位，目前设计为 8KB。
 
 每一个结构虽然不都像是调度器 M/P/G 结构那样的大部头，但初次阅读这些结构时想要理清他们之间的关系还是比较麻烦的。
 传统意义上的栈被 Go 的运行时霸占，不开放给用户态代码；而传统意义上的堆内存，又被 Go 运行时划分为了两个部分，
@@ -42,13 +42,13 @@ Go 堆负责了用户态对象的存放以及 goroutine 的执行栈。
 
 #### heapArena
 
-Go 堆被视为由多个 arena 组成，每个 arena 在 64 位机器上位 64MB，且起始地址与 arena 的大小对齐，
+Go 堆被视为由多个 arena 组成，每个 arena 在 64 位机器上为 64MB，且起始地址与 arena 的大小对齐，
 所有的 arena 覆盖了整个 Go 堆的地址空间。
 
 ```go
 const (
-	pageSize             = 8192                       // 8kb
-	heapArenaBytes       = 67108864                   // 64mb
+	pageSize             = 8192                       // 8KB
+	heapArenaBytes       = 67108864                   // 64MB
 	heapArenaBitmapBytes = heapArenaBytes / 32        // 2097152
 	pagesPerArena        = heapArenaBytes / pageSize  // 8192
 )
@@ -65,7 +65,7 @@ type heapArena struct {
 
 #### arenaHint
 
-结构比较简单，是 arenaHint 链表的节点结构，保存了arena 的起始地址、是否为最后一个 arena，以及下一个 arenaHint 指针。
+结构比较简单，是 arenaHint 链表的节点结构，保存了 arena 的起始地址、是否为最后一个 arena，以及下一个 arenaHint 指针。
 
 ```go
 //go:notinheap
@@ -79,7 +79,7 @@ type arenaHint struct {
 ### mspan
 
 然而管理 arena 如此粒度的内存并不符合实践，相反，所有的堆对象都通过 span 按照预先设定好的
-大小等级分别分配，小于 32kb 的小对象则分配在固定大小等级的 span 上，否则直接从 mheap 上进行分配。
+大小等级分别分配，小于 32KB 的小对象则分配在固定大小等级的 span 上，否则直接从 mheap 上进行分配。
 
 `mspan` 是相同大小等级的 span 的双向链表的一个节点，每个节点还记录了自己的起始地址、
 指向的 span 中页的数量。它要么位于 
@@ -145,7 +145,7 @@ type mcentral struct {
 }
 ```
 
-当 mcentral 中 nonempty 列表中也没有 可分配的 span 时，则会向 mheap 提出请求，从而获得
+当 mcentral 中 nonempty 列表中也没有可分配的 span 时，则会向 mheap 提出请求，从而获得
 新的 span，并进而交给 mcache。
 
 ### mheap
@@ -195,7 +195,7 @@ type mheap struct {
 Go 程序的执行是基于 goroutine 的，goroutine 和传统意义上的程序一样，也有栈和堆的概念。只不过
 Go 的运行时帮我们屏蔽掉了这两个概念，只在运行时内部区分并分别对应：goroutine 执行栈以及 Go 堆。
 
-goroutine 的执行栈与传统意义上的栈一样，当函数返回时，在栈就会被回收，栈中的对象都会被回收，从而
+goroutine 的执行栈与传统意义上的栈一样，当函数返回时，在栈上就会被回收，栈中的对象都会被回收，从而
 无需 GC 的标记；而堆则麻烦一些，由于 Go 支持垃圾回收，只要对象生存在堆上，Go 的运行时 GC 就会在
 后台将对应的内存进行标记从而能够在垃圾回收的时候将对应的内存回收，进而增加了开销。
 
@@ -286,7 +286,7 @@ TEXT main.f3(SB) /Users/changkun/dev/go-under-the-hood/demo/4-mem/alloc/alloc.go
 ```
 
 就会发现，对于产生在 Go 堆上分配对象的情况，均调用了运行时的 `runtime.newobject` 方法。
-当然，关键字 `new` 同样也会被编译器翻译为此函数，这个我们已经在实践知道了。
+当然，关键字 `new` 同样也会被编译器翻译为此函数，这个我们已经在实践中知道了。
 所以 `runtime.newobject` 就是内存分配的核心入口了。
 
 ### 分配入口
@@ -339,7 +339,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 
 ### 小对象分配
 
-当对一个小对象（<32kB）分配内存时，会将该对象所需的内存大小调整到某个能够容纳该对象的大小等级（size class），
+当对一个小对象（<32KB）分配内存时，会将该对象所需的内存大小调整到某个能够容纳该对象的大小等级（size class），
 并查看 mcache 中对应等级的 mspan，通过扫描 mspan 的 `freeindex` 来确定是否能够进行分配。
 
 当没有可分配的 mspan 时，会从 mcentral 中获取一个所需大小空间的新的 mspan，从 mcentral 中分配会对其进行加锁，
