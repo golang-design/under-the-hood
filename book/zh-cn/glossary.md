@@ -57,7 +57,7 @@ title: "附录B：术语表"
 | 假共享     |                | False Sharing         |           |      |
 | 无锁       |                | Lock-free             | LF        |      |
 | 无等待     |                | Wait-free             |           |      |
-|            |                |                       |           |      |
+| 开放编码式  |                | Open-coded            |           |      |
 |            |                |                       |           |      |
 
 

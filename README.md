@@ -78,14 +78,14 @@ Go 语言从 2009 年诞生之初已有十余年的历史。
 本书的主页（ https://changkun.de/golang ）以及 GitHub 仓库（ https://github.com/changkun/go-under-the-hood ）上可以找到本书的更新以及一些额外的参考资料。
 读者还可以在 GitHub 仓库上向作者发起关于本书内容的问题，或报告本书存在的错误。
 笔者欢迎您在 GitHub 仓库上提交 [Issues](https://github.com/changkun/go-under-the-hood/issues/new/choose) 或 [Pull Request](https://github.com/changkun/go-under-the-hood/pulls)。
-其具体细节请参考[如何参与贡献](../../CONTRIBUTING.md)。
+其具体细节请参考[如何参与贡献](https://github.com/changkun/go-under-the-hood/blob/master/CONTRIBUTING.md)。
 如果您想要关注本仓库的更新情况，可以点击仓库的 `Watch`。如果您喜欢本书，我们也非常高兴能够收到您的 `Star` 和捐款。
 
 ## 致谢
 
-本书的写作离不开诸多热心读者的支持，笔者收到了来自下列人员的有帮助的评价和勘误：`@two`, `@yangxikun`, `@cnbailian`, `@choleraehyq`, `@PureWhiteWu`。笔者真心感谢这些人对本书内容的质疑与指正。当然，书中还可能有错误存在，希望得到更多的指正和反馈。
+本书的写作离不开诸多热心读者的支持，笔者收到了来自下列人员的有帮助的评价和勘误：[@two](https://github.com/two), [@yangxikun](https://github.com/yangxikun), [@cnbailian](https://github.com/cnbailian), [@choleraehyq](https://github.com/choleraehyq), [@PureWhiteWu](https://github.com/PureWhiteWu)。笔者真心感谢这些人对本书内容的质疑与指正。当然，书中还可能有错误存在，希望得到更多的指正和反馈。
 
-笔者还希望感谢他所在 [Go 夜读](https://reading.developerlearning.cn/) 社区小组的核心成员以及社区里的朋友们，感谢他们努力建设的 Go 语言社区环境，以及积极参与并讨论 Go 语言的相关问题，他们是：`@yangwenmai`, `@qcrao`, `@eddycjy`, `@FelixSeptem`，`@cch123`。
+笔者还希望感谢他所在 [Go 夜读](https://reading.developerlearning.cn/) 社区小组的核心成员，感谢他们努力建设的 Go 语言社区环境，他们是：[@yangwenmai](https://github.com/yangwenmai), [@qcrao](https://github.com/qcrao), [@eddycjy](https://github.com/eddycjy), [@FelixSeptem](https://github.com/FelixSeptem)，以及社区里的朋友们积极参与并讨论 Go 语言的相关问题，他们是：[@cch123](https://github.com/cch123)。
 
 最后，笔者特别感谢 [@egonelbre](https://github.com/egonelbre/gophers) 所提供的 gopher 图片设计。
 
