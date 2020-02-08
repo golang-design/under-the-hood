@@ -22,6 +22,13 @@ import (
 // on the stack. During panic/Goexit processing, the appropriate defer calls are
 // made using extra funcdata info that indicates the exact stack slots that
 // contain the bitmask and defer fn/args.
+// 我们有两种执行 defer 的方式。旧的方法会在 defer 语句执行时，通过创建 defer 记录，添加到一个 defer 链中。
+// 这个链条会在函数退出时的 deferreturn 调用中检查并执行需要的的 defer 调用。
+// 一个更简便的方法（我们称为开放编码式（open-coded） defer）。这种情况下，我们简单的将 defer 函数及其参数信息
+// 存储在特殊的、defer语句所在的栈槽上，并在一个位掩码（bitmask）上设置一个标记位。
+// 在每个函数退出时，我们将基于设置的标记位以及函数和参数信息，对内联的代码直接进行适当的 defer 调用。
+// 在进行 panic/Goexit 处理时，适当的 defer 调用会使用额外的 funcdata 信息，
+// 这些信息用于指示精确的包含位掩码和函数参数信息的栈槽。
 
 // Check to make sure we can really generate a panic. If the panic
 // was generated from the runtime, or from inside malloc, then convert
@@ -226,6 +233,10 @@ func deferproc(siz int32, fn *funcval) { // arguments of fn follow fn
 	// collection or stack copying trigger until we've copied them out
 	// to somewhere safe. The memmove below does that.
 	// Until the copy completes, we can only call nosplit routines.
+	// fn 的参数处于不安全的状态中。deferproc 的栈 map 无法描述他们。因此，在
+	// 我们完全将他们复制到某个安全的地方之前，我们都不能触发让垃圾回收或栈拷贝。
+	// 下面的 memmove 就是做这件事情的。
+	// 直到拷贝完成，我们才调用 nosplit 协程。
 	sp := getcallersp()
 	argp := uintptr(unsafe.Pointer(&fn)) + unsafe.Sizeof(fn)
 	callerpc := getcallerpc()
@@ -264,6 +275,11 @@ func deferproc(siz int32, fn *funcval) { // arguments of fn follow fn
 // the arguments of the defer.
 // Nosplit because the arguments on the stack won't be scanned
 // until the defer record is spliced into the gp._defer list.
+// deferprocStack 讲一个新的 defer 函数和一个 defer 记录在栈上入队
+// defer 记录必须初始化它的 siz 和 fn。其他字段可以包含无用信息。
+// defer 记录必须立刻紧跟 defer 参数所在的内存之后。
+// Nosplit 是因为栈上的参数不会被扫描，直到 defer 记录被连接到 gp._defer 列表上。
+//
 //go:nosplit
 func deferprocStack(d *_defer) {
 	gp := getg()
@@ -274,6 +290,8 @@ func deferprocStack(d *_defer) {
 	// siz and fn are already set.
 	// The other fields are junk on entry to deferprocStack and
 	// are initialized here.
+	// siz 和 fn 已经被设置
+	// 其他字段在进入 deferprocStack 时是垃圾，并且在此初始化
 	d.started = false
 	d.heap = false
 	d.openDefer = false
@@ -292,6 +310,13 @@ func deferprocStack(d *_defer) {
 	// The fourth write does not require a write barrier because we
 	// explicitly mark all the defer structures, so we don't need to
 	// keep track of pointers to them with a write barrier.
+	// 下面的代码实现了没有写屏障的这些内容:
+	//   d.panic = nil
+	//   d.fd = nil
+	//   d.link = gp._defer
+	//   gp._defer = d
+	// 前三个写入的是栈，而且都是为初始化的内存，因此不需要写屏障。
+	// 第四个不需要写屏障的原因是我们显式的标记了 defer 结构。
 	*(*uintptr)(unsafe.Pointer(&d._panic)) = 0
 	*(*uintptr)(unsafe.Pointer(&d.fd)) = 0
 	*(*uintptr)(unsafe.Pointer(&d.link)) = uintptr(unsafe.Pointer(gp._defer))
@@ -375,6 +400,8 @@ func init() {
 
 // Allocate a Defer, usually using per-P pool.
 // Each defer must be released with freedefer.
+// 分配一个 defer, 通常使用了 per-P 池.
+// 每个 defer 必须由 freedefer 释放.
 //
 // This must not grow the stack because there may be a frame without
 // stack map information when this is called.
@@ -431,6 +458,8 @@ func newdefer(siz int32) *_defer {
 
 // Free the given defer.
 // The defer cannot be used after this call.
+// 释放给定的 defer
+// defer 在此调用后不能被使用
 //
 // This must not grow the stack because there may be a frame without a
 // stack map when this is called.
@@ -456,6 +485,10 @@ func freedefer(d *_defer) {
 		//
 		// Take this slow path on the system stack so
 		// we don't grow freedefer's stack.
+		// 转移一半的 local cache 到 central cache
+		//
+		// 将其转入系统栈上的 slow path
+		// 从而不会增长 freedefer 的栈
 		systemstack(func() {
 			var first, last *_defer
 			for len(pp.deferpool[sc]) > cap(pp.deferpool[sc])/2 {
@@ -479,6 +512,8 @@ func freedefer(d *_defer) {
 
 	// These lines used to be simply `*d = _defer{}` but that
 	// started causing a nosplit stack overflow via typedmemmove.
+	// 这些行以前只是为了简化 `*d = _defer{}`
+	// 但是通过 typedmemmove 开始的会导致一个 nosplit 栈溢出
 	d.siz = 0
 	d.started = false
 	d.openDefer = false
@@ -490,6 +525,8 @@ func freedefer(d *_defer) {
 	// d._panic and d.fn must be nil already.
 	// If not, we would have called freedeferpanic or freedeferfn above,
 	// both of which throw.
+	// d._panic 和 d.fn 必须已经是 nil
+	// 否则我们会在上面调用 freedeferpanic 或 freedeferfn，它们都会 throw
 	d.link = nil
 
 	pp.deferpool[sc] = append(pp.deferpool[sc], d)
@@ -515,6 +552,11 @@ func freedeferfn() {
 // to have been called by the caller of deferreturn at the point
 // just before deferreturn was called. The effect is that deferreturn
 // is called again and again until there are no more deferred functions.
+// 如果存在，则运行 defer 函数
+// 编译器会将这个调用插入到任何包含 defer 的函数的末尾。
+// 如果存在一个被 defer 的函数，此调用会调用 runtime.jmpdefer
+// 这将跳转到被延迟的函数，使得它看起来像是在调用 deferreturn 之前由 deferreturn 的调用者调用。
+// 产生的结果就是反复地调用 deferreturn，直到没有更多的 defer 函数为止。
 //
 // Declared as nosplit, because the function should not be preempted once we start
 // modifying the caller's frame in order to reuse the frame to call the deferred
@@ -557,6 +599,7 @@ func deferreturn(arg0 uintptr) {
 	default:
 		memmove(unsafe.Pointer(&arg0), deferArgs(d), uintptr(d.siz))
 	}
+	// 获得 fn 的入口地址，并随后立即将 _defer 释放掉
 	fn := d.fn
 	d.fn = nil
 	gp._defer = d.link

@@ -10,6 +10,7 @@ import (
 )
 
 // Block represents a basic block in the control flow graph of a function.
+// Block 表示了一个函数的控制流图中的一个基本块。
 type Block struct {
 	// A unique identifier for the block. The system will attempt to allocate
 	// these IDs densely, but no guarantees.

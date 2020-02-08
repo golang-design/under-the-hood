@@ -278,6 +278,8 @@ func (s *state) emitOpenDeferInfo() {
 
 // buildssa builds an SSA function for fn.
 // worker indicates which of the backend workers is doing the processing.
+// buildssa 为 fn 构建一个 SSA 函数
+// worker 表示正在处理的后台 worker
 func buildssa(fn *Node, worker int) *ssa.Func {
 	name := fn.funcname()
 	printssa := name == ssaDump
