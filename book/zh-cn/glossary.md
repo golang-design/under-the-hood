@@ -58,6 +58,7 @@ title: "附录B：术语表"
 | 无锁       |                | Lock-free             | LF        |      |
 | 无等待     |                | Wait-free             |           |      |
 | 开放编码式  |                | Open-coded            |           |      |
-|            |                |                       |           |      |
+| 函数序言    |                |  Prologue            |            |      |
+| 函数尾声    |                |  Epilogue            |            |      |
 
 

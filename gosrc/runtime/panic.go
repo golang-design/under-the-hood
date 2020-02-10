@@ -35,6 +35,9 @@ import (
 // to a throw of msg.
 // pc should be the program counter of the compiler-generated code that
 // triggered this panic.
+// 检查我们确实能够生成此 panic。如果该 panic 从运行时生成，或者来自 malloc，则转换
+// 并抛出一个消息
+// pc 应该是编译器生成的程序计数器，用于触发此 panic
 func panicCheck1(pc uintptr, msg string) {
 	if sys.GoarchWasm == 0 && hasPrefix(funcname(findfunc(pc)), "runtime.") {
 		// Note: wasm can't tail call, so we can't get the original caller's pc.
@@ -221,6 +224,8 @@ func panicmem() {
 
 // Create a new deferred function fn with siz bytes of arguments.
 // The compiler turns a defer statement into a call to this.
+// 创建一个新的函数 fn 以及大小为 siz bytes 的参数
+// 编译器将 defer 语句转换为该调用
 //go:nosplit
 func deferproc(siz int32, fn *funcval) { // arguments of fn follow fn
 	if getg().m.curg != getg() {
@@ -263,6 +268,9 @@ func deferproc(siz int32, fn *funcval) { // arguments of fn follow fn
 	// the code the compiler generates always
 	// checks the return value and jumps to the
 	// end of the function if deferproc returns != 0.
+	// deferproc 正常返回 0
+	// 终止一个 panic 的 defer 函数会使该 deferproc 返回 1
+	// 编译器代码总是生成返回值的检查，并在返回值不为零时跳转到函数尾声
 	return0()
 	// No code can go here - the C return register has
 	// been set and must not be clobbered.
@@ -857,6 +865,9 @@ func readvarintUnsafe(fd unsafe.Pointer) (uint32, unsafe.Pointer) {
 // d. It normally processes all active defers in the frame, but stops immediately
 // if a defer does a successful recover. It returns true if there are no
 // remaining defers to run in the frame.
+// runOpenDeferFrame 在 d 指定的帧中运行活跃的 open-coded defer。
+// 通常会在帧中处理所有的活跃 defer，但如果一个 defer 成功的 recover 之后会立刻停止。
+// 如果没有其他的 defer 则返回 true。
 func runOpenDeferFrame(gp *g, d *_defer) bool {
 	done := true
 	fd := d.fd
@@ -918,6 +929,7 @@ func runOpenDeferFrame(gp *g, d *_defer) bool {
 // panic record. This allows the runtime to return to the Goexit defer processing
 // loop, in the unusual case where the Goexit may be bypassed by a successful
 // recover.
+// reflectcallSave 在 panic 记录中保存 caller pc 和 sp 之后调用 reflectcall
 func reflectcallSave(p *_panic, fn, arg unsafe.Pointer, argsize uint32) {
 	if p != nil {
 		p.argp = unsafe.Pointer(getargp(0))
@@ -1190,6 +1202,8 @@ func recovery(gp *g) {
 	// Make the deferproc for this d return again,
 	// this time returning 1. The calling function will
 	// jump to the standard return epilogue.
+	// 使 deferproc 为此 d 返回
+	// 这时候返回 1。调用函数将跳转到标准的返回尾声
 	gp.sched.sp = sp
 	gp.sched.pc = pc
 	gp.sched.lr = 0
