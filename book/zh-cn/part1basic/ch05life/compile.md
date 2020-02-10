@@ -155,6 +155,14 @@ TODO: 未完成，当前内容来源于 `src/cmd/compile/README.md`
 
 在编译的第一阶段，源代码被 token 化（词法分析），解析（语法分析），并为每个源构造语法树文件。每个语法树都是相应源文件的精确表示对应于源的各种元素的节点，如表达式，声明和陈述。语法树还包括位置信息用于错误报告和调试信息的创建。
 
+```
+main -> gc.Main -> amd64.Init -> amd64.LinkArch.Init
+-> typecheck -> typecheck -> saveerrors -> typecheckslice
+-> checkreturn -> checkMapKeys -> capturevars -> 
+typecheckinl -> inlcalls -> escapes -> 
+newNowritebarrierrecChecker -> transformclosure
+```
+
 ## 5.1.3 第二阶段：语义分析
 
 - `cmd/compile/internal/gc`（类型检查，AST变换）
@@ -179,6 +187,12 @@ TODO: 未完成，当前内容来源于 `src/cmd/compile/README.md`
 然后，应用一系列与机器无关的传递和规则。 这些不涉及任何单个计算机体系结构，因此可以在所有 `GOARCH` 变体上运行。
 
 这些通用过程的一些示例包括消除死代码，删除不需要的零检查以及删除未使用的分支。通用重写规则主要涉及表达式，例如用常量值替换某些表达式，以及优化乘法和浮点运算。
+
+```
+initssaconfig -> peekitabs -> funccompile ->
+finit -> compileFunctions -> compileSSA -> buildssa -> genssa ->
+-> typecheck -> checkMapKeys -> dumpdata -> dumpobj
+```
 
 ## 5.1.5 第四阶段：机器码生成
 
