@@ -98,6 +98,7 @@ type BlockEffects struct {
 }
 
 // A collection of global state used by liveness analysis.
+// 用于 liveness 分析的一组全局状态
 type Liveness struct {
 	fn         *Node
 	f          *ssa.Func
@@ -129,8 +130,10 @@ type Liveness struct {
 
 	// These are only populated if open-coded defers are being used.
 	// List of vars/stack slots storing defer args
+	// 使用 open defer 时会被填充，列出所有的变量和栈槽来存储 defer 的参数
 	openDeferVars []openDeferVarInfo
 	// Map from defer arg OpVarDef to the block where the OpVarDef occurs.
+	// defer 的参数 OpVarDef 和它出现的位置
 	openDeferVardefToBlockMap map[*Node]*ssa.Block
 	// Map of blocks that cannot reach a return or exit (panic)
 	nonReturnBlocks map[*ssa.Block]bool

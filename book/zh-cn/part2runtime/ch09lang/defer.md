@@ -262,6 +262,8 @@ func deferproc(siz int32, fn *funcval) {
 	d.fn = fn
 	d.pc = callerpc
 	d.sp = sp
+
+	// 将参数保存到 _defer 记录中
 	switch siz {
 	case 0: // 什么也不做
 	case sys.PtrSize:
@@ -281,7 +283,7 @@ func deferproc(siz int32, fn *funcval) {
 
 注意，在这里我们看到了一个对参数进行拷贝的操作。这个操作也是我们在实践过程中经历过的，
 defer 调用被记录时，并不会对参数进行求值，而是会对参数完成一次拷贝。
-这么做原因在于，`defer` 可能会恢复 `panic`，进而导致 `fn` 的参数可能不安全。
+<!-- 这么做原因在于，`defer` 可能会恢复 `panic`，进而导致 `fn` 的参数可能不安全。 -->
 <!-- TODO: 为什么？ -->
 
 出于性能考虑，`newdefer` 通过 P 或者调度器 sched 上的的本地或全局 defer 池来
@@ -379,12 +381,9 @@ func deferreturn(arg0 uintptr) {
 	if d.sp != sp {
 		return
 	}
-	if d.openDefer {
-		...
-		return
-	}
+	...
 
-	// 移动参数
+	// 将参数复制出 _defer 记录外
 	switch d.siz {
 	case 0: // 什么也不做
 	case sys.PtrSize:
@@ -573,7 +572,7 @@ func freedefer(d *_defer) {
 
 正如本节最初中描述的那样，defer 给我们的第一感觉其实是一个编译期特性。前面我们讨论了
 为什么 defer 会需要运行时的支持，已经需要运行时的 defer 是如何工作的。现在我们来
-探究一下什么情况下能够让 defer 进化为一个编译期特性，即在函数末尾直接对延迟函数进行调用，
+探究一下什么情况下能够让 defer 进化为一个仅编译期特性，即在函数末尾直接对延迟函数进行调用，
 做到几乎不需要额外的开销。这类几乎不需要额外运行时性能开销的 defer，正是开放编码式 defer。
 这类 defer 与直接调用产生的性能差异有多大呢？我们不妨编写两个性能测试：
 
@@ -596,8 +595,139 @@ name      old time/op  new time/op  delta
 Defer-12  1.24ns ± 1%  2.23ns ± 1%  +80.06%  (p=0.000 n=10+9)
 ```
 
+我们再来观察以下开放编码式 defer 最终被编译的形式：
+
+```shell
+go build -gcflags "-l" -ldflags=-compressdwarf=false -o main.out main.go
+go tool objdump -S main.out > main.s
+```
+
+对于如下形式的函数调用：
+
+```go
+var mu sync.Mutex
+func callDefer() {
+	mu.Lock()
+	defer mu.Unlock()
+}
+```
+
+整个调用最终编译结果既没有 `deferproc` 或者 `deferprocStack`，也没有了 `deferreturn`。
+延迟语句被直接插入到了函数的末尾。
+
+```asm
+TEXT main.callDefer(SB) /Users/changkun/Desktop/defer/main.go
+func callDefer() {
+  ...
+	mu.Lock()
+  0x105794a		488d05071f0a00		LEAQ main.mu(SB), AX		
+  0x1057951		48890424		MOVQ AX, 0(SP)			
+  0x1057955		e8f6f8ffff		CALL sync.(*Mutex).Lock(SB)	
+	defer mu.Unlock()
+  0x105795a		488d057f110200		LEAQ go.func.*+1064(SB), AX	
+  0x1057961		4889442418		MOVQ AX, 0x18(SP)		
+  0x1057966		488d05eb1e0a00		LEAQ main.mu(SB), AX		
+  0x105796d		4889442410		MOVQ AX, 0x10(SP)		
+}
+  0x1057972		c644240f00		MOVB $0x0, 0xf(SP)		
+  0x1057977		488b442410		MOVQ 0x10(SP), AX		
+  0x105797c		48890424		MOVQ AX, 0(SP)			
+  0x1057980		e8ebfbffff		CALL sync.(*Mutex).Unlock(SB)	
+  0x1057985		488b6c2420		MOVQ 0x20(SP), BP		
+  0x105798a		4883c428		ADDQ $0x28, SP			
+  0x105798e		c3			RET				
+  ...
+```
+
+```
+AX = func
+0x18(SP) = AX
+AX = mu
+0x10(SP) = mu
+
+
+0xf(SP) = 0x0
+AX = 0x10(SP)
+0(SP) = AX
+
+```
+
 那么开放编码式 defer 是怎么实现的？所有的 defer 都是开放编码式的吗？
 什么情况下，开放编码式 defer 会退化为一个以来运行时的特性？
+
+我们先来看开放编码式 defer 的产生条件。在 SSA 的构建阶段 `buildssa`，我们有：
+
+```go
+// src/cmd/compile/internal/gc/ssa.go
+const maxOpenDefers = 8
+func walkstmt(n *Node) *Node {
+	...
+	switch n.Op {
+	case ODEFER:
+		Curfn.Func.SetHasDefer(true)
+		Curfn.Func.numDefers++
+		// 超过 8 个 defer 时，禁用对 defer 进行开放编码
+		if Curfn.Func.numDefers > maxOpenDefers {
+			Curfn.Func.SetOpenCodedDeferDisallowed(true)
+		}
+		// 存在逃逸时，禁用对 defer 进行开放编码
+		if n.Esc != EscNever {
+			Curfn.Func.SetOpenCodedDeferDisallowed(true)
+		}
+	case ...
+	}
+	...
+}
+
+func buildssa(fn *Node, worker int) *ssa.Func {
+	...
+	var s state
+	...
+	s.hasdefer = fn.Func.HasDefer()
+	...
+	// 可以对 defer 进行开放编码的条件
+	s.hasOpenDefers = Debug['N'] == 0 && s.hasdefer && !s.curfn.Func.OpenCodedDeferDisallowed()
+	if s.hasOpenDefers &&
+		s.curfn.Func.numReturns*s.curfn.Func.numDefers > 15 {
+		s.hasOpenDefers = false
+	}
+	...
+}
+```
+
+这样，我们得到了允许进行 defer 的开放编码的主要条件
+（此处略去了一些常见生产环境无关的条件，例如启用竞争检查时也不能对 defer 进行开放编码）：
+
+1. 没有禁用编译器优化，即没有设置 `-gcflags "-N"`
+2. 存在 defer 调用
+3. 函数内 defer 的数量不超过 8 个、且返回语句与延迟语句个数的乘积不超过 15
+4. 没有与 defer 相关的参数发生逃逸
+
+那么开放编码的 defer 是如何插入到函数返回的语句末尾并执行延迟调用的呢？
+
+```go
+func buildssa(fn *Node, worker int) *ssa.Func {
+	...
+	if s.hasOpenDefers {
+		// Create the deferBits variable and stack slot.  deferBits is a
+		// bitmask showing which of the open-coded defers in this function
+		// have been activated.
+		deferBitsTemp := tempAt(src.NoXPos, s.curfn, types.Types[TUINT8])
+		s.deferBitsTemp = deferBitsTemp
+		// For this value, AuxInt is initialized to zero by default
+		startDeferBits := s.entryNewValue0(ssa.OpConst8, types.Types[TUINT8])
+		s.vars[&deferBitsVar] = startDeferBits
+		s.deferBitsAddr = s.addr(deferBitsTemp, false)
+		s.store(types.Types[TUINT8], s.deferBitsAddr, startDeferBits)
+		// Make sure that the deferBits stack slot is kept alive (for use
+		// by panics) and stores to deferBits are not eliminated, even if
+		// all checking code on deferBits in the function exit can be
+		// eliminated, because the defer statements were all
+		// unconditional.
+		s.vars[&memVar] = s.newValue1Apos(ssa.OpVarLive, types.TypeMem, deferBitsTemp, s.mem(), false)
+	}
+}
+```
 
 对于一个开放编码式 defer 而言，它比普通类型的 defer 多记录了以下字段：
 
@@ -633,98 +763,40 @@ func (s *state) stmt(n *Node) {
 }
 ```
 
-
-```go
-func runOpenDeferFrame(gp *g, d *_defer) bool {
-	done := true
-	fd := d.fd
-
-	// Skip the maxargsize
-	_, fd = readvarintUnsafe(fd)
-	deferBitsOffset, fd := readvarintUnsafe(fd)
-	nDefers, fd := readvarintUnsafe(fd)
-	deferBits := *(*uint8)(unsafe.Pointer(d.varp - uintptr(deferBitsOffset)))
-
-	for i := int(nDefers) - 1; i >= 0; i-- {
-		// read the funcdata info for this defer
-		var argWidth, closureOffset, nArgs uint32
-		argWidth, fd = readvarintUnsafe(fd)
-		closureOffset, fd = readvarintUnsafe(fd)
-		nArgs, fd = readvarintUnsafe(fd)
-		if deferBits&(1<<i) == 0 {
-			for j := uint32(0); j < nArgs; j++ {
-				_, fd = readvarintUnsafe(fd)
-				_, fd = readvarintUnsafe(fd)
-				_, fd = readvarintUnsafe(fd)
-			}
-			continue
-		}
-		closure := *(**funcval)(unsafe.Pointer(d.varp - uintptr(closureOffset)))
-		d.fn = closure
-		deferArgs := deferArgs(d)
-		// If there is an interface receiver or method receiver, it is
-		// described/included as the first arg.
-		for j := uint32(0); j < nArgs; j++ {
-			var argOffset, argLen, argCallOffset uint32
-			argOffset, fd = readvarintUnsafe(fd)
-			argLen, fd = readvarintUnsafe(fd)
-			argCallOffset, fd = readvarintUnsafe(fd)
-			memmove(unsafe.Pointer(uintptr(deferArgs)+uintptr(argCallOffset)),
-				unsafe.Pointer(d.varp-uintptr(argOffset)),
-				uintptr(argLen))
-		}
-		deferBits = deferBits &^ (1 << i)
-		*(*uint8)(unsafe.Pointer(d.varp - uintptr(deferBitsOffset))) = deferBits
-		p := d._panic
-		reflectcallSave(p, unsafe.Pointer(closure), deferArgs, argWidth)
-		if p != nil && p.aborted {
-			break
-		}
-		d.fn = nil
-		// These args are just a copy, so can be cleared immediately
-		memclrNoHeapPointers(deferArgs, uintptr(argWidth))
-		if d._panic != nil && d._panic.recovered {
-			done = deferBits == 0
-			break
-		}
-	}
-
-	return done
-}
-```
+TODO: 未完成
 
 ## 9.2.4 `defer` 的演进过程
 
-TODO: 尚未完成
-
 defer 最早的实现非常的粗糙，每当出现一个 defer 调用，都会在堆上分配 defer 记录，
 并参与调用的参数实施一次拷贝，然后将其加入到 defer 链条上；当函数返回需要触发 defer 调用时，
-依次将 defer 从链表中取出，完成调用。
+依次将 defer 从链表中取出，完成调用。当然最初的实现并不需要完美，未来总是可以迭代其性能问题。
 
-在 Go 1.1 时，defer 得到了它的第一次优化 [Cox, 2011]。Russ Cox 提出
-将 defer 的分配和释放过程进行批量化处理，当时 Dmitry Vyukov 则提议在栈上分配会更加有效。
+在 Go 1.1 的开发阶段，defer 获得了它的第一次优化 [Cox, 2011]。Russ Cox 意识到了 defer 性能问题的
+根源是过多的内存分配与拷贝，进而提出将 defer 的分配和释放过程进行批量化处理，
+当时 Dmitry Vyukov 则提议在栈上分配会更加有效。
 但 Russ Cox 认为在执行栈上分配 defer 记录和在其他地方进行分配并没有带来太多收益。
 最终实现了 per-G 批量式分配的 defer 机制。
 
-由于后续调度器的改进，运行时开始支持 per-P 的资源池，defer 自然也是一类可以被视作局部持有的资源。
-因此分配和释放 defer 的资源在 Go 1.3 时得到优化 [Vyukov, 2014]，Dmitry Vyukov 将 per-G 分配的
-defer 改为了从 per-P 资源池分配的机制。
+由于后续调度器的改进（工作窃取调度的引入），运行时开始支持 per-P 的资源池，
+defer 自然也是一类可以被视作局部持有的资源。
+因此分配和释放 defer 的资源在 Go 1.3 时得到优化 [Vyukov, 2014]，
+Dmitry Vyukov 将 per-G 分配的 defer 改为了从 per-P 资源池分配的机制。
 
-早在 1.8 之前，defer 调用允许对栈进行分段，即允许在调用过程中被抢占，
-而分配（`newdefer`）甚至都是直接在系统栈上完成的，且需要将 P 和 M 进行绑定。
+由于分配延迟记录 `_defer` 的调用 `newdefer` 可能导致栈分裂，
+因此 defer 调用允许对栈进行分段，从而需要将 P 和 M 进行绑定。
 因此，Austin Clements 对 defer 做的一个优化 [Clements, 2016] 是
-在每个 `deferproc` 和 `deferreturn` 中都切换至系统栈，从而阻止了抢占和栈增长的发生。
-进而避免了抢占的发生，也就优化消除了 P 和 M 进行绑定所带来的开销。
-此外，`memmove` 进行拷贝的开销也是不可忽略的，此前的任何 defer 调用，无论是否存在
-大量参数拷贝，都会产生一次 `memmove` 的调用成本，在这个优化中，运行时针对没有参数和指针大小
-参数的这两种情况进行了优化，从而跳过了 `memmove` 带来的开销。
+在每个 `deferproc` 和 `deferreturn` 中都切换至系统栈，从而阻止了抢占和栈增长的发生，
+也就优化消除了 P 和 M 进行绑定所带来的开销。
+对于每次产生记录时，无论参数大小如何都涉及 `memmove` 系统调用，
+从而产生一次 `memmove` 的调用成本，这个优化中还特地针对没有参数和指针大小
+参数的这两种情况进行了判断，从而跳过了这种情况下 `memmove` 带来的开销。
 
 后来，Keith Randall 终于实现了 [Randall, 2013] 很早之前 Dmitry Vyukov 就已经
-提出的在栈上分配 defer 的优化 [Cox, 2011]，简单情况下不再需要打扰运行时的内存管理。
+提出的在栈上分配 defer 的优化 [Cox, 2011]，简单情况下不再需要使用运行时对延迟记录的内存管理。
 为 Go 1.13 进一步提升了 defer 的性能。
 
-最近，Dan Scales 作为 Go 团队的新成员，defer 的优化成为了他的第一个项目。
-他提出开放式编码 defer [Scales, 2019]，通过编译器辅助信息和位掩码在函数末尾处直接获取调用参数，
+在 Go 1.14 中，Dan Scales 作为 Go 团队的新成员，defer 的优化成为了他的第一个项目。
+他提出开放式编码 defer [Scales, 2019]，通过编译器辅助信息和位掩码在函数末尾处直接获取调用函数及参数，
 完成了近乎零成本的 defer 调用，成为了 Go 1.14 中几个出色的运行时性能优化之一。
 
 至此，defer 的优化之路正式告一段落。
@@ -738,16 +810,26 @@ defer 改为了从 per-P 资源池分配的机制。
 | 1.13 | 实现在执行栈上分配 defer，消除了常见的简单情况下堆上分配带来的开销 | Keith Randall |
 | 1.14 | 实现开放式编码 defer，支持在函数末尾处直接插入 defer 调用，引入几乎零成本 defer | Dan Scales |
 
+## 9.2.5 小结
 
-我们最后来总结一下 defer 的工作原理：
+我们最后来总结一下 defer 的基本工作原理以及三种 defer 的性能取舍：
 
-1. 将一个需要分配一个用于记录被 defer 的调用的 `_defer` 实例，并将入口地址及其参数复制保存，
-安插到 Goroutine 对应的延迟调用链表中。
+![](../../../assets/defer-perf.png)
 
-2. 在函数末尾处，通过编译器的配合，在调用被 defer 的函数前，将 `_defer` 实例归还，而后通过尾递归的方式
-来对需要 defer 的函数进行调用。
+**图 9.2.2：不同类型 defer 的编译与运行时成本之间的取舍**
 
-从这两个过程来看，一次 defer 的成本来源于 `_defer` 对象的分配与回收、被 defer 函数的参数的拷贝。我们会问，这些成本真的很高吗？确实不可忽略。什么时候会出现这些成本？在循环里使用 defer、函数内 defer 的数量超过 8 个时。
+1. 对于开放编码式 defer 而言：
+	- 编译器会直接将所需的参数存储到 FUNCDATA 中，并在返回语句的末尾插入被延迟的调用；
+	- 此类 defer 的唯一的运行时成本就是存储参与延迟调用的相关信息，运行时性能最好；
+	- 当整个调用中逻辑上会执行的 defer 不超过 15 个（例如七个 defer 作用在两个返回语句）、总 defer 数量不超过 8 个、且没有逃逸时，会激活使用此类 defer。
+2. 对于栈上分配的 defer 而言：
+	- 编译器会直接在栈上记录一个 `_defer` 记录，该记录不涉及内存分配，并将其作为参数，传入被翻译为 `deferprocStack` 的延迟语句，在延迟调用的位置将 `_defer` 压入 Goroutine 对应的延迟调用链表中；
+	- 在函数末尾处，通过编译器的配合，在调用被 defer 的函数前，调用 `deferreturn`，将被延迟的调用出栈并执行；
+	- 此类 defer 的唯一运行时成本是从 `_defer` 记录中将参数复制出，以及从延迟调用记录链表出栈的成本，运行时性能其次。
+3. 对于堆上分配的 defer 而言：
+	- 编译器首先会将延迟语句翻译为一个 `deferproc` 调用，进而从运行时分配一个用于记录被延迟调用的 `_defer` 记录，并将被延迟的调用的入口地址及其参数复制保存，入栈到 Goroutine 对应的延迟调用链表中；
+	- 在函数末尾处，通过编译器的配合，在调用被 defer 的函数前，调用 `deferreturn`，从而将 `_defer` 实例归还到资源池，而后通过模拟尾递归的方式来对需要 defer 的函数进行调用。
+	- 此类 defer 的主要性能问题存在于每个 defer 语句产生记录时的内存分配，记录参数和完成调用时的参数移动时的系统调用。
 
 ## 进一步阅读的参考文献
 
