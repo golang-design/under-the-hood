@@ -186,31 +186,8 @@ func ssaGenBlock(s *gc.SSAGenState, b, next *ssa.Block) {
 }
 ```
 
-注意，这里非常的巧妙，我们可能会疑惑为什么要用 TESTL 指令来判断 AX 的值？我们之后再谈。
-<!-- 
-
-		// 根据 TESTL AX, AX 判断 deferproc 或者 deferprocStack 的返回值：
-		// 0 表示我们应该继续执行
-		// 1 表示我们应该跳转到 deferreturn 调用
-
-原因在于 `deferproc` 或者 `deferprocStack` 的返回值可能是 0 也可能是 1。
-当返回 0 时，说明 defer 语句的记录被成功创建，返回值会记录在 AX 上：
-
-```go
-//go:nosplit
-func deferproc(siz int32, fn *funcval) {
-	...
-	return0()
-}
-```
-
-```asm
-TEXT runtime·return0(SB), NOSPLIT, $0
-	MOVL	$0, AX
-	RET
-```
-
-而当发生 panic 时，AX 的值会记录为 1，从而会跳转到函数尾声，执行 `deferreturn`。 -->
+注意，这里非常的巧妙，我们可能会疑惑为什么要用 TESTL 指令来判断 AX 的值？
+我们将在恐慌内建函数一节中详细讨论。
 
 ### 运行阶段
 
@@ -570,6 +547,8 @@ func freedefer(d *_defer) {
 
 ## 9.2.3 开放编码式 defer
 
+TODO: 精简代码、详细说明 SSA 变换图
+
 正如本节最初中描述的那样，defer 给我们的第一感觉其实是一个编译期特性。前面我们讨论了
 为什么 defer 会需要运行时的支持，已经需要运行时的 defer 是如何工作的。现在我们来
 探究一下什么情况下能够让 defer 进化为一个仅编译期特性，即在函数末尾直接对延迟函数进行调用，
@@ -655,6 +634,8 @@ AX = 0x10(SP)
 那么开放编码式 defer 是怎么实现的？所有的 defer 都是开放编码式的吗？
 什么情况下，开放编码式 defer 会退化为一个以来运行时的特性？
 
+### 产生条件
+
 我们先来看开放编码式 defer 的产生条件。在 SSA 的构建阶段 `buildssa`，我们有：
 
 ```go
@@ -703,47 +684,31 @@ func buildssa(fn *Node, worker int) *ssa.Func {
 3. 函数内 defer 的数量不超过 8 个、且返回语句与延迟语句个数的乘积不超过 15
 4. 没有与 defer 相关的参数发生逃逸
 
+### 延迟掩码
+
 那么开放编码的 defer 是如何插入到函数返回的语句末尾并执行延迟调用的呢？
 
 ```go
+// src/cmd/compile/internal/gc/ssa.go
 func buildssa(fn *Node, worker int) *ssa.Func {
 	...
 	if s.hasOpenDefers {
-		// Create the deferBits variable and stack slot.  deferBits is a
-		// bitmask showing which of the open-coded defers in this function
-		// have been activated.
+		// 创建 deferBits 变量及对应的栈槽。deferBits 是一个用于显示激活且被开放编码的 defer。
 		deferBitsTemp := tempAt(src.NoXPos, s.curfn, types.Types[TUINT8])
 		s.deferBitsTemp = deferBitsTemp
-		// For this value, AuxInt is initialized to zero by default
+		// deferBits 被设计为 8 位二进制，是硬件架构里最小也是最通用的情况。
+		// 因此可以被开放编码的 defer 数量不能超过 8 个。
 		startDeferBits := s.entryNewValue0(ssa.OpConst8, types.Types[TUINT8])
 		s.vars[&deferBitsVar] = startDeferBits
 		s.deferBitsAddr = s.addr(deferBitsTemp, false)
 		s.store(types.Types[TUINT8], s.deferBitsAddr, startDeferBits)
-		// Make sure that the deferBits stack slot is kept alive (for use
-		// by panics) and stores to deferBits are not eliminated, even if
-		// all checking code on deferBits in the function exit can be
-		// eliminated, because the defer statements were all
-		// unconditional.
-		s.vars[&memVar] = s.newValue1Apos(ssa.OpVarLive, types.TypeMem, deferBitsTemp, s.mem(), false)
+		...
 	}
-}
-```
-
-对于一个开放编码式 defer 而言，它比普通类型的 defer 多记录了以下字段：
-
-```go
-// src/runtime/panic.go
-type _defer struct {
-	started   bool	// 指定 defer 是否已经执行
-	openDefer bool	// 指定是否是一个开放编码式 defer
-	fd        unsafe.Pointer
-	varp      uintptr
-	framepc   uintptr
+	...
+	s.stmtList(fn.Nbody) // 调用 s.stmt
 	...
 }
 ```
-
-这些字段的主要功能是在需要进行调用时候
 
 ```go
 // src/cmd/compile/internal/gc/ssa.go
@@ -763,7 +728,224 @@ func (s *state) stmt(n *Node) {
 }
 ```
 
-TODO: 未完成
+```go
+func (s *state) openDeferRecord(n *Node) {
+	...
+	var args []*ssa.Value
+	var argNodes []*Node
+
+	opendefer := &openDeferInfo{
+		n: n,
+	}
+	fn := n.Left
+	if n.Op == OCALLFUNC {
+		// We must always store the function value in a stack slot for the
+		// runtime panic code to use. But in the defer exit code, we will
+		// call the function directly if it is a static function.
+		closureVal := s.expr(fn)
+		closure := s.openDeferSave(nil, fn.Type, closureVal)
+		opendefer.closureNode = closure.Aux.(*Node)
+		if !(fn.Op == ONAME && fn.Class() == PFUNC) {
+			opendefer.closure = closure
+		}
+	} else {
+		...
+	}
+	for _, argn := range n.Rlist.Slice() {
+		var v *ssa.Value
+		if canSSAType(argn.Type) {
+			v = s.openDeferSave(nil, argn.Type, s.expr(argn))
+		} else {
+			v = s.openDeferSave(argn, argn.Type, nil)
+		}
+		args = append(args, v)
+		argNodes = append(argNodes, v.Aux.(*Node))
+	}
+	opendefer.argVals = args
+	opendefer.argNodes = argNodes
+	index := len(s.openDefers)
+	s.openDefers = append(s.openDefers, opendefer)
+
+	// 更新 deferBits = 1<<len(defers)
+	bitvalue := s.constInt8(types.Types[TUINT8], 1<<uint(index))
+	newDeferBits := s.newValue2(ssa.OpOr8, types.Types[TUINT8], s.variable(&deferBitsVar, types.Types[TUINT8]), bitvalue)
+	s.vars[&deferBitsVar] = newDeferBits
+	s.store(types.Types[TUINT8], s.deferBitsAddr, newDeferBits)
+}
+```
+
+### 尾声调用
+
+```go
+// src/cmd/compile/internal/gc/ssa.go
+func buildssa(fn *Node, worker int) *ssa.Func {
+	...
+	if s.curBlock != nil {
+		s.exit()
+		...
+	}
+	...
+}
+func (s *state) exit() *ssa.Block {
+	if s.hasdefer {
+		if s.hasOpenDefers {
+			...
+			s.openDeferExit()
+		} else {
+			...
+		}
+	}
+	...
+}
+func (s *state) openDeferExit() {
+	deferExit := s.f.NewBlock(ssa.BlockPlain)
+	s.endBlock().AddEdgeTo(deferExit)
+	s.startBlock(deferExit)
+	s.lastDeferExit = deferExit
+	s.lastDeferCount = len(s.openDefers)
+	zeroval := s.constInt8(types.Types[TUINT8], 0)
+	// Test for and run defers in reverse order
+	for i := len(s.openDefers) - 1; i >= 0; i-- {
+		r := s.openDefers[i]
+		bCond := s.f.NewBlock(ssa.BlockPlain)
+		bEnd := s.f.NewBlock(ssa.BlockPlain)
+
+		deferBits := s.variable(&deferBitsVar, types.Types[TUINT8])
+		// Generate code to check if the bit associated with the current
+		// defer is set.
+		bitval := s.constInt8(types.Types[TUINT8], 1<<uint(i))
+		andval := s.newValue2(ssa.OpAnd8, types.Types[TUINT8], deferBits, bitval)
+		eqVal := s.newValue2(ssa.OpEq8, types.Types[TBOOL], andval, zeroval)
+		b := s.endBlock()
+		b.Kind = ssa.BlockIf
+		b.SetControl(eqVal)
+		b.AddEdgeTo(bEnd)
+		b.AddEdgeTo(bCond)
+		bCond.AddEdgeTo(bEnd)
+		s.startBlock(bCond)
+
+		// Clear this bit in deferBits and force store back to stack, so
+		// we will not try to re-run this defer call if this defer call panics.
+		nbitval := s.newValue1(ssa.OpCom8, types.Types[TUINT8], bitval)
+		maskedval := s.newValue2(ssa.OpAnd8, types.Types[TUINT8], deferBits, nbitval)
+		s.store(types.Types[TUINT8], s.deferBitsAddr, maskedval)
+		// Use this value for following tests, so we keep previous
+		// bits cleared.
+		s.vars[&deferBitsVar] = maskedval
+
+		// Generate code to call the function call of the defer, using the
+		// closure/receiver/args that were stored in argtmps at the point
+		// of the defer statement.
+		argStart := Ctxt.FixedFrameSize()
+		fn := r.n.Left
+		stksize := fn.Type.ArgWidth()
+		...
+		for j, argAddrVal := range r.argVals {
+			f := getParam(r.n, j)
+			pt := types.NewPtr(f.Type)
+			addr := s.constOffPtrSP(pt, argStart+f.Offset)
+			if !canSSAType(f.Type) {
+				s.move(f.Type, addr, argAddrVal)
+			} else {
+				argVal := s.load(f.Type, argAddrVal)
+				s.storeType(f.Type, addr, argVal, 0, false)
+			}
+		}
+		var call *ssa.Value
+		...
+		call = s.newValue1A(ssa.OpStaticCall, types.TypeMem, fn.Sym.Linksym(), s.mem())
+		call.AuxInt = stksize
+		s.vars[&memVar] = call
+		...
+		s.endBlock()
+		s.startBlock(bEnd)
+	}
+}
+```
+
+### 函数信息
+
+TODO: 转移到 panic 中，函数信息仅用于 panic 内建发生时
+
+```go
+// src/cmd/compile/internal/gc/ssa.go
+func buildssa(fn *Node, worker int) *ssa.Func {
+	...
+	if s.hasOpenDefers {
+		s.emitOpenDeferInfo()
+	}
+	...
+}
+```
+
+```go
+type openDeferInfo struct {
+	// The ODEFER node representing the function call of the defer
+	n *Node
+	// If defer call is closure call, the address of the argtmp where the
+	// closure is stored.
+	closure *ssa.Value
+	// The node representing the argtmp where the closure is stored - used for
+	// function, method, or interface call, to store a closure that panic
+	// processing can use for this defer.
+	closureNode *Node
+	// If defer call is interface call, the address of the argtmp where the
+	// receiver is stored
+	rcvr *ssa.Value
+	// The node representing the argtmp where the receiver is stored
+	rcvrNode *Node
+	// The addresses of the argtmps where the evaluated arguments of the defer
+	// function call are stored.
+	argVals []*ssa.Value
+	// The nodes representing the argtmps where the args of the defer are stored
+	argNodes []*Node
+}
+func (s *state) emitOpenDeferInfo() {
+	x := Ctxt.Lookup(s.curfn.Func.lsym.Name + ".opendefer")
+	s.curfn.Func.lsym.Func.OpenCodedDeferInfo = x
+	off := 0
+
+	// Compute maxargsize (max size of arguments for all defers)
+	// first, so we can output it first to the funcdata
+	var maxargsize int64
+	for i := len(s.openDefers) - 1; i >= 0; i-- {
+		r := s.openDefers[i]
+		argsize := r.n.Left.Type.ArgWidth()
+		if argsize > maxargsize {
+			maxargsize = argsize
+		}
+	}
+	off = dvarint(x, off, maxargsize)
+	off = dvarint(x, off, -s.deferBitsTemp.Xoffset)
+	off = dvarint(x, off, int64(len(s.openDefers)))
+
+	// Write in reverse-order, for ease of running in that order at runtime
+	for i := len(s.openDefers) - 1; i >= 0; i-- {
+		r := s.openDefers[i]
+		off = dvarint(x, off, r.n.Left.Type.ArgWidth())
+		off = dvarint(x, off, -r.closureNode.Xoffset)
+		numArgs := len(r.argNodes)
+		if r.rcvrNode != nil {
+			// If there's an interface receiver, treat/place it as the first
+			// arg. (If there is a method receiver, it's already included as
+			// first arg in r.argNodes.)
+			numArgs++
+		}
+		off = dvarint(x, off, int64(numArgs))
+		if r.rcvrNode != nil {
+			off = dvarint(x, off, -r.rcvrNode.Xoffset)
+			off = dvarint(x, off, s.config.PtrSize)
+			off = dvarint(x, off, 0)
+		}
+		for j, arg := range r.argNodes {
+			f := getParam(r.n, j)
+			off = dvarint(x, off, -arg.Xoffset)
+			off = dvarint(x, off, f.Type.Size())
+			off = dvarint(x, off, f.Offset)
+		}
+	}
+}
+```
 
 ## 9.2.4 `defer` 的演进过程
 

@@ -1,11 +1,58 @@
 ---
 weight: 2403
-title: "9.3 恐慌与恢复语句"
+title: "9.3 恐慌与恢复内建函数"
 ---
 
-# 9.3 恐慌与恢复语句
+# 9.3 恐慌与恢复内建函数
 
 [TOC]
+
+<!-- panic/recover 由 russ cox 完成 -->
+
+<!-- 
+
+		// 根据 TESTL AX, AX 判断 deferproc 或者 deferprocStack 的返回值：
+		// 0 表示我们应该继续执行
+		// 1 表示我们应该跳转到 deferreturn 调用
+
+原因在于 `deferproc` 或者 `deferprocStack` 的返回值可能是 0 也可能是 1。
+当返回 0 时，说明 defer 语句的记录被成功创建，返回值会记录在 AX 上：
+
+```go
+//go:nosplit
+func deferproc(siz int32, fn *funcval) {
+	...
+	return0()
+}
+```
+
+```asm
+TEXT runtime·return0(SB), NOSPLIT, $0
+	MOVL	$0, AX
+	RET
+```
+
+而当发生 panic 时，AX 的值会记录为 1，从而会跳转到函数尾声，执行 `deferreturn`。 -->
+
+
+
+<!-- TODO: 当发生 panic 时，如何回到一个开放编码的 defer
+对于一个开放编码式 defer 而言，它比普通类型的 defer 多记录了以下字段：
+
+```go
+// src/runtime/panic.go
+type _defer struct {
+	started   bool	// 指定 defer 是否已经执行
+	openDefer bool	// 指定是否是一个开放编码式 defer
+	fd        unsafe.Pointer
+	varp      uintptr
+	framepc   uintptr
+	...
+}
+```
+
+这些字段的主要功能是在需要进行调用时候 -->
+
 
 panic 能中断一个程序的执行，同时也能在一定情况下进行恢复。本节我们就来看一看 panic 和 recover 这对关键字
 的实现机制。根据我们对 Go 的实践，可以预见的是，他们的实现跟调度器和 defer 关键字也紧密相关。
@@ -50,9 +97,7 @@ TEXT main.main.func1(SB) /Users/changkun/dev/go-under-the-hood/demo/7-lang/panic
 
 其实也只是一个 `runtime.gorecover` 调用。
 
-
-
-## `gopanic` 和 `gorecover`
+## 9.3.1 `gopanic` 和 `gorecover`
 
 正如前面所探究得来，panic 关键字不过是一个 `gopanic` 调用，接受一个参数。
 在处理 panic 期间，会先判断当前 panic 的类型，确定 panic 是否可恢复。
@@ -263,14 +308,10 @@ func recovery(gp *g) {
 	sp := gp.sigcode0
 	pc := gp.sigcode1
 
-	// d 的参数需要位于栈中
-	if sp != 0 && (sp < gp.stack.lo || gp.stack.hi < sp) {
-		print("recover: ", hex(sp), " not in [", hex(gp.stack.lo), ", ", hex(gp.stack.hi), "]\n")
-		throw("bad recovery")
-	}
+	...
 
-	// 再次为 d 返回来调用 deferproc
-	// 这时候返回 1。调用函数将跳转到标准的返回 epilogue
+	// 使 deferproc 为此 d 返回
+	// 这时候返回 1。调用函数将跳转到标准的返回尾声
 	gp.sched.sp = sp
 	gp.sched.pc = pc
 	gp.sched.lr = 0
