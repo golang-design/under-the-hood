@@ -29,8 +29,8 @@ func randomDefers() {
 }
 ```
 
-因而 defer 并不是免费的午餐，复杂情况下的 defer 用例将产生运行时性能问题。
-本节我们来讨论 defer 的本质及其产生性能损耗的原因。
+因而 defer 并不是免费的午餐，在一个复杂的调用中，当无法直接确定需要的产生的延迟调用的数量时，
+延迟语句将产生运行时性能问题。本节我们来讨论 defer 的实现本质及其对症下药的相关性能优化手段。
 
 ## 9.2.1 defer 的类型
 
@@ -220,6 +220,7 @@ TEXT runtime·return0(SB), NOSPLIT, $0
 多个 defer 的 link 链表，该链表指向下一个需要执行的 defer，如图 9.2.1 所示。
 
 ```go
+// src/runtime/panic.go
 type _defer struct {
 	siz       int32
 	heap      bool
@@ -229,6 +230,7 @@ type _defer struct {
 	link      *_defer
 	...
 }
+// src/runtime/runtime2.go
 type g struct {
 	...
 	_defer *_defer
@@ -249,8 +251,6 @@ type g struct {
 这个调用很简单，仅仅只是将需要被 defer 调用的函数做了一次记录：
 
 ```go
-// 创建一个新的被延期执行的函数 fn，具有 siz 字节大小的参数。
-// 编译器会将 defer 语句翻译为此调用。
 //go:nosplit
 func deferproc(siz int32, fn *funcval) {
 	...
@@ -279,14 +279,18 @@ func deferproc(siz int32, fn *funcval) {
 并且通过 `newdefer` 来创建一个新的 `_defer` 实例，
 然后由 `fn`、`callerpc` 和 `sp` 来保存调用该 defer 的 Goroutine 上下文。
 
-注意，在这里我们看到了一个对参数进行拷贝的操作。这个操作也是我们在实践过程中经历过的，defer 调用被记录时，并不会对参数进行求值，而是会对参数完成一次拷贝。
+注意，在这里我们看到了一个对参数进行拷贝的操作。这个操作也是我们在实践过程中经历过的，
+defer 调用被记录时，并不会对参数进行求值，而是会对参数完成一次拷贝。
 这么做原因在于，`defer` 可能会恢复 `panic`，进而导致 `fn` 的参数可能不安全。
 <!-- TODO: 为什么？ -->
 
 出于性能考虑，`newdefer` 通过 P 或者调度器 sched 上的的本地或全局 defer 池来
-复用已经在堆上分配的内存。
+复用已经在堆上分配的内存。defer 的资源池会根据被延迟的调用所需的参数来决定 defer 记录
+的大小等级，每 16 个字节分一个等级。此做法的动机与运行时内存分配器针对不同大小对象的分配思路雷同，
+这里不再做深入讨论。
 
 ```go
+// src/runtime/runtime2.go
 type p struct {
 	...
 	// 不同大小的本地 defer 池
@@ -303,9 +307,12 @@ type schedt struct {
 }
 ```
 
-从而新建 `_defer` 实例，而后将其加入到了 Goroutine 所保留的 defer 链表上，通过 link 字段串联。
+对于新建的 `_defer` 实例而言，会将其加入到 Goroutine 所保留的 defer 链表上，
+通过 `link` 字段串联。
 
 ```go
+// src/runtime/panic.go
+
 //go:nosplit
 func newdefer(siz int32) *_defer {
 	var d *_defer
@@ -358,6 +365,8 @@ func newdefer(siz int32) *_defer {
 然后跳转并执行：
 
 ```go
+// src/runtime/panic.go
+
 //go:nosplit
 func deferreturn(arg0 uintptr) {
 	gp := getg()
@@ -399,6 +408,8 @@ func deferreturn(arg0 uintptr) {
 以及它的调用方 `deferreturn` 的 SP：
 
 ```asm
+// src/runtime/asm_amd64.s
+
 // func jmpdefer(fv *funcval, argp uintptr)
 TEXT runtime·jmpdefer(SB), NOSPLIT, $0-16
 	MOVQ	fv+0(FP), DX	// DX = fn
@@ -418,6 +429,8 @@ TEXT runtime·jmpdefer(SB), NOSPLIT, $0-16
 并在本地池已满时将其归还到全局资源池:
 
 ```go
+// src/runtime/panic.go
+
 //go:nosplit
 func freedefer(d *_defer) {
 	...
@@ -466,62 +479,21 @@ func freedefer(d *_defer) {
 
 ## 9.2.3 在栈上创建 defer
 
-TODO: 尚未完成
-
 defer 还可以直接在栈上进行分配，也就是第二种记录 defer 的形式 `deferprocStack`。
-在栈上分配 defer 的好处在于不再需要考虑内存分配时产生的性能开销，只需要适当的维护 `_defer`
-的链表即可。
+在栈上分配 defer 的好处在于函数返回后 `_defer` 便已得到释放，
+不再需要考虑内存分配时产生的性能开销，只需要适当的维护 `_defer` 的链表即可。
+
+在 SSA 阶段与在堆上分配的区别在于，在栈上创建 defer，需要直接在函数调用帧上使用编译器来初始化
+`_defer` 记录，并作为参数传递给 `deferprocStack`：
 
 ```go
-func deferstruct(stksize int64) *types.Type {
-	makefield := func(name string, typ *types.Type) *types.Field {
-		f := types.NewField()
-		f.Type = typ
-		// Unlike the global makefield function, this one needs to set Pkg
-		// because these types might be compared (in SSA CSE sorting).
-		// TODO: unify this makefield and the global one above.
-		f.Sym = &types.Sym{Name: name, Pkg: localpkg}
-		return f
-	}
-	argtype := types.NewArray(types.Types[TUINT8], stksize)
-	argtype.Width = stksize
-	argtype.Align = 1
-	// These fields must match the ones in runtime/runtime2.go:_defer and
-	// cmd/compile/internal/gc/ssa.go:(*state).call.
-	fields := []*types.Field{
-		makefield("siz", types.Types[TUINT32]),
-		makefield("started", types.Types[TBOOL]),
-		makefield("heap", types.Types[TBOOL]),
-		makefield("openDefer", types.Types[TBOOL]),
-		makefield("sp", types.Types[TUINTPTR]),
-		makefield("pc", types.Types[TUINTPTR]),
-		// Note: the types here don't really matter. Defer structures
-		// are always scanned explicitly during stack copying and GC,
-		// so we make them uintptr type even though they are real pointers.
-		makefield("fn", types.Types[TUINTPTR]),
-		makefield("_panic", types.Types[TUINTPTR]),
-		makefield("link", types.Types[TUINTPTR]),
-		makefield("framepc", types.Types[TUINTPTR]),
-		makefield("varp", types.Types[TUINTPTR]),
-		makefield("fd", types.Types[TUINTPTR]),
-		makefield("args", argtype),
-	}
-
-	// build struct holding the above fields
-	s := types.New(TSTRUCT)
-	s.SetNoalg(true)
-	s.SetFields(fields)
-	s.Width = widstruct(s, s, 0, 1)
-	s.Align = uint8(Widthptr)
-	return s
-}
+// src/cmd/compile/internal/gc/ssa.go
 func (s *state) call(n *Node, k callKind) *ssa.Value {
 	...
-
 	var call *ssa.Value
 	if k == callDeferStack {
 		// 直接在栈上创建 defer 记录
-		t := deferstruct(stksize)
+		t := deferstruct(stksize) // 从编译器角度构造 _defer 结构
 		d := tempAt(n.Pos, s.curfn, t)
 
 		s.vars[&memVar] = s.newValue1A(ssa.OpVarDef, types.TypeMem, d, s.mem())
@@ -540,110 +512,123 @@ func (s *state) call(n *Node, k callKind) *ssa.Value {
 		off := t.FieldOff(12)
 		args := n.Rlist.Slice()
 
-		// Set receiver (for interface calls). Always a pointer.
-		if rcvr != nil {
-			p := s.newValue1I(ssa.OpOffPtr, ft.Recv().Type.PtrTo(), off, addr)
-			s.store(types.Types[TUINTPTR], p, rcvr)
-		}
-		// Set receiver (for method calls).
-		if n.Op == OCALLMETH {
-			f := ft.Recv()
-			s.storeArgWithBase(args[0], f.Type, addr, off+f.Offset)
-			args = args[1:]
-		}
-		// Set other args.
-		for _, f := range ft.Params().Fields().Slice() {
-			s.storeArgWithBase(args[0], f.Type, addr, off+f.Offset)
-			args = args[1:]
-		}
-
-		// Call runtime.deferprocStack with pointer to _defer record.
+		// 调用 runtime.deferprocStack，以 _defer 记录的指针作为参数传递
 		arg0 := s.constOffPtrSP(types.Types[TUINTPTR], Ctxt.FixedFrameSize())
 		s.store(types.Types[TUINTPTR], arg0, addr)
 		call = s.newValue1A(ssa.OpStaticCall, types.TypeMem, deferprocStack, s.mem())
-		if stksize < int64(Widthptr) {
-			// We need room for both the call to deferprocStack and the call to
-			// the deferred function.
-			stksize = int64(Widthptr)
-		}
-		call.AuxInt = stksize
+		...
 	} else {
 		...
 	}
-	s.vars[&memVar] = call
 
-	// Finish block for defers
+	// 函数尾声与堆上分配的栈一样，调用 deferreturn
 	if k == callDefer || k == callDeferStack {
-		b := s.endBlock()
-		b.Kind = ssa.BlockDefer
-		b.SetControl(call)
-		bNext := s.f.NewBlock(ssa.BlockPlain)
-		b.AddEdgeTo(bNext)
-		// Add recover edge to exit code.
-		r := s.f.NewBlock(ssa.BlockPlain)
-		s.startBlock(r)
+		...
 		s.exit()
-		b.AddEdgeTo(r)
-		b.Likely = ssa.BranchLikely
-		s.startBlock(bNext)
 	}
-
-	res := n.Left.Type.Results()
-	if res.NumFields() == 0 || k != callNormal {
-		// call has no return value. Continue with the next statement.
-		return nil
-	}
-	fp := res.Field(0)
-	return s.constOffPtrSP(types.NewPtr(fp.Type), fp.Offset+Ctxt.FixedFrameSize())
+	...
 }
 ```
 
+可见，在编译阶段，一个 `_defer` 记录的空间已经在栈上得到保留，`deferprocStack` 的作用
+就仅仅承担了运行时对该记录的初始化这一功能：
+
 ```go
-// deferprocStack 讲一个新的 defer 函数和一个 defer 记录在栈上入队
-// defer 记录必须初始化它的 siz 和 fn。其他字段可以包含无用信息。
-// defer 记录必须立刻紧跟 defer 参数所在的内存之后。
-// Nosplit 是因为栈上的参数不会被扫描，直到 defer 记录被连接到 gp._defer 列表上。
+// src/runtime/panic.go
+
 //go:nosplit
 func deferprocStack(d *_defer) {
 	gp := getg()
-	// siz 和 fn 已经被设置
-	// 其他字段在进入 deferprocStack 时是垃圾，并且在此初始化
+	// 注意，siz 和 fn 已经在编译阶段完成设置，这里只初始化了其他字段
 	d.started = false
-	d.heap = false
+	d.heap = false		// 可见此时 defer 被标记为不在堆上分配
 	d.openDefer = false
 	d.sp = getcallersp()
 	d.pc = getcallerpc()
-	d.framepc = 0
-	d.varp = 0
-	// 下面的代码实现了没有写屏障的这些内容:
-	//   d.panic = nil
-	//   d.fd = nil
+	...
+	// 尽管在栈上进行分配，仍然需要将多个 _defer 记录通过链表进行串联，
+	// 以便在 deferreturn 中找到被延迟的函数的入口地址：
 	//   d.link = gp._defer
 	//   gp._defer = d
-	// 前三个写入的是栈，而且都是为初始化的内存，因此不需要写屏障。
-	// 第四个不需要写屏障的原因是我们显式的标记了 defer 结构。
-	*(*uintptr)(unsafe.Pointer(&d._panic)) = 0
-	*(*uintptr)(unsafe.Pointer(&d.fd)) = 0
 	*(*uintptr)(unsafe.Pointer(&d.link)) = uintptr(unsafe.Pointer(gp._defer))
 	*(*uintptr)(unsafe.Pointer(&gp._defer)) = uintptr(unsafe.Pointer(d))
-
 	return0()
+}
+```
+
+至于函数尾声的行为，与在堆上进行分配的操作同样是调用 `deferreturn`，我们就不再重复说明了。
+当然，里面涉及的 `freedefer` 调用由于不需要释放任何内存，也就早早返回了：
+
+```go
+// src/runtime/panic.go
+func freedefer(d *_defer) {
+	if !d.heap {
+		return
+	}
+	...
 }
 ```
 
 ## 9.2.3 开放编码式 defer
 
-TODO: 尚未完成
-
-出于对性能的考量，`_defer` 还记录了一些额外的字段，用于性能优化。
+正如本节最初中描述的那样，defer 给我们的第一感觉其实是一个编译期特性。前面我们讨论了
+为什么 defer 会需要运行时的支持，已经需要运行时的 defer 是如何工作的。现在我们来
+探究一下什么情况下能够让 defer 进化为一个编译期特性，即在函数末尾直接对延迟函数进行调用，
+做到几乎不需要额外的开销。这类几乎不需要额外运行时性能开销的 defer，正是开放编码式 defer。
+这类 defer 与直接调用产生的性能差异有多大呢？我们不妨编写两个性能测试：
 
 ```go
+func call()  { func() {}() }
+func callDefer() { defer func() {}() }
+func BenchmarkDefer(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		call() // 第二次运行时替换为 callDefer
+	}
+}
+```
+
+在 Go 1.14 版本下，读者可以获得类似下方的性能估计，其中使用 `callDefer` 后，
+性能损耗大约为 1 ns。这种纳秒级的性能损耗不到一个 CPU 时钟周期，
+我们已经可以认为开放编码式 defer 几乎没有了性能开销：
+
+```
+name      old time/op  new time/op  delta
+Defer-12  1.24ns ± 1%  2.23ns ± 1%  +80.06%  (p=0.000 n=10+9)
+```
+
+那么开放编码式 defer 是怎么实现的？所有的 defer 都是开放编码式的吗？
+什么情况下，开放编码式 defer 会退化为一个以来运行时的特性？
+
+对于一个开放编码式 defer 而言，它比普通类型的 defer 多记录了以下字段：
+
+```go
+// src/runtime/panic.go
 type _defer struct {
-	started   bool	// defer 是否已经执行
-	openDefer bool	// 是否是一个开放编码式 defer
+	started   bool	// 指定 defer 是否已经执行
+	openDefer bool	// 指定是否是一个开放编码式 defer
 	fd        unsafe.Pointer
 	varp      uintptr
 	framepc   uintptr
+	...
+}
+```
+
+这些字段的主要功能是在需要进行调用时候
+
+```go
+// src/cmd/compile/internal/gc/ssa.go
+func (s *state) stmt(n *Node) {
+	...
+	switch n.Op {
+	case ODEFER:
+		// 开放编码式 defer
+		if s.hasOpenDefers {
+			s.openDeferRecord(n.Left)
+		} else {
+			...
+		}
+	case ...
+	}
 	...
 }
 ```
@@ -710,7 +695,7 @@ func runOpenDeferFrame(gp *g, d *_defer) bool {
 
 ## 9.2.4 `defer` 的演进过程
 
-TODO: Review
+TODO: 尚未完成
 
 defer 最早的实现非常的粗糙，每当出现一个 defer 调用，都会在堆上分配 defer 记录，
 并参与调用的参数实施一次拷贝，然后将其加入到 defer 链条上；当函数返回需要触发 defer 调用时，
