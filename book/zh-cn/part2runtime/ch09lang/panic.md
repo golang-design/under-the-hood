@@ -53,6 +53,69 @@ type _defer struct {
 
 这些字段的主要功能是在需要进行调用时候 -->
 
+<!-- ### 函数信息
+
+TODO: 转移到 panic 中，函数信息仅用于 panic 内建发生时
+
+```go
+// src/cmd/compile/internal/gc/ssa.go
+func buildssa(fn *Node, worker int) *ssa.Func {
+	...
+	if s.hasOpenDefers {
+		s.emitOpenDeferInfo()
+	}
+	...
+}
+```
+
+```go
+func (s *state) emitOpenDeferInfo() {
+	x := Ctxt.Lookup(s.curfn.Func.lsym.Name + ".opendefer")
+	s.curfn.Func.lsym.Func.OpenCodedDeferInfo = x
+	off := 0
+
+	// Compute maxargsize (max size of arguments for all defers)
+	// first, so we can output it first to the funcdata
+	var maxargsize int64
+	for i := len(s.openDefers) - 1; i >= 0; i-- {
+		r := s.openDefers[i]
+		argsize := r.n.Left.Type.ArgWidth()
+		if argsize > maxargsize {
+			maxargsize = argsize
+		}
+	}
+	off = dvarint(x, off, maxargsize)
+	off = dvarint(x, off, -s.deferBitsTemp.Xoffset)
+	off = dvarint(x, off, int64(len(s.openDefers)))
+
+	// Write in reverse-order, for ease of running in that order at runtime
+	for i := len(s.openDefers) - 1; i >= 0; i-- {
+		r := s.openDefers[i]
+		off = dvarint(x, off, r.n.Left.Type.ArgWidth())
+		off = dvarint(x, off, -r.closureNode.Xoffset)
+		numArgs := len(r.argNodes)
+		if r.rcvrNode != nil {
+			// If there's an interface receiver, treat/place it as the first
+			// arg. (If there is a method receiver, it's already included as
+			// first arg in r.argNodes.)
+			numArgs++
+		}
+		off = dvarint(x, off, int64(numArgs))
+		if r.rcvrNode != nil {
+			off = dvarint(x, off, -r.rcvrNode.Xoffset)
+			off = dvarint(x, off, s.config.PtrSize)
+			off = dvarint(x, off, 0)
+		}
+		for j, arg := range r.argNodes {
+			f := getParam(r.n, j)
+			off = dvarint(x, off, -arg.Xoffset)
+			off = dvarint(x, off, f.Type.Size())
+			off = dvarint(x, off, f.Offset)
+		}
+	}
+}
+``` -->
+
 
 panic 能中断一个程序的执行，同时也能在一定情况下进行恢复。本节我们就来看一看 panic 和 recover 这对关键字
 的实现机制。根据我们对 Go 的实践，可以预见的是，他们的实现跟调度器和 defer 关键字也紧密相关。

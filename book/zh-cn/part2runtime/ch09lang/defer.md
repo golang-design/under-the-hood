@@ -8,8 +8,8 @@ title: "9.2 延迟语句"
 [TOC]
 
 延迟语句 `defer` 在最早期的 Go 语言设计中并不存在，后来才单独增加了这一特性，
-由 Robert Griesemer 完成语言规范的编写，并由 Ken Thompson 完成最早期的实现，
-两人合作完成这一语言特性。
+由 Robert Griesemer 完成语言规范的编写 [Griesemer, 2009]，
+并由 Ken Thompson 完成最早期的实现 [Thompson, 2009]，两人合作完成这一语言特性。
 
 defer 的语义表明，它会在函数返回、产生恐慌或者 `runtime.Goexit` 时被调用。直觉上看，
 defer 应该由编译器直接将需要的函数调用插入到该调用的地方，似乎是一个编译期特性，
@@ -30,7 +30,7 @@ func randomDefers() {
 ```
 
 因而 defer 并不是免费的午餐，在一个复杂的调用中，当无法直接确定需要的产生的延迟调用的数量时，
-延迟语句将产生运行时性能问题。本节我们来讨论 defer 的实现本质及其对症下药的相关性能优化手段。
+延迟语句将导致运行时性能下降的问题。本节我们来讨论 defer 的实现本质及其对症下药的相关性能优化手段。
 
 ## 9.2.1 defer 的类型
 
@@ -260,8 +260,10 @@ func deferproc(siz int32, fn *funcval) {
 
 注意，在这里我们看到了一个对参数进行拷贝的操作。这个操作也是我们在实践过程中经历过的，
 defer 调用被记录时，并不会对参数进行求值，而是会对参数完成一次拷贝。
-<!-- 这么做原因在于，`defer` 可能会恢复 `panic`，进而导致 `fn` 的参数可能不安全。 -->
-<!-- TODO: 为什么？ -->
+这么做原因是由于语义上的考虑。直觉上讲，defer 的参数应当在它所写的位置对传入的参数
+进行求值，而不是将求值步骤推迟，因为延后的参数可能发生变化，导致 defer 的语义发生意料之外的错误。
+例如，`f, _ := os.Open("file.txt")` 后立刻指定 `defer f.Close()`，倘若随后的语句修改了
+`f` 的值，那么将导致 `f` 无法被正常关闭。
 
 出于性能考虑，`newdefer` 通过 P 或者调度器 sched 上的的本地或全局 defer 池来
 复用已经在堆上分配的内存。defer 的资源池会根据被延迟的调用所需的参数来决定 defer 记录
@@ -547,8 +549,6 @@ func freedefer(d *_defer) {
 
 ## 9.2.3 开放编码式 defer
 
-TODO: 精简代码、详细说明 SSA 变换图
-
 正如本节最初中描述的那样，defer 给我们的第一感觉其实是一个编译期特性。前面我们讨论了
 为什么 defer 会需要运行时的支持，已经需要运行时的 defer 是如何工作的。现在我们来
 探究一下什么情况下能够让 defer 进化为一个仅编译期特性，即在函数末尾直接对延迟函数进行调用，
@@ -628,7 +628,6 @@ AX = mu
 0xf(SP) = 0x0
 AX = 0x10(SP)
 0(SP) = AX
-
 ```
 
 那么开放编码式 defer 是怎么实现的？所有的 defer 都是开放编码式的吗？
@@ -651,7 +650,13 @@ func walkstmt(n *Node) *Node {
 		if Curfn.Func.numDefers > maxOpenDefers {
 			Curfn.Func.SetOpenCodedDeferDisallowed(true)
 		}
-		// 存在逃逸时，禁用对 defer 进行开放编码
+		// 存在循环语句中的 defer，禁用对 defer 进行开放编码
+		// 是否有 defer 发生在循环语句内，在逃逸分析中进行判断，
+		// 逃逸分析会检查是否存在循环（loopDepth）：
+		// if where.Op == ODEFER && e.loopDepth == 1 {
+		// 	where.Esc = EscNever
+		// 	...
+		// }
 		if n.Esc != EscNever {
 			Curfn.Func.SetOpenCodedDeferDisallowed(true)
 		}
@@ -659,7 +664,6 @@ func walkstmt(n *Node) *Node {
 	}
 	...
 }
-
 func buildssa(fn *Node, worker int) *ssa.Func {
 	...
 	var s state
@@ -682,22 +686,79 @@ func buildssa(fn *Node, worker int) *ssa.Func {
 1. 没有禁用编译器优化，即没有设置 `-gcflags "-N"`
 2. 存在 defer 调用
 3. 函数内 defer 的数量不超过 8 个、且返回语句与延迟语句个数的乘积不超过 15
-4. 没有与 defer 相关的参数发生逃逸
+4. 没有与 defer 发生在循环语句中
 
-### 延迟掩码
+### 延迟比特
 
-那么开放编码的 defer 是如何插入到函数返回的语句末尾并执行延迟调用的呢？
+当然，正常编写的 `defer` 可以直接被编译器分析得出，但是如本节开头提到的，如果一个
+defer 发生在一个条件语句中，而这个条件必须等到运行时才能确定：
+
+```go
+if rand.Intn(100) < 42 {
+	defer fmt.Println("meaning-of-life")
+}
+```
+
+那么如何才能使用最小的成本，让插入到函数末尾的延迟语句，在条件成立时候被正确执行呢？
+这遍需要需要一种机制，能够记录存在延迟语句的条件分支是否被执行，
+这种机制在 Go 中利用了延迟比特（defer bit）。这种做法非常巧妙，但原理也非常简单。
+对于下面的代码而言：
+
+```go
+defer f1(a1)
+if cond {
+	defer f2(a2)
+}
+...
+```
+
+使用延迟比特的核心思想可以用这样的代码来概括：
+
+```go
+deferBits = 0           // 初始值 00000000
+
+deferBits |= 1 << 0     // 遇到第一个 defer，设置为 00000001
+_f1 = f1
+_a1 = a1
+if cond {
+	// 如果第二个 defer 被设置，则设置为 00000011，否则依然为 00000001
+	deferBits |= 1 << 1
+	_f2 = f2
+	_a2 = a2
+}
+...
+exit:
+// 按顺序倒序检查延迟比特。如果第二个 defer 被设置，则 00000011 & 00000010 == 00000010，
+// 即延迟比特不为零，应该调用 f2。
+// 如果第二个 defer 没有被设置，则 00000001 & 00000010 == 00000000，
+// 即延迟比特为零，不应该调用 f2。
+if deferBits & 1 << 1 != 0 { // 00000011 & 00000010 != 0
+	deferBits &^= 1<<1       // 00000001
+	_f2(_a2)
+}
+// 同理，由于 00000001 & 00000001 == 00000001，因此延迟比特不为零，应该调用 f1
+if deferBits && 1 << 0 != 0 {
+	deferBits &^= 1<<0
+	_f1(_a1)
+}
+```
+
+这个思想其实非常简单，就是以一个长度为 8 位的二进制码（也是硬件架构里最小也是最通用的情况），
+以每一位是否被设置 1，来判断延迟语句是否在运行时被设置，如果设置，则发生调用。否则则不调用。
+
+在实际的实现中，可以看到，当可以设置开放编码式 defer 时，`buildssa` 会首先创建一个
+长度位 8 位的临时变量：
 
 ```go
 // src/cmd/compile/internal/gc/ssa.go
 func buildssa(fn *Node, worker int) *ssa.Func {
 	...
 	if s.hasOpenDefers {
-		// 创建 deferBits 变量及对应的栈槽。deferBits 是一个用于显示激活且被开放编码的 defer。
+		// 创建 deferBits 临时变量
 		deferBitsTemp := tempAt(src.NoXPos, s.curfn, types.Types[TUINT8])
 		s.deferBitsTemp = deferBitsTemp
-		// deferBits 被设计为 8 位二进制，是硬件架构里最小也是最通用的情况。
-		// 因此可以被开放编码的 defer 数量不能超过 8 个。
+		// deferBits 被设计为 8 位二进制，因此可以被开放编码的 defer 数量不能超过 8 个
+		// 此处还将起始 deferBits 设置为零
 		startDeferBits := s.entryNewValue0(ssa.OpConst8, types.Types[TUINT8])
 		s.vars[&deferBitsVar] = startDeferBits
 		s.deferBitsAddr = s.addr(deferBitsTemp, false)
@@ -709,6 +770,8 @@ func buildssa(fn *Node, worker int) *ssa.Func {
 	...
 }
 ```
+
+随后针对出现 defer 的语句，进行编码：
 
 ```go
 // src/cmd/compile/internal/gc/ssa.go
@@ -726,22 +789,25 @@ func (s *state) stmt(n *Node) {
 	}
 	...
 }
-```
-
-```go
+// 存储一个 defer 调用的相关信息，例如所在的语法树结点、被延迟的调用、参数等等
+type openDeferInfo struct {
+	n           *Node
+	closure     *ssa.Value
+	closureNode *Node
+	...
+	argVals     []*ssa.Value
+	argNodes    []*Node
+}
 func (s *state) openDeferRecord(n *Node) {
 	...
 	var args []*ssa.Value
 	var argNodes []*Node
 
-	opendefer := &openDeferInfo{
-		n: n,
-	}
+	// 记录与 defer 相关的入口地址与参数信息
+	opendefer := &openDeferInfo{n: n}
 	fn := n.Left
+	// 记录函数入口地址
 	if n.Op == OCALLFUNC {
-		// We must always store the function value in a stack slot for the
-		// runtime panic code to use. But in the defer exit code, we will
-		// call the function directly if it is a static function.
 		closureVal := s.expr(fn)
 		closure := s.openDeferSave(nil, fn.Type, closureVal)
 		opendefer.closureNode = closure.Aux.(*Node)
@@ -751,6 +817,7 @@ func (s *state) openDeferRecord(n *Node) {
 	} else {
 		...
 	}
+	// 记录需要立即求值的的参数
 	for _, argn := range n.Rlist.Slice() {
 		var v *ssa.Value
 		if canSSAType(argn.Type) {
@@ -763,10 +830,11 @@ func (s *state) openDeferRecord(n *Node) {
 	}
 	opendefer.argVals = args
 	opendefer.argNodes = argNodes
+
+	// 每多出现一个 defer，len(defers) 会增加，进而 
+	// 延迟比特 deferBits |= 1<<len(defers) 被设置在不同的位上
 	index := len(s.openDefers)
 	s.openDefers = append(s.openDefers, opendefer)
-
-	// 更新 deferBits = 1<<len(defers)
 	bitvalue := s.constInt8(types.Types[TUINT8], 1<<uint(index))
 	newDeferBits := s.newValue2(ssa.OpOr8, types.Types[TUINT8], s.variable(&deferBitsVar, types.Types[TUINT8]), bitvalue)
 	s.vars[&deferBitsVar] = newDeferBits
@@ -774,18 +842,11 @@ func (s *state) openDeferRecord(n *Node) {
 }
 ```
 
-### 尾声调用
+在函数返回退出前，`state` 的 `exit` 函数会依次倒序创建对延迟比特的检查代码，
+从而顺利调用被延迟的函数调用：
 
 ```go
 // src/cmd/compile/internal/gc/ssa.go
-func buildssa(fn *Node, worker int) *ssa.Func {
-	...
-	if s.curBlock != nil {
-		s.exit()
-		...
-	}
-	...
-}
 func (s *state) exit() *ssa.Block {
 	if s.hasdefer {
 		if s.hasOpenDefers {
@@ -804,15 +865,15 @@ func (s *state) openDeferExit() {
 	s.lastDeferExit = deferExit
 	s.lastDeferCount = len(s.openDefers)
 	zeroval := s.constInt8(types.Types[TUINT8], 0)
-	// Test for and run defers in reverse order
+	// 倒序检查 defer
 	for i := len(s.openDefers) - 1; i >= 0; i-- {
 		r := s.openDefers[i]
 		bCond := s.f.NewBlock(ssa.BlockPlain)
 		bEnd := s.f.NewBlock(ssa.BlockPlain)
 
+		// 检查 deferBits
 		deferBits := s.variable(&deferBitsVar, types.Types[TUINT8])
-		// Generate code to check if the bit associated with the current
-		// defer is set.
+		// 创建 if deferBits & 1 << len(defer) != 0 { ... }
 		bitval := s.constInt8(types.Types[TUINT8], 1<<uint(i))
 		andval := s.newValue2(ssa.OpAnd8, types.Types[TUINT8], deferBits, bitval)
 		eqVal := s.newValue2(ssa.OpEq8, types.Types[TBOOL], andval, zeroval)
@@ -824,18 +885,13 @@ func (s *state) openDeferExit() {
 		bCond.AddEdgeTo(bEnd)
 		s.startBlock(bCond)
 
-		// Clear this bit in deferBits and force store back to stack, so
-		// we will not try to re-run this defer call if this defer call panics.
+		// 如果创建的条件分支被触发，则清空当前的延迟比特: deferBits &^= 1 << len(defers)
 		nbitval := s.newValue1(ssa.OpCom8, types.Types[TUINT8], bitval)
 		maskedval := s.newValue2(ssa.OpAnd8, types.Types[TUINT8], deferBits, nbitval)
 		s.store(types.Types[TUINT8], s.deferBitsAddr, maskedval)
-		// Use this value for following tests, so we keep previous
-		// bits cleared.
 		s.vars[&deferBitsVar] = maskedval
 
-		// Generate code to call the function call of the defer, using the
-		// closure/receiver/args that were stored in argtmps at the point
-		// of the defer statement.
+		// 处理被延迟的函数调用，取出保存的入口地址、参数信息
 		argStart := Ctxt.FixedFrameSize()
 		fn := r.n.Left
 		stksize := fn.Type.ArgWidth()
@@ -851,6 +907,7 @@ func (s *state) openDeferExit() {
 				s.storeType(f.Type, addr, argVal, 0, false)
 			}
 		}
+		// 调用
 		var call *ssa.Value
 		...
 		call = s.newValue1A(ssa.OpStaticCall, types.TypeMem, fn.Sym.Linksym(), s.mem())
@@ -863,91 +920,15 @@ func (s *state) openDeferExit() {
 }
 ```
 
-### 函数信息
-
-TODO: 转移到 panic 中，函数信息仅用于 panic 内建发生时
-
-```go
-// src/cmd/compile/internal/gc/ssa.go
-func buildssa(fn *Node, worker int) *ssa.Func {
-	...
-	if s.hasOpenDefers {
-		s.emitOpenDeferInfo()
-	}
-	...
-}
-```
-
-```go
-type openDeferInfo struct {
-	// The ODEFER node representing the function call of the defer
-	n *Node
-	// If defer call is closure call, the address of the argtmp where the
-	// closure is stored.
-	closure *ssa.Value
-	// The node representing the argtmp where the closure is stored - used for
-	// function, method, or interface call, to store a closure that panic
-	// processing can use for this defer.
-	closureNode *Node
-	// If defer call is interface call, the address of the argtmp where the
-	// receiver is stored
-	rcvr *ssa.Value
-	// The node representing the argtmp where the receiver is stored
-	rcvrNode *Node
-	// The addresses of the argtmps where the evaluated arguments of the defer
-	// function call are stored.
-	argVals []*ssa.Value
-	// The nodes representing the argtmps where the args of the defer are stored
-	argNodes []*Node
-}
-func (s *state) emitOpenDeferInfo() {
-	x := Ctxt.Lookup(s.curfn.Func.lsym.Name + ".opendefer")
-	s.curfn.Func.lsym.Func.OpenCodedDeferInfo = x
-	off := 0
-
-	// Compute maxargsize (max size of arguments for all defers)
-	// first, so we can output it first to the funcdata
-	var maxargsize int64
-	for i := len(s.openDefers) - 1; i >= 0; i-- {
-		r := s.openDefers[i]
-		argsize := r.n.Left.Type.ArgWidth()
-		if argsize > maxargsize {
-			maxargsize = argsize
-		}
-	}
-	off = dvarint(x, off, maxargsize)
-	off = dvarint(x, off, -s.deferBitsTemp.Xoffset)
-	off = dvarint(x, off, int64(len(s.openDefers)))
-
-	// Write in reverse-order, for ease of running in that order at runtime
-	for i := len(s.openDefers) - 1; i >= 0; i-- {
-		r := s.openDefers[i]
-		off = dvarint(x, off, r.n.Left.Type.ArgWidth())
-		off = dvarint(x, off, -r.closureNode.Xoffset)
-		numArgs := len(r.argNodes)
-		if r.rcvrNode != nil {
-			// If there's an interface receiver, treat/place it as the first
-			// arg. (If there is a method receiver, it's already included as
-			// first arg in r.argNodes.)
-			numArgs++
-		}
-		off = dvarint(x, off, int64(numArgs))
-		if r.rcvrNode != nil {
-			off = dvarint(x, off, -r.rcvrNode.Xoffset)
-			off = dvarint(x, off, s.config.PtrSize)
-			off = dvarint(x, off, 0)
-		}
-		for j, arg := range r.argNodes {
-			f := getParam(r.n, j)
-			off = dvarint(x, off, -arg.Xoffset)
-			off = dvarint(x, off, f.Type.Size())
-			off = dvarint(x, off, f.Offset)
-		}
-	}
-}
-```
+从整个过程中我们可以看到，开放编码式 defer 并不是绝对的零成本，尽管编译器能够做到将
+延迟调用直接插入返回语句之前，但出于语义的考虑，需要在栈上对参与延迟调用的参数进行一次求值；
+同时出于条件语句中可能存在的 defer，还额外需要通过延迟比特来记录一个延迟语句是否在运行时
+被设置。
+因此，开放编码式 defer 的成本体现在非常少量的指令和位运算来配合在运行时判断是否存在需要被延迟调用的 defer。
 
 ## 9.2.4 `defer` 的演进过程
+
+我们最后来回顾一下延迟语句的整个演进过程。
 
 defer 最早的实现非常的粗糙，每当出现一个 defer 调用，都会在堆上分配 defer 记录，
 并参与调用的参数实施一次拷贝，然后将其加入到 defer 链条上；当函数返回需要触发 defer 调用时，
@@ -978,7 +959,7 @@ Dmitry Vyukov 将 per-G 分配的 defer 改为了从 per-P 资源池分配的机
 为 Go 1.13 进一步提升了 defer 的性能。
 
 在 Go 1.14 中，Dan Scales 作为 Go 团队的新成员，defer 的优化成为了他的第一个项目。
-他提出开放式编码 defer [Scales, 2019]，通过编译器辅助信息和位掩码在函数末尾处直接获取调用函数及参数，
+他提出开放式编码 defer [Scales, 2019]，通过编译器辅助信息和延迟比特在函数末尾处直接获取调用函数及参数，
 完成了近乎零成本的 defer 调用，成为了 Go 1.14 中几个出色的运行时性能优化之一。
 
 至此，defer 的优化之路正式告一段落。
@@ -1015,6 +996,8 @@ Dmitry Vyukov 将 per-G 分配的 defer 改为了从 per-P 资源池分配的机
 
 ## 进一步阅读的参考文献
 
+- [Griesemer, 2009] Robert Griesemer. defer statement. Jan 27, 2009. https://github.com/golang/go/commit/4a903e0b32be5a590880ceb7379e68790602c29d
+- [Thompson, 2009] Ken Thompson. defer. Jan 27, 2009. https://github.com/golang/go/commit/1e1cc4eb570aa6fec645ff4faf13431847b99db8
 - [Cox, 2011] Russ Cox. runtime: aggregate defer. Oct, 2011. https://github.com/golang/go/issues/2364
 - [Clements, 2016] Austin Clements. runtime: optimize defer code. Sep, 2016. https://github.com/golang/go/commit/4c308188cc05d6c26f2a2eb30631f9a368aaa737
 - [Ma, 2016] Minux Ma. runtime: defer is slow. Mar, 2016. https://github.com/golang/go/issues/14939
