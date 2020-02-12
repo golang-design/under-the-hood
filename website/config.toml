@@ -1,6 +1,6 @@
 baseURL = "http://changkun.de/golang"
 languageCode = "zh-cn"
-title = "Go Under The Hood"
+title = "Go 语言原本"
 theme = "book"
 
 [markup.highlight]
