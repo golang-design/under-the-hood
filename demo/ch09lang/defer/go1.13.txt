@@ -1,0 +1,19 @@
+goos: darwin
+goarch: amd64
+BenchmarkNoDefer-12          	109050661	        10.7 ns/op
+BenchmarkNoDefer-12          	100000000	        10.7 ns/op
+BenchmarkNoDefer-12          	100000000	        10.9 ns/op
+BenchmarkNoDefer-12          	100000000	        10.7 ns/op
+BenchmarkNoDefer-12          	100000000	        10.7 ns/op
+BenchmarkDefer-12            	35371660	        31.3 ns/op
+BenchmarkDefer-12            	36074563	        32.1 ns/op
+BenchmarkDefer-12            	36526944	        31.5 ns/op
+BenchmarkDefer-12            	35350124	        31.3 ns/op
+BenchmarkDefer-12            	36396634	        31.4 ns/op
+BenchmarkFastpathDefer-12    	341651562	         3.57 ns/op
+BenchmarkFastpathDefer-12    	343082756	         3.48 ns/op
+BenchmarkFastpathDefer-12    	338122260	         3.48 ns/op
+BenchmarkFastpathDefer-12    	342125202	         3.49 ns/op
+BenchmarkFastpathDefer-12    	340544653	         3.47 ns/op
+PASS
+ok  	_/Users/changkun/dev/go-under-the-hood/demo/7-lang/defer	20.264s
