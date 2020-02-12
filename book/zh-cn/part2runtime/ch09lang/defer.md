@@ -84,9 +84,9 @@ func (s *state) stmt(n *Node) {
 
 ## 9.2.2 在堆上分配的 defer
 
-我们先来讨论最简单的在堆上分配的 defer 这种形式。在堆上分配的原因可以是由于参数的逃逸，
-或者无法执行编译器优化导致的。如果一个与 defer 相关的参数会逃逸到堆上，
-则会尝试在堆上分配；如果一个 defer 不能被编译器采用开放编码优化（之后会提到），
+我们先来讨论最简单的在堆上分配的 defer 这种形式。在堆上分配的原因是 defer 语句出现
+在了循环语句里，或者无法执行更高阶的编译器优化导致的。如果一个与 defer 出现在循环语句中，则
+可以执行的次数可能无法在编译期决定；如果一个 defer 不能被编译器采用开放编码优化（之后会提到），
 则也会在堆上分配 defer。总之，在堆上分配的 defer 产生的运行时开销最大。
 
 ### 编译阶段
@@ -461,8 +461,8 @@ defer 还可以直接在栈上进行分配，也就是第二种记录 defer 的�
 在栈上分配 defer 的好处在于函数返回后 `_defer` 便已得到释放，
 不再需要考虑内存分配时产生的性能开销，只需要适当的维护 `_defer` 的链表即可。
 
-在 SSA 阶段与在堆上分配的区别在于，在栈上创建 defer，需要直接在函数调用帧上使用编译器来初始化
-`_defer` 记录，并作为参数传递给 `deferprocStack`：
+在 SSA 阶段与在堆上分配的区别在于，在栈上创建 defer，
+需要直接在函数调用帧上使用编译器来初始化 `_defer` 记录，并作为参数传递给 `deferprocStack`：
 
 ```go
 // src/cmd/compile/internal/gc/ssa.go
@@ -638,8 +638,8 @@ func walkstmt(n *Node) *Node {
 		if Curfn.Func.numDefers > maxOpenDefers {
 			Curfn.Func.SetOpenCodedDeferDisallowed(true)
 		}
-		// 存在循环语句中的 defer，禁用对 defer 进行开放编码
-		// 是否有 defer 发生在循环语句内，在逃逸分析中进行判断，
+		// 存在循环语句中的 defer，禁用对 defer 进行开放编码。
+		// 是否有 defer 发生在循环语句内，会在 SSA 之前的逃逸分析中进行判断，
 		// 逃逸分析会检查是否存在循环（loopDepth）：
 		// if where.Op == ODEFER && e.loopDepth == 1 {
 		// 	where.Esc = EscNever
@@ -972,7 +972,7 @@ Dmitry Vyukov 将 per-G 分配的 defer 改为了从 per-P 资源池分配的机
 1. 对于开放编码式 defer 而言：
 	- 编译器会直接将所需的参数存储到 FUNCDATA 中，并在返回语句的末尾插入被延迟的调用；
 	- 此类 defer 的唯一的运行时成本就是存储参与延迟调用的相关信息，运行时性能最好；
-	- 当整个调用中逻辑上会执行的 defer 不超过 15 个（例如七个 defer 作用在两个返回语句）、总 defer 数量不超过 8 个、且没有逃逸时，会激活使用此类 defer。
+	- 当整个调用中逻辑上会执行的 defer 不超过 15 个（例如七个 defer 作用在两个返回语句）、总 defer 数量不超过 8 个、且没有出现在循环语句中时，会激活使用此类 defer。
 2. 对于栈上分配的 defer 而言：
 	- 编译器会直接在栈上记录一个 `_defer` 记录，该记录不涉及内存分配，并将其作为参数，传入被翻译为 `deferprocStack` 的延迟语句，在延迟调用的位置将 `_defer` 压入 Goroutine 对应的延迟调用链表中；
 	- 在函数末尾处，通过编译器的配合，在调用被 defer 的函数前，调用 `deferreturn`，将被延迟的调用出栈并执行；
