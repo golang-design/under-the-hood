@@ -577,8 +577,8 @@ Defer-12  1.24ns ± 1%  2.23ns ± 1%  +80.06%  (p=0.000 n=10+9)
 我们再来观察以下开放编码式 defer 最终被编译的形式：
 
 ```shell
-go build -gcflags "-l" -ldflags=-compressdwarf=false -o main.out main.go
-go tool objdump -S main.out > main.s
+$ go build -gcflags "-l" -ldflags=-compressdwarf=false -o main.out main.go
+$ go tool objdump -S main.out > main.s
 ```
 
 对于如下形式的函数调用：
@@ -592,7 +592,7 @@ func callDefer() {
 ```
 
 整个调用最终编译结果既没有 `deferproc` 或者 `deferprocStack`，也没有了 `deferreturn`。
-延迟语句被直接插入到了函数的末尾。
+延迟语句被直接插入到了函数的末尾：
 
 ```asm
 TEXT main.callDefer(SB) /Users/changkun/Desktop/defer/main.go
@@ -616,18 +616,6 @@ func callDefer() {
   0x105798a		4883c428		ADDQ $0x28, SP			
   0x105798e		c3			RET				
   ...
-```
-
-```
-AX = func
-0x18(SP) = AX
-AX = mu
-0x10(SP) = mu
-
-
-0xf(SP) = 0x0
-AX = 0x10(SP)
-0(SP) = AX
 ```
 
 那么开放编码式 defer 是怎么实现的？所有的 defer 都是开放编码式的吗？
