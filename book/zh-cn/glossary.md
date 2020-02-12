@@ -60,5 +60,6 @@ title: "附录B：术语表"
 | 开放编码式  |                | Open-coded            |           |      |
 | 函数序言    |                |  Prologue            |            |      |
 | 函数尾声    |                |  Epilogue            |            |      |
+| 延迟比特    |                |  Defer Bit            |            |      |
 
 

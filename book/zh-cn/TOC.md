@@ -126,7 +126,7 @@
 - [13.1 指针检查器](part3tools/ch13gc/unsafe.md)
 - [13.2 逃逸分析](part3tools/ch13gc/escape.md)
 - [13.3 词法与文法](part3tools/ch13gc/parse.md)
-- [13.4 编译后端 SSA](part3tools/ch13gc/ssa.md)
+- [13.4 SSA 中间表示](part3tools/ch13gc/ssa.md)
 - [13.5 语言的自举](part3tools/ch13gc/bootstrap.md)
 - [13.6 过去、现在与未来](part3tools/ch13gc/future.md)
 
@@ -149,7 +149,7 @@
 - [15.6 条件变量](part4lib/ch15sync/cond.md)
 - [15.7 原子操作](part4lib/ch15sync/atomic.md)
 
-### [第 16 章 网络操作](part4lib/ch16net/readme.md)
+#### [第 16 章 网络操作](part4lib/ch16net/readme.md)
 
 - [16.1 文件描述符抽象](part4lib/ch16net/fd.md)
 - [16.2 路由管理](part4lib/ch16net/routers.md)
@@ -170,6 +170,7 @@
 ### [参考文献](bib.md)
 ### [附录A: 源码索引](all.md)
 ### [附录B: 术语表](glossary.md)
+### [附录C: Go 语言规范](spec.md)
 
 ## 许可
 

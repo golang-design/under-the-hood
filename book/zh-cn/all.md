@@ -7,10 +7,12 @@ title: "附录A：源码文件分配索引及完成情况"
 
 下面列出了 Go 源码文件所实现的功能，以及他们主要功能的介绍，在本书正文中对应的（粗略）位置：
 
-## 第五章
+## 第 5 章 Go 程序生命周期
 
 boot:
 
+- [x] src/cmd/go
+- [x] src/cmd/internal/compile
 - [x] src/internal/cpu
 - [x] src/runtime
   - [x] rt0_darwin_amd64.s
@@ -21,7 +23,7 @@ boot:
   - [x] os_linux.go
   - [x] go_tls.h
 
-## 第六章
+## 第 6 章 调度器
 
 sched, runtime sync:
 
@@ -64,7 +66,7 @@ sched, runtime sync:
     - [x] timestub2.go
     - [x] time_fake.go
 
-## 第七章
+## 第 7 章 内存分配
 
 allocator:
 
@@ -91,7 +93,7 @@ allocator:
   - [x] memmove_wasm.s
   - [ ] mscavenger.go
 
-## 第八章
+## 第 8 章 垃圾回收
 
 GC:
 
@@ -109,51 +111,11 @@ GC:
   - [ ] lfstack_64bit.go
   - [ ] mfinal.go
 
-## 第九章
-
-race/trace/pprof/msan:
-
-- [ ] src/runtime
-  - [ ] profbuf.go
-  - [ ] proflabel.go
-  - [ ] race.go
-  - [ ] race0.go
-  - [ ] race_amd64.s
-  - [ ] trace.go
-  - [ ] traceback.go
-  - [ ] debug.go
-  - [ ] debugcall.go
-  - [ ] msan.go
-  - [ ] msan0.go
-  - [ ] msan_amd64.s
-
-## 第十章
-
-syscall/cgo:
-
-
-- [x] src/syscall
-- [ ] src/cmd
-  - [ ] /cgo
-- [ ] src/runtime
-  - [ ] /cgo
-  - [ ] cgo.go
-  - [ ] cgo_mmap.go
-  - [ ] cgo_sigaction.go
-  - [ ] cgocall.go
-  - [ ] cgocallback.go
-  - [ ] cgocheck.go
-  - [ ] cpuprof.go
-  - [ ] textflag.h
-  - [ ] funcdata.h
-  - [ ] defs_linux_amd64.go
-  - [ ] defs_darwin_amd64.go
-  - [ ] plugin.go
-
-## 第十一章
+## 第 9 章 语言核心
 
 runtime type system / keywords:
 
+- [ ] src/go/types
 - [ ] src/reflect
 - [ ] src/runtime
     - [x] type
@@ -186,26 +148,66 @@ runtime type system / keywords:
       - [ ] string.go
       - [ ] utf8.go
 
-## 第十二章
+## 第 10 章 兼容与契约
 
-- [ ] src/go/types
+syscall/cgo:
 
-## 第十三章
+
+- [x] src/syscall
+- [ ] src/cmd
+  - [ ] /cgo
+- [ ] src/runtime
+  - [ ] /cgo
+  - [ ] cgo.go
+  - [ ] cgo_mmap.go
+  - [ ] cgo_sigaction.go
+  - [ ] cgocall.go
+  - [ ] cgocallback.go
+  - [ ] cgocheck.go
+  - [ ] cpuprof.go
+  - [ ] textflag.h
+  - [ ] funcdata.h
+  - [ ] defs_linux_amd64.go
+  - [ ] defs_darwin_amd64.go
+  - [ ] plugin.go
+
+## 第 11 章 调试组件
+
+race/trace/pprof/msan:
+
+- [ ] src/runtime
+  - [ ] profbuf.go
+  - [ ] proflabel.go
+  - [ ] race.go
+  - [ ] race0.go
+  - [ ] race_amd64.s
+  - [ ] trace.go
+  - [ ] traceback.go
+  - [ ] debug.go
+  - [ ] debugcall.go
+  - [ ] msan.go
+  - [ ] msan0.go
+  - [ ] msan_amd64.s
+
+## 第 12 章 依赖管理
+
+
+## 第 13 章 编译器
 
 - [x] src/unsafe
 - [ ] src/cmd
   - [ ] /compile
   - [ ] /internal/obj
 
-## 第十四章
+## 第 14 章 链接器
 
 
-## 第十五章
+## 第 15 章 同步原语
 
 - [x] src/errors
 - [x] src/fmt.Errorf
 
-## 第十六章
+## 第 16 章 网络操作
 
 - [x] src/sync
   - [x] /atomic
@@ -219,6 +221,10 @@ runtime type system / keywords:
   - [ ] Cond
   - [ ] Mutex
   - [ ] Rwmutex
+
+## 第 17 章 错误处理
+
+## 第 18 章 泛型与合约
 
 ## 通用
 
