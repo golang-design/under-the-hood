@@ -1,9 +1,9 @@
 ---
 weight: 4302
-title: "17.2 错误检查 与 errors 包"
+title: "17.2 错误检查与 errors 包"
 ---
 
-# 17.2 错误检查 与 errors 包
+# 17.2 错误检查与 errors 包
 
 在 Go 1.13 以前，标准库中的 error 包仅包含一个 `New` 函数：
 
@@ -36,13 +36,11 @@ func Errorf(format string, a ...interface{}) error {
 其形式也就仅仅只是对 `errors.New` 加上 `fmt.Sprintf` 的一个简单封装。
 如上一节中对错误处理的讨论，这种依靠字符串进行错误定义的方式的可处理性几乎为零，会在上下文之间引入强依赖。
 
-## 错误检查
+从 Go 1.13 起，Go 在 `errors` 包中引入了一系列新的 API 来增强错误检查的手段。
 
-从 Go 1.13 起，Go 在 errors 包中引入了一系列新的 API 来增强错误检查的手段。
+## 17.2.1 `errors.Unwrap`
 
-### `Unwrap`
-
-Unwrap 的目的是将一个已被 fmt 包装过的 error 进行拆封，其实现逻辑利用了 `.(type)` 断言：
+`Unwrap` 的目的是将一个已被 `fmt` 包装过的 `error` 进行拆封，其实现逻辑利用了 `.(type)` 断言：
 
 ```go
 func Unwrap(err error) error {
@@ -56,7 +54,7 @@ func Unwrap(err error) error {
 }
 ```
 
-### `Is` 与 `As`
+## 17.2.2 `errors.Is` 与 `errors.As`
 
 `Is` 用于检查当前的两个 err 是否相等。之所以需要这个函数是因为一个错误可能被包装了多层，
 那么我们需要支持这个错误在包装过多层后的判断，因而可想而知在实现上需要一个 for 循环对其进行 Unwrap：
@@ -100,8 +98,9 @@ if errors.Is(err, io.ErrUnexpectedEOF) {
 }
 ```
 
-`As` 的实现与 `Is` 基本相同，不同之处在于 `As` 的目的是将某个 err 给拆封到 target 中，因此对于一个
-错误链而言，需要一个循环不断对错误进行 Unwrap，当错误实现 `As` 方法时，直接调用 `As`：
+`As` 的实现与 `Is` 基本相同，不同之处在于 `As` 的目的是将某个 `err` 给拆封
+到 `target` 中，因此对于一个错误链而言，需要一个循环不断对错误进行 `Unwrap`，
+当错误实现 `As` 方法时，直接调用 `As`：
 
 ```go
 func As(err error, target interface{}) bool {
@@ -150,7 +149,7 @@ if errors.As(err, &e) {
 }
 ```
 
-### fmt.Errorf 中的 `%w`
+## 17.2.3 `fmt.Errorf` 中的 `%w`
 
 `fmt.Errorf` 函数增加了一个 `%w` 动词，允许对一个错误进行封装：
 
@@ -175,7 +174,8 @@ func Errorf(format string, a ...interface{}) error {
 }
 ```
 
-在 Go 1.13 的 Errorf 的实现中，将需要包装的 err 包装为一个 `wrapError`，包含错误消息本身与对错误的封装：
+在 Go 1.13 的 `Errorf` 的实现中，将需要包装的 `err` 包装为一个 `wrapError`，
+包含错误消息本身与对错误的封装：
 
 ```go
 type wrapError struct {
@@ -197,7 +197,7 @@ func (e *wrapError) Unwrap() error { // 支持 errors.Unwrap 方法
 ```go
 type pp struct {
 	buf buffer // []byte
-	(...)
+	...
 	// 当格式化过程中可能包含 %w 动词时，设置为 true
 	wrapErrs bool
 	// wrappedErr 记录了 %w 动词的 err
@@ -228,19 +228,25 @@ func (p *pp) handleMethods(verb rune) (handled bool) {
 		verb = 'v'
 	}
 
-	(...)
+	...
 }
 ```
 
 很明显关于 `%w` 这个动词的处理仅仅就是将 err 记录到 wrappedErr 这个变量中，
 并将 verb 修改为 v 将其转化为 `%v` 动词进行后续的格式化处理。
 
+## 17.2.4 小结
+
+本节我们详细讨论了 `errors` 包的全部设计，它通过暴露 `New`、`Unwrap`、`Is` 
+和 `As` 四个接口完成了对复杂函数调用栈中使用 `fmt.Errorf` 层层封装的错误链条的封装和拆解过程，其中 `New` 负责原始错误的创建，`Unwrap` 允许对链表进行一次拆包，`Is` 提供了在复杂错误链中，判断错误类型的能力，`As` 则提供了将错误从错误链拆解到某个目标错误类型的能力。
+
 ## 进一步阅读的参考文献
 
-- [Github discussion, proposal: Go 2 error values](https://github.com/golang/go/issues/29934)
-- [Go 1.13 Lunch Decision, proposal: Go 2 error values](https://github.com/golang/go/issues/29934#issuecomment-489682919)
-- [Russ Cox's Response, proposal: Go 2 error values](https://github.com/golang/go/issues/29934#issuecomment-490087200)
-- [Jonathan Amsterdam and Bryan C. Mills, Error Values: Frequently Asked Questions, August 2019](https://github.com/golang/go/wiki/ErrorValueFAQ)
+- [Amsterdam, 2019] Jonathan Amsterdam. proposal: Go 2 error values. Jan 25, 2019. https://github.com/golang/go/issues/29934
+- [Neil, 2019] Damien Neil. Go 1.13 lunch decision about error values. May 6, 2019. https://github.com/golang/go/issues/29934#issuecomment-489682919)
+- [Cox, 2019] Russ Cox. Response, Response regarding "proposal: Go 2 error values". May 7, 2019. https://github.com/golang/go/issues/29934#issuecomment-490087200)
+- [Amsterdam and Mills, 2019] Jonathan Amsterdam and Bryan C. Mills. Error Values: Frequently Asked Questions. August 2019. https://github.com/golang/go/wiki/ErrorValueFAQ
+- [Neil and Amsterdam, 2019] Damien Neil and Jonathan Amsterdam. Working with Errors in Go 1.13. October 17, 2019. https://blog.golang.org/go1.13-errors
 
 ## 许可
 

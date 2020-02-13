@@ -156,7 +156,7 @@
 
 #### [第 17 章 错误处理](part4lib/ch17errors/readme.md)
 
-- [17.1 错误处理的历史及其演化](part4lib/ch17errors/history.md)
+- [17.1 错误处理的演化](part4lib/ch17errors/history.md)
 - [17.2 错误检查 与 errors 包](part4lib/ch17errors/errors.md)
 - [17.3 错误处理的未来](part4lib/ch17errors/future.md)
 
