@@ -9,7 +9,7 @@ title: "9.7 散列表"
 
 TODO: 请不要阅读此小节，内容编排中
 
-map 由运行时实现，编译器辅助进行布局，其本质为哈希表。我们可以通过图 1 展示的测试结果看出使用 map 的容量（无大量碰撞）。
+map 由运行时实现，编译器辅助进行布局，其本质为散列表。我们可以通过图 1 展示的测试结果看出使用 map 的容量（无大量碰撞）。
 
 ![](../../../assets/map-write-performance.png)
 
@@ -99,7 +99,7 @@ TODO: `runtime.extendRandom`
 func schedinit() {
   (...)
 	cpuinit() // 必须在 alginit 之前运行
-	alginit() // maps 不能在此调用之前使用，从 CPU 指令集初始化哈希算法
+	alginit() // maps 不能在此调用之前使用，从 CPU 指令集初始化散列算法
 	(...)
 }
 ```
@@ -109,7 +109,7 @@ func schedinit() {
 
 ```go
 func alginit() {
-	// 如果需要的指令存在则安装 AES 哈希算法
+	// 如果需要的指令存在则安装 AES 散列算法
 	if (GOARCH == "386" || GOARCH == "amd64") &&
 		GOOS != "nacl" &&
 		cpu.X86.HasAES && // AESENC
@@ -130,7 +130,7 @@ func alginit() {
 }
 ```
 
-可以看到，在指令集支持良好的情况下，amd64 平台会调用 `initAlgAES` 来使用 AES 哈希算法。
+可以看到，在指令集支持良好的情况下，amd64 平台会调用 `initAlgAES` 来使用 AES 散列算法。
 
 ```go
 var useAeshash bool
@@ -140,7 +140,7 @@ func initAlgAES() {
 	algarray[alg_MEM32].hash = aeshash32
 	algarray[alg_MEM64].hash = aeshash64
 	algarray[alg_STRING].hash = aeshashstr
-	// 使用随机数据初始化，从而使哈希碰撞攻击变得困难。
+	// 使用随机数据初始化，从而使散列值的碰撞攻击变得困难。
 	getRandomData(aeskeysched[:])
 }
 

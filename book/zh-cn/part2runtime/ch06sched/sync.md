@@ -473,7 +473,7 @@ func semroot(addr *uint32) *semaRoot {
 }
 ```
 
-其实现中使用分布式哈希表结构，根据信号量的实际地址的哈希值将其打散到 251 个 treap 树中。
+其实现中使用分布式散列表结构，根据信号量的实际地址的散列值将其打散到 251 个 treap 树中。
 
 ```go
 func semacquire1(addr *uint32, lifo bool, profile semaProfileFlags, skipframes int) {
