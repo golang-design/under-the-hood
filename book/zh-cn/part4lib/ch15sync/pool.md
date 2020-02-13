@@ -1,15 +1,14 @@
 ---
-weight: 4101
-title: "15.1 缓存池"
+weight: 4105
+title: "15.5 缓存池"
 ---
 
-# 15.1 缓存池
+# 15.5 缓存池
 
 [TOC]
 
-sync.Pool 是一个临时对象池。
-一句话来概括，sync.Pool 管理了一组临时对象，当需要时从池中获取，使用完毕后从再放回池中，以供他人使用。
-其公共方法与成员包括：
+`sync.Pool` 是一个临时对象池。一句话来概括，`sync.Pool` 管理了一组临时对象，
+当需要时从池中获取，使用完毕后从再放回池中，以供他人使用。其公共方法与成员包括：
 
 ```go
 type Pool struct {
@@ -75,9 +74,7 @@ type poolLocal struct {
 
 ```go
 func (p *Pool) Get() interface{} {
-
-	(...)
-
+	...
 	// 获取一个 poolLocal
 	l, pid := p.pin()
 
@@ -95,8 +92,7 @@ func (p *Pool) Get() interface{} {
 		}
 	}
 	runtime_procUnpin()
-
-	(...)
+	...
 
 	// 如果 getSlow 还是获取不到，则 New 一个
 	if x == nil && p.New != nil {
@@ -127,8 +123,7 @@ func (p *Pool) Put(x interface{}) {
 	if x == nil {
 		return
 	}
-
-	(...)
+	...
 
 	// 获得一个 localPool
 	l, _ := p.pin()
@@ -144,8 +139,7 @@ func (p *Pool) Put(x interface{}) {
 		l.shared.pushHead(x)
 	}
 	runtime_procUnpin()
-
-	(...)
+	...
 }
 ```
 
@@ -333,11 +327,11 @@ func runtime_registerPoolCleanup(cleanup func())
 在 `src/runtime/mgc.go` 中:
 
 ```go
-var poolcleanup func()
-// 利用编译器标志将 sync 包中的清理注册到运行时
-//go:linkname sync_runtime_registerPoolCleanup sync.runtime_registerPoolCleanup
-func sync_runtime_registerPoolCleanup(f func()) {
-	poolcleanup = f
+// 开始 GC
+func gcStart(trigger gcTrigger) {
+	...
+	clearpools()
+	...
 }
 
 // 实现缓存清理
@@ -346,14 +340,15 @@ func clearpools() {
 	if poolcleanup != nil {
 		poolcleanup()
 	}
-    (...)
+	...
 }
 
-// 开始 GC
-func gcStart(trigger gcTrigger) {
-	(...)
-	clearpools()
-	(...)
+var poolcleanup func()
+
+// 利用编译器标志将 sync 包中的清理注册到运行时
+//go:linkname sync_runtime_registerPoolCleanup sync.runtime_registerPoolCleanup
+func sync_runtime_registerPoolCleanup(f func()) {
+	poolcleanup = f
 }
 ```
 
@@ -647,24 +642,26 @@ shared 字段作为一个优化过的链式无锁变长队列，当在 `private`
 对于调用方而言，当 Get 到临时对象后，便脱离了池本身不受控制。
 用方有责任将使用完的对象放回池中。
 
-> 本文中介绍的 `sync.Pool` 实现为 Go 1.13 优化过后的版本，相较于之前的版本，主要有以下几点优化：
->
-> 1. 引入了 `victim` （二级）缓存，每次 GC 周期不再清理所有的缓存对象，而是将 `locals` 中的对象暂时放入 `victim` ，从而延迟到下一个 GC 周期进行回收；
->
-> 2. 在下一个周期到来前，`victim` 中的缓存对象可能会被偷取，在 `Put` 操作后又重新回到 `locals` 中，这个过程发生在从其他 P 的 `shared` 队列中偷取不到、以及 `New` 一个新对象之前，进而是在牺牲了 `New` 新对象的速度的情况下换取的；
->
-> 3. `poolLocal` 不再使用 `Mutex` 这类昂贵的锁来保证并发安全，取而代之的是使用了 CAS 算法优化实现的 `poolChain` 变长无锁双向链式队列。
->
-> 这种两级缓存的优化的优势在于：
->
-> 1. 显著降低了 GC 发生前清理当前周期中产生的大量缓存对象的影响：因为回收被推迟到了下个 GC 周期；
->
-> 2. 显著降低了 GC 发生后 New 对象的成本：因为密集的缓存对象读写可能从上个周期中未清理的对象中偷取。
+本文中介绍的 `sync.Pool` 实现为 Go 1.13 优化过后的版本，相较于之前的版本，主要有以下几点优化：
+
+1. 引入了 `victim` （二级）缓存，每次 GC 周期不再清理所有的缓存对象，而是将 `locals` 中的对象暂时放入 `victim` ，从而延迟到下一个 GC 周期进行回收；
+2. 在下一个周期到来前，`victim` 中的缓存对象可能会被偷取，在 `Put` 操作后又重新回到 `locals` 中，这个过程发生在从其他 P 的 `shared` 队列中偷取不到、以及 `New` 一个新对象之前，进而是在牺牲了 `New` 新对象的速度的情况下换取的；
+3. `poolLocal` 不再使用 `Mutex` 这类昂贵的锁来保证并发安全，取而代之的是使用了 CAS 算法优化实现的 `poolChain` 变长无锁双向链式队列。
+
+这种两级缓存的优化的优势在于：
+
+1. 显著降低了 GC 发生前清理当前周期中产生的大量缓存对象的影响：因为回收被推迟到了下个 GC 周期；
+2. 显著降低了 GC 发生后 New 对象的成本：因为密集的缓存对象读写可能从上个周期中未清理的对象中偷取。
 
 ## 进一步阅读的参考文献
 
-- [sync: use lock-free structure for Pool stealing](https://github.com/golang/go/commit/d5fd2dd6a17a816b7dfd99d4df70a85f1bf0de31)
-- [sync: smooth out Pool behavior over GC with a victim cache](https://github.com/golang/go/commit/2dcbf8b3691e72d1b04e9376488cef3b6f93b286)
+- [Cox, 2013] Russ Cox. gc-aware pool draining policy. Nov 27, 2013. https://groups.google.com/d/msg/golang-dev/kJ_R6vYVYHU/LjoGriFTYxMJ
+- [Fitzpatrick, 2013] Brad Fitzpatrick. sync: add Pool type. Jan 28, 2013. https://github.com/golang/go/issues/4720
+- [Vyukov, 2014a] Dmitry Vyukov. sync: scalable Pool. Jan 24, 2014. https://github.com/golang/go/commit/f8e0057bb71cded5bb2d0b09c6292b13c59b5748#diff-2e9fc106a7387ca4c32ecf856a91f82a
+- [Vyukov, 2014b] Dmitry Vyukov. sync: less agressive local caching in Pool. Apr 14, 2014. https://github.com/golang/go/commit/8fc6ed4c8901d13fe1a5aa176b0ba808e2855af5#diff-2e9fc106a7387ca4c32ecf856a91f82a
+- [Vyukov, 2014c] sync: release Pool memory during second and later GCs. Oct 22, 2014. https://github.com/golang/go/commit/af3868f1879c7f8bef1a4ac43cfe1ab1304ad6a4#diff-491b0013c82345bf6cfa937bd78b690d
+- [Clements, 2019a] Austin Clements. sync: use lock-free structure for Pool stealing. Mar 1, 2019. https://github.com/golang/go/commit/d5fd2dd6a17a816b7dfd99d4df70a85f1bf0de31
+- [Clements, 2019b] Austin Clements. sync: smooth out Pool behavior over GC with a victim cache. Mar 2, 2019. https://github.com/golang/go/commit/2dcbf8b3691e72d1b04e9376488cef3b6f93b286)
 
 ## 许可
 
