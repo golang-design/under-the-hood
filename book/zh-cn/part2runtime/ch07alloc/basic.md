@@ -90,20 +90,21 @@ type arenaHint struct {
 type mspan struct { // 双向链表
 	next *mspan     // 链表中的下一个 span，如果为空则为 nil
 	prev *mspan     // 链表中的前一个 span，如果为空则为 nil
-	(...)
+	...
 	startAddr      uintptr // span 的第一个字节的地址，即 s.base()
 	npages         uintptr // 一个 span 中的 page 数量
 	manualFreeList gclinkptr // mSpanManual span 的释放对象链表
-	(...)
+	...
 	freeindex  uintptr
 	nelems     uintptr // span 中对象的数量
 	allocCache uint64
-	(...)
+	allocBits  *gcBits
+	...
 	allocCount  uint16     // 分配对象的数量
 	spanclass   spanClass  // 大小等级与 noscan (uint8)
 	incache     bool       // 是否被 mcache 使用
 	state       mSpanState // mspaninuse 等等信息
-	(...)
+	...
 }
 ```
 
@@ -115,13 +116,13 @@ type mspan struct { // 双向链表
 ```go
 //go:notinheap
 type mcache struct {
-	(...)
+	...
 	tiny             uintptr
 	tinyoffset       uintptr
 	local_tinyallocs uintptr
 	alloc            [numSpanClasses]*mspan // 用来分配的 spans，由 spanClass 索引
 	stackcache       [_NumStackOrders]stackfreelist
-	(...)
+	...
 }
 ```
 
@@ -138,10 +139,7 @@ type mcentral struct {
 	spanclass spanClass
 	nonempty  mSpanList // 带有自由对象的 span 列表，即非空闲列表
 	empty     mSpanList // 没有自由对象的 span 列表（或缓存在 mcache 中）
-
-	// 假设 mcaches 中的所有 span 都已完全分配，则 nmalloc 是
-	// 从此 mcentral 分配的对象的累积计数。原子地写，在 STW 下读。
-	nmalloc uint64
+	...
 }
 ```
 
@@ -155,6 +153,7 @@ type mcentral struct {
 type mheap struct {
 	lock           mutex
 	pages          pageAlloc
+	...
 	allspans       []*mspan // 所有 spans 从这里分配出去
 	scavengeGoal   uint64
 	reclaimIndex   uint64
@@ -171,7 +170,7 @@ type mheap struct {
 		mcentral mcentral
 		pad      [cpu.CacheLinePadSize - unsafe.Sizeof(mcentral{})%cpu.CacheLinePadSize]byte
 	}
-	(...)
+	...
 
 	// 各种分配器
 	spanalloc             fixalloc // span* 分配器
@@ -181,7 +180,7 @@ type mheap struct {
 	specialprofilealloc   fixalloc // specialprofile* 分配器
 	speciallock           mutex    // 特殊记录分配器的锁
 	arenaHintAlloc        fixalloc // arenaHints 分配器
-	(...)
+	...
 }
 ```
 
@@ -263,17 +262,17 @@ func main() {
 
 ```asm
 TEXT main.f2(SB) /Users/changkun/dev/go-under-the-hood/demo/4-mem/alloc/alloc.go
-  (...)
+  ...
   alloc.go:17		0x104e086		488d05939f0000		LEAQ type.*+40256(SB), AX		
   alloc.go:17		0x104e08d		48890424		MOVQ AX, 0(SP)				
   alloc.go:17		0x104e091		e8cabffbff		CALL runtime.newobject(SB)		
   alloc.go:17		0x104e096		488b442408		MOVQ 0x8(SP), AX			
   alloc.go:17		0x104e09b		4889442410		MOVQ AX, 0x10(SP)			
   alloc.go:17		0x104e0a0		48c70002000000		MOVQ $0x2, 0(AX)			
-  (...)
+  ...
 
 TEXT main.f3(SB) /Users/changkun/dev/go-under-the-hood/demo/4-mem/alloc/alloc.go
-  (...)
+  ...
   alloc.go:22		0x104e0ed		488d05ecf60000		LEAQ type.*+62720(SB), AX		
   alloc.go:22		0x104e0f4		48890424		MOVQ AX, 0(SP)				
   alloc.go:22		0x104e0f8		e863bffbff		CALL runtime.newobject(SB)		
@@ -282,7 +281,7 @@ TEXT main.f3(SB) /Users/changkun/dev/go-under-the-hood/demo/4-mem/alloc/alloc.go
   alloc.go:22		0x104e107		b900008000		MOVL $0x800000, CX			
   alloc.go:22		0x104e10c		31c0			XORL AX, AX				
   alloc.go:22		0x104e10e		f348ab			REP; STOSQ AX, ES:0(DI)			
-  (...)
+  ...
 ```
 
 就会发现，对于产生在 Go 堆上分配对象的情况，均调用了运行时的 `runtime.newobject` 方法。
@@ -310,7 +309,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	}
 	mp := acquirem()
 	mp.mallocing = 1
-	(...)
+	...
 
 	// 获取当前 g 所在 M 所绑定 P 的 mcache
 	c := gomcache()
@@ -319,19 +318,19 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	if size <= maxSmallSize {
 		if noscan && size < maxTinySize {
 			// 微对象分配
-			(...)
+			...
 		} else {
 			// 小对象分配
-			(...)
+			...
 		}
 	} else {
 		// 大对象分配
-		(...)
+		...
 	}
-	(...)
+	...
 	mp.mallocing = 0
 	releasem(mp)
-	(...)
+	...
 	return x
 ```
 

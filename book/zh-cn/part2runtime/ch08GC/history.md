@@ -95,6 +95,8 @@ ROC 的全称是面向请求的回收器（Request Oriented Collector），它�
 - [Clements, 2018] [Proposal: Simplify mark termination and eliminate mark 2](https://go.googlesource.com/proposal/+/master/design/26903-simplify-mark-termination.md), [Discussion #26903](https://golang.org/issue/26903), released go1.12
 - [Hudson, 2018] [Richard L. Hudson. Getting to Go: The Journey of Go's Garbage Collector, in International Symposium on Memory Management (ISMM), June 18, 2018](https://blog.golang.org/ismmkeynote)
 - [Knyszek, 2019] [Proposal: Smarter Scavenging](https://go.googlesource.com/proposal/+/master/design/30333-smarter-scavenging.md), [Discussion #30333](https://golang.org/issue/30333)
+- [runtime/debug: add SetMaxHeap API](https://go-review.googlesource.com/c/go/+/46751/)
+- [runtime: mechanism for monitoring heap size](https://github.com/golang/go/issues/16843)
 
 ## 许可
 

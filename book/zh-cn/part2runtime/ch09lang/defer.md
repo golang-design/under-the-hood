@@ -265,7 +265,7 @@ defer 调用被记录时，并不会对参数进行求值，而是会对参数�
 例如，`f, _ := os.Open("file.txt")` 后立刻指定 `defer f.Close()`，倘若随后的语句修改了
 `f` 的值，那么将导致 `f` 无法被正常关闭。
 
-出于性能考虑，`newdefer` 通过 P 或者调度器 sched 上的的本地或全局 defer 池来
+出于性能考虑，`newdefer` 通过 P 或者调度器 sched 上的本地或全局 defer 池来
 复用已经在堆上分配的内存。defer 的资源池会根据被延迟的调用所需的参数来决定 defer 记录
 的大小等级，每 16 个字节分一个等级。此做法的动机与运行时内存分配器针对不同大小对象的分配思路雷同，
 这里不再做深入讨论。
@@ -401,7 +401,19 @@ TEXT runtime·jmpdefer(SB), NOSPLIT, $0-16
 
 这个 `jmpdefer` 巧妙的地方在于，它通过调用方 SP 来推算了 `deferreturn` 的入口地址，
 从而在完成某个 `defer` 调用后，由于被 defer 的函数返回时会出栈，
-会再次回到 `deferreturn` 的初始位置，进而继续反复调用，形成好似尾递归的假象。
+会再次回到 `deferreturn` 的初始位置，进而继续反复调用，从而模拟 `deferreturn` 不断的对自己进行尾递归的假象。
+
+上面的描述可能不太容易理解，我们再举一个实际的例子：
+
+```go
+func foo() {
+	a := 1
+	defer func(a *int) { println(a) }(&a)
+	defer func(a *int) { a++ }(&a)
+	a += 22
+	return
+}
+```
 
 释放操作非常普通，只是简单的将其归还到 P 的 `deferpool` 中，
 并在本地池已满时将其归还到全局资源池:

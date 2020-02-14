@@ -29,6 +29,18 @@ TODO: 请不要阅读此小节，内容编排中
   - 向量指令技术
   - SIMD 技术
 
+CAS 思想
+
+```
+for {
+	复制旧数据
+	基于旧数据构造新数据
+	if CompareAndSwap(内存地址，旧数据，新数据) {
+		break
+	}
+}
+```
+
 ## 许可
 
 [Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

@@ -31,6 +31,10 @@ Go 1.8 引入了一个新的写屏障（即混合写屏障），不再需要对�
 
 **定理: 当算法终止时，如果所有标记工作队列为空，则终止检测算法会成功。**
 
+## 进一步阅读的参考文献
+
+- [Simplify mark termination and eliminate mark 2](https://github.com/golang/go/issues/26903)
+- [Runtime: error message: P has cached GC work at end of mark termination](https://github.com/golang/go/issues/27993)
 
 ## 许可
 
