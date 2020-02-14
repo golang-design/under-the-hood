@@ -139,16 +139,17 @@
 
 ### [第四部分：标准库篇](part4lib/readme.md)
 
-#### [第 15 章 同步原语](part4lib/ch15sync/readme.md)
+#### [第 15 章 同步原语与模式](part4lib/ch15sync/readme.md)
 
-- [15.1 缓存池](part4lib/ch15sync/pool.md)
-- [15.2 `sync.Once`](part4lib/ch15sync/once.md)
-- [15.3 并发安全散列表](part4lib/ch15sync/map.md)
+- [15.1 原子操作](part4lib/ch15sync/atomic.md)
+- [15.2 互斥锁](part4lib/ch15sync/mutex.md)
+- [15.3 条件变量](part4lib/ch15sync/cond.md)
 - [15.4 同步组](part4lib/ch15sync/waitgroup.md)
-- [15.5 互斥锁](part4lib/ch15sync/mutex.md)
-- [15.6 条件变量](part4lib/ch15sync/cond.md)
-- [15.7 原子操作](part4lib/ch15sync/atomic.md)
-
+- [15.5 缓存池](part4lib/ch15sync/pool.md)
+- [15.6 并发安全散列表](part4lib/ch15sync/map.md)
+- [15.7 上下文](part4lib/ch15sync/context.md)
+- [15.8 内存模型](part4lib/ch15sync/mem.md)
+- 
 #### [第 16 章 网络操作](part4lib/ch16net/readme.md)
 
 - [16.1 文件描述符抽象](part4lib/ch16net/fd.md)
