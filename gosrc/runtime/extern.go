@@ -218,7 +218,7 @@ func GOROOT() string {
 }
 
 // Version 返回 Go 树的版本字符串。
-// 它是构建时的提交哈希和日期，或者，在可能的情况下，发布标签如 "go1.3"。
+// 它是构建时的提交散列和日期，或者，在可能的情况下，发布标签如 "go1.3"。
 func Version() string {
 	return sys.TheVersion
 }

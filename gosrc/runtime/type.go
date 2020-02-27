@@ -8,7 +8,7 @@ package runtime
 
 import "unsafe"
 
-// tflag 再 reflect/type.go 中进行说明.
+// tflag 在 reflect/type.go 中进行说明.
 //
 // tflag 的值必须与以下文件进行同步:
 //	cmd/compile/internal/gc/reflect.go

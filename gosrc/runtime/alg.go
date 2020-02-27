@@ -74,7 +74,7 @@ func strhashFallback(a unsafe.Pointer, h uintptr) uintptr {
 }
 
 // 注意: 因为 NaN != NaN, 一个 map 可以用 NaNs 包含任意数量（大量无用）的条目。
-// 为避免长 hash 链，我们分配一个随机数来来作为 NaN 的哈希值。
+// 为避免长 hash 链，我们分配一个随机数来来作为 NaN 的散列值。
 
 func f32hash(p unsafe.Pointer, h uintptr) uintptr {
 	f := *(*float32)(p)
@@ -317,7 +317,7 @@ var aeskeysched [hashRandomBytes]byte
 var hashkey [4]uintptr
 
 func alginit() {
-	// 如果需要的指令存在则安装 AES 哈希算法
+	// 如果需要的指令存在则安装 AES 散列算法
 	if (GOARCH == "386" || GOARCH == "amd64") &&
 		cpu.X86.HasAES && // AESENC
 		cpu.X86.HasSSSE3 && // PSHUFB
@@ -338,7 +338,7 @@ func alginit() {
 
 func initAlgAES() {
 	useAeshash = true
-	// 使用随机数据初始化，从而使哈希碰撞攻击变得困难。
+	// 使用随机数据初始化，从而使散列碰撞攻击变得困难。
 	getRandomData(aeskeysched[:])
 }
 

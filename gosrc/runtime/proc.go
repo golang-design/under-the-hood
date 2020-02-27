@@ -555,7 +555,7 @@ func schedinit() {
 
 	// cpu 相关的初始化
 	cpuinit() // 必须在 alginit 之前运行
-	alginit() // maps 不能在此调用之前使用，从 CPU 指令集初始化哈希算法
+	alginit() // maps 不能在此调用之前使用，从 CPU 指令集初始化散列算法
 
 	// 模块加载相关的初始化
 	modulesinit()   // 模块链接，提供 activeModules
