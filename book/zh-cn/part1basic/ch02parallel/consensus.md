@@ -1,6 +1,7 @@
 ---
 weight: 1205
 title: "2.5 共识技术"
+bookHidden: true
 ---
 
 

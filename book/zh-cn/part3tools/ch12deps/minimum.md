@@ -1,6 +1,7 @@
 ---
 weight: 3203
 title: "12.3 最小版本选择算法"
+bookHidden: true
 ---
 
 # 12.3 最小版本选择算法

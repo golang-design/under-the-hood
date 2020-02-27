@@ -1,6 +1,7 @@
 ---
 weight: 4403
 title: "18.3 泛型的未来"
+bookHidden: true
 ---
 
 # 18.3 泛型的未来

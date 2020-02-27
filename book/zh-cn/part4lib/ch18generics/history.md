@@ -1,6 +1,7 @@
 ---
 weight: 4401
 title: "18.1 泛型的历史及其演化"
+bookHidden: true
 ---
 
 # 18.1 泛型的历史及其演化

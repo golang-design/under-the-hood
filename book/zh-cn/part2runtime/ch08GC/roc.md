@@ -1,9 +1,10 @@
 ---
 weight: 2312
 title: "8.12 请求制导回收"
+bookHidden: true
 ---
 
-## 8.12 请求制导回收
+# 8.12 请求制导回收
 
 TODO: 
 

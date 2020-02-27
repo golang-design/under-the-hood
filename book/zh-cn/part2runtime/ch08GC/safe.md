@@ -1,6 +1,7 @@
 ---
 weight: 2309
 title: "8.9 安全点分析"
+bookHidden: true
 ---
 
 # 8.9 安全点分析

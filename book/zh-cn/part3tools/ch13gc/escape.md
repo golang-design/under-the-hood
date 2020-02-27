@@ -1,6 +1,7 @@
 ---
 weight: 3302
 title: "13.2 逃逸分析"
+bookHidden: true
 ---
 
 # 13.2 逃逸分析

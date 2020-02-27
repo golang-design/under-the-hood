@@ -1,6 +1,7 @@
 ---
 weight: 4402
 title: "18.2 泛型的实现与 contracts 包"
+bookHidden: true
 ---
 
 # 18.2 泛型的实现与 contracts 包

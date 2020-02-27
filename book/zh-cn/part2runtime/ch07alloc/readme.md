@@ -11,8 +11,9 @@ title: "第 7 章 内存分配"
 - [7.4 大对象分配](./largealloc.md)
 - [7.5 小对象分配](./smallalloc.md)
 - [7.6 微对象分配](./tinyalloc.md)
-- [7.7 内存统计](./mstats.md)
-- [7.8 过去、现在与未来](./history.md)
+- [7.7 页分配器](./pagealloc.md)
+- [7.8 内存统计](./mstats.md)
+- [7.9 过去、现在与未来](./history.md)
 
 ## 许可
 

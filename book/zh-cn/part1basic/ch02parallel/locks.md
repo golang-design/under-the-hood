@@ -1,6 +1,7 @@
 ---
 weight: 1207
 title: "2.7 同步锁"
+bookHidden: true
 ---
 
 # 2.7 同步锁

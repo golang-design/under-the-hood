@@ -1,6 +1,7 @@
 ---
 weight: 1304
 title: "3.4 工作窃取调度理论"
+bookHidden: true
 ---
 
 # 3.4 工作窃取调度理论

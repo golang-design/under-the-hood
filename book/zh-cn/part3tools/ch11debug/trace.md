@@ -1,6 +1,7 @@
 ---
 weight: 3103
 title: "11.3 性能追踪"
+bookHidden: true
 ---
 
 # 11.3 性能追踪

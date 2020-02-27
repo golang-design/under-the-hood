@@ -1,6 +1,7 @@
 ---
 weight: 3204
 title: "12.4 vgo 与 dep 之争"
+bookHidden: true
 ---
 
 # 12.4 vgo 与 dep 之争

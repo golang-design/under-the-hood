@@ -1,9 +1,10 @@
 ---
 weight: 2311
 title: "8.11 代际回收"
+bookHidden: true
 ---
 
-## 8.11 代际回收
+# 8.11 代际回收
 
 TODO: 
 

@@ -1,6 +1,7 @@
 ---
 weight: 3102
 title: "11.2 竞争检查"
+bookHidden: true
 ---
 
 

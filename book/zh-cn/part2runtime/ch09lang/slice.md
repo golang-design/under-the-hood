@@ -1,6 +1,7 @@
 ---
 weight: 2405
 title: "9.5 数组、切片与字符串"
+bookHidden: true
 ---
 
 # 9.5 数组、切片与字符串

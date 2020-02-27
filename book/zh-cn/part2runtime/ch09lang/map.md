@@ -1,6 +1,7 @@
 ---
 weight: 2406
 title: "9.6 散列表"
+bookHidden: true
 ---
 
 # 9.6 散列表

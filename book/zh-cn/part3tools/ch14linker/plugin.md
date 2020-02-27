@@ -1,6 +1,7 @@
 ---
 weight: 3404
 title: "14.4 plugin 包"
+bookHidden: true
 ---
 
 # 14.4 plugin 包

@@ -1,6 +1,7 @@
 ---
 weight: 1105
 title: "1.5 CPU 设计与架构"
+bookHidden: true
 ---
 
 ## 1.5 CPU 设计与架构

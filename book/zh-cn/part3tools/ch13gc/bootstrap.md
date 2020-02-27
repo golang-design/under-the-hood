@@ -1,6 +1,7 @@
 ---
 weight: 3305
 title: "13.5 语言的自举"
+bookHidden: true
 ---
 
 # 13.5 语言的自举

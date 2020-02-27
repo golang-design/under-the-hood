@@ -1,6 +1,7 @@
 ---
 weight: 1302
 title: "3.2 单机调度模型"
+bookHidden: true
 ---
 
 # 3.2 单机调度模型

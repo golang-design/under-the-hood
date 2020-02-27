@@ -1,6 +1,7 @@
 ---
 weight: 3201
 title: "12.1 依赖管理的难点"
+bookHidden: true
 ---
 
 # 12.1 依赖管理的难点

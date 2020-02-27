@@ -1,6 +1,7 @@
 ---
 weight: 3401
 title: "14.1 初始化"
+bookHidden: true
 ---
 
 # 14.1 初始化

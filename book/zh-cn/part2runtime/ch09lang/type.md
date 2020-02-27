@@ -1,6 +1,7 @@
 ---
 weight: 2401
 title: "9.1 运行时类型系统"
+bookHidden: true
 ---
 
 # 9.1 运行时类型系统

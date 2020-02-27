@@ -1,6 +1,7 @@
 ---
 weight: 1204
 title: "2.4 分布式计算的基本概念"
+bookHidden: true
 ---
 
 # 2.4 分布式计算的基本概念

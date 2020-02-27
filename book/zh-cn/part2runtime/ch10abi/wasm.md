@@ -1,6 +1,7 @@
 ---
 weight: 2505
 title: "10.5 WebAssembly"
+bookHidden: true
 ---
 
 # 10.5 WebAssembly

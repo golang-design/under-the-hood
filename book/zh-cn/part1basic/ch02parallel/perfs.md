@@ -1,6 +1,7 @@
 ---
 weight: 1203
 title: "2.3 性能模型"
+bookHidden: true
 ---
 
 # 2.3 性能模型

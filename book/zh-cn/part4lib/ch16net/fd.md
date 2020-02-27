@@ -1,6 +1,7 @@
 ---
 weight: 4201
 title: "16.1 文件描述符抽象"
+bookHidden: true
 ---
 
 # 16.1 文件描述符抽象

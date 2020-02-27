@@ -1,6 +1,7 @@
 ---
 weight: 1102
 title: "1.2 传统程序堆栈"
+bookHidden: true
 ---
 
 # 1.2 传统程序堆栈

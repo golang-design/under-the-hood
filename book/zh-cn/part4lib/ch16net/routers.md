@@ -1,6 +1,7 @@
 ---
 weight: 4202
 title: "16.2 路由管理"
+bookHidden: true
 ---
 
 # 16.2 路由管理
