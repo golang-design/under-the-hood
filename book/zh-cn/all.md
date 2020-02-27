@@ -5,6 +5,8 @@ title: "附录A：源码文件分配索引及完成情况"
 
 # 附录A：源码文件分配索引及完成情况
 
+TODO: 等全书写完后，重新组织本附录
+
 下面列出了 Go 源码文件所实现的功能，以及他们主要功能的介绍，在本书正文中对应的（粗略）位置：
 
 ## 第 5 章 Go 程序生命周期
@@ -202,12 +204,7 @@ race/trace/pprof/msan:
 ## 第 14 章 链接器
 
 
-## 第 15 章 同步原语
-
-- [x] src/errors
-- [x] src/fmt.Errorf
-
-## 第 16 章 网络操作
+## 第 15 章 同步模式
 
 - [x] src/sync
   - [x] /atomic
@@ -222,7 +219,12 @@ race/trace/pprof/msan:
   - [ ] Mutex
   - [ ] Rwmutex
 
+## 第 16 章 网络操作
+
 ## 第 17 章 错误处理
+
+- [x] src/errors
+- [x] src/fmt.Errorf
 
 ## 第 18 章 泛型与合约
 

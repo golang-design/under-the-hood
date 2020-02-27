@@ -55,7 +55,7 @@
 - [6.5 信号处理机制](part2runtime/ch06sched/signal.md)
 - [6.6 执行栈管理](part2runtime/ch06sched/stack.md)
 - [6.7 协作与抢占](part2runtime/ch06sched/preemption.md)
-- [6.8 运行时同步原语](part2runtime/ch06sched/sync.md)
+- [6.8 同步原语](part2runtime/ch06sched/sync.md)
 - [6.9 系统监控](part2runtime/ch06sched/sysmon.md)
 - [6.10 网络轮询器](part2runtime/ch06sched/poller.md)
 - [6.11 计时器](part2runtime/ch06sched/timer.md)
@@ -142,7 +142,7 @@
 
 ### [第四部分：标准库篇](part4lib/readme.md)
 
-#### [第 15 章 同步原语与模式](part4lib/ch15sync/readme.md)
+#### [第 15 章 同步模式](part4lib/ch15sync/readme.md)
 
 - [15.1 原子操作](part4lib/ch15sync/atomic.md)
 - [15.2 互斥锁](part4lib/ch15sync/mutex.md)

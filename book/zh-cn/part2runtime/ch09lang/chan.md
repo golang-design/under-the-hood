@@ -51,7 +51,7 @@ type waitq struct { // 等待队列 sudog 双向队列
 
 ![](./assets/../../../../assets/chan.png)
 
-> 更多关于 sudog 的细节，请参考 [6.8 运行时同步原语](../../part2runtime/ch06sched/sync.md)。
+> 更多关于 sudog 的细节，请参考 [6.8 同步原语](../../part2runtime/ch06sched/sync.md)。
 
 ### Channel 的创建
 

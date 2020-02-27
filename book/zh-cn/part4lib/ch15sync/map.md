@@ -537,7 +537,7 @@ func (m *Map) LoadOrStore(key, value interface{}) (actual interface{}, loaded bo
 当存储新值时，一定发生在 dirty map 中。当读取旧值时，如果 read map 读到则直接返回，如果没有读到，则尝试加锁去 dirty map 中取。
 这也就是官方宣称的 sync.Map 适用于一次写入多次读取的情景。
 
-sync.Map 中大量运用了 `atomic.CompareAndSwap` 这一同步原语，我们在 [atomic](./atomic.md) 中详细讨论其实现。
+sync.Map 中大量运用了 `atomic.CompareAndSwap` 这一同步模式，我们在 [atomic](./atomic.md) 中详细讨论其实现。
 
 ## 许可
 

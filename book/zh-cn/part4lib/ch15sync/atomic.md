@@ -12,7 +12,7 @@ title: "15.1 原子操作"
 ## 15.1.1 原子操作
 
 原子操作依赖硬件指令的支持，但同时还需要运行时调度器的配合。我们以
-`atomic.CompareAndSwapPointer` 为例，介绍 `sync/atomic` 包提供的同步原语。
+`atomic.CompareAndSwapPointer` 为例，介绍 `sync/atomic` 包提供的同步模式。
 
 `CompareAndSwapPointer` 它在包中只有函数定义，没有函数体：
 
