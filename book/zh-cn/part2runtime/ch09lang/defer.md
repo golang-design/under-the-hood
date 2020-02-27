@@ -16,7 +16,10 @@ defer 应该由编译器直接将需要的函数调用插入到该调用的地�
 不应该存在运行时性能问题，非常类似于 C++ 的 RAII 范式（当离开资源的作用域时，
 自动执行析构函数）。
 但实际情况是，由于 defer 并没有与其依赖资源挂钩，也允许在条件、循环语句中出现，
-这就是使得 defer 的语义变得相对复杂，无法在编译期决定存在多少个 defer 调用，例如：
+从而不再是一个作用域相关的概念，这就是使得 defer 的语义变得相对复杂。
+在一些复杂情况下，无法在编译期决定存在多少个 defer 调用。
+
+例如，在一个执行次数不确定的 for 循环中，defer 的执行次数是随机的：
 
 ```go
 func randomDefers() {
@@ -30,15 +33,15 @@ func randomDefers() {
 ```
 
 因而 defer 并不是免费的午餐，在一个复杂的调用中，当无法直接确定需要的产生的延迟调用的数量时，
-延迟语句将导致运行时性能下降的问题。本节我们来讨论 defer 的实现本质及其对症下药的相关性能优化手段。
+延迟语句将导致运行性能的下降。本节我们来讨论 defer 的实现本质及其对症下药的相关性能优化手段。
 
 ## 9.2.1 defer 的类型
 
-延迟语句的文法产生式 `DeferStmt -> "defer" Expression` 非常的简单，
+延迟语句的文法产生式 `DeferStmt -> "defer" Expression` 的描述非常的简单，因而也
 很容易将其处理为语法树的形式，但我们这里更关心的其实是它语义背后的中间和目标代码的形式。
 
-我们已经知道，在进行中间代码生成、SSA 处理阶段时，Go 语言的语句在 `buildssa` 时，
-会由 `state.stmt` 函数完成 SSA 处理。
+我们已经知道，在进行中间代码生成阶段，Go 语言的语句在执行 `buildssa` 时，会由
+`state.stmt` 函数完成 SSA 处理。
 
 ```go
 // src/cmd/compile/internal/gc/ssa.go
@@ -55,8 +58,10 @@ func (s *state) stmtList(l Nodes) {
 }
 ```
 
-对于 defer 而言，编译器会产生三种不同的 defer 形式，一种是普通在**堆上分配**的 `callDefer`，
-第二种是在**栈上分配**的 `callDeferStack`，最后一种则是**开放编码式（Open-coded）defer**。
+对于延迟语句而言，编译器会产生三种不同的延迟形式，
+第一种是最一般情况下的在**堆上分配**的延迟语句（`callDefer`），
+第二种是允许在**栈上分配**的延迟语句（`callDeferStack`），
+最后一种则是**开放编码式（Open-coded）**的延迟语句（`openDeferRecord`）。
 
 ```go
 // src/cmd/compile/internal/gc/ssa.go
@@ -85,14 +90,18 @@ func (s *state) stmt(n *Node) {
 ## 9.2.2 在堆上分配的 defer
 
 我们先来讨论最简单的在堆上分配的 defer 这种形式。在堆上分配的原因是 defer 语句出现
-在了循环语句里，或者无法执行更高阶的编译器优化导致的。如果一个与 defer 出现在循环语句中，则
-可以执行的次数可能无法在编译期决定；如果一个 defer 不能被编译器采用开放编码优化（之后会提到），
-则也会在堆上分配 defer。总之，在堆上分配的 defer 产生的运行时开销最大。
+在了循环语句里，或者无法执行更高阶的编译器优化导致的。如果一个与 defer 出现在循环语句中，
+则可执行的次数可能无法在编译期决定；如果一个调用中 defer 由于数量过多等原因，
+不能被编译器进行开放编码，则也会在堆上分配 defer。
+
+总之，由于这种不确定性的存在，在堆上分配的 defer 需要最多的运行时支持，因而产生的运行时开销也最大。
 
 ### 编译阶段
 
-为了使延迟语句的功能符合语言规范，该语句在编译的 SSA 阶段会被翻译为两个主体，
-其中第一个主体是被延迟的函数本身，另一个主体则是函数结束时需要执行所记录 defer 的代码块：
+为了使延迟语句的功能满足语言规范，该语句在编译的 SSA 阶段会被翻译为两个主体，
+其中第一个主体是被延迟的函数本身，另一个主体则是函数结束时需要执行所记录 defer 的代码块。
+
+首先会
 
 ```go
 // src/cmd/compile/internal/gc/ssa.go
@@ -100,7 +109,6 @@ func (s *state) call(n *Node, k callKind) *ssa.Value {
 	...
 	var call *ssa.Value
 	if k == callDeferStack {
-		// 在栈上创建 defer 结构
 		...
 	} else {
 		// 在堆上创建 defer
@@ -137,8 +145,7 @@ func (s *state) call(n *Node, k callKind) *ssa.Value {
 }
 ```
 
-并在函数帧的末尾插入函数的退出调用 `deferreturn`，并在在汇编代码生成时，
-通过 `genssa` 调用早就初始化好的 `ssaGenBlock`，来最终生成 defer 的函数尾声：
+函数 `genssa` 将调用早就初始化好的 `ssaGenBlock`，来最终生成 defer 的函数尾声：
 
 ```go
 // src/cmd/compile/internal/gc/ssa.go
@@ -153,18 +160,16 @@ func (s *state) exit() *ssa.Block {
 	}
 	...
 }
-// src/cmd/compile/internal/gc/ssa.go
 func genssa(f *ssa.Func, pp *Progs) {
 	var s SSAGenState
 	...
 	for i, b := range f.Blocks {
 		...
-		thearch.SSAGenBlock(&s, b, next) // 调用 ssaGenBlock
+		thearch.SSAGenBlock(&s, b, next) // 在内部调用 ssaGenBlock
 		...
 	}
 	...
 }
-// src/cmd/compile/internal/gc/ssa.go
 func ssaGenBlock(s *gc.SSAGenState, b, next *ssa.Block) {
 	switch b.Kind {
 	case ssa.BlockDefer:
@@ -187,7 +192,7 @@ func ssaGenBlock(s *gc.SSAGenState, b, next *ssa.Block) {
 ```
 
 注意，这里非常的巧妙，我们可能会疑惑为什么要用 TESTL 指令来判断 AX 的值？
-我们将在恐慌内建函数一节中详细讨论。
+我们将在 [9.3 恐慌内建函数](./panic.md)一节中详细讨论。
 
 ### 运行阶段
 
@@ -215,9 +220,10 @@ type g struct {
 }
 ```
 
-![](../../../assets/defer-link.png)
-
-**图 9.2.1：附着在 Goroutine 上的 `_defer` 记录的链表**
+<div style="text-align:center; width: 80%">
+<img src="../../../assets/defer-link.png"/>
+<strong align="center">图 9.2.1：附着在 Goroutine 上的 <code>_defer</code> 记录的链表</strong>
+</div>
 
 现在我们知道，一个在堆上分配的延迟语句被编译为了 `runtime.deferproc`，用于记录被延迟的函数调用；
 在函数的尾声，会插入 `runtime.deferreturn` 调用，用于执行被延迟的调用。
@@ -406,14 +412,21 @@ TEXT runtime·jmpdefer(SB), NOSPLIT, $0-16
 上面的描述可能不太容易理解，我们再举一个实际的例子：
 
 ```go
+package main
+
 func foo() {
-	a := 1
-	defer func(a *int) { println(a) }(&a)
-	defer func(a *int) { a++ }(&a)
-	a += 22
+	for i := 1; i <= 42; i++ {
+		defer func(i int) { println(i) }(i)
+	}
 	return
 }
+
+func main() {
+	foo()
+}
 ```
+
+TODO: 绘图
 
 释放操作非常普通，只是简单的将其归还到 P 的 `deferpool` 中，
 并在本地池已满时将其归还到全局资源池:
@@ -977,9 +990,10 @@ Dmitry Vyukov 将 per-G 分配的 defer 改为了从 per-P 资源池分配的机
 
 我们最后来总结一下 defer 的基本工作原理以及三种 defer 的性能取舍，见 图 9.2.2：
 
-![](../../../assets/defer-perf.png)
-
-**图 9.2.2：不同类型 defer 的编译与运行时成本之间的取舍**
+<div style="text-align:center; width: 80%">
+<img src="../../../assets/defer-perf.png"/>
+<strong align="center">图 9.2.2：不同类型 defer 的编译与运行时成本之间的取舍</strong>
+</div>
 
 1. 对于开放编码式 defer 而言：
 	- 编译器会直接将所需的参数进行存储，并在返回语句的末尾插入被延迟的调用；
