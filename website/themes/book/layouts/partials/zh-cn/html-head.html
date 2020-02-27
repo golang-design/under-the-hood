@@ -6,6 +6,9 @@
 <title>{{ partial "zh-cn/title" . }} | {{ .Site.Title -}}</title>
 <link rel="icon" href="{{ "favicon.png" | relURL }}" type="image/x-icon">
 
+<!-- fonts -->
+<link href="https://fonts.googleapis.com/css?family=Noto+Sans+SC|Source+Code+Pro&display=swap" rel="stylesheet">
+
 <!-- Theme stylesheet, you can customize scss by creating `assets/custom.scss` in your website -->
 {{- $styles := resources.Get "book.scss" | resources.ExecuteAsTemplate "book.scss" . | resources.ToCSS | resources.Minify | resources.Fingerprint }}
 <link rel="stylesheet" href="{{ $styles.RelPermalink }}" integrity="{{ $styles.Data.Integrity }}">

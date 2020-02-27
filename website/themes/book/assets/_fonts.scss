@@ -8,6 +8,7 @@
        url('fonts/roboto-v19-latin-300italic.woff2') format('woff2'), /* Chrome 26+, Opera 23+, Firefox 39+ */
        url('fonts/roboto-v19-latin-300italic.woff') format('woff'); /* Chrome 6+, Firefox 3.6+, IE 9+, Safari 5.1+ */
 }
+
 /* roboto-regular - latin */
 @font-face {
   font-family: 'Roboto';
@@ -41,9 +42,9 @@
 }
 
 body {
-  font-family: 'Roboto', sans-serif;
+  font-family: 'Noto Sans SC', 'Roboto', sans-serif;
 }
 
 code {
-  font-family: 'Roboto Mono', monospace;
+  font-family: 'Source Code Pro', 'Roboto Mono', monospace;
 }
