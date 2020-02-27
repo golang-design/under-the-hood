@@ -12,9 +12,10 @@ sync.Map 宣称内部做了特殊的优化，在两种情况下由于普通的 m
 
 下面是随 n 变化的性能结果
 
-![](../../../assets/map-syncmap.png)
-
-**图1：`map`+`sync.Mutex` 、`map`+`sync.RWMutex` 与 `sync.Map` 之间单次写多次读场景下的性能对比**
+<div class="img-center">
+<img src="../../../assets/map-syncmap.png"/>
+<strong>图1：<code>map</code>+<code>sync.Mutex</code> 、<code>map</code>+<code>sync.RWMutex</code>与 <code>sync.Map</code> 之间单次写多次读场景下的性能对比</strong>
+</div>
 
 下面我们来研究一下 sync.Map 的具体优化细节。
 

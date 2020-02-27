@@ -47,9 +47,12 @@ type waitq struct { // 等待队列 sudog 双向队列
 
 其中 `recvq` 和 `sendq` 分别是 `sudog` 的一个链式队列，
 其元素是一个包含当前包含队 Goroutine 及其要在 Channel 中发送的数据的一个封装，
-如图所示。
+如图 1 所示。
 
-![](./assets/../../../../assets/chan.png)
+<div class="img-center">
+<img src="../../../assets/chan.png"/>
+<strong>图1：Channel 的结构</strong>
+</div>
 
 > 更多关于 sudog 的细节，请参考 [6.8 同步原语](../../part2runtime/ch06sched/sync.md)。
 

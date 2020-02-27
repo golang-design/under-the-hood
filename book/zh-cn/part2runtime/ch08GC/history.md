@@ -19,7 +19,10 @@ title: "8.14 过去、现在与未来"
 
 在 Go 1.3 时候，官方将三色标记清扫算法的垃圾回收代码改为并行，从而缩短了用户代码的停止时间，但是这仍然会造成大量的空隙，如果用户代码是一个 Web 应用，且正在处理一个非常重要的请求，则会对请求延迟造成巨大的影响。
 
-![](../../../assets/gc1.png)
+<div class="img-center">
+<img src="../../../assets/gc1.png"/>
+<strong>图 1: Go 1 与 1.3 的垃圾回收器</strong>
+</div>
 
 ### Go 1.5
 
@@ -42,7 +45,10 @@ Go 1.7 使用了纯 Dijkstra 插入屏障技术 [Dijkstra et al. 1978]。
 
 Go 团队在 1.8 引入混合屏障将 STW 进一步缩短，几乎解决了 STW 的问题。
 
-![](../../../assets/gc2.png)
+<div class="img-center">
+<img src="../../../assets/gc2.png"/>
+<strong>图 1: Go 1.5 与 1.8 的垃圾回收器</strong>
+</div>
 
 ### Go 1.10, 1.11
 
@@ -54,7 +60,10 @@ Go 团队在 1.8 引入混合屏障将 STW 进一步缩短，几乎解决了 STW
 
 到了 Go 1.14，由于页分配器的引入，向操作系统归还内存的操作页完全得到并发。
 
-![](../../../assets/gc3.png)
+<div class="img-center">
+<img src="../../../assets/gc3.png"/>
+<strong>图 1: Go 1.13 与 1.14 的垃圾回收器</strong>
+</div>
 
 ## 被抛弃的方案
 

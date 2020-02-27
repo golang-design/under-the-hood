@@ -497,7 +497,10 @@ var gcBlackenEnabled uint32
 
 TODO:
 
-![](../../../assets/gc-phase.png)
+<div class="img-center">
+<img src="../../../assets/gc-phase.png"/>
+<strong>图 1: 垃圾回收器各阶段总览</strong>
+</div>
 
 ## 许可
 

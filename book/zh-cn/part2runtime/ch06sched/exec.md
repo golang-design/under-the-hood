@@ -1543,9 +1543,12 @@ TEXT runtime·exitThread(SB),NOSPLIT,$0-8
 
 ## 小结
 
-我们已经看过了整个调度器的设计，下图纵观了整个过程：
+我们已经看过了整个调度器的设计，图 1 纵观了整个调度循环：
 
-![](../../../assets/schedule.png)
+<div class="img-center">
+<img src="../../../assets/schedule.png"/>
+<strong>图 1：调度器调度循环纵览</strong>
+</div>
 
 那么，很自然的能够想到这个流程中存在两个问题：
 

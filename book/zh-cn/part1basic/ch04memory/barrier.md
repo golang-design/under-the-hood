@@ -17,9 +17,10 @@ title: "4.3 屏障技术"
 白色对象 B 永远不会被标记为黑色对象了（回收器不会重新扫描黑色对象）。
 进而产生被错误回收的对象 B，如图 1 所示。
 
-![](../../../assets/gc-mutator.png)
-
-_图 1: 回收器正确性的破坏_
+<div class="img-center">
+<img src="../../../assets/gc-mutator.png"/>
+<strong>图 1: 回收器正确性的破坏</strong>
+</div>
 
 ## 4.3.2 弱三色不变性
 
@@ -116,9 +117,10 @@ func DijkstraWritePointer(slot *unsafe.Pointer, ptr unsafe.Pointer) {
 `shade(ptr)` 会将尚未变成灰色或黑色的指针 `ptr` 标记为灰色。通过保守的假设 `*slot` 可能会变为黑色，
 并确保 `ptr` 不会在将赋值为 `*slot` 前变为白色，进而确保了强三色不变性。图 2 展示了三个对象之间，赋值器和回收器的对 ABC 对象图的操作，赋值器修改 ABC 之间的引用关系，而回收器根据引用关系进一步修改 ABC 各自的颜色。
 
-![](./../../../assets/gc-wb-dijkstra.png)
-
-_图 2: 使用 Dijkstra 写屏障的赋值器_
+<div class="img-center">
+<img src="../../../assets/gc-wb-dijkstra.png"/>
+<strong>图 2: 使用 Dijkstra 写屏障的赋值器</strong>
+</div>
 
 Dijkstra 屏障的优势在于：
 
@@ -162,9 +164,10 @@ Yuasa 删除屏障的优势则在于不需要标记结束阶段的重新扫描�
 结束时候能够准确的回收所有需要回收的白色对象。
 缺陷是 Yuasa 删除屏障会拦截写操作，进而导致波面的退后，产生冗余的扫描，如图 3 所示。
 
-![](./../../../assets/gc-wb-yuasa.png)
-
-_图 3: 使用 Yuasa 写屏障的赋值器_
+<div class="img-center">
+<img src="../../../assets/gc-wb-yuasa.png"/>
+<strong>图 3: 使用 Yuasa 写屏障的赋值器</strong>
+</div>
 
 ### Yuasa 屏障的正确性
 

@@ -191,13 +191,14 @@ func sysargs(argc int32, argv **byte) {
 而在 Linux 平台中，这个过程就变得复杂起来了。
 与 Darwin 使用 `mach-o` 不同，Linux 使用 ELF 格式 [Matz et al. 2014]。
 ELF 除了 argc, argv, envp 之外，会携带辅助向量（auxiliary vector）
-将某些内核级的信息传递给用户进程，例如**内存物理页大小**。具体结构如图 5-1 所示。
+将某些内核级的信息传递给用户进程，例如**内存物理页大小**。具体结构如图 5.1 所示。
 
-![](../../../assets/proc-stack.png)
+<div class="img-center">
+<img src="../../../assets/proc-stack.png"/>
+<strong>图 5.1：ELF 格式的进程栈结构</strong>
+</div>
 
-***图 5-1：ELF 格式的进程栈结构***
-
-对照图 5-1 的词表，我们能够很容易的看明白 `sysargs` 在 Linux amd64 下作的事情：
+对照图 5.1 的词表，我们能够很容易的看明白 `sysargs` 在 Linux amd64 下作的事情：
 
 ```go
 // runtime/os_linux.go
@@ -355,11 +356,12 @@ func schedinit() {
 
 ## 5.2.5 小结
 
-我们通过一个简化的调用关系图来对本节中我们观察到的程序启动流程，如图 5-2 所示。
+我们通过一个简化的调用关系图来对本节中我们观察到的程序启动流程，如图 5.2 所示。
 
-![](../../../assets/boot.png)
-
-_图 5-2：Go 程序引导过程调用关系_
+<div class="img-center">
+<img src="../../../assets/boot.png"/>
+<strong>图 5.2：Go 程序引导过程调用关系</strong>
+</div>
 
 根据分析我们可以看到，Go 程序既不是从 `main.main` 直接启动，也不是从 `runtime.main` 直接启动。
 相反，其实际的入口位于 `runtime._rt0_amd64_*`。随后会转到 `runtime.rt0_go` 调用。在这个调用中，除了进行运行时类型检查外，还确定了两个很重要的运行时常量，即处理器核心数以及内存物理页大小。

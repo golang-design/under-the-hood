@@ -189,9 +189,12 @@ timer 作为一个对时间敏感的功能，同网络数据的拉取操作一�
 在这个过程中要小心当 P 被回收时，需要将局部的 P 进行删除，或者转移到其他 P 上，
 由 `runtime.moveTimers` 实现。
 
-一个 Timer 具有十种状态，他们之间的状态转换图如下所示：
+一个 Timer 具有十种状态，他们之间的状态转换图如图 1 所示。
 
-![](../../../assets/timers.png)
+<div class="img-center">
+<img src="../../../assets/timers.png"/>
+<strong>图 1: 计时器状态机</strong>
+</div>
 
 总结来说：
 

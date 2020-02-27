@@ -45,9 +45,10 @@ DATA	runtime·mainPC+0(SB)/8,$runtime·main(SB)
 GLOBL	runtime·mainPC(SB),RODATA,$8
 ```
 
-![](../../../assets/sched-init.png)
-
-**图1: MPG 初始化过程。M/P/G 彼此的初始化顺序遵循：`mcommoninit` --> `procresize` --> `newproc`，他们分别负责初始化 M 资源池（allm）、P 资源池（allp）、G 的运行现场（g.sched）以及调度队列（p.runq）。**
+<div class="img-center">
+<img src="../../../assets/sched-init.png"/>
+<strong>图1: MPG 初始化过程。M/P/G 彼此的初始化顺序遵循：`mcommoninit` --> `procresize` --> `newproc`，他们分别负责初始化 M 资源池（allm）、P 资源池（allp）、G 的运行现场（g.sched）以及调度队列（p.runq）。</strong>
+</div>
 
 ## M 初始化
 
@@ -88,9 +89,10 @@ func mcommoninit(mp *m) {
 
 在看 `runtime.procresize` 函数之前，我们先概览一遍 P 的状态转换图，如图 1 所示。
 
-![](../../../assets/p-status.png)
-
-**图 1: P 的状态转换图**
+<div class="img-center">
+<img src="../../../assets/p-status.png"/>
+<strong>图 1: P 的状态转换图</strong>
+</div>
 
 通常情况下（在程序运行时不调整 P 的个数），P 只会在四种状态下进行切换。
 当程序刚开始运行进行初始化时，所有的 P 都处于 `_Pgcstop` 状态，
@@ -285,9 +287,10 @@ func (pp *p) destroy() {
 
 在看 `runtime.newproc` 之前，我们先大致浏览一下 G 的各个状态，如图 2 所示。
 
-![](../../../assets/g-status.png)
-
-**图2: G 的转状态转换图**
+<div class="img-center">
+<img src="../../../assets/g-status.png"/>
+<strong>图 2: G 的转状态转换图</strong>
+</div>
 
 我们接下来就来粗略看一看 `runtime.newproc`：
 

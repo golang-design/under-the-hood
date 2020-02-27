@@ -11,7 +11,10 @@ TODO: 请不要阅读此小节，内容编排中
 
 map 由运行时实现，编译器辅助进行布局，其本质为散列表。我们可以通过图 1 展示的测试结果看出使用 map 的容量（无大量碰撞）。
 
-![](../../../assets/map-write-performance.png)
+<div class="img-center">
+<img src="../../../assets/map-write-performance.png"/>
+<strong>图1: cgo/Go/C/net 包 在网络 I/O 场景下的性能对比，图取自 <a src="https://github.com/changkun/cgo-benchmarks">github.com/changkun/cgo-benchmarks</a></strong>
+</div>
 
 **图1: map[int64]int64 写入性能，其中 `key==value` 且 key 从 1 开始增长。从 218000000 个 key 后开始出现比较严重的碰撞。**
 

@@ -220,9 +220,9 @@ type g struct {
 }
 ```
 
-<div style="text-align:center; width: 80%">
+<div class="img-center">
 <img src="../../../assets/defer-link.png"/>
-<strong align="center">图 9.2.1：附着在 Goroutine 上的 <code>_defer</code> 记录的链表</strong>
+<strong>图 9.2.1：附着在 Goroutine 上的 <code>_defer</code> 记录的链表</strong>
 </div>
 
 现在我们知道，一个在堆上分配的延迟语句被编译为了 `runtime.deferproc`，用于记录被延迟的函数调用；
@@ -990,9 +990,9 @@ Dmitry Vyukov 将 per-G 分配的 defer 改为了从 per-P 资源池分配的机
 
 我们最后来总结一下 defer 的基本工作原理以及三种 defer 的性能取舍，见 图 9.2.2：
 
-<div style="text-align:center; width: 80%">
+<div class="img-center">
 <img src="../../../assets/defer-perf.png"/>
-<strong align="center">图 9.2.2：不同类型 defer 的编译与运行时成本之间的取舍</strong>
+<strong>图 9.2.2：不同类型 defer 的编译与运行时成本之间的取舍</strong>
 </div>
 
 1. 对于开放编码式 defer 而言：

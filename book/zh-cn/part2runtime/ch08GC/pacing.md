@@ -39,7 +39,10 @@ $$
 H_g^{(n)} = (1+h_g) H_m^{(n-1)}
 $$
 
-![](../../../assets/gc-pacing.png)
+<div class="img-center">
+<img src="../../../assets/gc-pacing.png"/>
+<strong>图1：调步算法的模型</strong>
+</div>
 
 这时的 $H_g(n)$ 是作为用户的我们所希望的堆的增长结果，GC 必须将堆的大小限制在此结果以内。
 

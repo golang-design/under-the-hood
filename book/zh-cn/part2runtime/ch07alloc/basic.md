@@ -360,9 +360,10 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 
 图 1 展示了所有结构的关系。
 
-![](../../../assets/mem-struct.png)
-
-_图 1: Go 内存管理结构总览_
+<div class="img-center">
+<img src="../../../assets/mem-struct.png"/>
+<strong>图 1: Go 内存管理结构总览</strong>
+</div>
 
 heap 最中间的灰色区域 arena 覆盖了 Go 程序的整个虚拟内存，
 每个 arena 包括一段 bitmap 和一段指向连续 span 的指针；
