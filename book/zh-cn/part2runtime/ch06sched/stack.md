@@ -1,9 +1,9 @@
 ---
 weight: 2106
-title: "6.6 goroutine 及其执行栈管理"
+title: "6.6 执行栈管理"
 ---
 
-# 6.6 goroutine 及其执行栈管理
+# 6.6 执行栈管理
 
 [TOC]
 

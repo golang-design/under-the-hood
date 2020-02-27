@@ -42,7 +42,7 @@
 
 - [5.1 Go 程序编译流程](part1basic/ch05life/compile.md)
 - [5.2 Go 程序启动引导](part1basic/ch05life/boot.md)
-- [5.3 主 goroutine 的生与死](part1basic/ch05life/main.md)
+- [5.3 主 Goroutine 的生与死](part1basic/ch05life/main.md)
 
 ### [第二部分：运行时篇](part2runtime/readme.md)
 
@@ -70,8 +70,9 @@
 - [7.4 大对象分配](part2runtime/ch07alloc/largealloc.md)
 - [7.5 小对象分配](part2runtime/ch07alloc/smallalloc.md)
 - [7.6 微对象分配](part2runtime/ch07alloc/tinyalloc.md)
-- [7.7 内存统计](part2runtime/ch07alloc/mstats.md)
-- [7.8 过去、现在与未来](part2runtime/ch07alloc/history.md)
+- [7.7 页分配器](part2runtime/ch07alloc/pagealloc.md)
+- [7.8 内存统计](part2runtime/ch07alloc/mstats.md)
+- [7.9 过去、现在与未来](part2runtime/ch07alloc/history.md)
 
 #### [第 8 章 垃圾回收](part2runtime/ch08GC/readme.md)
 
@@ -83,20 +84,22 @@
 - [8.6 扫描标记与标记辅助](part2runtime/ch08GC/mark.md)
 - [8.7 标记终止阶段](part2runtime/ch08GC/termination.md)
 - [8.8 内存清扫阶段](part2runtime/ch08GC/sweep.md)
-- [8.9 清道夫及其调步算法](part2runtime/ch08GC/scavenge.md)
-- [8.10 用户层 APIs](part2runtime/ch08GC/finalizer.md)
-- [8.11 过去、现在与未来](part2runtime/ch08GC/history.md)
+- [8.9 安全点分析](part2runtime/ch08GC/safe.md)
+- [8.10 清道夫及其调步算法](part2runtime/ch08GC/scavenge.md)
+- [8.11 代际回收](part2runtime/ch08GC/generational.md)
+- [8.12 请求制导回收](part2runtime/ch08GC/roc.md)
+- [8.13 用户层 APIs](part2runtime/ch08GC/finalizer.md)
+- [8.14 过去、现在与未来](part2runtime/ch08GC/history.md)
 
 #### [第 9 章 语言核心](part2runtime/ch09lang/readme.md)
 
-- [9.1 for 语句](part2runtime/ch09lang/for.md)
-- [9.2 defer 语句](part2runtime/ch09lang/defer.md)
-- [9.3 panic 与 recover 语句](part2runtime/ch09lang/panic.md)
-- [9.4 channel 与 select](part2runtime/ch09lang/chan.md)
-- [9.5 运行时类型系统](part2runtime/ch09lang/type.md)
-- [9.6 数组、切片与字符串](part2runtime/ch09lang/slice.md)
-- [9.7 散列表](part2runtime/ch09lang/map.md)
-- [9.8 接口](part2runtime/ch09lang/interface.md)
+- [9.1 运行时类型系统](part2runtime/ch09lang/type.md)
+- [9.2 延迟语句](part2runtime/ch09lang/defer.md)
+- [9.3 恐慌与恢复内建函数](part2runtime/ch09lang/panic.md)
+- [9.4 Channel 与 Select](part2runtime/ch09lang/chan.md)
+- [9.5 数组、切片与字符串](part2runtime/ch09lang/slice.md)
+- [9.6 散列表](part2runtime/ch09lang/map.md)
+- [9.7 接口](part2runtime/ch09lang/interface.md)
 
 #### [第 10 章 兼容与契约](part2runtime/ch10abi/readme.md)
 

@@ -13,9 +13,12 @@ title: "第 8 章 垃圾回收"
 - [8.6 扫描标记与标记辅助](./mark.md)
 - [8.7 标记终止阶段](./termination.md)
 - [8.8 内存清扫阶段](./sweep.md)
-- [8.9 清道夫及其调步算法](./scavenge.md)
-- [8.10 用户层 APIs](./finalizer.md)
-- [8.11 过去、现在与未来](./history.md)
+- [8.9 安全点分析](./safe.md)
+- [8.10 清道夫及其调步算法](./scavenge.md)
+- [8.11 代际回收](./generational.md)
+- [8.12 请求制导回收](./roc.md)
+- [8.13 用户层 APIs](./finalizer.md)
+- [8.14 过去、现在与未来](./history.md)
 
 垃圾回收是一个相当困难且复杂的系统工程。
 

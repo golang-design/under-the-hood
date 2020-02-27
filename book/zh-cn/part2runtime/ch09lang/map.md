@@ -1,9 +1,9 @@
 ---
-weight: 2407
-title: "9.7 散列表"
+weight: 2406
+title: "9.6 散列表"
 ---
 
-# 9.7 散列表
+# 9.6 散列表
 
 [TOC]
 
@@ -477,6 +477,7 @@ field:
 	}
 }
 ```
+
 ## 许可
 
 [Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

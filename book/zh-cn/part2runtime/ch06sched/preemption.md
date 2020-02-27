@@ -27,9 +27,6 @@ Go 的运行时并不具备操作系统内核级的中断能力，基于工作�
      的 G 则可能会被偷取到其他 M 中。
   2. 被动 GC 抢占：当需要进行 GC 时，为了保证不具备主动抢占处理的函数执行时间过长，导致
      导致 GC 迟迟不得执行而导致的高延迟，而强制停止 G 并转为执行垃圾回收。
-     + enlistWorker
-     + gcStart: gcbgmarkworker
-     + gcStart: marktermination
 
 ## 协作式调度
 
@@ -49,7 +46,7 @@ func Gosched() {
 }
 // Gosched 在 g0 上继续执行
 func gosched_m(gp *g) {
-	(...)
+	...
 	goschedImpl(gp)
 }
 ```
@@ -102,24 +99,20 @@ func ready(gp *g, traceskip int, next bool) {
 
 func notetsleepg(n *note, ns int64) bool {
 	gp := getg()
-	(...)
+	...
 
 	if ns >= 0 {
 		deadline := nanotime() + ns
-		(...)
-
-		(...)
+		...
 		notesWithTimeout[n] = noteWithTimeout{gp: gp, deadline: deadline}
-		(...)
-
+		...
 		gopark(nil, nil, waitReasonSleep, traceEvNone, 1)
-
-		(...)
+		...
 		delete(notesWithTimeout, n)
-		(...)
+		...
 	}
 
-	(...)
+	...
 }
 ```
 
@@ -131,7 +124,7 @@ func notetsleepg(n *note, ns int64) bool {
 func goschedImpl(gp *g) {
 	// 放弃当前 g 的运行状态
 	status := readgstatus(gp)
-	(...)
+	...
 	casgstatus(gp, _Grunning, _Grunnable)
 	// 使当前 m 放弃 g
 	dropg()
@@ -175,7 +168,7 @@ const stackPreempt = (1<<(8*sys.PtrSize) - 1) & -1314
 
 ```asm
 TEXT runtime·morestack(SB),NOSPLIT,$0-0
-	(...)
+	...
 	MOVQ	0(SP), AX // f's PC
 	MOVQ	AX, (g_sched+gobuf_pc)(SI)
 	MOVQ	SI, (g_sched+gobuf_g)(SI)
@@ -183,7 +176,7 @@ TEXT runtime·morestack(SB),NOSPLIT,$0-0
 	MOVQ	AX, (g_sched+gobuf_sp)(SI)
 	MOVQ	BP, (g_sched+gobuf_bp)(SI)
 	MOVQ	DX, (g_sched+gobuf_ctxt)(SI)
-	(...)
+	...
 	CALL	runtime·newstack(SB)
 ```
 
@@ -193,11 +186,10 @@ TEXT runtime·morestack(SB),NOSPLIT,$0-0
 //go:nowritebarrierrec
 func newstack() {
 	thisg := getg()
-	(...)
+	...
 
 	gp := thisg.m.curg
-
-	(...)
+	...
 
 	morebuf := thisg.m.morebuf
 	thisg.m.morebuf.pc = 0
@@ -217,10 +209,10 @@ func newstack() {
 			gogo(&gp.sched) // 重新进入调度循环
 		}
 	}
-	(...)
+	...
 	// 如果需要对栈进行调整
 	if preempt {
-		(...)
+		...
 		if gp.preemptShrink {
 			// 我们正在一个同步安全点，因此等待栈收缩
 			gp.preemptShrink = false
@@ -229,15 +221,15 @@ func newstack() {
 		if gp.preemptStop {
 			preemptPark(gp) // 永不返回
 		}
-		(...)
+		...
 		// 表现得像是调用了 runtime.Gosched，主动让权
 		gopreempt_m(gp) // 重新进入调度循环
 	}
-	(...)
+	...
 }
 // 与 gosched_m 一致
 func gopreempt_m(gp *g) {
-	(...)
+	...
 	goschedImpl(gp)
 }
 ```
@@ -350,7 +342,7 @@ func retake(now int64) uint32 {
 	lock(&allpLock)
 	for i := 0; i < len(allp); i++ {
 		_p_ := allp[i]
-		(...)
+		...
 		pd := &_p_.sysmontick
 		s := _p_.status
 		sysretake := false
@@ -361,7 +353,7 @@ func retake(now int64) uint32 {
 				pd.schedtick = uint32(t)
 				pd.schedwhen = now
 			} else if pd.schedwhen+forcePreemptNS <= now {
-				(...)
+				...
 				sysretake = true
 			}
 		}
@@ -386,7 +378,7 @@ func retake(now int64) uint32 {
 			// 这个过程发生在 stoplockedm 中
 			incidlelocked(-1)
 			if atomic.Cas(&_p_.status, s, _Pidle) { // 将 P 设为 idle，从而交于其他 M 使用
-				(...)
+				...
 				n++
 				_p_.syscalltick++
 				handoffp(_p_)
@@ -418,12 +410,12 @@ func retake(now int64) uint32 {
 
 ```go
 func retake(now int64) uint32 {
-	(...)
+	...
 	for i := 0; i < len(allp); i++ {
 		_p_ := allp[i]
-		(...)
+		...
 		if s == _Prunning || s == _Psyscall {
-			(...)
+			...
 			} else if pd.schedwhen+forcePreemptNS <= now {
 				// 对于 syscall 的情况，因为 M 没有与 P 绑定，
 				// preemptone() 不工作
@@ -431,9 +423,9 @@ func retake(now int64) uint32 {
 				sysretake = true
 			}
 		}
-		(...)
+		...
 	}
-	(...)
+	...
 }
 func preemptone(_p_ *p) bool {
 	// 检查 M 与 P 是否绑定
@@ -486,7 +478,7 @@ const sigPreempt = _SIGURG
 // 接收到该请求后，如果正在运行的 G 或 P 被标记为抢占，并且 goroutine 处于异步安全点，
 // 它将抢占 goroutine。在处理抢占请求后，它始终以原子方式递增 mp.preemptGen。
 func preemptM(mp *m) {
-	(...)
+	...
 	signalM(mp, sigPreempt)
 }
 func signalM(mp *m, sig int) {
@@ -508,16 +500,16 @@ func signalM(mp *m, sig int) {
 ```go
 //go:nowritebarrierrec
 func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
-	(...)
+	...
 	c := &sigctxt{info, ctxt}
-	(...)
+	...
 	if sig == sigPreempt {
 		// 可能是一个抢占信号
 		doSigPreempt(gp, c)
 		// 即便这是一个抢占信号，它也可能与其他信号进行混合，因此我们
 		// 继续进行处理。
 	}
-	(...)
+	...
 }
 // doSigPreempt 处理了 gp 上的抢占信号
 func doSigPreempt(gp *g, ctxt *sigctxt) {
@@ -560,15 +552,15 @@ func asyncPreempt()
 
 ```asm
 TEXT ·asyncPreempt(SB),NOSPLIT|NOFRAME,$0-0
-	(...)
+	...
 	MOVQ AX, 0(SP)
-	(...)
+	...
 	MOVUPS X15, 352(SP)
 	CALL ·asyncPreempt2(SB)
 	MOVUPS 352(SP), X15
-	(...)
+	...
 	MOVQ 0(SP), AX
-	(...)
+	...
 	RET
 ```
 
@@ -599,97 +591,7 @@ func asyncPreempt2() {
 3. M2 修改执行的上下文，并恢复到修改后的位置 `asyncPreempt`
 4. 重新进入调度循环进而调度其他 goroutine `preemptPark` `gopreempt_m`
 
-#### 抢占的安全区
-
-什么时候才能进行抢占呢？如何才能区分该抢占信号是运行时发出的还是用户代码发出的呢？
-TODO:
-
-
-TODO: 解释执行栈映射补充寄存器映射，中断信号 SIGURG
-
-```go
-// wantAsyncPreempt 返回异步抢占是否被 gp 请求
-func wantAsyncPreempt(gp *g) bool {
-	// 同时检查 G 和 P
-	return (gp.preempt || gp.m.p != 0 && gp.m.p.ptr().preempt) && readgstatus(gp)&^_Gscan == _Grunning
-}
-```
-
-什么时候才是安全的异步抢占点呢？
-TODO:
-
-```go
-func isAsyncSafePoint(gp *g, pc, sp, lr uintptr) bool {
-	mp := gp.m
-
-	// Only user Gs can have safe-points. We check this first
-	// because it's extremely common that we'll catch mp in the
-	// scheduler processing this G preemption.
-	if mp.curg != gp {
-		return false
-	}
-
-	// Check M state.
-	if mp.p == 0 || !canPreemptM(mp) {
-		return false
-	}
-
-	// Check stack space.
-	if sp < gp.stack.lo || sp-gp.stack.lo < asyncPreemptStack {
-		return false
-	}
-
-	// Check if PC is an unsafe-point.
-	f := findfunc(pc)
-	if !f.valid() {
-		// Not Go code.
-		return false
-	}
-	(...)
-	smi := pcdatavalue(f, _PCDATA_RegMapIndex, pc, nil)
-	if smi == -2 {
-		// Unsafe-point marked by compiler. This includes
-		// atomic sequences (e.g., write barrier) and nosplit
-		// functions (except at calls).
-		return false
-	}
-	if fd := funcdata(f, _FUNCDATA_LocalsPointerMaps); fd == nil || fd == unsafe.Pointer(&no_pointers_stackmap) {
-		// This is assembly code. Don't assume it's
-		// well-formed. We identify assembly code by
-		// checking that it has either no stack map, or
-		// no_pointers_stackmap, which is the stack map
-		// for ones marked as NO_LOCAL_POINTERS.
-		//
-		// TODO: Are there cases that are safe but don't have a
-		// locals pointer map, like empty frame functions?
-		return false
-	}
-	if hasPrefix(funcname(f), "runtime.") ||
-		hasPrefix(funcname(f), "runtime/internal/") ||
-		hasPrefix(funcname(f), "reflect.") {
-		// For now we never async preempt the runtime or
-		// anything closely tied to the runtime. Known issues
-		// include: various points in the scheduler ("don't
-		// preempt between here and here"), much of the defer
-		// implementation (untyped info on stack), bulk write
-		// barriers (write barrier check),
-		// reflect.{makeFuncStub,methodValueCall}.
-		//
-		// TODO(austin): We should improve this, or opt things
-		// in incrementally.
-		return false
-	}
-
-	return true
-}
-```
-
-#### 其他抢占触发点
-
-TODO: 一些 GC 的处理， suspendG
-
-preemptStop 会在什么时候被设置为抢占呢？GC。
-
+<!-- TODO: 抢占问题的引入历史 -->
 
 ## 小结
 

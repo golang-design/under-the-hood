@@ -70,7 +70,8 @@ TODO: 谈及内存模型与实现的 barrier 之间的关系
 - [Cox, 2014] Russ Cox. doc: allow buffered channel as semaphore without initialization. March 03, 2014. https://codereview.appspot.com/75130045
 - [Vyukov, 2014a] Dmitry Vyukov. doc: define how sync interacts with memory model. May 7, 2014. https://github.com/golang/go/issues/7948
 - [Vyukov, 2014b] Dmitry Vyukov. doc: define how finalizers interact with memory model. Dec 25, 2014. https://github.com/golang/go/issues/9442
-- [Cox, 2016] Russ Cox. Go's Memory Model. February 25, 2016. http://nil.csail.mit.edu/6.824/2016/notes/gomem.pdf -->
+- [Cox, 2016] Russ Cox. Go's Memory Model. February 25, 2016. http://nil.csail.mit.edu/6.824/2016/notes/gomem.pdf 
+- Fannie Zhang. Specify the memory order guarantee provided by atomic Load/Store. July 15, 2019. https://groups.google.com/forum/#!msg/golang-dev/vVkH_9fl1D8/azJa10lkAwAJ -->
 
 ## 许可
 
