@@ -52,9 +52,7 @@ func buildssa(fn *Node, worker int) *ssa.Func {
 	...
 }
 func (s *state) stmtList(l Nodes) {
-	for _, n := range l.Slice() {
-		s.stmt(n)
-	}
+	for _, n := range l.Slice() { s.stmt(n) }
 }
 ```
 
@@ -225,8 +223,8 @@ type g struct {
 <strong>图 9.2.1：附着在 Goroutine 上的 <code>_defer</code> 记录的链表</strong>
 </div>
 
-现在我们知道，一个在堆上分配的延迟语句被编译为了 `runtime.deferproc`，用于记录被延迟的函数调用；
-在函数的尾声，会插入 `runtime.deferreturn` 调用，用于执行被延迟的调用。
+现在我们知道，一个在堆上分配的延迟语句被编译为了 `deferproc`，用于记录被延迟的函数调用；
+在函数的尾声，会插入 `deferreturn` 调用，用于执行被延迟的调用。
 
 下面我们就来详细看看这两个调用具体发生了什么事情。
 
@@ -339,7 +337,7 @@ func newdefer(siz int32) *_defer {
 			d = (*_defer)(mallocgc(total, deferType, true))
 		})
 	}
-	// 将 _defer 实例添加到 goroutine 的 _defer 链表上。
+	// 将 _defer 实例添加到 Goroutine 的 _defer 链表上。
 	d.siz = siz
 	d.heap = true
 	d.link = gp._defer
@@ -515,14 +513,12 @@ func (s *state) call(n *Node, k callKind) *ssa.Value {
 		off := t.FieldOff(12)
 		args := n.Rlist.Slice()
 
-		// 调用 runtime.deferprocStack，以 _defer 记录的指针作为参数传递
+		// 调用 deferprocStack，以 _defer 记录的指针作为参数传递
 		arg0 := s.constOffPtrSP(types.Types[TUINTPTR], Ctxt.FixedFrameSize())
 		s.store(types.Types[TUINTPTR], arg0, addr)
 		call = s.newValue1A(ssa.OpStaticCall, types.TypeMem, deferprocStack, s.mem())
 		...
-	} else {
-		...
-	}
+	} else { ... }
 
 	// 函数尾声与堆上分配的栈一样，调用 deferreturn
 	if k == callDefer || k == callDeferStack {
@@ -565,9 +561,7 @@ func deferprocStack(d *_defer) {
 ```go
 // src/runtime/panic.go
 func freedefer(d *_defer) {
-	if !d.heap {
-		return
-	}
+	if !d.heap { return }
 	...
 }
 ```
@@ -581,7 +575,7 @@ func freedefer(d *_defer) {
 这类 defer 与直接调用产生的性能差异有多大呢？我们不妨编写两个性能测试：
 
 ```go
-func call()  { func() {}() }
+func call()      { func() {}() }
 func callDefer() { defer func() {}() }
 func BenchmarkDefer(b *testing.B) {
 	for i := 0; i < b.N; i++ {
@@ -715,6 +709,7 @@ if rand.Intn(100) < 42 {
 那么如何才能使用最小的成本，让插入到函数末尾的延迟语句，在条件成立时候被正确执行呢？
 这遍需要需要一种机制，能够记录存在延迟语句的条件分支是否被执行，
 这种机制在 Go 中利用了延迟比特（defer bit）。这种做法非常巧妙，但原理也非常简单。
+
 对于下面的代码而言：
 
 ```go
@@ -725,11 +720,14 @@ if cond {
 ...
 ```
 
-使用延迟比特的核心思想可以用这样的代码来概括：
+使用延迟比特的核心思想可以用下面的伪代码来概括。
+在创建延迟调用的阶段，首先通过延迟比特的特定位置记录哪些带条件的 defer 被触发。
+这个延迟比特是一个长度为 8 位的二进制码（也是硬件架构里最小也是最通用的情况），
+以每一位是否被设置 1，来判断延迟语句是否在运行时被设置，如果设置，则发生调用。
+否则则不调用：
 
 ```go
 deferBits = 0           // 初始值 00000000
-
 deferBits |= 1 << 0     // 遇到第一个 defer，设置为 00000001
 _f1 = f1
 _a1 = a1
@@ -739,12 +737,17 @@ if cond {
 	_f2 = f2
 	_a2 = a2
 }
-...
+```
+
+在退出位置，再重新根据被标记的延迟比特，反向推导哪些位置的 defer 需要被触发，从而
+执行延迟调用：
+
+```go
 exit:
-// 按顺序倒序检查延迟比特。如果第二个 defer 被设置，则 00000011 & 00000010 == 00000010，
-// 即延迟比特不为零，应该调用 f2。
-// 如果第二个 defer 没有被设置，则 00000001 & 00000010 == 00000000，
-// 即延迟比特为零，不应该调用 f2。
+// 按顺序倒序检查延迟比特。如果第二个 defer 被设置，则
+//   00000011 & 00000010 == 00000010，即延迟比特不为零，应该调用 f2。
+// 如果第二个 defer 没有被设置，则 
+//   00000001 & 00000010 == 00000000，即延迟比特为零，不应该调用 f2。
 if deferBits & 1 << 1 != 0 { // 00000011 & 00000010 != 0
 	deferBits &^= 1<<1       // 00000001
 	_f2(_a2)
@@ -755,9 +758,6 @@ if deferBits && 1 << 0 != 0 {
 	_f1(_a1)
 }
 ```
-
-这个思想其实非常简单，就是以一个长度为 8 位的二进制码（也是硬件架构里最小也是最通用的情况），
-以每一位是否被设置 1，来判断延迟语句是否在运行时被设置，如果设置，则发生调用。否则则不调用。
 
 在实际的实现中，可以看到，当可以设置开放编码式 defer 时，`buildssa` 会首先创建一个
 长度位 8 位的临时变量：
@@ -795,9 +795,7 @@ func (s *state) stmt(n *Node) {
 		// 开放编码式 defer
 		if s.hasOpenDefers {
 			s.openDeferRecord(n.Left)
-		} else {
-			...
-		}
+		} else { ... }
 	case ...
 	}
 	...
@@ -937,43 +935,45 @@ func (s *state) openDeferExit() {
 延迟调用直接插入返回语句之前，但出于语义的考虑，需要在栈上对参与延迟调用的参数进行一次求值；
 同时出于条件语句中可能存在的 defer，还额外需要通过延迟比特来记录一个延迟语句是否在运行时
 被设置。
-因此，开放编码式 defer 的成本体现在非常少量的指令和位运算来配合在运行时判断是否存在需要被延迟调用的 defer。
+因此，开放编码式 defer 的成本体现在非常少量的指令和位运算来配合在运行时判断
+是否存在需要被延迟调用的 defer。
 
-## 9.2.4 `defer` 的演进过程
+## 9.2.4 `defer` 的优化之路
 
 我们最后来回顾一下延迟语句的整个演进过程。
 
-defer 最早的实现非常的粗糙，每当出现一个 defer 调用，都会在堆上分配 defer 记录，
-并参与调用的参数实施一次拷贝，然后将其加入到 defer 链条上；当函数返回需要触发 defer 调用时，
+defer 的早期实现其实是非常的粗糙的，每当出现一个 defer 调用，都会在堆上分配 defer 记录，
+并对参与调用的参数实施一次拷贝操作，然后将其加入到 defer 链条上；当函数返回需要触发 defer 调用时，
 依次将 defer 从链表中取出，完成调用。当然最初的实现并不需要完美，未来总是可以迭代其性能问题。
 
-在 Go 1.1 的开发阶段，defer 获得了它的第一次优化 [Cox, 2011]。Russ Cox 意识到了 defer 性能问题的
-根源是过多的内存分配与拷贝，进而提出将 defer 的分配和释放过程进行批量化处理，
-当时 Dmitry Vyukov 则提议在栈上分配会更加有效。
-但 Russ Cox 认为在执行栈上分配 defer 记录和在其他地方进行分配并没有带来太多收益。
-最终实现了 per-G 批量式分配的 defer 机制。
+在 Go 1.1 的开发阶段，defer 获得了它的第一次优化 [Cox, 2011]。Russ Cox 意识到
+defer 性能问题的根源是当产生多个 defer 调用时，造成的过多的内存分配与拷贝操作，
+进而提出将 defer 的分配和释放过程在每个 Goroutine 内进行批量处理。当时 Dmitry Vyukov
+则提议在栈上分配会更加有效，但 Russ Cox 错误的认为在执行栈上分配 defer 记录与
+在其他地方进行分配并没有带来太多收益，最终实现了 per-G 批量式分配的 defer 机制。
 
-由于后续调度器的改进（工作窃取调度的引入），运行时开始支持 per-P 的资源池，
-defer 自然也是一类可以被视作局部持有的资源。
+由于后续调度器的改进，工作窃取调度的引入，运行时开始支持 per-P 的局部资源池，
+defer 作为发生在 Goroutine 内的调用，所需的内存自然也是一类可以被视作局部持有的资源。
 因此分配和释放 defer 的资源在 Go 1.3 时得到优化 [Vyukov, 2014]，
 Dmitry Vyukov 将 per-G 分配的 defer 改为了从 per-P 资源池分配的机制。
 
-由于分配延迟记录 `_defer` 的调用 `newdefer` 可能导致栈分裂，
-因此 defer 调用允许对栈进行分段，从而需要将 P 和 M 进行绑定。
+由于分配延迟记录 `_defer` 的调用 `newdefer` 可能存在本地资源池、全局资源池均不存在可复用的内存，
+进而导致栈分裂，更糟糕的情况下甚至可能发生抢占，导致 M/P 解绑与绑定等额外的调度开销。
 因此，Austin Clements 对 defer 做的一个优化 [Clements, 2016] 是
 在每个 `deferproc` 和 `deferreturn` 中都切换至系统栈，从而阻止了抢占和栈增长的发生，
-也就优化消除了 P 和 M 进行绑定所带来的开销。
-对于每次产生记录时，无论参数大小如何都涉及 `memmove` 系统调用，
-从而产生一次 `memmove` 的调用成本，这个优化中还特地针对没有参数和指针大小
-参数的这两种情况进行了判断，从而跳过了这种情况下 `memmove` 带来的开销。
+也就优化消除了抢占带来的 M/P 绑定所带来的开销。除此之外，对于每次产生记录时，
+无论参数大小如何都涉及 `memmove` 系统调用，从而产生一次 `memmove` 的调用成本，
+Austin 的优化中还特地针对没有参数和指针大小参数的这两种情况进行了判断，从而跳过了
+这些特殊情况下情况下 `memmove` 带来的开销。
 
 后来，Keith Randall 终于实现了 [Randall, 2013] 很早之前 Dmitry Vyukov 就已经
-提出的在栈上分配 defer 的优化 [Cox, 2011]，简单情况下不再需要使用运行时对延迟记录的内存管理。
-为 Go 1.13 进一步提升了 defer 的性能。
+提出的在栈上分配 defer 的优化 [Cox, 2011]，简单情况下不再需要使用运行时对延迟记录
+的内存管理。为 Go 1.13 进一步提升了 defer 的性能。
 
 在 Go 1.14 中，Dan Scales 作为 Go 团队的新成员，defer 的优化成为了他的第一个项目。
-他提出开放式编码 defer [Scales, 2019]，通过编译器辅助信息和延迟比特在函数末尾处直接获取调用函数及参数，
-完成了近乎零成本的 defer 调用，成为了 Go 1.14 中几个出色的运行时性能优化之一。
+他提出开放式编码 defer [Scales, 2019]，通过编译器辅助信息和延迟比特在函数末尾处
+直接获取调用函数及参数，完成了近乎零成本的 defer 调用，成为了 Go 1.14 中几个出色的
+运行时性能优化之一。
 
 至此，defer 的优化之路正式告一段落。
 
@@ -988,12 +988,7 @@ Dmitry Vyukov 将 per-G 分配的 defer 改为了从 per-P 资源池分配的机
 
 ## 9.2.5 小结
 
-我们最后来总结一下 defer 的基本工作原理以及三种 defer 的性能取舍，见 图 9.2.2：
-
-<div class="img-center">
-<img src="../../../assets/defer-perf.png"/>
-<strong>图 9.2.2：不同类型 defer 的编译与运行时成本之间的取舍</strong>
-</div>
+我们最后来总结一下 defer 的基本工作原理以及三种 defer 的性能取舍，见图 9.2.2。
 
 1. 对于开放编码式 defer 而言：
 	- 编译器会直接将所需的参数进行存储，并在返回语句的末尾插入被延迟的调用；
@@ -1007,6 +1002,11 @@ Dmitry Vyukov 将 per-G 分配的 defer 改为了从 per-P 资源池分配的机
 	- 编译器首先会将延迟语句翻译为一个 `deferproc` 调用，进而从运行时分配一个用于记录被延迟调用的 `_defer` 记录，并将被延迟的调用的入口地址及其参数复制保存，入栈到 Goroutine 对应的延迟调用链表中；
 	- 在函数末尾处，通过编译器的配合，在调用被 defer 的函数前，调用 `deferreturn`，从而将 `_defer` 实例归还到资源池，而后通过模拟尾递归的方式来对需要 defer 的函数进行调用。
 	- 此类 defer 的主要性能问题存在于每个 defer 语句产生记录时的内存分配，记录参数和完成调用时的参数移动时的系统调用，运行时性能最差。
+
+<div class="img-center">
+<img src="../../../assets/defer-perf.png"/>
+<strong>图 9.2.2：不同类型 defer 的编译与运行时成本之间的取舍</strong>
+</div>
 
 ## 进一步阅读的参考文献
 
