@@ -1,4 +1,4 @@
-<img src="book/assets/cover-cn.png" alt="logo" height="550" align="right" />
+<img src="book/assets/cover-cn-v2.png" alt="logo" height="550" align="right" />
 
 # Go 语言原本
 
