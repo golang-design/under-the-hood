@@ -115,7 +115,12 @@ ul.pagination {
 
     @include fixed;
   }
-
+  nav>ul>li>a {
+    font-weight: bolder;
+  }
+  nav>ul>li>ul>li>a {
+    font-weight: bold;
+  }
   a {
     color: inherit;
   }
@@ -124,6 +129,30 @@ ul.pagination {
     color: $color-link;
   }
 }
+
+// Better scroll bar
+
+// width
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+// track
+::-webkit-scrollbar-track {
+  background: #f1f1f1; 
+}
+ 
+// handle
+::-webkit-scrollbar-thumb {
+  background: #888; 
+}
+
+// handle on hover
+::-webkit-scrollbar-thumb:hover {
+  background: #555; 
+}
+
+// ---
 
 .book-section-flat {
   margin-bottom: $padding-16 * 2;
@@ -146,14 +175,22 @@ ul.pagination {
   min-width: $body-min-width;
   flex-grow: 1;
   padding: $padding-16;
+  margin: 10px;
 }
 
 .book-header {
   margin-bottom: $padding-16;
   display: none;
 }
-
+.magic {
+  display: flex;
+}
+.book-switch {
+  flex: 1;
+  right: 0;
+}
 .book-search {
+  flex: 0 0 70%;
   position: relative;
   margin: $padding-16 0;
   border-bottom: 1px solid transparent;
@@ -341,4 +378,72 @@ aside nav,
   .book-toc nav {
     padding: $padding-16 * 2 $padding-16;
   }
+}
+
+// Dark Mode Toggle
+
+// The switch - the box around the slider
+.switch {
+  position: relative;
+  display: block;
+  width: 60px;
+  height: 32px;
+  margin: 16px 0px 16px 20px;
+}
+
+// Hide default HTML checkbox
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+// The slider
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: .20rem;
+  background-color: #ccc;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  border-radius: .20rem;
+  height: 24px;
+  width: 26px;
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+input:checked + .slider {
+  background-color: #2196F3;
+}
+
+input:focus + .slider {
+  box-shadow: 0 0 1px #2196F3;
+}
+
+input:checked + .slider:before {
+  -webkit-transform: translateX(26px);
+  -ms-transform: translateX(26px);
+  transform: translateX(26px);
+}
+
+// Rounded sliders
+.slider.round {
+  border-radius: 34px;
+}
+
+.slider.round:before {
+  border-radius: 50%;
 }

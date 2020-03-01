@@ -31,11 +31,11 @@ $body-background: white !default;
 $body-font-color: $gray-800 !default;
 $body-font-weight: normal !default;
 
-$body-min-width: 20rem !default;
-$container-max-width: 80rem !default;
+$body-min-width: 40rem !default;
+$container-max-width: 100rem !default;
 
 $header-height: 3.5rem !default;
-$menu-width: 16rem !default;
+$menu-width: 20rem !default;
 $toc-width: 16rem !default;
 
 $md-breakpoint: $menu-width + $body-min-width * 1.25 + $toc-width !default;
