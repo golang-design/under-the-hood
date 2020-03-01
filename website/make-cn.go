@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -47,8 +48,18 @@ func walkDocs(path string, info os.FileInfo, err error) error {
 	dst := dstDoc + strings.TrimPrefix(path, srcDoc)
 	// rules:
 	//   - replace readme.md to _index.md
+	// rules:
+	//   - ](./xxx/yyy/zzz.md) => ](.././xxx/yyy/zzz.md) if not in readme.md
 	if strings.Contains(dst, "readme.md") {
 		dst = strings.TrimSuffix(dst, "readme.md") + "_index.md"
+	} else {
+		println("file: ", dst)
+		re := regexp.MustCompile("(?m)\\]\\(\\..*?\\.md\\)")
+		data = []byte(re.ReplaceAllStringFunc(string(data), func(m string) string {
+			ret := m[:2] + "../" + m[2:]
+			println(ret)
+			return ret
+		}))
 	}
 
 	// create directory first
