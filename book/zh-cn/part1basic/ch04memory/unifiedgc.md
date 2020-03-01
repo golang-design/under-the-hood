@@ -23,13 +23,33 @@ title: "4.4 垃圾回收统一理论"
 
 ## 追踪式 GC
 
+TODO:
+
 ## 引用计数式 GC
+
+TODO:
 
 ## 垃圾回收统一定理
 
+虽然在实践中我们有追踪式和引用计数式两种 GC 的形式，但在理论上我们能够对其进行统一描述，
+这就是**垃圾回收统一定理**（Unified Theory of GC） [Bacon et al. 2004]。
+
+内存中对象及其指针所组成了一个对象图，我们不妨令所有对象组成的集合为 $V$，
+设指针所指链接对象的多重集为 $E$。由于我们不应该释放一个会在未来会被使用的对象，
+如果我们不对任何赋值器进行分析而是进行保守地估计，则如果从栈或寄存器出发存在到达对象的路径，
+则该对象将在未来被使用，记这些路径的起始对象组成的集合为根集合 $R$。则对象的引用计数 $\rho (v)$（其中 $v\in V$）可以由下述的递归定点表示进行计算：
+
+$$
+\rho (v) = |[v: v\in R]| + |[(w, v) : (w,v) \in E \land \rho(w) > 0]|
+$$
+
+TODO: 将 追踪式和引用计数式 GC 用定点表示进行描述
+
+TODO: 讨论统一定理的指导意义
+
 ## 进一步阅读的参考文献
 
-1. Bacon, David F., Perry Cheng, and V. T. Rajan. "A unified theory of garbage collection." ACM SIGPLAN Notices 39.10 (2004): 50-68.
+- [Bacon et al. 2004] Bacon, David F., Perry Cheng, and V. T. Rajan. "A unified theory of garbage collection." ACM SIGPLAN Notices 39.10 (2004): 50-68.
 
 ## 许可
 

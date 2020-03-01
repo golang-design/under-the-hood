@@ -35,6 +35,7 @@ title: "附录B：术语表"
 | 栈         |                | Stack                 |           |      |
 | 微型分配器 |                | Tiny Allocator        |           |      |
 | 微对象     |                | Tiny Object           |           |      |
+| 内存屏障   |                | Memory Barrier        |           |      |
 | 写屏障     |                | Write Barrier         | WB/wb     |      |
 | 工作线程   |                | Worker Thread         |           |      |
 |            |                |                       |           |      |
