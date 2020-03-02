@@ -7,7 +7,8 @@ title: "6.2 初始化"
 
 [TOC]
 
-我们已经在 [初始化概览](../../part1basic/ch05life/init.md) 中粗略了解到 `schedinit` 函数，
+我们已经在 [5.2 Go 程序启动引导](../../part1basic/ch05life/boot.md) 
+中粗略了解到 `schedinit` 函数，
 现在我们来仔细分析里面真正关于调度器的初始化步骤。
 
 ```go

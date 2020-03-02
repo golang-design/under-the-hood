@@ -1,6 +1,7 @@
 ---
 weight: 2100
 title: "第 6 章 调度器"
+bookCollapseSection: true
 ---
 
 # 第 6 章 调度器
@@ -14,7 +15,7 @@ title: "第 6 章 调度器"
 - [6.7 协作与抢占](./preemption.md)
 - [6.8 同步原语](./sync.md)
 - [6.9 系统监控](./sysmon.md)
-- [6.10 网络轮询器](./poller.md)
+<!-- - [6.10 网络轮询器](./poller.md) -->
 - [6.11 计时器](./timer.md)
 - [6.12 用户层 APIs](./calls.md)
 - [6.13 过去、现在与未来](./history.md)

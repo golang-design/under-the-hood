@@ -1,6 +1,7 @@
 ---
 weight: 1500
 title: "第 5 章 Go 程序生命周期"
+bookCollapseSection: true
 ---
 
 # 第 5 章 Go 程序生命周期

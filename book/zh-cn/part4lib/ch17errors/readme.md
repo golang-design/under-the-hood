@@ -1,6 +1,7 @@
 ---
 weight: 4300
 title: "第 17 章 错误处理"
+bookCollapseSection: true
 ---
 
 # 第 17 章 错误处理

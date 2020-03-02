@@ -1,6 +1,7 @@
 ---
 weight: 4100
 title: "第 15 章 同步模式"
+bookCollapseSection: true
 ---
 
 # 第 15 章 同步模式
@@ -11,7 +12,7 @@ title: "第 15 章 同步模式"
 - [15.4 同步组](./waitgroup.md)
 - [15.5 缓存池](./pool.md)
 - [15.6 并发安全散列表](./map.md)
-- [15.7 上下文](./context.md)
+<!-- - [15.7 上下文](./context.md) -->
 - [15.8 内存模型](./mem.md)
 
 > _The fact that the construction can be defined in terms of simpler underlying primitives is a useful guarantee that its inclusion is logically consistent with the remainder of the language._
