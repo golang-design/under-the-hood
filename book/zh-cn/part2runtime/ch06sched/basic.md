@@ -1,6 +1,10 @@
 ---
 weight: 2101
 title: "6.1 设计原则"
+prevSec: ""
+prevSecTitle: ""
+nextSec: ""
+nextSecTitle: ""
 ---
 
 # 6.1 设计原则

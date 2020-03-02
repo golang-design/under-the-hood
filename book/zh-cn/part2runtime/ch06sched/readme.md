@@ -7,7 +7,7 @@ bookCollapseSection: true
 # 第 6 章 调度器
 
 - [6.1 设计原则](./basic.md)
-- [6.2 调度器初始化](./init.md)
+- [6.2 初始化](./init.md)
 - [6.3 调度循环](./exec.md)
 - [6.4 线程管理](./thread.md)
 - [6.5 信号处理机制](./signal.md)
