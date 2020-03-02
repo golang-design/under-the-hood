@@ -9,6 +9,43 @@ title: "9.3 恐慌与恢复内建函数"
 
 <!-- panic/recover 由 russ cox 完成 -->
 
+
+<!-- 在 `buildssa` 阶段完成后，`genssa` 将初始化好的 `ssaGenBlock`，
+用来最终生成 `defer` 的函数尾声：
+
+```go
+// src/cmd/compile/internal/gc/ssa.go
+func genssa(f *ssa.Func, pp *Progs) {
+	var s SSAGenState
+	...
+	for i, b := range f.Blocks {
+		...
+		thearch.SSAGenBlock(&s, b, next) // 在内部调用 ssaGenBlock
+		...
+	}
+	...
+}
+func ssaGenBlock(s *gc.SSAGenState, b, next *ssa.Block) {
+	switch b.Kind {
+	case ssa.BlockDefer:
+		p := s.Prog(x86.ATESTL) // TESTL
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = x86.REG_AX // AX
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = x86.REG_AX   // AX
+		p = s.Prog(x86.AJNE)    // JNE
+		p.To.Type = obj.TYPE_BRANCH
+		s.Branches = append(s.Branches, gc.Branch{P: p, B: b.Succs[1].Block()})
+		if b.Succs[0].Block() != next {
+			p := s.Prog(obj.AJMP) // JMP
+			p.To.Type = obj.TYPE_BRANCH
+			s.Branches = append(s.Branches, gc.Branch{P: p, B: b.Succs[0].Block()})
+		}
+	case ...:
+	}
+}
+``` -->
+
 <!-- 
 
 		// 根据 TESTL AX, AX 判断 deferproc 或者 deferprocStack 的返回值：
@@ -466,8 +503,8 @@ B 包含了 recover，而 C 发生了 panic，则这时 B 的 panic 无法恢复
 否则无法对 panic 进行恢复。
 
 当一个 panic 被恢复后，调度并因此中断，会重新进入调度循环，进而继续执行 recover 后面的代码，
-包括比 recover 更早的 defer（因为已经执行过得 defer 已经被释放，而尚未执行的 defer 仍在 goroutine 的 defer 链表中），
-或者 recover 所在函数的调用方。
+包括比 recover 更早的 defer（因为已经执行过得 defer 已经被释放，
+而尚未执行的 defer 仍在 goroutine 的 defer 链表中），或者 recover 所在函数的调用方。
 
 ## 许可
 

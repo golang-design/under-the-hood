@@ -26,7 +26,7 @@ func randomDefers() {
 	rand.Seed(time.Now().UnixNano())
 	for rand.Intn(100) > 42 {
 		defer func() {
-			println("changkun/go-under-the-hood")
+			println("changkun.de/golang")
 		}()
 	}
 }
@@ -40,8 +40,11 @@ func randomDefers() {
 延迟语句的文法产生式 `DeferStmt -> "defer" Expression` 的描述非常的简单，因而也
 很容易将其处理为语法树的形式，但我们这里更关心的其实是它语义背后的中间和目标代码的形式。
 
-我们已经知道，在进行中间代码生成阶段，Go 语言的语句在执行 `buildssa` 时，会由
-`state.stmt` 函数完成 SSA 处理。
+在 [5.1 Go 程序编译流程](../../part1basic/ch05life/compile.md) 一节中我们提到过，
+在进行中间代码生成阶段时，会通过 `compileSSA` 先调用 `buildssa` 为函数体生成 SSA 形式的函数，
+并而后调用 `genssa` 将函数的 SSA 中间表示转换为具体的指令。
+
+Go 语言的语句在执行 `buildssa` 阶段中，会由 `state.stmt` 完成函数中各个语句 SSA 处理。
 
 ```go
 // src/cmd/compile/internal/gc/ssa.go
@@ -56,10 +59,9 @@ func (s *state) stmtList(l Nodes) {
 }
 ```
 
-对于延迟语句而言，编译器会产生三种不同的延迟形式，
-第一种是最一般情况下的在**堆上分配**的延迟语句（`callDefer`），
-第二种是允许在**栈上分配**的延迟语句（`callDeferStack`），
-最后一种则是**开放编码式（Open-coded）**的延迟语句（`openDeferRecord`）。
+对于延迟语句而言，其中间表示会产生三种不同的延迟形式，
+第一种是最一般情况下的在**堆上分配**的延迟语句，第二种是允许在**栈上分配**的延迟语句，
+最后一种则是**开放编码式（Open-coded）**的延迟语句。
 
 ```go
 // src/cmd/compile/internal/gc/ssa.go
@@ -92,14 +94,16 @@ func (s *state) stmt(n *Node) {
 则可执行的次数可能无法在编译期决定；如果一个调用中 defer 由于数量过多等原因，
 不能被编译器进行开放编码，则也会在堆上分配 defer。
 
-总之，由于这种不确定性的存在，在堆上分配的 defer 需要最多的运行时支持，因而产生的运行时开销也最大。
+总之，由于这种不确定性的存在，在堆上分配的 defer 需要最多的运行时支持，
+因而产生的运行时开销也最大。
 
 ### 编译阶段
 
 为了使延迟语句的功能满足语言规范，该语句在编译的 SSA 阶段会被翻译为两个主体，
 其中第一个主体是被延迟的函数本身，另一个主体则是函数结束时需要执行所记录 defer 的代码块。
 
-首先会
+`state.call` 调用会生成用于记录延迟调用参数的指令，并创建一个 `deferproc` 的调用指令；
+而后在 `state.exit` 调用在函数返回前插入 `deferreturn` 调用的指令。
 
 ```go
 // src/cmd/compile/internal/gc/ssa.go
@@ -141,12 +145,6 @@ func (s *state) call(n *Node, k callKind) *ssa.Value {
 	}
 	...
 }
-```
-
-函数 `genssa` 将调用早就初始化好的 `ssaGenBlock`，来最终生成 defer 的函数尾声：
-
-```go
-// src/cmd/compile/internal/gc/ssa.go
 func (s *state) exit() *ssa.Block {
 	if s.hasdefer {
 		if s.hasOpenDefers {
@@ -158,39 +156,51 @@ func (s *state) exit() *ssa.Block {
 	}
 	...
 }
-func genssa(f *ssa.Func, pp *Progs) {
-	var s SSAGenState
-	...
-	for i, b := range f.Blocks {
-		...
-		thearch.SSAGenBlock(&s, b, next) // 在内部调用 ssaGenBlock
-		...
-	}
-	...
+```
+
+例如，对于一个纯粹的 `defer` 调用而言：
+
+```
+package main
+
+func foo() {
+	return
 }
-func ssaGenBlock(s *gc.SSAGenState, b, next *ssa.Block) {
-	switch b.Kind {
-	case ssa.BlockDefer:
-		p := s.Prog(x86.ATESTL) // TESTL
-		p.From.Type = obj.TYPE_REG
-		p.From.Reg = x86.REG_AX // AX
-		p.To.Type = obj.TYPE_REG
-		p.To.Reg = x86.REG_AX   // AX
-		p = s.Prog(x86.AJNE)    // JNE
-		p.To.Type = obj.TYPE_BRANCH
-		s.Branches = append(s.Branches, gc.Branch{P: p, B: b.Succs[1].Block()})
-		if b.Succs[0].Block() != next {
-			p := s.Prog(obj.AJMP) // JMP
-			p.To.Type = obj.TYPE_BRANCH
-			s.Branches = append(s.Branches, gc.Branch{P: p, B: b.Succs[0].Block()})
-		}
-	case ...:
-	}
+
+func main() {
+	defer foo()
+	return
 }
 ```
 
-注意，这里非常的巧妙，我们可能会疑惑为什么要用 TESTL 指令来判断 AX 的值？
-我们将在 [9.3 恐慌内建函数](./panic.md)一节中详细讨论。
+如果我们将其强制编译为在堆上分配的形式，可以观察到如下的汇编代码。其中 `defer foo()`
+被转化为了 `deferproc` 调用，并在函数返回前，调用了 `deferreturn`：
+
+```
+TEXT main.foo(SB) /Users/changkun/Desktop/defer/ssa/main.go
+	return
+  0x104ea20		c3			RET			
+
+TEXT main.main(SB) /Users/changkun/Desktop/defer/ssa/main.go
+func main() {
+  ...
+  // 将 defer foo() { ... }() 转化为一个 deferproc 调用
+  // 在调用 deferproc 前完成参数的准备工作，这个例子中没有参数
+  0x104ea4d		c7042400000000		MOVL $0x0, 0(SP)		
+  0x104ea54		488d0585290200		LEAQ go.func.*+60(SB), AX	
+  0x104ea5b		4889442408		MOVQ AX, 0x8(SP)		
+  0x104ea60		e8bb31fdff		CALL runtime.deferproc(SB)	
+  ...
+  // 函数返回指令 RET 前插入的 deferreturn 语句
+  0x104ea7b		90			NOPL				
+  0x104ea7c		e82f3afdff		CALL runtime.deferreturn(SB)	
+  0x104ea81		488b6c2410		MOVQ 0x10(SP), BP		
+  0x104ea86		4883c418		ADDQ $0x18, SP			
+  0x104ea8a		c3			RET				
+  // 函数的尾声
+  0x104ea8b		e8d084ffff		CALL runtime.morestack_noctxt(SB)	
+  0x104ea90		eb9e			JMP main.main(SB)			
+```
 
 ### 运行阶段
 
