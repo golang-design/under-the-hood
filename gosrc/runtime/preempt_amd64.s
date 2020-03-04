@@ -12,6 +12,11 @@ TEXT ·asyncPreempt(SB),NOSPLIT|NOFRAME,$0-0
 	ADJSP $368
 	// 不过 vec 不知道 ADJSP，因此阻止 vet 栈检查
 	NOP SP
+	#ifdef GOOS_darwin
+	CMPB internal∕cpu·X86+const_offsetX86HasAVX(SB), $0
+	JE 2(PC)
+	VZEROUPPER
+	#endif
 	MOVQ AX, 0(SP)
 	MOVQ CX, 8(SP)
 	MOVQ DX, 16(SP)
