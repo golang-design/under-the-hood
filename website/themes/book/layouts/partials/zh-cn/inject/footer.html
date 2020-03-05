@@ -1,17 +1,9 @@
 <div class="guide-links">
 {{if .Params.prevSec }}
-  {{if .Params.bookCollapseSection }}
   <span>← 上一节：<a href="{{ .Params.prevSec }}">{{.Params.prevSecTitle}}</a></span>
-  {{else}}
-  <span>← 上一节：<a href="../{{ .Params.prevSec }}">{{.Params.prevSecTitle}}</a></span>
-  {{end}}
 {{end}}
 {{if .Params.nextSec }}
-  {{if .Params.bookCollapseSection }}
   <span style="float: right;">下一节：<a href="{{.Params.nextSec}}">{{.Params.nextSecTitle}}</a> →</span>
-  {{else}}
-  <span style="float: right;">下一节：<a href="../{{.Params.nextSec}}">{{.Params.nextSecTitle}}</a> →</span>
-  {{end}}
 {{end}}
 </div>
 

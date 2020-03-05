@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -19,16 +21,32 @@ const (
 	dstREADME = "content/_index.md"
 )
 
-var ignores = [...]string{
-	`
+type section struct {
+	weight int
+	title  string
+	url    string
+	path   string
+}
+
+type bookHierarchy []section
+
+func (h bookHierarchy) Len() int           { return len(h) }
+func (h bookHierarchy) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h bookHierarchy) Less(i, j int) bool { return h[i].weight < h[j].weight }
+
+var (
+	ignores = [...]string{
+		`
 [TOC]
 `,
-	`.md`,
-	`
+		`.md`,
+		`
 ## 许可
 
 [Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)`,
-}
+	}
+	hierarchy = bookHierarchy{}
+)
 
 func walkDocs(path string, info os.FileInfo, err error) error {
 	// rules:
@@ -140,6 +158,104 @@ type: zh-cn
 	}
 }
 
+func walkDocsForHierarchy(path string, info os.FileInfo, err error) error {
+	// rules:
+	//   - skip dirs
+	//   - skip TOC.md
+	if info.IsDir() || strings.Contains(path, "DS_Store") {
+		fmt.Printf("walkDocsForHierarchy: skip dir %v\n", path)
+		return nil
+	}
+
+	data, err := ioutil.ReadFile(path)
+	if err != nil {
+		panic(fmt.Errorf("walkDocsForHierarchy: cannot read: %v", err))
+	}
+
+	// !!!HACK:
+	// the following parsing is hacking the YAML meta
+	// It is very ugly but works so far. Refactoring at some point
+	// maybe never :)
+
+	doc := string(data)[12:] // read weight
+	endIdx := 0
+	for _, ch := range doc {
+		if rune(ch) == '\n' {
+			break
+		}
+		endIdx++
+	}
+	rawWeight := doc[:endIdx]
+	doc = doc[endIdx+9:] // read title
+	endIdx = 0
+	for i := 0; i < len(doc); i++ {
+		if doc[i] == '\n' {
+			break
+		}
+		endIdx++
+	}
+
+	weight, err := strconv.Atoi(rawWeight)
+	if err != nil {
+		panic(fmt.Errorf("walkDocsForHierarchy: expect numbers for weight: %v", err))
+	}
+	title := doc[:endIdx-1]
+	url := strings.Replace(path, "content", "/golang", -1)
+	url = strings.Replace(url, ".md", "", -1)
+	url = strings.Replace(url, "_index", "", -1)
+	hierarchy = append(hierarchy, section{
+		weight: weight,
+		url:    url,
+		title:  title,
+		path:   path,
+	})
+	return nil
+}
+
+func walkDocsForNavigation(path string, info os.FileInfo, err error) error {
+	// rules:
+	//   - skip dirs
+	//   - skip TOC.md
+	if info.IsDir() || strings.Contains(path, "DS_Store") {
+		fmt.Printf("walkDocsForNavigation: skip dir %v\n", path)
+		return nil
+	}
+
+	data, err := ioutil.ReadFile(path)
+	if err != nil {
+		panic(fmt.Errorf("walkDocsForNavigation: cannot read: %v", err))
+	}
+
+	// generate navigation metadata
+	// - prevSec: ""
+	// - prevSecTitle: ""
+	// - nextSec: ""
+	// - nextSecTitle: ""
+	meta := ""
+	for idx, h := range hierarchy {
+		if h.path == path {
+			prev := idx - 1
+			next := idx + 1
+			if prev > 0 {
+				meta += fmt.Sprintf("prevSec: \"%s\"\nprevSecTitle: \"%s\"\n", hierarchy[prev].url, hierarchy[prev].title)
+			}
+			if next < len(hierarchy) {
+				meta += fmt.Sprintf("nextSec: \"%s\"\nnextSecTitle: \"%s\"\n", hierarchy[next].url, hierarchy[next].title)
+			}
+			break
+		}
+	}
+	dataWithNavi := make([]byte, 4)
+	copy(dataWithNavi, data[:4])
+	dataWithNavi = append(dataWithNavi, []byte(meta)...)
+	dataWithNavi = append(dataWithNavi, data[4:]...)
+	err = ioutil.WriteFile(path, dataWithNavi, os.ModePerm)
+	if err != nil {
+		panic(fmt.Errorf("walkDocs: cannot write: %v", err))
+	}
+	return nil
+}
+
 func main() {
 	dirs := [...]string{
 		dstDoc,
@@ -155,6 +271,13 @@ func main() {
 
 	// 2. walk all files
 	filepath.Walk(srcDoc, walkDocs)
+
+	filepath.Walk(dstDoc, walkDocsForHierarchy)
+	sort.Sort(hierarchy)
+	for _, h := range hierarchy {
+		println("weight: ", h.weight, " title: ", h.title, " url: ", h.url)
+	}
+	filepath.Walk(dstDoc, walkDocsForNavigation)
 
 	// 3. walk all assets
 	filepath.Walk(srcAssets, walkAssets)
