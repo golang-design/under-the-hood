@@ -205,7 +205,7 @@ func walkDocsForHierarchy(path string, info os.FileInfo, err error) error {
 	url = strings.Replace(url, "_index", "", -1)
 	hierarchy = append(hierarchy, section{
 		weight: weight,
-		url:    url,
+		url:    strings.ToLower(url),
 		title:  title,
 		path:   path,
 	})
