@@ -55,7 +55,7 @@ GLOBL	runtime·mainPC(SB),RODATA,$8
 
 M 其实就是 OS 线程，它只有两个状态：自旋、非自旋。
 在调度器初始化阶段，只有一个 M，那就是主 OS 线程，因此这里的 `commoninit` 仅仅只是将对 M 进行一个初步的初始化，
-该初始化进包含对 M 及用于处理 M 信号的 G 的相关运算操作，未涉及工作线程的暂止和复始。
+该初始化包含对 M 及用于处理 M 信号的 G 的相关运算操作，未涉及工作线程的暂止和复始。
 
 ```go
 // src/runtime/proc.go
@@ -478,7 +478,7 @@ func releasem(mp *m) {
 
 创建 G 的过程也是相对比较复杂的，我们来总结一下这个过程：
 
-1. 首先尝试从 P 本地 gfree 链表或全局 gfree 队列获取已经执行过的、已经执行过的 g
+1. 首先尝试从 P 本地 gfree 链表或全局 gfree 队列获取已经执行过的 g
 2. 初始化过程中程序无论是本地队列还是全局队列都不可能获取到 g，因此创建一个新的 g，并为其分配运行线程（执行栈），这时 g 处于 `_Gidle` 状态
 3. 创建完成后，g 被更改为 `_Gdead` 状态，并根据要执行函数的入口地址和参数，初始化执行栈的 SP 和参数的入栈位置，并将需要的参数拷贝一份存入执行栈中
 4. 根据 SP、参数，在 `g.sched` 中保存 SP 和 PC 指针来初始化 g 的运行现场
@@ -699,7 +699,7 @@ func runqputslow(_p_ *p, gp *g, h, t uint32) bool {
 	return true
 }
 // 将一批 runnable goroutine 放入全局 runnable 队列中
-// 它会清楚 *batch
+// 它会清除 *batch
 // 调度器必须锁住才可调用
 func globrunqputbatch(batch *gQueue, n int32) {
 	sched.runq.pushBackAll(*batch)
