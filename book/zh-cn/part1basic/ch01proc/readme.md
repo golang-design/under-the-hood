@@ -13,6 +13,14 @@ bookCollapseSection: true
 <!-- - [1.5 CPU 设计与架构](./cpu.md) -->
 <!-- - [1.6 编译与链接](./compile.md) -->
 
+> _就在我们启动 Go 语言项目的那段时间，我尝试去读 C++ 0x 的草案，结果这成了说服我对 Go 语言如此热衷的原因。_
+> 
+> _The reason I was enthusiastic about Go is because, at the same time we were starting on Go, I tried to read the C++ 0x proposed standard, that was the convincer for me._
+> 
+> -- Ken Thompson
+
+
+
 ## 许可
 
 [Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

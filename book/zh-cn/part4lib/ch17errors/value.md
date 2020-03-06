@@ -1,11 +1,11 @@
 ---
 weight: 4301
-title: "17.1 错误处理的演化"
+title: "17.1 错误的演化"
 ---
 
-# 17.1 错误处理的演化
+# 17.1 错误的演化
 
-`error` 在 Go 中表现为一个内建的接口类型：
+错误 `error` 在 Go 中表现为一个内建的接口类型：
 
 ```go
 type error interface {
@@ -13,7 +13,7 @@ type error interface {
 }
 ```
 
-任何实现了 `Error() string` 方法的类型都能作为 `error` 类型进行传递。
+任何实现了 `Error() string` 方法的类型都能作为 `error` 类型进行传递，成为错误值。
 
 ## 17.1.1 错误类型的历史形态
 
@@ -389,6 +389,10 @@ func CopyFile(src, dst string) (err error) {
 - [Cox, 2018] Russ Cox. Error Values — Problem Overview. August 2018. https://github.com/golang/proposal/blob/master/design/go2draft-error-values-overview.md
 - [Lohuizen, 2018] Marcel van Lohuizen. Error Handling — Draft Design. August 2018. https://github.com/golang/proposal/blob/master/design/go2draft-error-handling.md
 - [Griesemer, 2019] Robert Griesemer, Proposal: A built-in Go error check function, "try". July 2019. https://github.com/golang/go/issues/32437#issuecomment-512035919
+
+<!-- https://groups.google.com/forum/#!searchin/golang-nuts/error$20handling$20research%7Csort:date/golang-nuts/_sE6BxUDVBw/a59qnkwiCgAJ
+http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p0709r3.pdf
+https://stackoverflow.com/questions/46586/goto-still-considered-harmful -->
 
 ## 许可
 
