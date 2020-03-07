@@ -147,7 +147,11 @@ type: zh-cn
 
 	data = append([]byte(head), data...)
 
+	// HACKs
 	data = bytes.Replace(data, []byte("https://changkun.de/golang/"), []byte("https://changkun.de/golang/zh-cn/preface/"), -1)
+	data = bytes.Replace(data, []byte("https://changkun.de/golang/zh-cn/preface/assets/wechat.jpg"), []byte("https://changkun.de/golang/assets/wechat.jpg"), -1)
+	data = bytes.Replace(data, []byte("https://changkun.de/golang/zh-cn/preface/assets/alipay.jpg"), []byte("https://changkun.de/golang/assets/alipay.jpg"), -1)
+
 	data = bytes.Replace(data, []byte("book/"), []byte("./"), 2)
 	data = bytes.Replace(data, []byte("./CONTRIBUTING.md"), []byte("https://github.com/changkun/go-under-the-hood/blob/master/CONTRIBUTING.md"), -1)
 

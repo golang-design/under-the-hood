@@ -81,7 +81,7 @@ Go 语言从 2009 年诞生之初已有十余年的历史。
 读者还可以在 GitHub 仓库上向作者发起关于本书内容的问题，或报告本书存在的错误。
 笔者欢迎您在 GitHub 仓库上提交 [Issues](https://github.com/changkun/go-under-the-hood/issues/new/choose) 或 [Pull Request](https://github.com/changkun/go-under-the-hood/pulls)。
 其具体细节请参考[如何参与贡献](https://github.com/changkun/go-under-the-hood/blob/master/CONTRIBUTING.md)。
-如果您想要关注本仓库的更新情况，可以点击仓库的 `Watch`。如果您喜欢本书，我们也非常高兴能够收到您的 `Star` 和捐款。
+如果您想要关注本仓库的更新情况，可以点击仓库的 `Watch`。如果您喜欢本书，我们也非常高兴能够收到您的 `Star` 和资助。
 
 ## 致谢
 
