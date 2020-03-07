@@ -122,8 +122,8 @@ func walkAssets(path string, info os.FileInfo, err error) error {
 	dst := dstAssets + strings.TrimPrefix(path, srcAssets)
 
 	// rules:
-	//   - copy .png and .jpeg only
-	if !(strings.Contains(dst, ".png") || strings.Contains(dst, ".jpeg")) {
+	//   - copy .png, .jpeg, .jpg only
+	if !(strings.Contains(dst, ".png") || strings.Contains(dst, ".jpeg") || strings.Contains(dst, ".jpg")) {
 		return nil
 	}
 
