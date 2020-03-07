@@ -5,8 +5,6 @@ title: "9.4 Channel 与 Select"
 
 # 9.4 Channel 与 Select
 
-[TOC]
-
 > 本节内容提供一个线上演讲：[YouTube 在线](https://www.youtube.com/watch?v=d7fFCGGn0Wc)，[Google Slides 讲稿](https://docs.google.com/presentation/d/18_9LcMc8u93aITZ6DqeUfRvOcHQYj2gwxhskf0XPX2U/edit?usp=sharing)。
 
 Go 语言中 Channel 与 Select 语句受到 1978 年 CSP 原始理论的启发。

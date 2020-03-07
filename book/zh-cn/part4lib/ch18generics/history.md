@@ -6,8 +6,6 @@ bookHidden: true
 
 # 18.1 泛型的历史及其演化
 
-[TOC]
-
 TODO: 请不要阅读此小节，内容编排中
 
 

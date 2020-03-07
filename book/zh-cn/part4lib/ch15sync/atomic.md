@@ -5,8 +5,6 @@ title: "15.1 原子操作"
 
 # 15.1 原子操作
 
-[TOC]
-
 `atomic` 包中包含了很多原子型操作。它们均基于运行时中 `runtime/internal/atomic` 的实现。
 
 ## 15.1.1 原子操作

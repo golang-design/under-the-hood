@@ -6,8 +6,6 @@ bookHidden: true
 
 # 15.7 上下文
 
-[TOC]
-
 TODO: 本节尚未开始编写
 
 ## 许可

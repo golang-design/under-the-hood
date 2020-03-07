@@ -5,8 +5,6 @@ title: "6.11 计时器"
 
 # 6.11 计时器
 
-[TOC]
-
 > 本节内容提供一个线上演讲：[YouTube 在线](https://www.youtube.com/watch?v=XJx0eTP-y9I)，[Google Slides 讲稿](https://docs.google.com/presentation/d/1c2mRWA-FiihgpbGsE4uducou7X5d4WoiiLVab-ewsT8/edit?usp=sharing)。
 
 time 是一个很有意思的包，除去需要获取当前时间的 Now 这一平淡无奇、直接对系统调用进行

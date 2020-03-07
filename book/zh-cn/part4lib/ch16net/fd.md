@@ -6,8 +6,6 @@ bookHidden: true
 
 # 16.1 文件描述符抽象
 
-[TOC]
-
 TODO: 请不要阅读此小节，内容编排中
 
 

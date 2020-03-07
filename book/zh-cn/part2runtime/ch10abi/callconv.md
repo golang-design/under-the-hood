@@ -6,8 +6,6 @@ bookHidden: true
 
 # 10.3 调用规范
 
-[TOC]
-
 TODO: 请不要阅读此小节，内容编排中
 
 

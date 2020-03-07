@@ -36,9 +36,6 @@ func (h bookHierarchy) Less(i, j int) bool { return h[i].weight < h[j].weight }
 
 var (
 	ignores = [...]string{
-		`
-[TOC]
-`,
 		`.md`,
 		`
 ## 许可
@@ -51,8 +48,7 @@ var (
 func walkDocs(path string, info os.FileInfo, err error) error {
 	// rules:
 	//   - skip dirs
-	//   - skip TOC.md
-	if info.IsDir() || strings.Contains(path, "TOC.md") {
+	if info.IsDir() {
 		fmt.Printf("walkDocs: skip dir %v\n", path)
 		return nil
 	}
@@ -91,7 +87,6 @@ func walkDocs(path string, info os.FileInfo, err error) error {
 	// rules:
 	//   - ignore license
 	//   - ignore content jumpping
-	//   - ignore [TOC]
 	//   - ignore all .md
 	for _, ignore := range ignores {
 		data = bytes.Replace(data, []byte(ignore), []byte(""), -1)
@@ -165,7 +160,6 @@ type: zh-cn
 func walkDocsForHierarchy(path string, info os.FileInfo, err error) error {
 	// rules:
 	//   - skip dirs
-	//   - skip TOC.md
 	if info.IsDir() || strings.Contains(path, "DS_Store") {
 		fmt.Printf("walkDocsForHierarchy: skip dir %v\n", path)
 		return nil
@@ -219,7 +213,6 @@ func walkDocsForHierarchy(path string, info os.FileInfo, err error) error {
 func walkDocsForNavigation(path string, info os.FileInfo, err error) error {
 	// rules:
 	//   - skip dirs
-	//   - skip TOC.md
 	if info.IsDir() || strings.Contains(path, "DS_Store") {
 		fmt.Printf("walkDocsForNavigation: skip dir %v\n", path)
 		return nil

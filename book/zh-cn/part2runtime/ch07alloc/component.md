@@ -5,8 +5,6 @@ title: "7.2 组件"
 
 # 7.2 组件
 
-[TOC]
-
 本节独立地讨论内存分配器中的几个组件：`fixalloc`、`linearAlloc`、`mcache`。
 
 ## fixalloc

@@ -5,8 +5,6 @@ title: "6.9 系统监控"
 
 # 6.9 系统监控
 
-[TOC]
-
 我们已经完整分析过调度器的调度执行了。
 当我们通过 `runtime.newproc` 创建好主 goroutine 后，会将其加入到一个 P 的本地队列中。
 随着 `runtime.mstart` 启动调度器，主 goroutine 便开始得以调度。

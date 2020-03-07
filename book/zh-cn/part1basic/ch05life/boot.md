@@ -5,8 +5,6 @@ title: "5.3 Go 程序启动引导"
 
 # 5.3 Go 程序启动引导
 
-[TOC]
-
 Go 程序启动后需要对自身运行时进行初始化，其真正的程序入口由 runtime 包控制。
 以 AMD64 架构上的 Linux 和 macOS 为例，分别位于：`src/runtime/rt0_linux_amd64.s` 和 `src/runtime/rt0_darwin_amd64.s`。
 

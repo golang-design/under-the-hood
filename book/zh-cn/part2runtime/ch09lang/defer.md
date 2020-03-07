@@ -5,8 +5,6 @@ title: "9.2 延迟语句"
 
 # 9.2 延迟语句
 
-[TOC]
-
 延迟语句 `defer` 在最早期的 Go 语言设计中并不存在，后来才单独增加了这一特性，
 由 Robert Griesemer 完成语言规范的编写 [Griesemer, 2009]，
 并由 Ken Thompson 完成最早期的实现 [Thompson, 2009]，两人合作完成这一语言特性。

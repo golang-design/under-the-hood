@@ -5,8 +5,6 @@ title: "8.6 扫描标记与标记辅助"
 
 # 8.6 扫描标记与标记辅助
 
-[TOC]
-
 ```go
 func gcBgMarkWorker(_p_ *p) {
 	gp := getg()

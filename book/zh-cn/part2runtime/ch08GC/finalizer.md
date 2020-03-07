@@ -5,8 +5,6 @@ title: "8.13 用户层 APIs"
 
 # 8.13 用户层 APIs
 
-[TOC]
-
 TODO:
 
 ## 存活与终结

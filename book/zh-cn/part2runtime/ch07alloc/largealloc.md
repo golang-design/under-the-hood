@@ -5,8 +5,6 @@ title: "7.4 大对象分配"
 
 # 7.4 大对象分配
 
-[TOC]
-
 大对象（large object）（>32kb）直接从 Go 堆上进行分配，不涉及 mcache/mcentral/mheap 之间的三级过程，也就相对简单。
 
 ## 从堆上分配

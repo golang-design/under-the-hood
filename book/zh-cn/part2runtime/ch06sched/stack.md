@@ -5,8 +5,6 @@ title: "6.6 执行栈管理"
 
 # 6.6 执行栈管理
 
-[TOC]
-
 ## goroutine 栈结构
 
 goroutine 是一个 g 对象，g 对象的前三个字段描述了它的执行栈：

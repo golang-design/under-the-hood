@@ -5,8 +5,6 @@ title: "5.4 主 Goroutine 的生与死"
 
 # 5.4 主 Goroutine 的生与死
 
-[TOC]
-
 上一节中我们已经知道 `schedinit` 完成初始化工作后并不会立即执行 `runtime.main`
 （即主 Goroutine 运行的地方）。相反，会在后续的 `mstart` 调用中被调度器调度执行。
 这个过程中，只会将 `runtime.main` 的入口地址压栈，进而将其传递给 `newproc` 进行使用，

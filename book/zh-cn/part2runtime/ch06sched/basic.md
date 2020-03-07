@@ -1,15 +1,9 @@
 ---
 weight: 2101
 title: "6.1 设计原则"
-prevSec: ""
-prevSecTitle: ""
-nextSec: ""
-nextSecTitle: ""
 ---
 
 # 6.1 设计原则
-
-[TOC]
 
 我们首先了解一下调度器的设计原则及一些基本概念来建立对调度器较为宏观的认识。
 理解调度器涉及的主要概念包括以下三个：

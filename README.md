@@ -20,7 +20,7 @@ Go 语言从 2009 年诞生之初已有十余年的历史。
 很难让人不对其简洁设计背后的各项实现机制以及具体工作原理所好奇。
 本书就是一本讨论 Go 语言源码工程中的技术原理及其演进历程的书籍。
 
-## 本书的写作目标
+## 致读者的话
 
 读者可能会好奇，设计总在演进、源码总在变化，为什么要耗费力气研究实际工作中可能永远不会接触的源码？
 笔者以为不然，因为『软件工程发生在代码被非原作者阅读之时』，在阅读源码的过程中，
@@ -48,7 +48,7 @@ Go 语言从 2009 年诞生之初已有十余年的历史。
 ## 全书的组织结构
 
 本书内容涵盖整个 Go 语言的核心源码，这包括用户代码能直接接触的 Go 运行时组件、
-与关键语言特性强相关的编译工具链、诸多重要的标准库 `sync`、`context`、`reflect` 和 `errors` 等等。
+与关键语言特性强相关的工具链、诸多重要的标准库 `sync`、`context`、`reflect` 和 `errors` 等等。
 在极少数情况下，本书会讨论不同平台下的实现差异，主要以 Linux amd64 为主，只在独立设计的章节中讨论其他平台，例如 macOS 的 darwin 平台、WebAssembly 等。
 
 本书共分为四个主要部分：
@@ -67,7 +67,7 @@ Go 语言从 2009 年诞生之初已有十余年的历史。
 
 ## 阅读的预备知识
 
-阅读本书的读者应该具备一些基本的计算机科学素养，至少学过一门**程序设计**课程以及**数据结构**的课程。如果你具备基本的**离散数学**和**概率论**知识将会对阅读本书的部分章节有所帮助。
+阅读本书的读者应该具备一些基本的计算机科学素养，至少学过一门**程序设计**课程以及**数据结构**的课程，例如能够熟悉地谈论散列表、红黑树等概念。若你具备基本的**离散数学**和**概率论**知识，对谓词、随机变量等数学概念具有一定程度的理解，那么将会对阅读本书的部分章节有所帮助。
 
 本书并未要求读者已经掌握使用 Go 语言，因此会在开篇快速介绍 Go 的语言规范。如果你已经具备 Go 语言编码和相关开发经验，则会对阅读本书有所帮助。
 
@@ -77,17 +77,22 @@ Go 语言从 2009 年诞生之初已有十余年的历史。
 
 ## 社区的支持
 
-本书的主页（ https://changkun.de/golang ）以及 GitHub 仓库（ https://github.com/changkun/go-under-the-hood ）上可以找到本书的更新以及一些额外的参考资料。
-读者还可以在 GitHub 仓库上向作者发起关于本书内容的问题，或报告本书存在的错误。
+本书的主页（ https://changkun.de/golang ）以及 GitHub 仓库（ https://github.com/changkun/go-under-the-hood ）上可以找到本书的更新情况以及一些额外的参考资料。
+这是一本开源书籍，读者还可以在 GitHub 仓库上向作者发起关于本书内容的问题，或报告本书存在的错误。
 笔者欢迎您在 GitHub 仓库上提交 [Issues](https://github.com/changkun/go-under-the-hood/issues/new/choose) 或 [Pull Request](https://github.com/changkun/go-under-the-hood/pulls)。
 其具体细节请参考[如何参与贡献](https://github.com/changkun/go-under-the-hood/blob/master/CONTRIBUTING.md)。
 如果您想要关注本仓库的更新情况，可以点击仓库的 `Watch`。如果您喜欢本书，我们也非常高兴能够收到您的 `Star` 和资助。
 
 ## 致谢
 
-本书的写作离不开诸多热心读者的支持，笔者收到了来自下列人员的有帮助的评价和勘误：[@two](https://github.com/two), [@yangxikun](https://github.com/yangxikun), [@cnbailian](https://github.com/cnbailian), [@choleraehyq](https://github.com/choleraehyq), [@PureWhiteWu](https://github.com/PureWhiteWu)。笔者真心感谢这些人对本书内容的质疑与指正。当然，书中还可能有错误存在，希望得到更多的指正和反馈。
+本书的写作离不开诸多热心读者的支持，笔者收到了来自下列人员的有帮助的评价和勘误：
+[@yangwenmai](https://github.com/yangwenmai)、[@two](https://github.com/two)、[@yangxikun](https://github.com/yangxikun)、[@cnbailian](https://github.com/cnbailian)、[@choleraehyq](https://github.com/choleraehyq)、[@PureWhiteWu](https://github.com/PureWhiteWu)。
+笔者真心感谢这些人对本书内容的质疑与指正。当然，书中还可能有错误存在，希望得到更多的指正和反馈。
 
-笔者还希望感谢他所在 [Go 夜读](https://reading.developerlearning.cn/) 社区小组的核心成员，感谢他们努力建设的 Go 语言社区环境，他们是：[@yangwenmai](https://github.com/yangwenmai), [@qcrao](https://github.com/qcrao), [@eddycjy](https://github.com/eddycjy), [@FelixSeptem](https://github.com/FelixSeptem)，以及社区里的朋友们积极参与并讨论 Go 语言的相关问题，他们是：[@cch123](https://github.com/cch123)。
+笔者还希望感谢他所在 [Go 夜读](https://reading.developerlearning.cn/) 社区小组的核心成员，感谢他们努力建设的 Go 语言社区环境，他们是：
+[@yangwenmai](https://github.com/yangwenmai), [@qcrao](https://github.com/qcrao), [@eddycjy](https://github.com/eddycjy), [@FelixSeptem](https://github.com/FelixSeptem)，
+以及社区里的朋友们积极参与并讨论 Go 语言的相关问题，他们是：
+[@cch123](https://github.com/cch123)。
 
 最后，笔者特别感谢 [@egonelbre](https://github.com/egonelbre/gophers) 所提供的 gopher 图片设计。
 

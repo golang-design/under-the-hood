@@ -5,8 +5,6 @@ title: "8.2 混合写屏障技术"
 
 # 8.2 混合写屏障技术
 
-[TOC]
-
 在诸多屏障技术中，Go 使用了 Dijkstra 与 Yuasa 屏障的结合，
 即**混合写屏障（Hybrid write barrier）技术** [Clements and Hudson, 2016]。
 Go 在 1.8 的时候为了简化 GC 的流程，同时减少标记终止阶段的重扫成本，

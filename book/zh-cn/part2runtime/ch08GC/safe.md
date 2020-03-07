@@ -6,8 +6,6 @@ bookHidden: true
 
 # 8.9 安全点分析
 
-[TOC]
-
 TODO: 请不要阅读此小节
 
 <!-- + enlistWorker

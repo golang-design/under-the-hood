@@ -5,8 +5,6 @@ title: "15.4 同步组"
 
 # 15.4 同步组
 
-[TOC]
-
 sync.WaitGroup 可以达到并发 goroutine 的执行屏障的效果，等待多个 goroutine 执行完毕。
 
 ## 结构

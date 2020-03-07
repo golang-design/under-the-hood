@@ -5,8 +5,6 @@ title: "9.3 恐慌与恢复内建函数"
 
 # 9.3 恐慌与恢复内建函数
 
-[TOC]
-
 <!-- panic/recover 由 russ cox 完成 -->
 
 
