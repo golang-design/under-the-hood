@@ -251,7 +251,7 @@ func malg(stacksize int32) *g {
 }
 ```
 
-`stackguard0` 不出所料的被设置为了 `stack.lo + _StackGuard`，而 `stackguard0` 则为 `~0`。
+`stackguard0` 不出所料的被设置为了 `stack.lo + _StackGuard`，而 `stackguard1` 则为 `~0`。
 而执行栈本身是通过 `stackalloc` 来进行分配。
 
 ## 执行栈的分配
@@ -316,7 +316,7 @@ if c == nil || thisg.m.preemptoff != "" {
 v = unsafe.Pointer(x) // 最终取得 stack
 ```
 
-如果没他们都有缓存，则向内部填充更多的缓存：
+如果没多的缓存，则向内部填充更多的缓存：
 
 ```go
 //go:systemstack
