@@ -1,5 +1,9 @@
 <img src="book/assets/cover-cn-v2.png" alt="logo" height="450" align="right" style="margin: 5px; margin-bottom: 20px;" />
 
+**声明：本项目已经终止维护，笔者在此特别感谢所有对支持、阅读和关注过此书的读者。**
+
+**Notice：The project has terminated its maintenance, there will be no future plans for the writing of the book. The author would like to thank everybody who had supported, read and followed the writing of the book.**
+
 # Go 语言原本
 
 内容基于 `go1.14`
@@ -85,14 +89,9 @@ Go 语言从 2009 年诞生之初已有十余年的历史。
 
 ## 致谢
 
-本书的写作离不开诸多热心读者的支持，笔者收到了来自下列人员的有帮助的评价和勘误：
-[@yangwenmai](https://github.com/yangwenmai)、[@two](https://github.com/two)、[@yangxikun](https://github.com/yangxikun)、[@cnbailian](https://github.com/cnbailian)、[@choleraehyq](https://github.com/choleraehyq)、[@PureWhiteWu](https://github.com/PureWhiteWu)。
-笔者真心感谢这些人对本书内容的质疑与指正。当然，书中还可能有错误存在，希望得到更多的指正和反馈。
+笔者希望感谢他所在 [Go 夜读](https://reading.developerlearning.cn/) 社区小组的核心成员，感谢他们努力建设的 Go 语言社区环境，他们是：[@yangwenmai](https://github.com/yangwenmai), [@qcrao](https://github.com/qcrao), [@eddycjy](https://github.com/eddycjy), [@FelixSeptem](https://github.com/FelixSeptem)，以及社区里的朋友们积极参与并讨论 Go 语言的相关问题，他们是：[@cch123](https://github.com/cch123)。
 
-笔者还希望感谢他所在 [Go 夜读](https://reading.developerlearning.cn/) 社区小组的核心成员，感谢他们努力建设的 Go 语言社区环境，他们是：
-[@yangwenmai](https://github.com/yangwenmai), [@qcrao](https://github.com/qcrao), [@eddycjy](https://github.com/eddycjy), [@FelixSeptem](https://github.com/FelixSeptem)，
-以及社区里的朋友们积极参与并讨论 Go 语言的相关问题，他们是：
-[@cch123](https://github.com/cch123)。
+当然，本书的写作离不开诸多热心读者的支持，笔者收到了来自下列人员的有帮助的评价和勘误：[@two](https://github.com/two), [@yangxikun](https://github.com/yangxikun), [@cnbailian](https://github.com/cnbailian), [@choleraehyq](https://github.com/choleraehyq), [@PureWhiteWu](https://github.com/PureWhiteWu), [@hw676018683](https://github.com/hw676018683)， [@wangzeping722](https://github.com/wangzeping722)。笔者真心感谢这些人对本书内容的质疑与指正。当然，书中还可能有错误存在，希望得到更多的指正和反馈。
 
 最后，笔者特别感谢 [@egonelbre](https://github.com/egonelbre/gophers) 所提供的 gopher 图片设计。
 
