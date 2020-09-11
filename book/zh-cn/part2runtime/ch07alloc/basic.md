@@ -378,4 +378,4 @@ heap 最中间的灰色区域 arena 覆盖了 Go 程序的整个虚拟内存，
 
 ## 许可
 
-[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)
+[Go under the hood](https://github.com/golang-design/under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

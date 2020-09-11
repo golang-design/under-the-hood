@@ -154,4 +154,4 @@ Cilk 系统目前运行在现代共享内存多处理器上，例如 Sun Enterpr
 
 ## 许可
 
-[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)
+[Go under the hood](https://github.com/golang-design/under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

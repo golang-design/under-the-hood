@@ -1,3 +1,7 @@
+// Copyright 2020 Changkun Ou. All rights reserved.
+// Use of this source code is governed by a MIT
+// license that can be found in the LICENSE file.
+
 package main
 
 import (
@@ -40,7 +44,7 @@ var (
 		`
 ## 许可
 
-[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)`,
+[Go under the hood](https://github.com/golang-design/under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)`,
 	}
 	hierarchy = bookHierarchy{}
 )
@@ -95,6 +99,17 @@ func walkDocs(path string, info os.FileInfo, err error) error {
 	//   - replace ../assets to assets
 	data = bytes.Replace(data, []byte("../assets"), []byte("../../assets"), -1)
 
+	// rules:
+	//   - process all links in reference document.
+	if strings.Contains(dst, "ref.md") {
+		// find url
+		re := regexp.MustCompile("(http|ftp|https)://([\\w_-]+(?:(?:\\.[\\w_-]+)+))([\\w.,@?^=%&:/~+#-]*[\\w@?^=%&/~+#-])?")
+		data = []byte(re.ReplaceAllStringFunc(string(data), func(m string) string {
+			ret := fmt.Sprintf(`<a href="%s">%s</a>`, m, m)
+			return ret
+		}))
+	}
+
 	err = ioutil.WriteFile(dst, data, os.ModePerm)
 	if err != nil {
 		panic(fmt.Errorf("walkDocs: cannot write: %v", err))
@@ -143,12 +158,12 @@ type: zh-cn
 	data = append([]byte(head), data...)
 
 	// HACKs
-	data = bytes.Replace(data, []byte("https://changkun.de/golang/"), []byte("https://changkun.de/golang/zh-cn/preface/"), -1)
-	data = bytes.Replace(data, []byte("https://changkun.de/golang/zh-cn/preface/assets/wechat.jpg"), []byte("https://changkun.de/golang/assets/wechat.jpg"), -1)
-	data = bytes.Replace(data, []byte("https://changkun.de/golang/zh-cn/preface/assets/alipay.jpg"), []byte("https://changkun.de/golang/assets/alipay.jpg"), -1)
+	data = bytes.Replace(data, []byte("https://golang.design/under-the-hood/"), []byte("https://golang.design/under-the-hood/zh-cn/preface/"), -1)
+	data = bytes.Replace(data, []byte("https://golang.design/under-the-hood/zh-cn/preface/assets/wechat.jpg"), []byte("https://golang.design/under-the-hood/assets/wechat.jpg"), -1)
+	data = bytes.Replace(data, []byte("https://golang.design/under-the-hood/zh-cn/preface/assets/alipay.jpg"), []byte("https://golang.design/under-the-hood/assets/alipay.jpg"), -1)
 
 	data = bytes.Replace(data, []byte("book/"), []byte("./"), 2)
-	data = bytes.Replace(data, []byte("./CONTRIBUTING.md"), []byte("https://github.com/changkun/go-under-the-hood/blob/master/CONTRIBUTING.md"), -1)
+	data = bytes.Replace(data, []byte("./CONTRIBUTING.md"), []byte("https://github.com/golang-design/under-the-hood/blob/master/CONTRIBUTING.md"), -1)
 
 	fmt.Printf("handleREADME: writing %v\n", dstREADME)
 	err = ioutil.WriteFile(dstREADME, data, os.ModePerm)

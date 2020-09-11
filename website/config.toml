@@ -1,4 +1,4 @@
-baseURL = "http://changkun.de/golang"
+baseURL = "http://golang.design/under-the-hood"
 languageCode = "zh-cn"
 title = "Go 语言原本"
 theme = "book"

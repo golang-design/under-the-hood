@@ -1,19 +1,15 @@
 <img src="book/assets/cover-cn-v2.png" alt="logo" height="450" align="right" style="margin: 5px; margin-bottom: 20px;" />
 
-**声明：本项目已经终止维护，笔者在此特别感谢所有对支持、阅读和关注过此书的读者。**
-
-**Notice：The project has terminated its maintenance, there will be no future plans for the writing of the book. The author would like to thank everybody who had supported, read and followed the writing of the book.**
-
 # Go 语言原本
 
-内容基于 `go1.14`
+当前内容基于 `go1.14`
 
 ![](https://img.shields.io/badge/lang-简体中文-red.svg?longCache=true&style=flat-square)
-![](https://img.shields.io/github/license/changkun/go-under-the-hood.svg?style=flat-square)
+![](https://img.shields.io/github/license/golang-design/under-the-hood.svg?style=flat-square)
 ![](https://img.shields.io/badge/license-CC%20BY--NC--ND%204.0-lightgrey.svg?style=flat-square)
 [![](https://img.shields.io/badge/chat-telegram-%232CA5E0.svg?logo=telegram&logoColor=white&style=flat-square)](https://t.me/joinchat/FEeulA4zgj2DsBbudBqMcQ)
-[![](https://img.shields.io/badge/捐赠-微信-68b600.svg?style=popout-square&logo=WeChat)](https://changkun.de/golang/assets/wechat.jpg)
-[![](https://img.shields.io/badge/捐赠-支付宝-00a2ef.svg?style=popout-square&logo=AliPay)](https://changkun.de/golang/assets/alipay.jpg)
+[![](https://img.shields.io/badge/捐赠-微信-68b600.svg?style=popout-square&logo=WeChat)](https://golang.design/under-the-hood/assets/wechat.jpg)
+[![](https://img.shields.io/badge/捐赠-支付宝-00a2ef.svg?style=popout-square&logo=AliPay)](https://golang.design/under-the-hood/assets/alipay.jpg)
 [![](https://img.shields.io/badge/捐赠-PayPal-104098.svg?style=popout-square&logo=PayPal)](https://www.paypal.me/changkunde/4.99eur)
 
 Go 语言从 2009 年诞生之初已有十余年的历史。
@@ -40,18 +36,11 @@ Go 语言从 2009 年诞生之初已有十余年的历史。
 这使得笔者在阅读这类资料时无法鉴别其内容的正确性。由于 Go 的开发是相当活跃的，
 因此本书希望对整个 Go 源码的技术原理和演进历史进行一个相对完整的介绍。
 
-**注意，目前所有正文内容均为临时写作阶段，内容可能较为混乱，部分内容为空属于正常现象。**
-当全文初稿完成后会针对以下目标进行优化：
-
-- 行文逻辑优化，补充大量配图
-- 源码删减，只保留核心逻辑
-- 对实际原理进行精炼，并延伸至理论
-- 加强理论部分的描述，消除时效性较强的内容
-- 理论与实践为主，代码为辅
+**注意，目前本书还属于相当早期的创作阶段。**
 
 ## 全书的组织结构
 
-本书内容涵盖整个 Go 语言的核心源码，这包括用户代码能直接接触的 Go 运行时组件、
+本书内容希望涵盖整个 Go 语言的核心源码，这包括用户代码能直接接触的 Go 运行时组件、
 与关键语言特性强相关的工具链、诸多重要的标准库 `sync`、`context`、`reflect` 和 `errors` 等等。
 在极少数情况下，本书会讨论不同平台下的实现差异，主要以 Linux amd64 为主，只在独立设计的章节中讨论其他平台，例如 macOS 的 darwin 平台、WebAssembly 等。
 
@@ -77,14 +66,14 @@ Go 语言从 2009 年诞生之初已有十余年的历史。
 
 ## 开始阅读
 
-- [网站在线](https://changkun.de/golang/)
+- [网站在线](https://golang.design/under-the-hood/)
 
 ## 社区的支持
 
-本书的主页（ https://changkun.de/golang ）以及 GitHub 仓库（ https://github.com/changkun/go-under-the-hood ）上可以找到本书的更新情况以及一些额外的参考资料。
-这是一本开源书籍，读者还可以在 GitHub 仓库上向作者发起关于本书内容的问题，或报告本书存在的错误。
-笔者欢迎您在 GitHub 仓库上提交 [Issues](https://github.com/changkun/go-under-the-hood/issues/new/choose) 或 [Pull Request](https://github.com/changkun/go-under-the-hood/pulls)。
-其具体细节请参考[如何参与贡献](https://github.com/changkun/go-under-the-hood/blob/master/CONTRIBUTING.md)。
+本书的主页（ https://golang.design/under-the-hood ）以及 GitHub 仓库（ https://github.com/golang-design/under-the-hood ）上可以找到本书的更新情况以及一些额外的参考资料。
+这是一本属于 [golang.design](https://golang.design) initiative 旗下创作的开源书籍，读者还可以在 GitHub 仓库上向作者发起关于本书内容的问题，或报告本书存在的错误。
+笔者欢迎您在 GitHub 仓库上提交 [Issues](https://github.com/golang-design/under-the-hood/issues/new/choose) 或 [Pull Request](https://github.com/golang-design/under-the-hood/pulls)。
+其具体细节请参考[如何参与贡献](https://github.com/golang-design/under-the-hood/blob/master/CONTRIBUTING.md)。
 如果您想要关注本仓库的更新情况，可以点击仓库的 `Watch`。如果您喜欢本书，我们也非常高兴能够收到您的 `Star` 和资助。
 
 ## 致谢
@@ -97,4 +86,4 @@ Go 语言从 2009 年诞生之初已有十余年的历史。
 
 ## 许可
 
-[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)
+[Go: Under the Hood](https://github.com/golang-design/under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

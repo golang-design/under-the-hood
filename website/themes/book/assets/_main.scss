@@ -1,3 +1,10 @@
+.book-cover img {
+  width: 290px;
+  float: right;
+  border-radius: 1px;
+  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.4);
+}
+
 html {
   font-size: $font-size-base;
   letter-spacing: 0.33px;
@@ -90,7 +97,7 @@ ul.pagination {
 }
 
 .container {
-  max-width: $container-max-width;
+  max-width: $container-max-width-desktop;
   margin: 0 auto;
 }
 
@@ -110,6 +117,7 @@ ul.pagination {
   font-size: $font-size-14;
 
   nav {
+    // margin-top: $banner-height;
     width: $menu-width;
     padding: $padding-16;
 
@@ -176,6 +184,7 @@ ul.pagination {
   flex-grow: 1;
   padding: $padding-16;
   margin: 10px;
+  // margin-top: $banner-height;
 }
 
 .book-header {
@@ -238,6 +247,7 @@ ul.pagination {
   font-size: $font-size-12;
 
   nav {
+    // margin-top: $banner-height;
     width: $toc-width;
     padding: $padding-16;
 
@@ -371,7 +381,7 @@ aside nav,
 }
 
 // Extra space for big screens
-@media screen and (min-width: $container-max-width) {
+@media screen and (min-width: $container-max-width-mobile) {
   .book-page,
   .book-posts,
   .book-menu nav,
@@ -446,4 +456,45 @@ input:checked + .slider:before {
 
 .slider.round:before {
   border-radius: 50%;
+}
+
+// self customized
+
+.quote {
+  border-radius: 3px;
+  padding: 15px;
+  // border-left-color: #666; // why not working?
+  background-color: rgba(#666, 0.1);
+}
+.quote-mark {
+  float: right;
+}
+.quote-right {
+  text-align: right;
+}
+
+// !WORKAROUND: 
+// overwrite hugo markdown table style
+.bib table {
+  overflow: visible;
+  word-wrap: break-word;
+  table-layout: fixed;
+}
+.bib tr td, .bib {
+  vertical-align: top !important;
+  padding-left: 0px !important;
+  padding-right: 10px !important;
+  padding-bottom: 10px !important;
+  border: none !important;
+}
+.bib tr td:first-child {
+  text-align: right;
+  width: 22%;
+}
+.bib tr td:nth-child(2) {
+  word-break: break-word; 
+  width: 80%;  
+}
+.bib tr:nth-child(even) {
+  background-color: white !important;
 }

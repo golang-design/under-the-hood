@@ -24,7 +24,7 @@ func randomDefers() {
 	rand.Seed(time.Now().UnixNano())
 	for rand.Intn(100) > 42 {
 		defer func() {
-			println("changkun.de/golang")
+			println("golang.design/under-the-hood")
 		}()
 	}
 }
@@ -1029,4 +1029,4 @@ Austin 的优化中还特地针对没有参数和指针大小参数的这两种�
 
 ## 许可
 
-[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)
+[Go under the hood](https://github.com/golang-design/under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

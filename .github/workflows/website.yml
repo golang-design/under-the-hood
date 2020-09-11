@@ -7,10 +7,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
 
-    - name: Set up Go 1.13
+    - name: Set up Go 1.15
       uses: actions/setup-go@v1
       with:
-        go-version: 1.13
+        go-version: 1.15
       id: go
 
     - name: Setup Hugo
@@ -34,5 +34,5 @@ jobs:
         chmod 400 ~/.ssh/id_rsa
         eval "$(ssh-agent -s)"
         ssh-add ~/.ssh/id_rsa
-        ssh-keyscan -H 'changkun.de' >> ~/.ssh/known_hosts
-        scp -r public/* $USER@changkun.de:$TARGET
+        ssh-keyscan -H 'golang.design' >> ~/.ssh/known_hosts
+        scp -r public/* $USER@golang.design:$TARGET

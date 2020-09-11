@@ -2,7 +2,7 @@ all: clean
 	go run make-cn.go
 	hugo -D --minify
 
-s:
+s: all
 	hugo server -D
 
 clean:

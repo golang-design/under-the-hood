@@ -9,7 +9,7 @@ func randomDefer() {
 	rand.Seed(time.Now().UnixNano())
 	for rand.Intn(100) > 42 {
 		defer func() {
-			println("changkun/go-under-the-hood")
+			println("golang-design/under-the-hood")
 		}()
 	}
 }

@@ -66,14 +66,14 @@ Go 语言从 2009 年诞生之初已有十余年的历史。
 
 ## 开始阅读
 
-- [网站在线](https://changkun.de/golang/)
+- [网站在线](https://golang.design/under-the-hood/)
 
 ## 社区的支持
 
-本书的主页（ https://changkun.de/golang ）以及 GitHub 仓库（ https://github.com/changkun/go-under-the-hood ）上可以找到本书的更新情况以及一些额外的参考资料。
+本书的主页（ https://golang.design/under-the-hood ）以及 GitHub 仓库（ https://github.com/golang-design/under-the-hood ）上可以找到本书的更新情况以及一些额外的参考资料。
 这是一本开源书籍，读者还可以在 GitHub 仓库上向作者发起关于本书内容的问题，或报告本书存在的错误。
-笔者欢迎您在 GitHub 仓库上提交 [Issues](https://github.com/changkun/go-under-the-hood/issues/new/choose) 或 [Pull Request](https://github.com/changkun/go-under-the-hood/pulls)。
-其具体细节请参考[如何参与贡献](https://github.com/changkun/go-under-the-hood/blob/master/CONTRIBUTING.md)。
+笔者欢迎您在 GitHub 仓库上提交 [Issues](https://github.com/golang-design/under-the-hood/issues/new/choose) 或 [Pull Request](https://github.com/golang-design/under-the-hood/pulls)。
+其具体细节请参考[如何参与贡献](https://github.com/golang-design/under-the-hood/blob/master/CONTRIBUTING.md)。
 如果您想要关注本仓库的更新情况，可以点击仓库的 `Watch`。如果您喜欢本书，我们也非常高兴能够收到您的 `Star` 和资助。
 
 ## 致谢
@@ -87,4 +87,4 @@ Go 语言从 2009 年诞生之初已有十余年的历史。
 
 ## 许可
 
-[Go under the hood](https://github.com/changkun/go-under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)
+[Go under the hood](https://github.com/golang-design/under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)
