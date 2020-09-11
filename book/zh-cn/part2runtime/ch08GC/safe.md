@@ -1,12 +1,11 @@
 ---
-weight: 2309
-title: "8.9 安全点分析"
-bookHidden: true
+weight: 2307
+title: "8.7 安全点分析"
 ---
 
-# 8.9 安全点分析
+# 8.7 安全点分析
 
-TODO: 请不要阅读此小节
+TODO: 暂无此节内容写作计划，请谨慎阅读
 
 <!-- + enlistWorker
 + gcStart: gcbgmarkworker
@@ -58,7 +57,7 @@ func isAsyncSafePoint(gp *g, pc, sp, lr uintptr) bool {
 		// Not Go code.
 		return false
 	}
-	(...)
+	...
 	smi := pcdatavalue(f, _PCDATA_RegMapIndex, pc, nil)
 	if smi == -2 {
 		// Unsafe-point marked by compiler. This includes

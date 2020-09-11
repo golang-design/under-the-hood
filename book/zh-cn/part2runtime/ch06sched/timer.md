@@ -5,7 +5,7 @@ title: "6.11 计时器"
 
 # 6.11 计时器
 
-> 本节内容提供一个线上演讲：[YouTube 在线](https://www.youtube.com/watch?v=XJx0eTP-y9I)，[Google Slides 讲稿](https://docs.google.com/presentation/d/1c2mRWA-FiihgpbGsE4uducou7X5d4WoiiLVab-ewsT8/edit?usp=sharing)。
+> 本节内容提供一个线上演讲：[YouTube 在线](https://www.youtube.com/watch?v=XJx0eTP-y9I)，[Google Slides 讲稿](https://changkun.de/s/timer114/)。
 
 time 是一个很有意思的包，除去需要获取当前时间的 Now 这一平淡无奇、直接对系统调用进行
 封装（ `runtime·nanotime` ）的函数外，其中最有意思的莫过于它所提供的 Timer 和 Ticker 了。
@@ -94,7 +94,7 @@ type runtimeTimer struct {
 	pp uintptr // timer 所在的 P 的指针
 
 	// 当时间为 when 时，唤醒 timer，当时间为 when+period, ... (period > 0)
-	// 时，均在 timer goroutine 中调用 f(arg, now)，从而 f 必须具有良好的行为（不会阻塞）
+	// 时，均在 timer Goroutine 中调用 f(arg, now)，从而 f 必须具有良好的行为（不会阻塞）
 	when     int64
 	period   int64
 	f        func(interface{}, uintptr)
@@ -108,8 +108,8 @@ func stopTimer(*runtimeTimer) bool
 func resetTimer(*runtimeTimer, int64)
 ```
 
-可见，timer 返回的 channel 会被用户代码的 goroutine 持有，为了使 channel 能正常
-进行消息通信，每当 timer 被唤醒时，timer 自建的 goroutine 会单独向 channel 发送
+可见，timer 返回的 channel 会被用户代码的 Goroutine 持有，为了使 channel 能正常
+进行消息通信，每当 timer 被唤醒时，timer 自建的 Goroutine 会单独向 channel 发送
 当前时间 `Now()`：
 
 ```go
@@ -121,7 +121,7 @@ func sendTime(c interface{}, seq uintptr) {
 }
 ```
 
-## Timer 状态机
+## 6.11.1 Timer 状态机
 
 早在 Go 1.10 以前，所有的 timer 均在一个全局的四叉小顶堆中进行维护，显然并发性能是
 不够的，随后到了 Go 1.10 时，将堆的数量扩充到了 64 个，但仍然需要在唤醒 timer 时，
@@ -191,7 +191,7 @@ timer 作为一个对时间敏感的功能，同网络数据的拉取操作一�
 
 一个 Timer 具有十种状态，他们之间的状态转换图如图 1 所示。
 
-<div class="img-center">
+<div class="img-center" style="margin: 0 auto; max-width: 70%">
 <img src="../../../assets/timers.png"/>
 <strong>图 1: 计时器状态机</strong>
 </div>
@@ -546,7 +546,7 @@ func runOneTimer(pp *p, t *timer, now int64) {
 
 	unlock(&pp.timersLock)
 
-	f(arg, seq) // 触发 sendTime 信号 通知用户 goroutine
+	f(arg, seq) // 触发 sendTime 信号 通知用户 Goroutine
 
 	lock(&pp.timersLock)
 
@@ -554,7 +554,7 @@ func runOneTimer(pp *p, t *timer, now int64) {
 }
 ```
 
-## Timer 的触发
+## 6.11.2 Timer 的触发
 
 ### 从调度循环中直接触发
 
@@ -677,7 +677,7 @@ func addAdjustedTimers(pp *p, moved []*timer) {
 }
 ```
 
-与调度器调度 goroutine 的机制相同，如果一个 P 中没有了 timer，同样会尝试从其他
+与调度器调度 Goroutine 的机制相同，如果一个 P 中没有了 timer，同样会尝试从其他
 的 P 中偷取一半的 timer：
 
 ```go
@@ -746,7 +746,7 @@ top:
 		}
 	}
 	if ranTimer {
-		// 执行完一个 timer 后可能存在已经就绪的 goroutine
+		// 执行完一个 timer 后可能存在已经就绪的 Goroutine
 		goto top
 	}
 
@@ -902,7 +902,7 @@ func wakeNetPoller(when int64) {
 
 ### 从系统监控中触发
 
-与 goroutine 调度完全一样，系统监控也负责 netpoller 的触发，并在必要时启动 M 来执行需要的 timer 或获取网络数据。
+与 Goroutine 调度完全一样，系统监控也负责 netpoller 的触发，并在必要时启动 M 来执行需要的 timer 或获取网络数据。
 
 ```go
 //go:nowritebarrierrec
@@ -936,7 +936,7 @@ func sysmon() {
 		lastpoll := int64(atomic.Load64(&sched.lastpoll))
 		if netpollinited() && lastpoll != 0 && lastpoll+10*1000*1000 < now {
 			atomic.Cas64(&sched.lastpoll, uint64(lastpoll), uint64(now))
-			list := netpoll(0) // 非阻塞，返回 goroutine 列表
+			list := netpoll(0) // 非阻塞，返回 Goroutine 列表
 			if !list.empty() {
 				// 需要在插入 g 列表前减少空闲锁住的 m 的数量（假装有一个正在运行）
 				// 否则会导致这些情况：
@@ -1046,14 +1046,8 @@ func timejump() *p {
 ## 小结
 
 Timer 的实现已经经历了好几次大幅度的优化。如今的 Timer 生存在 P 中，每当进入调度循环时，
-都会对 Timer 进行检查，从而快速的启动那些对时间敏感的 goroutine，
+都会对 Timer 进行检查，从而快速的启动那些对时间敏感的 Goroutine，
 这一思路也同样得益于 netpoller，通过系统事件来唤醒那些对有效性极度敏感的任务。
-
-## 进一步阅读的参考文献
-
-- [runtime: timer doesn't scale on multi-CPU systems with a lot of timers](https://github.com/golang/go/issues/15133)
-- [time: excessive CPU usage when using Ticker and Sleep](https://github.com/golang/go/issues/27707)
-- [runtime: make timers faster](https://github.com/golang/go/issues/6239)
 
 ## 许可
 

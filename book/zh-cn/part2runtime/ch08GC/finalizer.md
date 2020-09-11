@@ -1,9 +1,9 @@
 ---
-weight: 2313
-title: "8.13 用户层 APIs"
+weight: 2310
+title: "8.10 终结器"
 ---
 
-# 8.13 用户层 APIs
+# 8.10 终结器
 
 TODO:
 
@@ -22,12 +22,12 @@ func efaceOf(ep *interface{}) *eface {
 }
 
 func SetFinalizer(obj interface{}, finalizer interface{}) {
-	(...)
+	...
 	e := efaceOf(&obj)
 	etyp := e._type
-	(...)
+	...
 	ot := (*ptrtype)(unsafe.Pointer(etyp))
-	(...)
+	...
 
 	// find the containing object
 	base, _, _ := findObject(uintptr(e.data), 0, 0)
@@ -189,7 +189,7 @@ func runfinq() {
 			continue
 		}
 		unlock(&finlock)
-		(...)
+		...
 		for fb != nil {
 			for i := fb.cnt; i > 0; i-- {
 				f := &fb.fin[i-1]

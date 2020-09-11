@@ -16,6 +16,19 @@ bookCollapseSection: true
 - [7.8 内存统计](./mstats.md)
 <!-- - [7.9 过去、现在与未来](./history.md) -->
 
+<div class="quote">
+<i class="quote-mark fas fa-thumbtack"></i>
+<I>
+640KB（内存）对于任何人来说都应该足够了。
+</I></br>
+<I>
+640KB [of memory] ought to be enough for anybody.
+</I></br>
+<div class="quote-right">
+-- Bill Gates
+</div>
+</div>
+
 ## 许可
 
 [Go under the hood](https://github.com/golang-design/under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

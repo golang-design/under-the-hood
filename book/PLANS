@@ -1,0 +1,118 @@
+## Go 1.12
+
+相对重要的改进
+
+- 并发 GC：https://golang.org/issue/17503
+- 设计文档：https://github.com/golang/proposal/blob/master/design/17503-eliminate-rescan.md
+
+- 并发 GC：https://golang.org/issue/26903
+- 设计文档：https://github.com/golang/proposal/blob/master/design/26903-simplify-mark-termination.md
+
+- Go 程序 ABI : https://golang.org/issue/27539
+- 设计文档：https://github.com/golang/proposal/blob/master/design/27539-internal-abi.md
+
+比较重要的 bug:
+
+- 编译器残留内存：https://golang.org/issue/22350
+- 设计文档：https://docs.google.com/document/d/1un-Jn47yByHL7I0aVIP_uVCMxjdM5mpelJhiKlIqxkE/edit#
+
+## Go 1.13
+
+- new escape analysis：https://golang.org/issue/23109
+- new sync.Pool：https://golang.org/issue/22950
+- scavenging: https://golang.org/issue/30333
+- https://golang.org/issue/32012
+- https://golang.org/issue/31966
+- final implementation: https://go-review.googlesource.com/c/proposal/+/176377
+- 缩小编译体积: https://golang.org/issue/6853
+- 启用编译器 mid-stack inline: https://golang.org/issue/19348
+- defer on Stack: https://golang.org/issue/14939, https://golang.org/issue/6980
+
+
+## Go 1.14
+
+- Release Note: https://tip.golang.org/doc/go1.14
+- [x] async preemption：https://golang.org/issue/10958
+    - https://golang.org/issue/24543
+    - https://github.com/golang/proposal/blob/master/design/24543-non-cooperative-preemption.md
+- [x] new error inspection:
+    - https://golang.org/issue/29934
+    - https://golang.org/issue/30468
+    - 凉凉：https://golang.org/issue/32437#issuecomment-512035919
+- [x] new timer
+    - https://golang.org/issue/6239
+    - https://golang.org/issue/27707
+- new page allocator
+    - https://golang.org/issue/35112
+    - https://go-review.googlesource.com/c/go/+/200439/
+- -d=checkptr
+    - https://golang.org/issue/22218
+    - https://groups.google.com/forum/#!msg/golang-dev/SzwDoqoRVJA/Iozu8vWdDwAJ
+    - https://golang.org/issue/34964
+    - https://golang.org/issue/34972
+- [x] opencoded defer: 
+    - https://github.com/golang/proposal/blob/master/design/34481-opencoded-defers.md
+- fuzz test
+
+Ongoing
+
+- scavenger 的改进
+    - runtime: scavenger pacing fails to account for fragmentation https://golang.org/issue/34048
+    - runtime: potential deadlock cycle caused by scavenge.lock https://golang.org/issue/34047
+
+- GC 的改进
+    - runtime: cannot ReadMemStats during GC https://golang.org/issue/19812
+    - runtime: mechanism for monitoring heap size https://golang.org/issue/16843
+
+
+## Go 1.15
+
+Go 1.15:
+
+- go linker: https://docs.google.com/document/d/1D13QhciikbdLtaI67U6Ble5d_1nsI4befEd6_k1z91U/view#
+- 并发 GC 的 BUG：https://golang.org/issue/27993
+    - BUG 产生的原因在于它假设 local work queue 中消耗 GC 的 work 来创建新的 GC work.
+    - 但实际上写屏障允许在 local work queue 为空的情况下创建新的 work
+    - 从而某些对象可能为灰色对象
+    - 因为它只能在堆中，所以任何 P 都可以从该对象走到从其访问的白色对象，并使写屏障标记该对象，从而导致 work 被添加到 local queue (可能空)。
+    - 理论证明中的 flushed bit 不会 track 这种 work 的通信，也就导致了算法失败的原因
+- 24byte class
+    - https://golang.org/issue/8885
+- lazy module loading
+    - https://golang.org/issue/36460
+- scavenger
+    - https://golang.org/issue/35788
+    - https://golang.org/issue/36603
+    - https://golang.org/issue/36521
+- async preempt
+    - https://golang.org/issue/36365
+- GC
+    - https://golang.org/issue/19812
+    - https://golang.org/issue/37116
+- memalloc
+    - https://golang.org/issue/37487
+- assembler
+    - https://golang.org/issue/37121
+- sync
+    - https://golang.org/issue/37262
+    - https://golang.org/issue/17973
+- sched
+    - runtime: optimization to reduce P churn https://golang.org/issue/32113
+    - runtime: scheduler is slow when goroutines are frequently woken https://golang.org/issue/18237
+
+## 待整理
+
+- go issue 16798 proposal: cmd/compile: add tail call optimization for self-recursion only
+- go issue 22624 proposal: Go 2: add become statement to support tail calls
+- go cl https://github.com/golang/go/commit/997c00f9919794d878aee4a87187dfaaebef6cd9, https://golang.org/issue/13086
+- sync.Mutex runtime: fall back to fair locks after repeated sleep-acquire failures
+
+## Misc design history
+
+- Fairness in select statement: https://github.com/golang/go/issues/21806
+- runtime: optimize write barrier: https://github.com/golang/go/issues/22460
+- why go.mod has its own bespoke syntax: https://github.com/golang/go/issues/23966#issuecomment-377997161
+- proposal for atomic.Value: https://groups.google.com/forum/#!msg/golang-dev/SBmIen68ys0/WGfYQQSO4nAJ
+- RWMutex scalability issue: https://go-review.googlesource.com/c/go/+/215365/2
+- redo of errgroup: https://go-review.googlesource.com/c/sync/+/134395
+- Go is not community-driven: https://groups.google.com/forum/#!msg/golang-nuts/6dKNSN0M_kg/Y1yDJRwQBgAJ

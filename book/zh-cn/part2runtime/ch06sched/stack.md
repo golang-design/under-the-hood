@@ -1,22 +1,22 @@
 ---
-weight: 2106
-title: "6.6 执行栈管理"
+weight: 2107
+title: "6.7 执行栈管理"
 ---
 
-# 6.6 执行栈管理
+# 6.7 执行栈管理
 
-## goroutine 栈结构
+## 6.7.1 Goroutine 栈结构
 
-goroutine 是一个 g 对象，g 对象的前三个字段描述了它的执行栈：
+Goroutine 是一个 g 对象，g 对象的前三个字段描述了它的执行栈：
 
 ```go
-// stack 描述了 goroutine 的执行栈，栈的区间为 [lo, hi)，在栈两边没有任何隐式数据结构
+// stack 描述了 Goroutine 的执行栈，栈的区间为 [lo, hi)，在栈两边没有任何隐式数据结构
 // 因此 Go 的执行栈由运行时管理，本质上分配在堆中，比 ulimit -s 大
 type stack struct {
 	lo uintptr
 	hi uintptr
 }
-// gobuf 描述了 goroutine 的执行现场
+// gobuf 描述了 Goroutine 的执行现场
 type gobuf struct {
 	sp   uintptr
 	pc   uintptr
@@ -37,10 +37,10 @@ type g struct {
 	// 当位于 g0 和 gsignal 栈上时，值为 stack.lo + StackGuard
 	// 在其他栈上值为 ~0 用于触发 morestackc (并 crash) 调用
 	stackguard1 uintptr
-	(...)
+	...
 	// sched 描述了执行现场
 	sched       gobuf
-	(...)
+	...
 }
 ```
 
@@ -48,7 +48,7 @@ type g struct {
                            <-- _StackPreempt
 
 高地址
-       goroutine stack
+       Goroutine stack
     +-------------------+  <-- _g_.stack.hi
     |                   |
     +-------------------+
@@ -78,7 +78,7 @@ type g struct {
 低地址
 ```
 
-## 执行栈初始化
+## 6.7.2 执行栈初始化
 
 执行栈可以在函数执行完毕后，专门被垃圾回收整个回收掉，从而将它们单独管理起来能够利于垃圾回收器的统一回收：
 
@@ -123,7 +123,7 @@ func (list *mSpanList) init() {
 
 ```go
 func stackinit() {
-	(...)
+	...
 	for i := range stackpool {
 		stackpool[i].item.span.init()
 	}
@@ -133,9 +133,9 @@ func stackinit() {
 }
 ```
 
-## G 的创生
+## 6.7.3 G 的创生
 
-一个 goroutine 的创建通过 `newproc` 来完成，在调用这个函数之前，goroutine 还尚未存在，
+一个 Goroutine 的创建通过 `newproc` 来完成，在调用这个函数之前，Goroutine 还尚未存在，
 只有一个入口地址及参数的大小，我们通过下面的例子来理解：
 
 ```go
@@ -155,7 +155,7 @@ func main() {
 ```asm
 TEXT main.main(SB) main.go
   main.go:7		0x104df70		65488b0c2530000000	MOVQ GS:0x30, CX
-  (...)
+  ...
   main.go:8		0x104df8d		488d055ed10100		LEAQ go.string.*+1874(SB), AX
   main.go:8		0x104df94		4889442410		MOVQ AX, 0x10(SP)
   main.go:8		0x104df99		48c74424180b000000	MOVQ $0xb, 0x18(SP)
@@ -163,7 +163,7 @@ TEXT main.main(SB) main.go
   main.go:8		0x104dfa9		488d05b80c0200		LEAQ go.func.*+67(SB), AX
   main.go:8		0x104dfb0		4889442408		MOVQ AX, 0x8(SP)
   main.go:8		0x104dfb5		e876cefdff		CALL runtime.newproc(SB)
-  (...)
+  ...
 ```
 
 具体的传参过程：
@@ -191,7 +191,7 @@ CALL runtime.newproc(SB)      // 调用 newproc
       |       siz       |
 0x00  +-----------------+ <-- SP
       |    newproc PC   |  
-      +-----------------+ callerpc: 要运行的 goroutine 的 PC
+      +-----------------+ callerpc: 要运行的 Goroutine 的 PC
       |                 |
       |                 |       低地址
 ```
@@ -204,8 +204,8 @@ func newproc(siz int32, fn *funcval) {
 	// 获取调用方 PC/IP 寄存器值
 	pc := getcallerpc()
 
-	// 用 g0 系统栈创建 goroutine 对象
-	// 传递的参数包括 fn 函数入口地址, argp 参数起始地址, siz 参数长度, gp（g0），调用方 pc（goroutine）
+	// 用 g0 系统栈创建 Goroutine 对象
+	// 传递的参数包括 fn 函数入口地址, argp 参数起始地址, siz 参数长度, gp（g0），调用方 pc（Goroutine）
 	systemstack(func() {
 		newproc1(fn, (*uint8)(argp), siz, gp, pc)
 	})
@@ -216,7 +216,7 @@ func newproc(siz int32, fn *funcval) {
 
 ```go
 func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintptr) {
-	(...)
+	...
 	newg := gfget(_p_) // 根据 p 获得一个新的 g
 
 	// 初始化阶段，gfget 是不可能找到 g 的
@@ -226,11 +226,11 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 		casgstatus(newg, _Gidle, _Gdead) // 将新创建的 g 从 _Gidle 更新为 _Gdead 状态
 		allgadd(newg) // 将 Gdead 状态的 g 添加到 allg，这样 GC 不会扫描未初始化的栈
 	}
-	(...)
+	...
 }
 ```
 
-从而通过 `malg` 分配一个具有最小栈的 goroutine：
+从而通过 `malg` 分配一个具有最小栈的 Goroutine：
 
 ```go
 // 分配一个新的 g 结构, 包含一个 stacksize 字节的的栈
@@ -254,7 +254,7 @@ func malg(stacksize int32) *g {
 `stackguard0` 不出所料的被设置为了 `stack.lo + _StackGuard`，而 `stackguard1` 则为 `~0`。
 而执行栈本身是通过 `stackalloc` 来进行分配。
 
-## 执行栈的分配
+## 6.7.4 执行栈的分配
 
 前面已经提到栈可能从两个不同的位置被分配：小栈和大栈。小栈指大小为 2K/4K/8K/16K 的栈，大栈则是更大的栈。
 `stackalloc` 基本上也就是在权衡应该从哪里分配出一个执行栈，返回所在栈的低位和高位。
@@ -265,19 +265,19 @@ func malg(stacksize int32) *g {
 //go:systemstack
 func stackalloc(n uint32) stack {
 	thisg := getg()
-	(...)
+	...
 
 	// 小栈由自由表分配器分配有固定大小。
 	// 如果我们需要更大尺寸的栈，我们将重新分配专用 span。
 	var v unsafe.Pointer
 	// 检查是否从缓存分配
 	if n < _FixedStack<<_NumStackOrders && n < _StackCacheSize {
-		(...) // 小栈分配
+		... // 小栈分配
 	} else {
-		(...) // 大栈分配
+		... // 大栈分配
 	}
 
-	(...)
+	...
 	return stack{uintptr(v), uintptr(v) + uintptr(n)}
 }
 ```
@@ -285,7 +285,7 @@ func stackalloc(n uint32) stack {
 ### 小栈分配
 
 对于大小较小的栈可以从 stackpool 或者 stackcache 中进行分配，这取决于
-当产生栈分配时，goroutine 所在的 m 是否具有 mcache （`m.mcache`）或者是否发生抢占（`m.preemptoff`）：
+当产生栈分配时，Goroutine 所在的 m 是否具有 mcache （`m.mcache`）或者是否发生抢占（`m.preemptoff`）：
 
 ```go
 // 计算对应的 mSpanList
@@ -321,7 +321,7 @@ v = unsafe.Pointer(x) // 最终取得 stack
 ```go
 //go:systemstack
 func stackcacherefill(c *mcache, order uint8) {
-	(...)
+	...
 
 	// 从全局缓存中获取一些 stack
 	// 获取所允许的容量的一半来防止 thrashing
@@ -350,7 +350,7 @@ func stackpoolalloc(order uint8) gclinkptr {
 	if s == nil {
 		// 缓存已空，从 mheap 上进行分配
 		s = mheap_.allocManual(_StackCacheSize>>_PageShift, &memstats.stacks_inuse)
-		(...)
+		...
 		s.elemsize = _FixedStack << order
 		for i := uintptr(0); i < _StackCacheSize; i += s.elemsize {
 			x := gclinkptr(s.base() + i)
@@ -360,7 +360,7 @@ func stackpoolalloc(order uint8) gclinkptr {
 		list.insert(s)
 	}
 	x := s.manualFreeList
-	(...)
+	...
 	s.manualFreeList = x.ptr().next
 	s.allocCount++
 	if s.manualFreeList.ptr() == nil {
@@ -390,7 +390,7 @@ unlock(&stackLarge.lock)
 
 if s == nil { // 如果无法从缓存中获取，则从堆中分配一个新的栈
 	s = mheap_.allocManual(npage, &memstats.stacks_inuse)
-	(...)
+	...
 	s.elemsize = uintptr(n)
 }
 v = unsafe.Pointer(s.base())
@@ -413,7 +413,7 @@ func (h *mheap) allocManual(npage uintptr, stat *uint64) *mspan {
 		s.nelems = 0
 		s.elemsize = 0
 		s.limit = s.base() + s.npages<<_PageShift
-		(...)
+		...
 	}
 
 	// This unlock acts as a release barrier. See mheap.alloc_m.
@@ -442,22 +442,22 @@ func (h *mheap) allocSpanLocked(npage uintptr, stat *uint64) *mspan {
 
 HaveSpan:
 	s := t.span()
-	(...)
+	...
 	return s
 }
 ```
 
 
-## 执行栈的伸缩
+## 6.7.5 执行栈的伸缩
 
-早年的 Go 运行时使用**分段栈**的机制，即当一个 goroutine 的执行栈溢出时，
+早年的 Go 运行时使用**分段栈**的机制，即当一个 Goroutine 的执行栈溢出时，
 栈的扩张操作是在另一个栈上进行的，这两个栈彼此没有连续。
 这种设计的缺陷很容易破坏缓存的局部性原理，从而降低程序的运行时性能。
 因此现在 Go 运行时开始使用**连续栈**机制，当一个执行栈发生溢出时，
 新建一个两倍于原栈大小的新栈，再将原栈整个拷贝到新栈上。
 从而整个栈总是连续的。栈的拷贝并非想象中的那样简单，因为一个栈上可能保留指向被拷贝栈的指针，
 从而当栈发生拷贝后，这个指针可能还指向原栈，从而造成错误。
-此外，goroutine 上原本的 `gobuf` 也需要被更新，这也是使用连续栈的难点之一。
+此外，Goroutine 上原本的 `gobuf` 也需要被更新，这也是使用连续栈的难点之一。
 
 ### 分段标记
 
@@ -467,15 +467,15 @@ HaveSpan:
 ```go
 // cmd/internal/obj/x86/obj6.go
 func preprocess(ctxt *obj.Link, cursym *obj.LSym, newprog obj.ProgAlloc) {
-	(...)
+	...
 	p := cursym.Func.Text
 	autoffset := int32(p.To.Offset) // 栈帧大小
 	// 一些额外的栈帧大小计算
-	(...)
+	...
 	if !cursym.Func.Text.From.Sym.NoSplit() {
 		p = stacksplit(ctxt, cursym, p, newprog, autoffset, int32(textarg)) // 触发分段检查
 	}
-	(...)
+	...
 }
 ```
 
@@ -484,18 +484,18 @@ func preprocess(ctxt *obj.Link, cursym *obj.LSym, newprog obj.ProgAlloc) {
 
 ```go
 func stacksplit(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog, newprog obj.ProgAlloc, framesize int32, textarg int32) *obj.Prog {
-	(...)
+	...
 
 	var q1 *obj.Prog
 	if framesize <= objabi.StackSmall {
 		// 小栈: SP <= stackguard，直接比较 SP 和 stackguard
 		//	CMPQ SP, stackguard
-		(...)
+		...
 	} else if framesize <= objabi.StackBig {
 		// 大栈: SP-framesize <= stackguard-StackSmall
 		//	LEAQ -xxx(SP), AX
 		//	CMPQ AX, stackguard
-		(...)
+		...
 	} else {
 		// 更大的栈需要防止 wraparound
 		// 如果 SP 接近于零:
@@ -511,10 +511,10 @@ func stacksplit(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog, newprog obj.ProgA
 		//	LEAQ	StackGuard(SP), AX
 		//	SUBQ	CX, AX
 		//	CMPQ	AX, $(framesize+(StackGuard-StackSmall))
-		(...)
+		...
 	}
 
-	(...)
+	...
 	// 函数的尾声
 	morestack := "runtime.morestack"
 	switch {
@@ -524,7 +524,7 @@ func stacksplit(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog, newprog obj.ProgA
 		morestack = "runtime.morestack_noctxt"
 	}
 	call.To.Sym = ctxt.Lookup(morestack)
-	(...)
+	...
 
 	return jls
 }
@@ -595,7 +595,7 @@ TEXT runtime·morestack(SB),NOSPLIT,$0-0
 	RET
 ```
 
-`newstack` 在前半部分承担了对 goroutine 进行抢占的任务（见 [6.7 协作与抢占](./preemption.md)），
+`newstack` 在前半部分承担了对 Goroutine 进行抢占的任务（见 [6.7 协作与抢占](./preemption.md)），
 而在后半部分则是真正的栈扩张。
 
 ```go
@@ -603,11 +603,11 @@ TEXT runtime·morestack(SB),NOSPLIT,$0-0
 func newstack() {
 	thisg := getg()
 
-	(...)
+	...
 
 	gp := thisg.m.curg
 
-	(...)
+	...
 
 	morebuf := thisg.m.morebuf
 	thisg.m.morebuf.pc = 0
@@ -615,7 +615,7 @@ func newstack() {
 	thisg.m.morebuf.sp = 0
 	thisg.m.morebuf.g = 0
 
-	(...)
+	...
 
 	sp := gp.sched.sp
 	if sys.ArchFamily == sys.AMD64 || sys.ArchFamily == sys.I386 || sys.ArchFamily == sys.WASM {
@@ -623,7 +623,7 @@ func newstack() {
 		sp -= sys.PtrSize
 	}
 
-	(...)
+	...
 
 	// 分配一个更大的段，并对栈进行移动
 	oldsize := gp.stack.hi - gp.stack.lo
@@ -641,7 +641,7 @@ func newstack() {
 
 	// 因为 gp 处于 Gcopystack 状态，当我们对栈进行复制时并发 GC 不会扫描此栈
 	copystack(gp, newsize, true)
-	(...)
+	...
 	casgstatus(gp, _Gcopystack, _Grunning)
 	gogo(&gp.sched) // 继续执行
 }
@@ -655,9 +655,9 @@ func newstack() {
 
 ```go
 func copystack(gp *g, newsize uintptr, sync bool) {
-	(...)
+	...
 	old := gp.stack
-	(...)
+	...
 	used := old.hi - gp.sched.sp
 
 	// 分配新的栈
@@ -665,7 +665,7 @@ func copystack(gp *g, newsize uintptr, sync bool) {
 	if stackPoisonCopy != 0 {
 		fillstack(new, 0xfd)
 	}
-	(...)
+	...
 
 	// 计算调整的幅度
 	var adjinfo adjustinfo
@@ -787,16 +787,16 @@ func syncadjustsudogs(gp *g, used uintptr, adjinfo *adjustinfo) uintptr {
 //go:nowritebarrier
 //go:systemstack
 func scanstack(gp *g, gcw *gcWork) {
-	(...)
+	...
 	// _Grunnable, _Gsyscall, _Gwaiting 才会发生
 
 	// 如果栈使用不多，则进行栈收缩
 	shrinkstack(gp)
-	(...)
+	...
 }
 
 func shrinkstack(gp *g) {
-	(...)
+	...
 
 	oldsize := gp.stack.hi - gp.stack.lo
 	newsize := oldsize / 2
@@ -820,7 +820,7 @@ func shrinkstack(gp *g) {
 		return
 	}
 
-	(...)
+	...
 
 	// 将旧栈拷贝到新收缩后的栈上
 	copystack(gp, newsize, false)
@@ -828,10 +828,6 @@ func shrinkstack(gp *g) {
 ```
 
 可以看到，如果一个栈仅被使用了四分之一，则会出发栈的收缩，收缩后的大小是原来栈大小的一半。
-
-## 小结
-
-TODO:
 
 ## 许可
 

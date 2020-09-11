@@ -1,0 +1,56 @@
+This file contains several tricks in tuning styles of the website but keep
+the compatabilities of its markdown form.
+
+1. Customized styles
+
+For images, we can use the following snippet, it floats an image to the
+right of a page, and specifies its width and margin w.r.t its surrouding texts:
+
+<div class="img-center" style="margin: 0 30px 30px 50px; float: right; max-width: 60%">
+<img src="./x.png" />
+<strong>title</strong>
+</div>
+
+Specifically, the following centers an image:
+
+<div class="img-center" style="margin: 0 auto; max-width: 80%">
+<img src="./book/assets/book.png"/>
+<strong>title</strong>
+</div>
+
+If your title does not looks like centerd on the bottom of your image,
+you can use  to sdjust the title position, 
+e.g. <strong>title<span style="padding-right:140px"></strong> to 
+give more space of the right of your text.
+
+Sometimes, we need put a quote, here is how to do it:
+
+<div class="quote">
+<i class="quote-mark fas fa-thumbtack"></i>
+<I>
+大道至简。
+</I></br>
+<I>
+Simplicity is complicated.
+</I></br>
+<div class="quote-right">
+-- Rob Pike
+</div>
+</div>
+
+Literature is supported with the following format:
+
+<table class="bib">
+
+<tr>
+<td>[XXX, 1999]</td><td>YYY</td>
+</tr>
+<tr>
+<td>[XXX, 2000]</td><td>YYY</td>
+</tr>
+
+</table>
+
+Lastly, here are some useful text symbols that you can copy with:
+
+↰ ↱ ↲ ↳ ↴ ↵

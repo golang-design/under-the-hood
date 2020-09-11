@@ -37,12 +37,6 @@ Go 语言源码的研究不仅仅局限于跟用户态代码直接相关的运�
 源码的研究虽然已经结束，但要将研究中获得的知识进一步运用到生产实践中构建更多的价值，
 这又将是一个全新的起点。
 
-祝好，
-
-欧长坤 
-
-2020 年 03 月 10 日 于 慕尼黑
-
 ## 许可
 
 [Go under the hood](https://github.com/golang-design/under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)

@@ -1,40 +1,40 @@
 ---
-weight: 2308
-title: "8.8 内存清扫阶段"
+weight: 2305
+title: "8.5 免清扫式位图技术"
 ---
 
-# 8.8 内存清扫阶段
+# 8.5 免清扫式位图技术
 
-清扫过程非常简单，此刻 GC 已停止，它与赋值器（用户代码）并发执行。
+清扫过程非常简单，它与赋值器（用户代码）并发执行。
 它的主要职能便是如何将一个已经从内存分配器中分配出得内存回收到内存分配器中。
 
 ## 启动方式
 
-标记终止结束后，会进入 `GCoff` 阶段，并调用 `gcSweep` 来并发的使后台清扫器 goroutine 与赋值器并发执行。
+标记终止结束后，会进入 `GCoff` 阶段，并调用 `gcSweep` 来并发的使后台清扫器 Goroutine 与赋值器并发执行。
 
 ```go
 func gcMarkTermination(nextTriggerRatio float64) {
-	(...)
+	...
 	systemstack(func() {
-		(...)
+		...
 		// 标记阶段已经完成，关闭写屏障，开始并发清扫
 		setGCPhase(_GCoff)
 		gcSweep(work.mode)
 	})
-	(...)
+	...
 }
 ```
 
-其实现非常简单，只需要将 mheap_ 相关的标志位清零，并唤醒后台清扫器 goroutine 即可。
+其实现非常简单，只需要将 mheap_ 相关的标志位清零，并唤醒后台清扫器 Goroutine 即可。
 
 ```go
 //go:systemstack
 func gcSweep(mode gcMode) { // 此时为 GCoff 阶段
-	(...)
+	...
 	lock(&mheap_.lock)
 	mheap_.sweepgen += 2
 	mheap_.sweepdone = 0
-	(...)
+	...
 	mheap_.pagesSwept = 0
 	mheap_.sweepArenas = mheap_.allArenas
 	mheap_.reclaimIndex = 0
@@ -42,9 +42,9 @@ func gcSweep(mode gcMode) { // 此时为 GCoff 阶段
 	unlock(&mheap_.lock)
 
 	// 出于调试目的，用户可以让 sweep 过程阻塞执行，但我们并不感兴趣
-	(...)
+	...
 
-	// 并发清扫（唤醒后台 goroutine）
+	// 并发清扫（唤醒后台 Goroutine）
 	lock(&sweep.lock)
 	if sweep.parked {
 		sweep.parked = false
@@ -75,7 +75,7 @@ type sweepdata struct {
 该结构通过：
 
 1. mutex 保证清扫过程的原子性
-2. g 指针来保存所在的 goroutine
+2. g 指针来保存所在的 Goroutine
 3. started 判断是否开始
 4. nbgsweep 和 npausesweep 来统计清扫过程
 
@@ -85,7 +85,7 @@ type sweepdata struct {
 
 ```go
 func bgsweep(c chan int) {
-	(...)
+	...
 	for {
 		// 清扫 span，如果清扫了一部分 span，则记录 bgsweep 的次数
 		for sweepone() != ^uintptr(0) {
@@ -102,7 +102,7 @@ func bgsweep(c chan int) {
 			unlock(&sweep.lock)
 			continue
 		}
-		// 否则让 goroutine 进行 park
+		// 否则让 Goroutine 进行 park
 		sweep.parked = true
 		goparkunlock(&sweep.lock, waitReasonGCSweepWait, traceEvGoBlock, 1)
 	}
@@ -114,9 +114,9 @@ sweepone 从堆中清理
 ```go
 func sweepone() uintptr {
 	_g_ := getg()
-	(...)
+	...
 
-	// 增加锁的数量确保 goroutine 在 sweep 中不会被抢占，进而不会将 span 留到下个 GC 产生不一致
+	// 增加锁的数量确保 Goroutine 在 sweep 中不会被抢占，进而不会将 span 留到下个 GC 产生不一致
 	_g_.m.locks++
 	if atomic.Load(&mheap_.sweepdone) != 0 {
 		_g_.m.locks--
@@ -135,7 +135,7 @@ func sweepone() uintptr {
 			break
 		}
 		if s.state != mSpanInUse {
-			(...)
+			...
 			continue
 		}
 		if s.sweepgen == sg-2 && atomic.Cas(&s.sweepgen, sg-2, sg-1) {
@@ -159,7 +159,7 @@ func sweepone() uintptr {
 
 	// 减少 sweeper 的数量并确保最后一个运行的 sweeper 正常标记了 mheap.sweepdone
 	if atomic.Xadd(&mheap_.sweepers, -1) == 0 && atomic.Load(&mheap_.sweepdone) != 0 {
-		(...)
+		...
 	}
 	_g_.m.locks--
 	return npages
@@ -212,16 +212,16 @@ func (h *mheap) freeManual(s *mspan, stat *uint64) {
 func (h *mheap) freeSpanLocked(s *mspan, acctinuse, acctidle bool) {
 	switch s.state {
 	case mSpanManual:
-		(...) // panic
+		... // panic
 	case mSpanInUse:
-		(...)
+		...
 		h.pagesInUse -= uint64(s.npages)
 
 		// 清除 arena page bitmap 正在使用的二进制位
 		arena, pageIdx, pageMask := pageIndexOf(s.base())
 		arena.pageInUse[pageIdx] &^= pageMask
 	default:
-		(...) // panic
+		... // panic
 	}
 
 	if acctinuse {
@@ -239,6 +239,8 @@ func (h *mheap) freeSpanLocked(s *mspan, acctinuse, acctidle bool) {
 	h.free.insert(s)
 }
 ```
+
+<!-- 位图技术 -->
 
 ## 许可
 

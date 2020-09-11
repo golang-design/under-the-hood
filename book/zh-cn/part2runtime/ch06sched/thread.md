@@ -1,23 +1,23 @@
 ---
-weight: 2104
-title: "6.4 线程管理"
+weight: 2105
+title: "6.5 线程管理"
 ---
 
-# 6.4 线程管理
+# 6.5 线程管理
 
-Go 语言既然专门将线程进一步抽象为 goroutine，自然也就不希望我们对线程做过多的操作，事实也是如此，
+Go 语言既然专门将线程进一步抽象为 Goroutine，自然也就不希望我们对线程做过多的操作，事实也是如此，
 大部分的用户代码并不需要线程级的操作。但某些情况下，当需要
-使用 cgo 调用 C 端图形库（如 GLib）时，甚至需要将某个 goroutine 用户态代码一直在主线程上执行。
-我们已经知道了 `runtime.LockOSThread` 会将当前 goroutine 锁在一个固定的 OS 线程上执行，
+使用 cgo 调用 C 端图形库（如 GLib）时，甚至需要将某个 Goroutine 用户态代码一直在主线程上执行。
+我们已经知道了 `runtime.LockOSThread` 会将当前 Goroutine 锁在一个固定的 OS 线程上执行，
 但是一旦开放了锁住某个 OS 线程后，会连带产生一些副作用。比如当系统级的编程实践总是需要对线程进行操作，
 尤其是当用户态代码通过系统调用将 OS 线程所在的 Linux namespace 进行修改、把线程私有化时（系统调用
 `unshare` 和标志位 `CLONE_NEWNS`），
-其他 goroutine 已经不再适合在此 OS 线程上执行。这时候不得不将 M 永久的从运行时中移出，
-通过[对调度器调度循环的分析](./exec.md)，得知了 `LockOSThread/UnlockOSThread`
-也是目前唯一一个能够让 M 退出的做法（将 goroutine 锁在 OS 线程上，且在 goroutine 死亡退出时不调用 Unlock 方法）。
+其他 Goroutine 已经不再适合在此 OS 线程上执行。这时候不得不将 M 永久的从运行时中移出，
+通过[6.3 调度循环](./exec.md)一节的介绍，我们知道 `LockOSThread/UnlockOSThread`
+也是目前唯一一个能够让 M 退出的做法（将 Goroutine 锁在 OS 线程上，且在 Goroutine 死亡退出时不调用 Unlock 方法）。
 本节便进一步研究 Go 语言对用户态线程操作的支持和与之相关的运行时线程的管理。
 
-## LockOSThread
+## 6.5.1 LockOSThread
 
 LockOSThread 和 UnlockOSThread 在运行时包中分别提供了私有和公开的方法。
 运行时私有的 lockOSThread 非常简单：
@@ -33,7 +33,8 @@ func lockOSThread() {
 因为整个运行时只有在 `runtime.main` 调用 `main.init` 、和 cgo 的 C 调用 Go 时候才会使用，
 其中 `main.init` 其实也是为了 cgo 里 Go 调用某些 C 图形库时需要主线程支持才使用的。
 因此不需要做过多复杂的处理，直接在 m 上进行计数
-（计数的原因在于安全性和始终上的一些处理，防止用户态代码误用，例如只调用了 Unlock 而没有先调用 Lock [MILLS et al., 2017]），
+（计数的原因在于安全性和始终上的一些处理，防止用户态代码误用，
+例如只调用了 Unlock 而没有先调用 Lock [Mills, 2017]），
 而后调用 `dolockOSThread` 将 g 与 m 互相锁定：
 
 ```go
@@ -70,7 +71,7 @@ func LockOSThread() {
 }
 ```
 
-## UnlockOSThread
+## 6.5.2 UnlockOSThread
 
 Unlock 的部分非常简单，减少计数，再实际 dounlock：
 
@@ -113,13 +114,13 @@ func dounlockOSThread() {
 }
 ```
 
-## lockedg/lockedm 与调度循环
+## 6.5.3 lockedg/lockedm 与调度循环
 
 一个很自然的问题，为什么简单的设置 lockedg 和 lockedm 之后就能保证 g 只在一个 m 上执行了？
 其实我们已经在调度循环中见过与之相关的代码了：
 
 ```go
-// 调度器的一轮：找到 runnable goroutine 并进行执行且永不返回
+// 调度器的一轮：找到 runnable Goroutine 并进行执行且永不返回
 func schedule() {
 	_g_ := getg()
 
@@ -170,7 +171,7 @@ func stoplockedm() {
 }
 ```
 
-## 模板线程
+## 6.5.4 模板线程
 
 前面已经提到过，锁住系统线程带来的隐患就是某个线程的状态可能被用户态代码过分的修改，
 从而不再具有产出新线程的能力，模板线程就提供了一个备用线程，不会执行 g，只用于创建安全的 m。
@@ -329,14 +330,6 @@ func newm(fn func(), _p_ *p) {
 LockOSThread 并不是什么优秀的特性，相反它却给 Go 运行时调度器带来了诸多管理上的难题。
 它的存在仅仅只是需要提供对上个世纪 C 编写的诸多遗产提供必要支持，倘若 Go 的基础库能够更加丰富，
 这项特性可能不复存在。
-
-## 进一步阅读的参考文献
-
-- [LOPEZ et al., 2016] [runtime: let idle OS threads exit](https://github.com/golang/go/issues/14592)
-- [MILLS et al., 2017] [proposal: runtime: pair LockOSThread, UnlockOSThread calls](https://github.com/golang/go/issues/20458)
-- [NAVYTUX et al., 2017] [runtime: big performance penalty with runtime.LockOSThread](https://github.com/golang/go/issues/21827)
-- [RGOOCH et al., 2017] [runtime: terminate locked OS thread if its goroutine exits](https://github.com/golang/go/issues/20395)
-- [TAYLOR et al., 2016] [runtime: unexpectedly large slowdown with runtime.LockOSThread](https://github.com/golang/go/issues/18023)
 
 ## 许可
 

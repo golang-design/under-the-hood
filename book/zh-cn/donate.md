@@ -8,9 +8,20 @@ bookHidden: true
 
 如果你认为本书对你起到了帮助，并希望资助作者，可以通过下面的二维码给予支持：
 
-| 微信 | 支付宝 |
-|:----:|:-----:|
-|![](../assets/wechat.jpg)|![](../assets/alipay.jpg)|
+<table style="text-align: center;">
+<tr>
+<th>微信</th><th>支付宝</th>
+</tr>
+<tr>
+<td>
+<img src="../assets/wechat.jpg" style="margin: 0 auto; max-width: 40%"/>
+</td>
+<td>
+<img src="../assets/alipay.jpg" style="margin: 0 auto; max-width: 40%">
+</td>
+</tr>
+
+</table>
 
 # Donate
 
@@ -24,4 +35,12 @@ I would love if you support me to make the book better, click the following butt
 
 | 日期 | 资助人 | 金额 |
 |:--:|:--:|:--:|
-| 2020-03-08 | *文 | ¥ 100 |
+| 2020-03-23 | *联 | ¥ 50 |
+| 2020-03-21 | *Y | ¥ 10 | 
+| 2020-03-13 | *杰 | ¥ 50 |
+| 2020-03-13 | *衷 | ¥ 5 |
+| 2020-03-11 | *衷 | ¥ 5 |
+| 2020-03-08 | *文 | ¥ 100 | 
+| 2020-01-09 | *喜剑 | ¥ 66.6 |
+
+总计：¥ 286.6

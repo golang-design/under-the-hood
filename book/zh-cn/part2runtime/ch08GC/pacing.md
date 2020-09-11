@@ -1,11 +1,11 @@
 ---
-weight: 2304
-title: "8.4 触发频率及其调步算法"
+weight: 2303
+title: "8.3 触发频率及其调步算法"
 ---
 
-# 8.4 触发频率及其调步算法
+# 8.3 触发频率及其调步算法
 
-## 8.4.1 GC 的调控方式
+## 8.3.1 GC 的调控方式
 
 ```go
 // src/runtime/debug
@@ -15,7 +15,7 @@ func SetMaxStack(bytes int) int
 
 GOGC
 
-## 8.4.2 调步算法及其数学模型
+## 8.3.2 调步算法及其数学模型
 
 目前触发 GC 的条件使用的是从 Go 1.5 时提出的**调步（Pacing）算法**，
 调步算法是优化并发执行时 GC 的步调，换句话说就是解决什么时候应该触发下一次 GC 
@@ -39,7 +39,7 @@ $$
 H_g^{(n)} = (1+h_g) H_m^{(n-1)}
 $$
 
-<div class="img-center">
+<div class="img-center" style="margin: 0 auto; max-width: 70%">
 <img src="../../../assets/gc-pacing.png"/>
 <strong>图1：调步算法的模型</strong>
 </div>
@@ -136,7 +136,7 @@ func main() {
 $ go build -o main
 $ GODEBUG=gctrace=1 ./main
 #allocate:  1
-(...)
+...
 #allocate:  20
 gc finished
 gc 1 @0.001s 3%: 0.016+0.23+0.019 ms clock, 0.20+0.11/0.060/0.13+0.22 ms cpu, 4->5->1 MB, 5 MB goal, 12 P
@@ -170,13 +170,13 @@ for n := 1; n < 50; n++ {
 $ go build -o main
 $ GODEBUG=gctrace=1,gcpacertrace=1 ./main
 #allocate:  1
-(...)
+...
 
 pacer: H_m_prev=2236962 h_t=+8.750000e-001 H_T=4194304 h_a=+2.387451e+000 H_a=7577600 h_g=+1.442627e+000 H_g=5464064 u_a=+2.652227e-001 u_g=+3.000000e-001 W_a=152832 goalΔ=+5.676271e-001 actualΔ=+1.512451e+000 u_a/u_g=+8.840755e-001
 #allocate:  28
 gc 1 @0.001s 5%: 0.032+0.32+0.055 ms clock, 0.38+0.068/0.053/0.11+0.67 ms cpu, 4->7->3 MB, 5 MB goal, 12 P
 
-(...)
+...
 #allocate:  37
 pacer: H_m_prev=3307736 h_t=+6.000000e-001 H_T=5292377 h_a=+7.949171e-001 H_a=5937112 h_g=+1.000000e+000 H_g=6615472 u_a=+2.658428e-001 u_g=+3.000000e-001 W_a=154240 goalΔ=+4.000000e-001 actualΔ=+1.949171e-001 u_a/u_g=+8.861428e-001
 #allocate:  38
@@ -195,16 +195,18 @@ gc 2 @0.002s 9%: 0.017+0.26+0.16 ms clock, 0.20+0.079/0.058/0.12+1.9 ms cpu, 5->
 我们据此计算第二次估计的堆增长率：
 
 $$
-\begin{align}
-h_t^{(2)} &= h_t^{(1)} + 0.5 \left[ \frac{H_g^{(1)} - H_a^{(1)}}{H_a^{(1)}} - h_t^{(1)} - \frac{u_a^{(1)}}{u_g^{(1)}} \left( h_a^{(1)} - h_t^{(1)} \right) \right] \\
-&= 0.875 + 0.5 \left[ \frac{5464064 - 7577600}{5464064} - 0.875 - \frac{0.2652227}{0.3} \left( 0.2387451 - 0.875 \right) \right] \\
-& \approx 0.52534543909 \\
-\end{align}
+h_t^{(2)} = h_t^{(1)} + 0.5 \left[ \frac{H_g^{(1)} - H_a^{(1)}}{H_a^{(1)}} - h_t^{(1)} - \frac{u_a^{(1)}}{u_g^{(1)}} \left( h_a^{(1)} - h_t^{(1)} \right) \right]
+$$
+$$
+= 0.875 + 0.5 \left[ \frac{5464064 - 7577600}{5464064} - 0.875 - \frac{0.2652227}{0.3} \left( 0.2387451 - 0.875 \right) \right]
+$$
+$$
+\approx 0.52534543909
 $$
 
 因为 $0.52534543909 < 0.6\rho = 0.6$，因此下一次的触发率为 $h_t^{2} = 0.6$，与我们实际观察到的第二次 GC 的触发率 0.6 吻合。
 
-## 8.4.3 实现细节
+## 8.3.3 实现细节
 
 ### 扫描工作估计器
 
@@ -270,9 +272,9 @@ TODO:
 
 ```go
 type mstats struct {
-	(...)
+	...
 	last_gc_nanotime uint64 // 上次 gc (monotonic 时间)
-	(...)
+	...
 
 	// triggerRatio is the heap growth ratio that triggers marking.
 	//
@@ -324,7 +326,7 @@ func setGCPercent(in int32) (out int32) {
 	heapminimum = defaultHeapMinimum * uint64(gcpercent) / 100
 	gcSetTriggerRatio(memstats.triggerRatio) // 更新步调来响应 gcpercent 变化
 	unlock(&mheap_.lock)
-	(...)
+	...
 	return out
 }
 func gcSetTriggerRatio(triggerRatio float64) {
@@ -373,7 +375,7 @@ func gcSetTriggerRatio(triggerRatio float64) {
 		if trigger < minTrigger {
 			trigger = minTrigger
 		}
-		(...)
+		...
 		if trigger > goal {
 			// The trigger ratio is always less than GOGC/100, but
 			// other bounds on the trigger may have raised it.
@@ -385,7 +387,7 @@ func gcSetTriggerRatio(triggerRatio float64) {
 	// Commit to the trigger and goal.
 	memstats.gc_trigger = trigger
 	memstats.next_gc = goal
-	(...)
+	...
 
 	// Update mark pacing.
 	if gcphase != _GCoff {
@@ -428,11 +430,6 @@ func gcSetTriggerRatio(triggerRatio float64) {
 	gcPaceScavenger()
 }
 ```
-
-## 进一步阅读的参考文献
-
-- [Go 1.5 concurrent garbage collector pacing](https://docs.google.com/document/d/1wmjrocXIWTr1JxU-3EQBI6BK6KgtiFArkG47XK73xIQ/edit#)
-- [Separate soft and hard heap size goal](https://github.com/golang/proposal/blob/master/design/14951-soft-heap-limit.md)
 
 ## 许可
 

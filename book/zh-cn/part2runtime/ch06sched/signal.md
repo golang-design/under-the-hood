@@ -1,18 +1,18 @@
 ---
-weight: 2105
-title: "6.5 信号处理机制"
+weight: 2106
+title: "6.6 信号处理机制"
 ---
 
-# 6.5 信号处理机制
+# 6.6 信号处理机制
 
-我们已经知道了 Go 运行时调度已 goroutine 的方式调度了所有用户态代码。
-每个 goroutine 都有可能在不同的线程上重新被执行。
-那么如果用户态的某个 goroutine 需要接收系统信号，
-如何才能确保某个线程的信号能够正确的发送到可能在其他线程上执行的监听信号的 goroutine 呢？
+我们已经知道了 Go 运行时调度已 Goroutine 的方式调度了所有用户态代码。
+每个 Goroutine 都有可能在不同的线程上重新被执行。
+那么如果用户态的某个 Goroutine 需要接收系统信号，
+如何才能确保某个线程的信号能够正确的发送到可能在其他线程上执行的监听信号的 Goroutine 呢？
 
 本节我们讨论调度器里涉及的 signal 信号处理机制。
 
-## 信号与软中断
+## 6.6.1 信号与软中断
 
 信号机制是 UNIX、类 UNIX 甚至其他 POSIX 兼容系统上规定的一种进程异步通信的限制形式。
 用于提醒某个事件的发生状态。
@@ -25,7 +25,7 @@ title: "6.5 信号处理机制"
 并重新切换到用户空间来执行预先设置好的信号处理回调。当回调执行完毕之后，会重新切换回内核
 空间，并从中断的位置进行恢复，如图 1 所示。
 
-<div class="img-center">
+<div class="img-center" style="margin: 0 50px 0px 30px; float: left; max-width: 60%">
 <img src="../../../assets/signal-handler.png"/>
 <strong>图 1: 用户空间与内核空间的信号处理流程</strong>
 </div>
@@ -44,64 +44,72 @@ title: "6.5 信号处理机制"
 如果要检测和修改当前信号屏蔽字，则需要调用 `sigprocmask`
 系统调用来进行。通过 `_SIG_SETMASK` 可以直接设置想要的屏蔽字，并获得原先的屏蔽字。
 
-值得注意的是，信号会在所有线程中进行共享。换句话说，
-尽管某个线程可以阻止某些信号，但当线程修改了某个信号相关的处理行为后，
+值得注意的是，信号会在所有线程中进行共享。
+换句话说，尽管某个线程可以阻止某些信号，但当线程修改了某个信号相关的处理行为后，
 所有线程都必须共享这个行为带来的变化。
 如果一个线程选择忽略某个信号，则其他线程可以恢复信号的默认处理行为，或者设置为信号设置
-一个新的 handler。
-从而能够撤销线程的信号选择。进程中信号会被传递给单个线程，
-如果信号与硬件故障或计时器超时有关，信号便会被发送到引起事件的线程中去，而其他的信号则
-被发送到任一个线程。
+一个新的处理函数，进而能够撤销线程的信号选择。
+进程中信号会被传递给单个线程，如果信号与硬件故障或计时器超时有关，
+信号便会被发送到引起事件的线程中去，而其他的信号则被发送到任一个线程。
 
-Linux 上的线程以独立进程进行实现，通过 clone 调用来共享资源，因此 Linux 上的信号
+Linux 上的线程以独立进程进行实现，通过 `clone` 调用来共享资源，因此 Linux 上的信号
 处理与类 Unix 系统略有不同，POSIX.1 线程模型会在异步信号发送到进程后，
 且没有阻塞屏蔽字时接受信号。而 Linux 上每个线程作为独立进程执行，系统无法选择没有
 阻塞屏蔽字的线程，进而无法注意到这个信号。所以 Linux 上也存在不可靠信号和可靠信号的
-概念，不可靠信号可能丢失，多次发送相同的信号只能收到一次，取值从 1 至 31；
+概念。其中不可靠信号可能丢失，多次发送相同的信号只能收到一次，取值从 1 至 31；
 可靠信号则可以进行排队，取值从 32 至 64。
 
 这便是运行时信号处理的基本原理。
 
-## 初始化
+## 6.6.2 处理函数的初始化
 
-[调度器：调度循环](exec.md) 中讨论过了 M 的生命周期，M 可以在两种情况下被创建：
+[6.3 调度循环](./exec.md) 中讨论过了 M 的生命周期，M 可以在两种情况下被创建：
 
-1. 程序运行之初的 M0，无需创建已经存在的系统线程，只需对其进行初始化即可。
-
-	```
-	schedinit --> mcommoninit --> mpreinit --> msigsave --> initSigmask --> mstart
-	```
-
-2. 需要时创建的 M，某些特殊情况下一定会创建一个新的 M并进行初始化，而后创建系统线程：
+1. 程序运行之初的 M0，无需创建已经存在的系统线程，只需对其进行初始化即可。其函数调用链如下所示：
 
 	```
-	startm 时没有空闲 m
-	startTemplateThread 时
-	startTheWorldWithSema 时 p 如果没有 m
-	main 时创建系统监控
-	oneNewExtraM 时
-	
-	newm --> allocm --> mcommoninit --> mpreinit --> newm1 --> newosproc --> mstart
+	schedinit
+	 ↳ mcommoninit
+	    ↳ mpreinit
+	       ↳ msigsave
+	          ↳ initSigmask
+	             ↳ mstart
 	```
 
-在 `mpreinit` 中，会为一个 M 创建 `gsignal`，是一个在 M 上用于处理信号的 goroutine
-（因此，除了 g0 外，其实第一个创建的 g 应该是它，但是它并没有设置 goid）：
+2. 需要时创建的 M，某些特殊情况下一定会创建一个新的 M 并进行初始化，而后创建系统线程。这些情况包括：
+
+   1. startm 时没有空闲 m
+   2. startTemplateThread 时
+   3. startTheWorldWithSema 时 p 如果没有 m
+   4. main 时创建系统监控
+   5. oneNewExtraM 时
+
+	其调用链为：
+
+	```
+	newm
+	 ↳ allocm
+	    ↳ mcommoninit
+	       ↳ mpreinit
+	          ↳ newm1
+	             ↳ newosproc
+	                ↳ mstart
+	```
+
+在 `mcommoninit` 里，会在一个父线程（或引导时的主线程）上调用 `mpreinit`，并最终会为一个 M 创建 `gsignal`，是一个在 M 上用于处理信号的 Goroutine。因此，除了 g0 外，其实第一个创建的 g 应该是它，
+但是它并没有设置 Goid (Goroutine ID)：
 
 ```go
 func mcommoninit(mp *m) {
-	(...)
-
+	...
 	// 初始化 gsignal，用于处理 m 上的信号。
 	mpreinit(mp)
-
 	// gsignal 的运行栈边界处理
 	if mp.gsignal != nil {
 		mp.gsignal.stackguard1 = mp.gsignal.stack.lo + _StackGuard
 	}
-
-	(...)
+	...
 }
-// 调用此方法来初始化一个新的 m (包含引导 m)
 // 从一个父线程上进行调用（引导时为主线程），可以分配内存
 func mpreinit(mp *m) {
 	mp.gsignal = malg(32 * 1024) // OS X 需要 >= 8K，此处创建处理 singnal 的 g
@@ -111,18 +119,17 @@ func mpreinit(mp *m) {
 
 ### 获取原始信号屏蔽字
 
-在调度器的初始化的阶段，`initSigmask` 目标旨在记录
-主线程 M0 创建之初的屏蔽字 `sigmask`：
+在调度器的初始化的阶段，`initSigmask` 目标旨在记录主线程 M0 创建之初的屏蔽字 `sigmask`：
 
 ```go
 func schedinit() {
 	_g_ := getg()
-	(...)
+	...
 	mcommoninit(_g_.m)
-	(...)
+	...
 	msigsave(_g_.m)
 	initSigmask = _g_.m.sigmask
-	(...)
+	...
 }
 ```
 
@@ -133,7 +140,6 @@ func schedinit() {
 const _SIG_SETMASK = 3
 
 // msigsave 将当前线程的信号屏蔽字保存到 mp.sigmask。
-// 当一个非 Go 线程调用 Go 函数时，用于保留非 Go 信号屏蔽字。
 //go:nosplit
 //go:nowritebarrierrec
 func msigsave(mp *m) {
@@ -141,22 +147,20 @@ func msigsave(mp *m) {
 }
 ```
 
-`sigprocmask` 为系统调用，返回值通过 `old` 进行返回，其中 `sigset` 是 `uint32` 类型：
+`sigprocmask` 的本质为系统调用，其返回值通过 `old` 交付给调用者：
 
 ```go
 type sigset uint32
-
 //go:nosplit
 //go:nowritebarrierrec
 func sigprocmask(how int32, new, old *sigset) {
 	rtsigprocmask(how, new, old, int32(unsafe.Sizeof(*new)))
 }
-
 //go:noescape
 func rtsigprocmask(how int32, new, old *sigset, size int32)
 ```
 
-`rtsigprocmask` 在 Linux 上由汇编直接封装 `rt_sigprocmask` 调用 [DIENET, 2017a]：
+`rtsigprocmask` 在 Linux 上由汇编直接包装 `rt_sigprocmask` 调用：
 
 ```c
 TEXT runtime·rtsigprocmask(SB),NOSPLIT,$0-28
@@ -175,7 +179,7 @@ TEXT runtime·rtsigprocmask(SB),NOSPLIT,$0-28
 注意，`rt_sigprocmask` 只适用于单个线程的调用，多线程上的调用时未定义行为，
 不过初始化阶段的此时还未创建其他线程，因此此调用时安全的。
 
-在 Darwin 上则是通过 `pthread_sigmask` [DIENET, 2017b] 来完成：
+在 Darwin 系统中，所有的信号处理函数均通过 `pthread_sigmask` 来完成：
 
 ```go
 //go:nosplit
@@ -209,9 +213,9 @@ TEXT runtime·sigprocmask_trampoline(SB),NOSPLIT,$0
 var initSigmask sigset
 
 func schedinit() {
-	(...)
+	...
 	initSigmask = _g_.m.sigmask
-	(...)
+	...
 }
 ```
 
@@ -222,38 +226,31 @@ func schedinit() {
 在进入 `mstart` 后，调用链关系就变成了：
 
 ```
-mstart --> mstart1 --> minit --> mstartm0 (仅当 m0 调用) --> schedule --> mexit --> sigblock --> unminit 
+mstart
+ ↳ mstart1
+    ↳ minit
+       ↳ mstartm0 (仅当 m0 调用)
+          ↳ schedule
+             ↳ mexit
+                ↳ sigblock
+                   ↳ unminit 
 ```
 
-`mstart1` 会调用 `minit` 进行初始化，这个函数也是平台相关的：
+`mstart1` 会调用 `minit` 进行初始化：
 
 ```go
-// linux
 func minit() {
 	minitSignals()
-	(...)
+	...
 }
 func minitSignals() {
 	minitSignalStack()
 	minitSignalMask()
 }
-
-
-// darwin
-func minit() {
-	if GOARCH != "arm" && GOARCH != "arm64" {
-		minitSignalStack()
-	}
-	minitSignalMask()
-}
 ```
 
-但无论是在 Linux 还是 Darwin 上，均会调用 `minitSignalStack` 和 `minitSignalMask`
-（虽然 `iOS` 上并不会调用 `minitSignalStack`）。
-
-
-M 在初始化过程中，会判定当前线程是否设置了备用信号栈，正常情况下一个新创建的 M 是
-没有备用信号栈的。
+M 在初始化过程中，会判定当前线程是否设置了备用信号栈，
+正常情况下一个新创建的 M 是没有备用信号栈的。
 如果没有，则会将 `m.gsignal` 的执行栈设置为备用信号栈，用于处理产生的信号。
 
 另一种情况是，当使用 cgo 时，非 Go 线程可能调用 Go 代码，
@@ -261,15 +258,12 @@ M 在初始化过程中，会判定当前线程是否设置了备用信号栈，
 因此如果 M 已经存在了备用信号栈，则会将现有的信号栈保存到 `m.goSigStack` 中。
 
 ```go
-type stackt struct {
+type stackt struct { // 信号栈
 	ss_sp     *byte
 	ss_flags  int32
 	pad_cgo_0 [4]byte
 	ss_size   uintptr
 }
-```
-
-```go
 // 如果没有为线程设置备用信号栈（正常情况），则将备用信号栈设置为 gsignal 栈。
 // 如果为线程设置了备用信号栈（非 Go 线程设置备用信号栈然后调用 Go 函数的情况），
 // 则将 gsignal 栈设置为备用信号栈。
@@ -345,9 +339,6 @@ func minitSignalMask() {
 	// 重新设置屏蔽字
 	sigprocmask(_SIG_SETMASK, &nmask, nil)
 }
-```
-
-```go
 // 判断某个信号是否为不可阻止的信号
 // 1. 当信号是非阻塞信号，则不可阻止
 // 2. 当改程序为模块时，则可阻止
@@ -374,25 +365,13 @@ type sigTabT struct {
 	flags int32
 	name  string
 }
-
-// linux
 var sigtable = [...]sigTabT{
 	/* 0 */ {0, "SIGNONE: no trap"},
 	/* 1 */ {_SigNotify + _SigKill, "SIGHUP: terminal line hangup"},
-	(...)
+	...
 	/* 63 */ {_SigNotify, "signal 63"},
 	/* 64 */ {_SigNotify, "signal 64"},
 }
-// darwin
-var sigtable = [...]sigTabT{
-	/* 0 */ {0, "SIGNONE: no trap"},
-	/* 1 */ {_SigNotify + _SigKill, "SIGHUP: terminal line hangup"},
-	/* 2 */ {_SigNotify + _SigKill, "SIGINT: interrupt"},
-	(...)
-	/* 30 */ {_SigNotify, "SIGUSR1: user-defined signal 1"},
-	/* 31 */ {_SigNotify, "SIGUSR2: user-defined signal 2"},
-}
-// Values for the flags field of a sigTabT.
 const (
 	_SigNotify   = 1 << iota // let signal.Notify have signal, even if from kernel
 	_SigKill                 // if signal.Notify doesn't take it, exit quietly
@@ -406,27 +385,21 @@ const (
 )
 ```
 
-## 信号处理
+## 6.6.3 信号处理
 
 万事俱备，只欠东风。信号处理相关的初始化已经完成，包括了信号的屏蔽字、信号栈等。
-
-进入调度循环之前，在 M0 上，会调用 `mstartm0`，进而调用 `initsig`：
+正式进入调度循环之前，在 M0 上将调用 `mstartm0`，进而调用 `initsig` 初始化信号，针对每个信号进行单独处理：
 
 ```go
 //go:yeswritebarrierrec
 func mstartm0() {
-	(...)
+	...
 	initsig(false)
 }
-```
-
-从而初始化信号，针对每个信号进行单独处理：
-
-```go
 //go:nosplit
 //go:nowritebarrierrec
 func initsig(preinit bool) {
-	(...)
+	...
 
 	for i := uint32(0); i < _NSIG; i++ {
 		t := &sigtable[i]
@@ -434,7 +407,7 @@ func initsig(preinit bool) {
 			continue
 		}
 
-		// 此时不需要原子操作，因为此时没有其他运行的 goroutine
+		// 此时不需要原子操作，因为此时没有其他运行的 Goroutine
 		fwdSig[i] = getsig(i)
 
 		// 检查该信号是否需要设置 signal handler
@@ -480,21 +453,19 @@ func setsig(i uint32, fn uintptr) {
 
 ```asm
 TEXT runtime·sigtramp(SB),NOSPLIT,$72
-	(...)
-
+	...
 	MOVQ	DX, ctx-56(SP)
 	MOVQ	SI, info-64(SP)
 	MOVQ	DI, signum-72(SP)
 	MOVQ	$runtime·sigtrampgo(SB), AX
 	CALL AX
-
-	(...)
+	...
 	RET
 ```
 
-进而调用 `sigtrampgo`。这样的处理方式是因为，`sighandler` 会将产生的信号交给
-对应的 g ，此时还无法决定究竟谁来进行处理。因此，当信号发生时，而 `sigtrampgo` 
-会被调用：
+进而调用 `sigtrampgo`。这样的处理方式是因为，
+`sighandler` 会将产生的信号交给对应的 g ，此时还无法决定究竟谁来进行处理。
+因此，当信号发生时，而 `sigtrampgo` 会被调用：
 
 ```go
 //go:nosplit
@@ -503,18 +474,17 @@ func sigtrampgo(sig uint32, info *siginfo, ctx unsafe.Pointer) {
 	if sigfwdgo(sig, info, ctx) {
 		return
 	}
-	(...)
-
+	...
 	setg(g.m.gsignal)
-	(...)
+	...
 	sighandler(sig, info, ctx, g)
 	setg(g)
-	(...)
+	...
 }
 ```
 
 而 `sigfwdgo` 用于约定该信号是否应该由 Go 进行处理，
-如果不由 Go 进行处理则将其转发到 Go 代码之前设置的 handler 上（这是 cgo 的情况）。
+如果不由 Go 进行处理（例如 cgo）则将其转发到 Go 代码之前设置的 handler 上。
 
 我们暂时关注 Go 端的情况，代码会继续执行，将 g 设置为 `gsignal`，从而来到了 `sighandler`：
 
@@ -534,6 +504,7 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 		return
 	}
 
+	// 用户信号
 	if sig == _SIGUSR1 && testSigusr1 != nil && testSigusr1(gp) {
 		return
 	}
@@ -553,13 +524,10 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 		// 我们无法安全的 sigpanic 因为它可能造成栈的增长，因此忽略它
 		flags = (flags &^ _SigPanic) | _SigThrow
 	}
-	if isAbortPC(c.sigpc()) {
-		// 很多架构中，abort 函数会导致内存段错误，不将其作为 panic
-		flags = _SigThrow
-	}
+	...
 	if c.sigcode() != _SI_USER && flags&_SigPanic != 0 {
 		// 产生 panic 的信号
-		(...)
+		...
 		c.preparePanic(sig, gp)
 		return
 	}
@@ -586,15 +554,15 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 		return
 	}
 
-	// 后面是一些直接 panic 的情况
-	(...)
+	// 处理一些直接 panic 的情况
+	...
 }
 ```
 
 注意，在信号处理中，当信号为 `sigPreempt` 时，将触发运行时的异步抢占机制，我们会在
 [6.7 协作与抢占](./preemption.md) 一节中进行讨论。
 
-`sigsend` 则将用户信号发送到信号队列 `sig` 中：
+函数 `sigsend` 会将用户信号发送到信号队列 `sig` 中：
 
 ```go
 var sig struct {
@@ -661,9 +629,9 @@ Send:
 
 用户信号的接收方是通过 os/signal 完成的，我们随后讨论。
 
-## Extra M
+## 6.6.4 辅 M 线程
 
-上面讨论过了 Extra M 的存在，Extra M 是一个用于服务非 Go 线程（cgo 产生的线程）回调的 M（Windows 上也需要）。
+辅 M 是一个用于服务非 Go 线程（cgo 产生的线程）回调的 M。
 
 ```go
 //go:yeswritebarrierrec
@@ -693,9 +661,6 @@ func newextram() {
 		}
 	}
 }
-```
-
-```go
 // onNewExtraM 分配一个 m 并将其放入 extra list 中
 func oneNewExtraM() {
 	mp := allocm(nil, nil)
@@ -717,7 +682,7 @@ func oneNewExtraM() {
 	mp.lockedg.set(gp)
 	gp.lockedm.set(mp)
 	gp.goid = int64(atomic.Xadd64(&sched.goidgen, 1))
-	(...)
+	...
 	// 给垃圾回收器使用
 	allgadd(gp)
 
@@ -731,7 +696,7 @@ func oneNewExtraM() {
 }
 ```
 
-## 对 os/signal 的支持
+## 6.6.5 对 `os/signal` 包的支持
 
 我们已经看到了用户注册的信号会通过 `sigsend` 进行发送，这就是我们使用 `os/signal` 包的核心。
 
@@ -739,23 +704,15 @@ func oneNewExtraM() {
 
 ```go
 var (
-	// watchSignalLoopOnce guards calling the conditionally
-	// initialized watchSignalLoop. If watchSignalLoop is non-nil,
-	// it will be run in a goroutine lazily once Notify is invoked.
-	// See Issue 21576.
 	watchSignalLoopOnce sync.Once
 	watchSignalLoop     func()
 )
-
 func init() {
-	signal_enable(0) // first call - initialize
+	signal_enable(0) // 首次调用，进行初始化
 	watchSignalLoop = loop
 }
-
 func loop() {
-	for {
-		process(syscall.Signal(signal_recv()))
-	}
+	for { process(syscall.Signal(signal_recv())) }
 }
 ```
 
@@ -788,9 +745,6 @@ func signal_enable(s uint32) {
 
 	sigenable(s)
 }
-```
-
-```go
 // 从信号队列中接受信号
 //go:linkname signal_recv os/signal.signal_recv
 func signal_recv() uint32 {
@@ -852,7 +806,7 @@ func process(sig os.Signal) {
 		}
 	}
 
-	(...) // Stop 的处理
+	... // Stop 的处理
 }
 ```
 
@@ -865,9 +819,6 @@ var handlers struct {
 	ref [numSig]int64
 	stopping []stopping
 }
-```
-
-```go
 func Notify(c chan<- os.Signal, sig ...os.Signal) {
 	if c == nil {
 		panic("os/signal: Notify using nil channel")
@@ -916,20 +867,13 @@ func Notify(c chan<- os.Signal, sig ...os.Signal) {
 }
 ```
 
-## 小结
+## 6.6.6 小结
 
-由于调度器的特殊性，以及 cgo 的支持，运行时信号处理相对而言还是较为复杂的，需要一套
-完整的机制来对各种情况进行处理，甚至对用户态代码的 `os/signal` 进行支持。
-当然，信号处理的功能远不止如此，利用此信号机制还可以实现抢占式调度，
-我们在 [6.7 协作与抢占](./preemption.md) 中再来讨论这一机制。
-
-## 进一步阅读的参考文献
-
-- [WIKI, 2019] [Signal(Unix)](https://en.wikipedia.org/wiki/Signal_(IPC))
-- [MAN7, 2017] [sigaltstack - Linux man page](http://man7.org/linux/man-pages/man2/sigaltstack.2.html)
-- [DIENET, 2017a] [sigprocmask - Linux man page](https://linux.die.net/man/2/rt_sigprocmask)
-- [DIENET, 2017b] [pthread_sigmask - Linux man page](https://linux.die.net/man/3/pthread_sigmask)
-- [STEVENS et al., 1992] Stevens, W. Richard, and Stephen A. Rago. Advanced programming in the UNIX environment. Addison-Wesley, 2013.
+由于调度器在 Go 程序运行时的特殊地位，以及在进行跨语言调用时需要 `cgo` 的支持，
+运行时信号处理相对而言还是较为复杂的，需要一套完整的机制来对各种情况进行处理，
+甚至对用户态代码的 `os/signal` 进行支持。当然，信号处理的功能远不止如此，
+利用此信号机制还可以实现抢占式调度，我们将在 [6.7 协作与抢占](./preemption.md) 中
+再来讨论这一机制的另一巨大作用。
 
 ## 许可
 
