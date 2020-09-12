@@ -213,7 +213,7 @@ func walkDocsForHierarchy(path string, info os.FileInfo, err error) error {
 		panic(fmt.Errorf("walkDocsForHierarchy: expect numbers for weight: %v", err))
 	}
 	title := doc[:endIdx-1]
-	url := strings.Replace(path, "content", "/golang", -1)
+	url := strings.Replace(path, "content", "/under-the-hood", -1)
 	url = strings.Replace(url, ".md", "", -1)
 	url = strings.Replace(url, "_index", "", -1)
 	hierarchy = append(hierarchy, section{
