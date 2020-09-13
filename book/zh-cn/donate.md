@@ -35,6 +35,8 @@ I would love if you support me to make the book better, click the following butt
 
 | 日期 | 资助人 | 金额 |
 |:--:|:--:|:--:|
+| 2020-07-26 | *宇 | ¥ 5 |
+| 2020-07-26 | *琦 | ¥ 100 |
 | 2020-03-23 | *联 | ¥ 50 |
 | 2020-03-21 | *Y | ¥ 10 | 
 | 2020-03-13 | *杰 | ¥ 50 |
@@ -43,4 +45,4 @@ I would love if you support me to make the book better, click the following butt
 | 2020-03-08 | *文 | ¥ 100 | 
 | 2020-01-09 | *喜剑 | ¥ 66.6 |
 
-总计：¥ 286.6
+总计：¥ 391.6
