@@ -1,13 +1,13 @@
 ---
-weight: 1204
-title: "1.4 顺序进程通讯 CSP"
+weight: 1103
+title: "1.3 顺序进程通讯"
 ---
 
-# 1.4 顺序进程通讯 CSP
+# 1.3 顺序进程通讯
 
 > 本节内容提供一个线上演讲：[YouTube 在线](https://www.youtube.com/watch?v=Z8ZpWVuEx8c)，[Google Slides 讲稿](https://changkun.de/s/csp/)。
 
-TODO: 暂无此节内容写作计划，请谨慎阅读
+
 
 早在上个世纪七十年代，多核处理器还是一个科研主题，并没有进入普通程序员的视野。
 Tony Hoare 于 1977 年提出通信顺序进程（CSP）理论，遥遥领先与他所在的时代。
@@ -27,7 +27,7 @@ CSP 的模型由并发执行的实体（线程或者进程）所组成，实体�
 
 研究证明了消息传递与如今的线程与锁是等价的 [Lauer and Needham 1979]。
 
-## 1.4.1 产生背景
+## 1.3.1 产生背景
 
 传统程序设计中三种常见的构造结构：重复构造（for）、条件构造（if）、顺序组合（;）
 
@@ -88,7 +88,7 @@ C.A.R Hoare 1978 的萌芽论文，认为输入输出在一种模型编程语言
 
 - pattern-matching
 
-## 1.4.2 设计细节
+## 1.3.2 设计细节
 
 CSP 语言的结构非常简单，极度的数学形式化、简洁与优雅。
 将 Dijkstra 守护指令、`!` 发送 与 `?` 接受消息进行一般性的推广：
@@ -270,7 +270,7 @@ i := 0; *[i < size; content(i) ≠ n → i := i+1]
 *[X?V() → val := val+1 □ val > 0; Y?P() → val := val-1]
 ```
 
-## 1.4.3 协程
+## 1.3.3 协程
 
 ### S31 COPY
 
@@ -460,7 +460,7 @@ func S35_ConwayProblem(cardfile chan []rune, lineprinter chan string) {
 ```
 
 
-## 1.4.4 子程、数据表示与递归
+## 1.3.4 子程、数据表示与递归
 
 子程是一个与用户过程并发执行的子过程：
 
@@ -568,7 +568,7 @@ i:integer; i := 0;
 
 Go 实现：https://github.com/changkun/gobase/blob/f787593b4467793f8ee0b07583ea9ffde5adf2be/csp/csp.go#L392 
 
-## 1.4.5 监控与调度
+## 1.3.5 监控与调度
 
 监控可以被视为与多个用户过程通信的单一过程，且总是能跟用户过程进行通信。
 
@@ -633,7 +633,7 @@ ROOM = occupancy:integer; occupancy := 0;
 
 Go 实现：https://github.com/changkun/gobase/blob/f787593b4467793f8ee0b07583ea9ffde5adf2be/csp/csp.go#L746 
 
-## 1.4.6 算法
+## 1.3.6 算法
 
 ### S61 Eratosthenes 素数筛法
 
@@ -679,7 +679,7 @@ CENTER = *[x:real;M(i,j-1)?x->
 
 Go 实现：https://github.com/changkun/gobase/blob/f787593b4467793f8ee0b07583ea9ffde5adf2be/csp/csp.go#L923 
 
-## 1.4.7 总结
+## 1.3.7 总结
 
 CSP 设计是 Tony Hoare 的早期提出的设计，与随后将理论完整化后的 CSP（1985）存在两大差异：
 

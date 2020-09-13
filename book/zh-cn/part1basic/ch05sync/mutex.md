@@ -5,7 +5,7 @@ title: "5.2 互斥锁"
 
 # 5.2 互斥锁
 
-TODO: 暂无此节内容写作计划，请谨慎阅读
+
 
 ```go
 type Mutex struct {

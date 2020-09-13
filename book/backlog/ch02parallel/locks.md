@@ -6,7 +6,6 @@ bookHidden: true
 
 # 2.7 同步锁
 
-TODO: 请不要阅读此小节，内容编排中
 
 
 TODO: mutex, spin lock, transactional memory

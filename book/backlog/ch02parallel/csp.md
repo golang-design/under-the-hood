@@ -5,7 +5,6 @@ title: "2.6 顺序进程通讯 CSP"
 
 > 本节内容提供一个线上演讲：[YouTube 在线](https://www.youtube.com/watch?v=Z8ZpWVuEx8c)，[Google Slides 讲稿](https://docs.google.com/presentation/d/1N5skL6vR9Wxk-I82AYs3dlsOsJkUAGJCsb5NGpXWpqo/edit?usp=sharing)。
 
-TODO: 请不要阅读此小节，内容编排中
 
 早在上个世纪七十年代，多核处理器还是一个科研主题，并没有进入普通程序员的视野。
 Tony Hoare 于 1977 年提出通信顺序进程（CSP）理论，遥遥领先与他所在的时代。

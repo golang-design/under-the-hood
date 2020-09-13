@@ -1,9 +1,9 @@
 ---
-weight: 1506
-title: "5.6 同步组"
+weight: 1505
+title: "5.5 同步组"
 ---
 
-# 5.6 同步组
+# 5.5 同步组
 
 sync.WaitGroup 可以达到并发 Goroutine 的执行屏障的效果，等待多个 Goroutine 执行完毕。
 

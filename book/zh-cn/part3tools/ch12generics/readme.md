@@ -1,10 +1,10 @@
 ---
 weight: 3400
-title: "第 12 章 泛型与合约"
+title: "第 12 章 泛型"
 bookCollapseSection: true
 ---
 
-# 第 12 章 泛型与合约
+# 第 12 章 泛型
 
 - [12.1 泛型设计的演进](./history.md)
 - [12.2 基于合约的泛型](./contracts.md)

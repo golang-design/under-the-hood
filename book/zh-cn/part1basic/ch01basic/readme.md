@@ -6,10 +6,10 @@ bookCollapseSection: true
 
 # 第 1 章 Go 语言的前世今生
 
-- [1.1 编程语言的发展史](./history.md)
+- [1.1 编程语言的发展](./history.md)
 - [1.2 Go 语言综述](./go.md)
-- [1.3 Plan 9 汇编语言](./asm.md)
-- [1.4 顺序过程通讯](./csp.md)
+- [1.3 顺序过程通讯](./csp.md)
+- [1.4 Plan 9 汇编语言](./asm.md)
 
 <div class="quote">
 <i class="quote-mark fas fa-thumbtack"></i>

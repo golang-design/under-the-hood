@@ -1,6 +1,6 @@
 ---
-weight: 5004
-title: "附录B：术语表"
+weight: 5001
+title: "附录 A：术语表"
 ---
 
 # 术语表

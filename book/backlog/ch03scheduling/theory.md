@@ -6,7 +6,6 @@ bookHidden: true
 
 # 3.4 工作窃取调度理论
 
-TODO: 请不要阅读此小节，内容编排中
 
 
 TODO: 讨论与 work tealing 相关的调度理论，可能的讨论的主题包括：

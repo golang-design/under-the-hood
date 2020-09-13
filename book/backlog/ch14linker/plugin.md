@@ -6,7 +6,6 @@ bookHidden: true
 
 # 14.4 plugin 包
 
-TODO: 请不要阅读此小节，内容编排中
 
 ## 许可
 

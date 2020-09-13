@@ -9,12 +9,12 @@ bookCollapseSection: true
 - [5.1 共享内存式同步模式](./basic.md)
 - [5.2 互斥](./mutex.md)
 - [5.3 原子操作](./atomic.md)
-- [5.4 内存一致模型](./mem.md)
-- [5.5 条件变量](./cond.md)
-- [5.6 同步组](./waitgroup.md)
-- [5.7 缓存池](./pool.md)
-- [5.8 并发安全散列表](./map.md)
-- [5.9 上下文](./context.md)
+- [5.4 条件变量](./cond.md)
+- [5.5 同步组](./waitgroup.md)
+- [5.6 缓存池](./pool.md)
+- [5.7 并发安全散列表](./map.md)
+- [5.8 上下文](./context.md)
+- [5.9 内存一致模型](./mem.md)
 - [5.10 进一步阅读的参考文献](./ref.md)
 
 <div class="quote">

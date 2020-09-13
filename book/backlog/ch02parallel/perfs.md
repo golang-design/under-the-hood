@@ -6,7 +6,6 @@ bookHidden: true
 
 # 2.3 性能模型
 
-TODO: 请不要阅读此小节，内容编排中
 
 - 性能方程
 - memory wall
