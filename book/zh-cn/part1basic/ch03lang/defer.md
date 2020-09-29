@@ -59,7 +59,7 @@ func (s *state) stmtList(l Nodes) {
 
 对于延迟语句而言，其中间表示会产生三种不同的延迟形式，
 第一种是最一般情况下的在**堆上分配**的延迟语句，第二种是允许在**栈上分配**的延迟语句，
-最后一种则是**开放编码式（Open-coded）**的延迟语句。
+最后一种则是 **开放编码式(Open-coded)** 的延迟语句。
 
 ```go
 // src/cmd/compile/internal/gc/ssa.go
