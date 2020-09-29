@@ -212,15 +212,15 @@ go func() {
 
 Channel 主要有两种形式：
 
-1. **有缓存 Channel（buffered channel）**，使用 `make(chan T, n)` 创建
-2. **无缓存 Channel（unbuffered channel）**，使用 `make(chan T)` 创建
+1. **有缓冲 Channel（buffered channel）**，使用 `make(chan T, n)` 创建
+2. **无缓冲 Channel（unbuffered channel）**，使用 `make(chan T)` 创建
 
 其中 `T` 为 Channel 传递数据的类型，`n` 为缓存的大小，这两种 Channel 的读写操作都非常简单：
 
 ```go
-// 创建有缓存 Channel
+// 创建有缓冲 Channel
 ch := make(chan interface{}, 10)
-// 创建无缓存 Channel
+// 创建无缓冲 Channel
 ch := make(chan struct{})
 // 发送
 ch <- v
