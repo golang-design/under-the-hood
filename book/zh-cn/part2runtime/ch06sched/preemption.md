@@ -156,7 +156,7 @@ func goschedImpl(gp *g) {
 ```go
 // Goroutine 抢占请求
 // 存储到 g.stackguard0 来导致栈分段检查失败
-// 必须必任何实际的 SP 都要大
+// 必须比任何实际的 SP 都要大
 // 十六进制为：0xfffffade
 const stackPreempt = (1<<(8*sys.PtrSize) - 1) & -1314
 ```
