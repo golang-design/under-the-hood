@@ -321,7 +321,7 @@ func main() {
 }
 ```
 
-除了错误值意外，还可以使用 `panic` 与 `recover` 内建函数来进行错误的传播：
+除了错误值以外，还可以使用 `panic` 与 `recover` 内建函数来进行错误的传播：
 
 ```go
 func panic(v interface{})
