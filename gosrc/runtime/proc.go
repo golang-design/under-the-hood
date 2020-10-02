@@ -879,7 +879,7 @@ func casGFromPreempted(gp *g, old, new uint32) bool {
 
 // stopTheWorld 从正在执行的 goroutine 中停止所有的 P，在 GC 安全点 safe point
 // 打断所有 goroutine 并记录打断的原因。作为结果，只有当前 goroutine 的 P 正在运行。
-// stopTheWorld 不能再系统栈上调用，调用方也不能持有 worldsema。调用放必须在其他 P
+// stopTheWorld 不能在系统栈上调用，调用方也不能持有 worldsema。调用方必须在其他 P
 // 应该恢复执行的时候调用 startTheWorld。
 //
 // stopTheWorld 在多个 goroutine 间同时调用时安全的。每个 goroutine 都会执行自己
