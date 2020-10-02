@@ -496,7 +496,7 @@ func fatalpanic(msgs *_panic) {
 
 从 panic 和 recover 这对关键字的实现上可以看出，可恢复的 panic 必须要 recover 的配合。
 而且，这个 recover 必须位于同一 goroutine 的直接调用链上（例如，如果 A 依次调用了 B 和 C，而
-B 包含了 recover，而 C 发生了 panic，则这时 B 的 panic 无法恢复 C 的 panic；
+B 包含了 recover，而 C 发生了 panic，则这时 B 的 recover 无法恢复 C 的 panic；
 又例如 A 调用了 B 而 B 又调用了 C，那么 C 发生 panic 时，如果 A 要求了 recover 则仍然可以恢复），
 否则无法对 panic 进行恢复。
 
