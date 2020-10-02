@@ -495,10 +495,48 @@ func fatalpanic(msgs *_panic) {
 ## 小结
 
 从 panic 和 recover 这对关键字的实现上可以看出，可恢复的 panic 必须要 recover 的配合。
-而且，这个 recover 必须位于同一 goroutine 的直接调用链上（例如，如果 A 依次调用了 B 和 C，而
-B 包含了 recover，而 C 发生了 panic，则这时 B 的 panic 无法恢复 C 的 panic；
-又例如 A 调用了 B 而 B 又调用了 C，那么 C 发生 panic 时，如果 A 要求了 recover 则仍然可以恢复），
-否则无法对 panic 进行恢复。
+而且，这个 recover 必须位于同一 goroutine 的直接调用链上，否则无法对 panic 进行恢复。
+
+例如，如果 A 依次调用了 B 和 C，而 B 包含了 recover，而 C 发生了 panic，则这时 B 的 recover 无法恢复 C 的 panic；
+
+```go
+func A () {
+    B()
+    C()
+}
+
+func B() {
+    defer func () {
+        recover() // 无法恢复 panic("C")
+    }()
+
+    println("B")
+}
+
+func C() {
+    panic("C")
+}
+```
+
+又例如 A 调用了 B 而 B 又调用了 C，那么 C 发生 panic 时，如果 A 要求了 recover 则仍然可以恢复。
+
+```go
+func A () {
+    defer func () {
+        recover() // 可以恢复 panic("C")
+    }()
+
+    B()
+}
+
+func B() {
+    C()
+}
+
+func C() {
+    panic("C")
+}
+```
 
 当一个 panic 被恢复后，调度并因此中断，会重新进入调度循环，进而继续执行 recover 后面的代码，
 包括比 recover 更早的 defer（因为已经执行过得 defer 已经被释放，
