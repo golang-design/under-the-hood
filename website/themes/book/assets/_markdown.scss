@@ -54,7 +54,7 @@
     padding: $padding-16;
     background: $gray-100;
     border-radius: $border-radius;
-    overflow-x: hidden;
+    overflow-x: auto;
 
     code {
       padding: 0;
@@ -115,6 +115,7 @@
   // Special case for highlighted code with line numbers
   .highlight table tr {
     td:nth-child(1) pre {
+      overflow-x: hidden;
       margin: 0;
       padding-right: 0;
     }
