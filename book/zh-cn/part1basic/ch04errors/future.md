@@ -94,7 +94,7 @@ case *CustomError:
 ```
 
 得益于 `fmt.Formatter` 接口，`pkg/errors` 还实现了 `Fomat(fmt.State, rune)` 方法，
-进而在使用 `%+v` 进行错误答应时，能携带堆栈信息：
+进而在使用 `%+v` 进行错误打印时，能携带堆栈信息：
 
 ```go
 func (w *withStack) Format(s fmt.State, verb rune) {
