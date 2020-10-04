@@ -100,7 +100,7 @@ func (c *copyChecker) check() {
 
 ## Wait / Signal / Broadcast
 
-Wait/Signal/Broadcast 的是由同时列表来实现的，撇开 copyChecker，
+Wait/Signal/Broadcast 都是由通知列表来实现的，撇开 copyChecker，
 Wait 无非就是向 notifyList 注册一个通知，而后阻塞到被通知，
 Signal 则负责通知一个在 notifyList 注册过的 waiter 发出通知，
 Broadcast 更是直接粗暴的向所有人都发出通知。
@@ -108,7 +108,7 @@ Broadcast 更是直接粗暴的向所有人都发出通知。
 ```go
 // Wait 原子式的 unlock c.L， 并暂停执行调用的 goroutine。
 // 在稍后执行后，Wait 会在返回前 lock c.L. 与其他系统不同，
-// 除非被 Broadcase 或 Signal 唤醒，否则等待无法返回。
+// 除非被 Broadcast 或 Signal 唤醒，否则等待无法返回。
 //
 // 因为等待第一次 resume 时 c.L 没有被锁定，所以当 Wait 返回时，
 // 调用者通常不能认为条件为真。相反，调用者应该在循环中使用 Wait()：
