@@ -211,7 +211,7 @@ func (wg *WaitGroup) Wait() {
 ```go
 wg := sync.WaitGroup{}
 wg.Add(1)
-go func() { wg.Done() }
+go func() { wg.Done() }()
 wg.Wait()
 ```
 
