@@ -67,8 +67,8 @@ type entry struct {
 	// 否则，entry 仍然有效，且被记录在 m.read.m[key] ，但如果 m.dirty != nil，则在 m.dirty[key] 中
 	//
 	// 一个 entry 的 p 字段 可以被原子替换为 nil 来标记删除， 重建 dirty 时跳过 nil 标记的 entry，
-	// 然后在 dirty 提升为 read 时真正实现删除
-	// 当 m.dirty 是下一个创建的，它会自动将 nil 替换为 expunged 且
+	// 然后在 dirty 提升为 read 时真正实现删除。
+	// 当 m.dirty 下一次创建时，它会自动将 nil 替换为 expunged 且
 	// 让 m.dirty[key] 成为未设置的状态。
 	//
 	// 与一个 entry 关联的值可以被原子替换式的更新，提供的 p != expunged。如果 p == expunged，
