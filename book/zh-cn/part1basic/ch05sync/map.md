@@ -415,7 +415,7 @@ func (e *entry) delete() (hadValue bool) {
 		}
 		// 否则，将 p 的值与 nil 进行原子换
 		if atomic.CompareAndSwapPointer(&e.p, p, nil) {
-			// 删除成功（本质只是接触引用，实际上是留给 GC 清理）
+			// 删除成功（本质只是解除引用，实际上是留给 GC 清理）
 			return true
 		}
 	}
