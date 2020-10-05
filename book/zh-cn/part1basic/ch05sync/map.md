@@ -212,7 +212,7 @@ type entry struct {
 	//
 	// 否则，entry 仍然有效，且被记录在 m.read.m[key] ，但如果 m.dirty != nil，则在 m.dirty[key] 中
 	//
-	// 一个 entry 可以被原子替换为 nil 来删除：当 m.dirty 是下一个创建的，它会自动将 nil 替换为 expunged 且
+	// 一个 entry 可以被原子替换为 nil 来删除：当 m.dirty 下一次创建时，它会自动将 nil 替换为 expunged 且
 	// 让 m.dirty[key] 成为未设置的状态。
 	//
 	// 与一个 entry 关联的值可以被原子替换式的更新，提供的 p != expunged。如果 p == expunged，
@@ -415,7 +415,7 @@ func (e *entry) delete() (hadValue bool) {
 		}
 		// 否则，将 p 的值与 nil 进行原子换
 		if atomic.CompareAndSwapPointer(&e.p, p, nil) {
-			// 删除成功（本质只是接触引用，实际上是留给 GC 清理）
+			// 删除成功（本质只是解除引用，实际上是留给 GC 清理）
 			return true
 		}
 	}
