@@ -3708,7 +3708,7 @@ retry:
 	_p_.gFree.n--
 	// 查看是否需要分配运行栈
 	if gp.stack.lo == 0 {
-		// 栈可能从全局 gfree 链表中取得，栈已被 gfput 给释放，所以需要分配一个新的栈。
+		// 栈可能是非固定大小，已被 gfput 给释放，所以需要分配一个新的栈。
 		// 栈分配发生在系统栈上
 		systemstack(func() {
 			gp.stack = stackalloc(_FixedStack)
