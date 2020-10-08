@@ -4249,7 +4249,7 @@ func (pp *p) destroy() {
 	// 释放当前 P 绑定的 cache
 	freemcache(pp.mcache)
 	pp.mcache = nil
-	// 将当前 P 的 G 复链转移到全局
+	// 将当前 P 的空闲的 G 复链转移到全局
 	gfpurge(pp)
 	traceProcFree(pp)
 	if raceenabled {
