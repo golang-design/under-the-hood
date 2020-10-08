@@ -513,7 +513,7 @@ func (pp *p) destroy() {
 		pp.runnext = 0
 	}
 	(...)
-	// 将当前 P 的 G 复链转移到全局
+	// 将当前 P 的空闲的 G 复链转移到全局
 	gfpurge(pp)
 	(...)
 	pp.status = _Pdead
