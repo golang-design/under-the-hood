@@ -119,7 +119,7 @@ func (list *mSpanList) init() {
 }
 ```
 
-`stackpool` 和 `stackLarge` 的初始化仅仅就是讲这两个链表中不同阶的 mspan 链表进行初始化：
+`stackpool` 和 `stackLarge` 的初始化仅仅就是将这两个链表中不同阶的 mspan 链表进行初始化：
 
 ```go
 func stackinit() {
@@ -595,7 +595,7 @@ TEXT runtime·morestack(SB),NOSPLIT,$0-0
 	RET
 ```
 
-`newstack` 在前半部分承担了对 Goroutine 进行抢占的任务（见 [6.7 协作与抢占](./preemption.md)），
+`newstack` 在前半部分承担了对 Goroutine 进行抢占的任务（见 [6.8 协作与抢占](./preemption.md)），
 而在后半部分则是真正的栈扩张。
 
 ```go
@@ -800,7 +800,7 @@ func shrinkstack(gp *g) {
 
 	oldsize := gp.stack.hi - gp.stack.lo
 	newsize := oldsize / 2
-	// 当收缩后的大小小于最小的栈的大小时，不再进行搜索
+	// 当收缩后的大小小于最小的栈的大小时，不再进行收缩
 	if newsize < _FixedStack {
 		return
 	}
@@ -827,7 +827,7 @@ func shrinkstack(gp *g) {
 }
 ```
 
-可以看到，如果一个栈仅被使用了四分之一，则会出发栈的收缩，收缩后的大小是原来栈大小的一半。
+可以看到，如果一个栈仅被使用了四分之一，则会触发栈的收缩，收缩后的大小是原来栈大小的一半。
 
 ## 许可
 

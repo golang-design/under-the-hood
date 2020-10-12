@@ -33,7 +33,7 @@ func lockOSThread() {
 因为整个运行时只有在 `runtime.main` 调用 `main.init` 、和 cgo 的 C 调用 Go 时候才会使用，
 其中 `main.init` 其实也是为了 cgo 里 Go 调用某些 C 图形库时需要主线程支持才使用的。
 因此不需要做过多复杂的处理，直接在 m 上进行计数
-（计数的原因在于安全性和始终上的一些处理，防止用户态代码误用，
+（计数的原因在于安全性和时钟上的一些处理，防止用户态代码误用，
 例如只调用了 Unlock 而没有先调用 Lock [Mills, 2017]），
 而后调用 `dolockOSThread` 将 g 与 m 互相锁定：
 
