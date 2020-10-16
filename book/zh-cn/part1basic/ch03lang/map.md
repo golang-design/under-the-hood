@@ -350,7 +350,7 @@ var X86 x86
 type CacheLinePad struct{ _ [CacheLinePadSize]byte }
 
 // CacheLineSize 是 CPU 的假设的缓存行大小
-// 当前没有对实际的缓存航大小在运行时检测，因此我们使用针对每个 GOARCH 的 CacheLinePadSize 进行估计
+// 当前没有对实际的缓存行大小在运行时检测，因此我们使用针对每个 GOARCH 的 CacheLinePadSize 进行估计
 var CacheLineSize uintptr = CacheLinePadSize
 
 // x86 中的布尔值包含相应命名的 cpuid 功能位。
