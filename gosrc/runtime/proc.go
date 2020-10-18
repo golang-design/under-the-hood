@@ -3708,8 +3708,8 @@ retry:
 	_p_.gFree.n--
 	// 查看是否需要分配运行栈
 	if gp.stack.lo == 0 {
-		// 栈可能是非固定大小，已被 gfput 给释放，所以需要分配一个新的栈。
-		// 栈分配发生在系统栈上
+		// 在 gfput 函数中，可能将非固定大小（例如发生伸缩后）的运行栈进行释放，
+		// 此时的 g 不具备运行栈，因此需要重新分配一个新的栈。
 		systemstack(func() {
 			gp.stack = stackalloc(_FixedStack)
 		})

@@ -34,8 +34,8 @@ P 的存在不太好理解，我们暂时先记住这个概念，之后再来回
 
 我们都知道计算的局部性原理，为了利用这一原理，调度器所需调度的 G 都会被放在每个 M 自身对应的本地队列中。
 换句话说，每个 M 都无法直接观察到其他的 M 所具有的 G 的状态，存在多个 M 之间的共识问题。这本质上就是一个分布式系统。
-显然，每个 M 都能够连续的获取自身的状态，但当它需要获取整个系统的全局状态时却不容易。
-原因在于我们没有一个能够让所有线程都同步的时钟，换句话说，
+显然，每个 M 都能够连续的获取自身的状态，但当它需要获取整个系统的全局状态时却不容易，
+原因在于我们没有一个能够让所有线程都同步的时钟。换句话说，
 我们需要依赖屏障来保证多个 M 之间的全局状态同步。更进一步，在不使用屏障的情况下，
 能否利用每个 M 在不同时间中记录的本地状态中计算出调度器的全局状态，或者形式化的说：
 能否在快速路径（fast path）下计算进程集的全局谓词（global predicates）呢？根据我们在共识技术中的知识，是不可能的。
@@ -304,7 +304,7 @@ GLOBL	runtime·mainPC(SB),RODATA,$8
 <strong>图 1: MPG 初始化过程。M/P/G 彼此的初始化顺序遵循：<code>mcommoninit</code>、<code>procresize</code>、<code>newproc</code>，他们分别负责初始化 M 资源池（<code>allm</code>）、P 资源池（<code>allp</code>）、G 的运行现场（<code>g.sched</code>）以及调度队列（<code>p.runq</code>）。</strong>
 </div>
 
-## 6.2.1 M 初始化
+## 6.3.3 M 初始化
 
 M 其实就是 OS 线程，它只有两个状态：自旋、非自旋。
 在调度器初始化阶段，只有一个 M，那就是主 OS 线程，因此这里的 `commoninit` 仅仅只是对 M 进行一个初步的初始化，
@@ -339,7 +339,7 @@ func mcommoninit(mp *m) {
 
 这里省略了对不影响本节内容的 `gsignal` 的初始化过程，其作用参见 [6.5 信号处理机制](./signal.md)。
 
-## 6.2.2 P 初始化
+## 6.3.4 P 初始化
 
 在看 `runtime.procresize` 函数之前，我们先概览一遍 P 的状态转换图，如图 2 所示。
 
@@ -537,7 +537,7 @@ func (pp *p) destroy() {
 为了向用户层提供对调度器的控制，runtime 包中提供了一些方法达到了这一目的，在本章的最后，
 我们来快速过一遍在前面还未提及的在 runtime 包中一些与调度器相关的公共方法。
 
-### 6.32.1 GOMAXPROCS
+### 6.3.1 GOMAXPROCS
 
 我们知道在大部分的时间里，P 的数量是不会被动态调整的。
 而 `runtime.GOMAXPROCS`  能够在运行时动态调整 P 的数量，我们就来看看这个调用会做什么事情。
@@ -585,7 +585,7 @@ func GOMAXPROCS(n int) int {
 runtime.GOMAXPROCS(runtime.GOMAXPROCS(0))
 ```
 
-## 6.2.3 G 初始化
+## 6.3.5 G 初始化
 
 运行完 `runtime.procresize` 之后，我们知道，主 Goroutine 会以被调度器调度的方式进行运行，
 这将由 `runtime.newproc` 来完成主 Goroutine 的初始化工作。
@@ -790,231 +790,9 @@ func releasem(mp *m) {
 6. 给 Goroutine 分配 id，并将其放入 P 本地队列的队头或全局队列（初始化阶段队列肯定不是满的，因此不可能放入全局队列）
 7. 检查空闲的 P，将其唤醒，准备执行 G，但我们目前处于初始化阶段，主 Goroutine 尚未开始执行，因此这里不会唤醒 P。
 
-值得一提的是，`newproc` 是由 `go:nosplit` 修饰的函数（见 [6.7 协作与抢占](./preemption.md)），
+值得一提的是，`newproc` 是由 `go:nosplit` 修饰的函数（见 [6.8 协作与抢占](./preemption.md)），
 因此这个函数在执行过程中不会发生扩张和抢占，这个函数中的每一行代码都是深思熟虑过、确保能够在有限的栈空间内
 完成执行。
-
-### 一些细节
-
-我们再额外看几个调用的函数：
-
-```go
-// 从 gfree 链表中获取 g
-// 如果 P 本地 gfree 链表为空，从调度器的全局 gfree 链表中取
-func gfget(_p_ *p) *g {
-retry:
-	if _p_.gFree.empty() && (!sched.gFree.stack.empty() || !sched.gFree.noStack.empty()) {
-		lock(&sched.gFree.lock)
-		// 将一批空闲的 G 移动到 P
-		for _p_.gFree.n < 32 {
-			// 倾向于有栈的 G
-			gp := sched.gFree.stack.pop()
-			if gp == nil {
-				gp = sched.gFree.noStack.pop()
-				if gp == nil {
-					break
-				}
-			}
-			sched.gFree.n--
-			_p_.gFree.push(gp)
-			_p_.gFree.n++
-		}
-		unlock(&sched.gFree.lock)
-		goto retry
-	}
-	gp := _p_.gFree.pop()
-	if gp == nil {
-		return nil
-	}
-	// 拿到一个 g
-	_p_.gFree.n--
-	// 查看是否需要分配运行栈
-	if gp.stack.lo == 0 {
-		// 栈可能是非固定大小，已被 gfput 给释放，所以需要分配一个新的栈。
-		// 栈分配发生在系统栈上
-		systemstack(func() {
-			gp.stack = stackalloc(_FixedStack)
-		})
-		// 计算栈边界
-		gp.stackguard0 = gp.stack.lo + _StackGuard
-	}
-	(...)
-	return gp
-}
-```
-
-总结一下整个过程，gFree 用来表示已经执行完毕那些 g 对象，在 P 和调度器中均有保存，目的很明显是复用：
-
-1. 首先从 P 的 gFree 链表中取；
-2. 如果从 P 的 gFree 链表中取不到，再看从调度器的 gfree 链表取；
-    - 首先倾向于获取已经有执行栈的 g，因为省去了执行栈的获取
-    - 否则才去取没有执行栈的队列
-    - 如果都找不到则确实找不到可以复用的 g 了；
-3. 无论如何，如果找到了，则从 gfree 链表中取一个 g，取到的 g 的栈可能由于此前为非固定大小，已被 gfput 给释放，所以需要分配新的栈。
-
-在初始化阶段，什么都没有，这个函数直接返回 `nil`。
-
-将 g 添加到 allg 队列中，用于避免 GC 扫描这些没有初始化过的栈（GC 的优化）：
-
-```go
-func allgadd(gp *g) {
-	if readgstatus(gp) == _Gidle {
-		throw("allgadd: bad status Gidle")
-	}
-
-	lock(&allglock)
-	allgs = append(allgs, gp)
-	allglen = uintptr(len(allgs))
-	unlock(&allglock)
-}
-```
-
-清理 g 的运行现场调用了 `memclrNoHeapPointers`，它的作用是将该段内存清零，我们会在内存分配器中讨论它的具体实现。
-然后就是保存 g 的运行入口 `gostartcallfn`：
-
-```go
-// funcPC 返回函数 f 的入口 PC。
-// 它假设 f 是一个 func 值。否则行为是未定义的。
-// 小心：在包含插件的程序中，funcPC 可以对相同的函数返回不同的值（因为在地址空间中相同的函数可能有多个副本）
-// 为安全起见，不要在任何 == 表达式中使用此函数。它只在作为地址用于执行代码时是安全的。
-//go:nosplit
-func funcPC(f interface{}) uintptr {
-	return **(**uintptr)(add(unsafe.Pointer(&f), sys.PtrSize))
-}
-
-// 调整 Gobuf，就好像它执行了对 fn 的调用，然后立即进行了 gosave
-func gostartcallfn(gobuf *gobuf, fv *funcval) {
-	var fn unsafe.Pointer
-	if fv != nil {
-		fn = unsafe.Pointer(fv.fn)
-	} else {
-		fn = unsafe.Pointer(funcPC(nilfunc))
-	}
-	gostartcall(gobuf, fn, unsafe.Pointer(fv))
-}
-// 调整 Gobuf，就好像它用上下文 ctxt 对 fn 执行了一个调用，然后立即进行了 gosave
-func gostartcall(buf *gobuf, fn, ctxt unsafe.Pointer) {
-	sp := buf.sp
-	if sys.RegSize > sys.PtrSize {
-		sp -= sys.PtrSize
-		*(*uintptr)(unsafe.Pointer(sp)) = 0
-	}
-	sp -= sys.PtrSize
-	*(*uintptr)(unsafe.Pointer(sp)) = buf.pc
-	buf.sp = sp
-	buf.pc = uintptr(fn)
-	buf.ctxt = ctxt
-}
-```
-
-整个过程就只是将要执行的函数 `fv` 或者称 `fn` 保存到了 `newg.sched` 这个 buf 中。
-
-最后，将 g 放入运行队列之中的 `runqput`：
-
-这个过程中，在 next 为 false 时，会将 要放入的 g 
-插入到队列尾部，如果队列已满，则放入全局队列。
-
-而当 next 为 true 时，则 g 放入计划运行的 next 任务中，而原有的
-next 任务会放到队列尾部，若队列已满，则会被放入全局队列（好惨）。
-
-```go
-// runqput 尝试将 g 放入本地可运行队列中
-// 如果 next 为 false，则 runqput 会将 g 放到可运行队列的尾部
-// 如果 next 为 true，则 runqput 会将 g 放入 _p_.runnext 槽内
-// 如果运行队列已满，则runnext 会放到全局队列中去
-// 仅在所有 P 下执行。
-func runqput(_p_ *p, gp *g, next bool) {
-	if randomizeScheduler && next && fastrand()%2 == 0 {
-		next = false
-	}
-
-	if next {
-	retryNext:
-		oldnext := _p_.runnext
-		if !_p_.runnext.cas(oldnext, guintptr(unsafe.Pointer(gp))) {
-			goto retryNext
-		}
-		if oldnext == 0 {
-			return
-		}
-		// 将原先的 runnext 踢出普通运行队列
-		gp = oldnext.ptr()
-	}
-
-retry:
-	h := atomic.LoadAcq(&_p_.runqhead) // load-acquire, 与 consumer 进行同步
-	t := _p_.runqtail
-	// 如果 P 的本地队列没有满，入队
-	if t-h < uint32(len(_p_.runq)) {
-		_p_.runq[t%uint32(len(_p_.runq))].set(gp)
-		atomic.StoreRel(&_p_.runqtail, t+1) // store-release, 使 consumer 可以开始消费这个 item
-		return
-	}
-	// 可运行队列已经满了，只能扔给全局队列了
-	if runqputslow(_p_, gp, h, t) {
-		return
-	}
-	// 如果队列不空则上面已经返回
-	goto retry
-}
-```
-
-扔给全局队列还有什么意想不到的操作？
-
-```go
-// 将 g 和一批 work 从本地 runnable 队列放入全局队列
-// 由拥有 P 的 M 执行
-func runqputslow(_p_ *p, gp *g, h, t uint32) bool {
-	var batch [len(_p_.runq)/2 + 1]*g
-
-	// 首先，从本地队列中抓取一半 work
-	n := t - h
-	n = n / 2
-	(...)
-
-	for i := uint32(0); i < n; i++ {
-		batch[i] = _p_.runq[(h+i)%uint32(len(_p_.runq))].ptr()
-	}
-	if !atomic.CasRel(&_p_.runqhead, h, h+n) { // cas-release, commits consume
-		return false
-	}
-	batch[n] = gp
-
-	// 打乱顺序
-	if randomizeScheduler {
-		for i := uint32(1); i <= n; i++ {
-			j := fastrandn(i + 1)
-			batch[i], batch[j] = batch[j], batch[i]
-		}
-	}
-
-	// 将 Goroutine 彼此连接
-	for i := uint32(0); i < n; i++ {
-		batch[i].schedlink.set(batch[i+1])
-	}
-	var q gQueue
-	q.head.set(batch[0])
-	q.tail.set(batch[n])
-
-	// 将这批 work 放到全局队列中去
-	lock(&sched.lock)
-	globrunqputbatch(&q, int32(n+1))
-	unlock(&sched.lock)
-	return true
-}
-// 将一批 runnable goroutine 放入全局 runnable 队列中
-// 它会清除 *batch
-// 调度器必须锁住才可调用
-func globrunqputbatch(batch *gQueue, n int32) {
-	sched.runq.pushBackAll(*batch)
-	sched.runqsize += n
-	*batch = gQueue{}
-}
-```
-
-可见，当要将一个 g 放入全局队列时，不仅仅只影响它自己，
-还会将本地队列中一半的 work 给拿走，然后将他们的执行顺序重新打乱。
-再放入全局队列。
 
 ## 小结
 
