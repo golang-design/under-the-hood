@@ -5,19 +5,151 @@ title: "5.7 并发安全散列表"
 
 # 5.7 并发安全散列表
 
-sync.Map 宣称内部做了特殊的优化，在两种情况下优于普通的 map+mutex。在研究源码之前我们先来看看测试结果。
-在测试中，我们测试了：n 个 key 中，每个 key 产生 1 次写行为，每个 key 产生 n 次读行为。
+语言内建的散列表 `map` 结构并不是并发安全的，在并发的对该结构进行读写时，甚至可能产生不可恢复的运行时恐慌，
+导致程序将不受控制的崩溃，这在对于可用性有一定要求的 Web 场景下，这几乎是一个致命的缺陷。
 
-下面是随 n 变化的性能结果
+为了解决并发问题，`sync` 包中提供了一种特殊的并发安全散列表 `sync.Map` 结构。该结构的使用
+文档说明了该结构的实现针对了读多写少的这一特殊的场景进行优化，
+并得到了优于普通的 `map` 加 `sync.Mutex` 结构的性能，例如：
 
-<div class="img-center" style="margin: 20px auto; max-width: 60%">
+```go
+// MutexMap 是一个简单的 map + sync.Mutex 的并发安全散列表实现
+type MutexMap struct {
+	data map[interface{}]interface{}
+	mu   sync.Mutex
+}
+
+func (m *MutexMap) Load(k interface{}) (v interface{}, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok = m.data[k]
+	return
+}
+
+func (m *MutexMap) Store(k, v interface{}) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data[k] = v
+}
+```
+
+## 5.7.1 sync.Map 的性能
+
+在讨论 `sync.Map` 的设计之前我们先通过一个基准测试来对这个优化场景进行一个初步的认识。
+
+即便是对于「读多写少」的场景，我们也需要对不同的情况进行讨论。作为抛砖引玉，本节我们只针对
+这一种场景进行基准测试，读者也可以自行据此举一反三：对于一个给定的 sync.Map，并发场景下
+n 个 goroutine 同时产生对同一个 key 的并发读写行为，在 key 不存在时，向散列表进行写操作，
+在 key 存在时，进行读操作（即调用 LoadOrStore）。
+
+根据这个描述，我们不难写出如下的基准测试：
+
+```go
+func BenchmarkLoadStoreCollision(b *testing.B) {
+	ms := [...]mapInterface{
+		&MutexMap{data: map[interface{}]interface{}{}},
+		&RWMutexMap{data: map[interface{}]interface{}{}},
+		&sync.Map{},
+	}
+
+	// 测试对于同一个 key 的 n-1 并发读和 1 并发写的性能
+	for _, m := range ms {
+		b.Run(fmt.Sprintf("%T", m), func(b *testing.B) {
+			var i int64
+			b.RunParallel(func(pb *testing.PB) {
+				// 记录并发执行的 goroutine id
+				gid := int(atomic.AddInt64(&i, 1) - 1)
+
+				if gid == 0 {
+					// gid 为 0 的 goroutine 负责并发写
+					for i := 0; pb.Next(); i++ {
+						m.Store(0, i)
+					}
+				} else {
+					// gid 不为 0 的 goroutine 负责并发读
+					for pb.Next() {
+						m.Load(0)
+					}
+				}
+			})
+		})
+	}
+}
+```
+
+其中 `mapInterface` 用于让基准测试可以针对具有相同操作不同实现的散列表进行循环处理；
+而 `RWMutexMap` 仅仅只是将 `mu` 字段从 `sync.Mutex` 改为了 `sync.RWMutex`
+
+```go
+type mapInterface interface {
+	Load(k interface{}) (v interface{}, ok bool)
+	Store(k, v interface{})
+}
+
+// RWMutexMap 是一个简单的 map + sync.RWMutex 的并发安全散列表实现
+type RWMutexMap struct {
+	data map[interface{}]interface{}
+	mu   sync.RWMutex
+}
+
+func (m *RWMutexMap) Load(k interface{}) (v interface{}, ok bool) { /* ...实现相同... */ }
+func (m *RWMutexMap) Store(k, v interface{}) { /* ...实现相同... */ }
+```
+
+在 Go 的基准测试工具中，`b.RunParallel` 将执行 GOMAXPROCS 个并发的 Goroutine，
+为了测试随并发 Goroutine 数量增多情况下散列表的性能变化情况，可以通过 `-cpu` 参数
+来动态调整 GOMAXPROCS 的数量，于是：
+
+```bash
+$ go test -v -run=none -bench=. -count=10 -cpu=2,4,8,16,32,64,128,256,512 | tee bench.txt
+```
+
+运行完毕后，再使用 benchstat 工具对测试结果从统计意义上消除系统误差：
+
+```bash
+$ benchstat bench.txt
+name                                         time/op
+LoadStoreCollision/*map_test.MutexMap-2      42.7ns ± 1%
+LoadStoreCollision/*map_test.MutexMap-4      60.0ns ± 2%
+LoadStoreCollision/*map_test.MutexMap-8      76.5ns ± 5%
+LoadStoreCollision/*map_test.MutexMap-16     90.7ns ± 3%
+LoadStoreCollision/*map_test.MutexMap-32     94.2ns ± 6%
+LoadStoreCollision/*map_test.MutexMap-64      109ns ± 1%
+LoadStoreCollision/*map_test.MutexMap-128     134ns ±14%
+LoadStoreCollision/*map_test.MutexMap-256     175ns ±16%
+LoadStoreCollision/*map_test.MutexMap-512     223ns ± 6%
+LoadStoreCollision/*map_test.RWMutexMap-2     123ns ± 8%
+LoadStoreCollision/*map_test.RWMutexMap-4     140ns ± 8%
+LoadStoreCollision/*map_test.RWMutexMap-8     141ns ± 4%
+LoadStoreCollision/*map_test.RWMutexMap-16    133ns ± 6%
+LoadStoreCollision/*map_test.RWMutexMap-32    126ns ± 7%
+LoadStoreCollision/*map_test.RWMutexMap-64    131ns ±15%
+LoadStoreCollision/*map_test.RWMutexMap-128   152ns ± 5%
+LoadStoreCollision/*map_test.RWMutexMap-256   152ns ± 6%
+LoadStoreCollision/*map_test.RWMutexMap-512   164ns ± 3%
+LoadStoreCollision/*sync.Map-2               33.7ns ± 3%
+LoadStoreCollision/*sync.Map-4               14.9ns ± 4%
+LoadStoreCollision/*sync.Map-8               9.67ns ± 7%
+LoadStoreCollision/*sync.Map-16              7.24ns ± 6%
+LoadStoreCollision/*sync.Map-32              6.44ns ± 4%
+LoadStoreCollision/*sync.Map-64              6.45ns ± 2%
+LoadStoreCollision/*sync.Map-128             6.67ns ± 8%
+LoadStoreCollision/*sync.Map-256             6.69ns ± 3%
+LoadStoreCollision/*sync.Map-512             6.19ns ± 1%
+```
+
+我们将这个结果进行可视化，如图 1 所示，展现了 sync.Map 与其他两种实现下，随并发数量 n 变化
+而产生的性能对比：
+
+<div class="img-center" style="margin: 20px auto; max-width: 70%">
 <img src="../../../assets/map-syncmap.png"/>
-<strong>图1：<code>map</code>+<code>sync.Mutex</code> 、<code>map</code>+<code>sync.RWMutex</code>与 <code>sync.Map</code> 之间单次写多次读场景下的性能对比</strong>
+<strong>图1：<code>MutexMap</code> 、<code>RWMutexMap</code> 与 <code>sync.Map</code> 之间写少读多场景下的性能对比</strong>
 </div>
 
-下面我们来研究一下 sync.Map 的具体优化细节。
+从图 1 中我们可以非常直观的看出，随着并发数量的增加，sync.Map 在多读场景下始终保持非常优秀的性能，而 Mutex/RWMutex 则随着并发数量的增加导致性能稳步的下降，耗时越来越多。
+因此，sync.Map 针对读多写少的场景下确实存在非常强的优化。那么这究竟是如何做到的呢？接下来我们就来就据此逐步展开讨论 `sync.Map` 的优化设计。
 
-## 结构
+## 5.7.2 结构
 
 既然是并发安全，因此 sync.Map 一定会包含 Mutex。那么宣称的多次读场景下的优化一定是使用了某种特殊的
 机制来保证安全的情况下可以不再使用 Mutex。
@@ -67,7 +199,7 @@ type Map struct {
 从 `misses` 的描述中可以大致看出 sync.Map 的思路是发生足够多的读时，就将 dirty map 复制一份到 read map 上。
 从而实现在 read map 上的读操作不再需要昂贵的 Mutex 操作。
 
-## `Store()`
+## 5.7.3 写操作 Store
 
 我们先来看看 `Store()`。
 
@@ -282,7 +414,7 @@ func (e *entry) tryExpungeLocked() (isExpunged bool) {
 2. 优先从 read map 中读，更新失败才读 dirty map。
 3. 存储新值的时候，如果 dirty map 中没有 read map 中的值，那么直接将整个 read map 同步到 dirty map。这时原来的 dirty map 被彻底覆盖（一些值依赖 GC 进行清理）。
 
-## `Load()`
+## 5.7.4 读操作 Load
 
 Load 的操作就是从 dirty map 或者 read map 中查找所存储的值。
 
@@ -367,7 +499,7 @@ func (m *Map) missLocked() {
 
 可以看出，miss 如果大于了 dirty 所存储的 key 数时，会将 dirty map 同步到 read map，并将自身清空，miss 计数归零。
 
-## `Delete()`
+## 5.7.5 删除操作 Delete
 
 再来看删除操作。
 
@@ -426,7 +558,7 @@ func (e *entry) delete() (hadValue bool) {
 实际的回收是由 GC 进行处理。
 如果 read map 中并未找到要删除的值，才会去尝试删除 dirty map 中的值。
 
-## `Range()`
+## 5.7.6 迭代操作 Range
 
 有了上面的存取基础，这时候来看 Range 一切都显得很自然：
 
@@ -469,7 +601,7 @@ func (m *Map) Range(f func(key, value interface{}) bool) {
 
 既然要 Range 整个 map，则需要考虑 dirty map 与 read map 不一致的问题，如果不一致，则直接将 dirty map 同步到 read map 中。
 
-## `LoadOrStore`
+## 5.7.7 读写操作 LoadOrStore
 
 ```go
 // LoadOrStore 在 key 已经存在时，返回存在的值，否则存储当前给定的值
@@ -522,7 +654,7 @@ func (m *Map) LoadOrStore(key, value interface{}) (actual interface{}, loaded bo
 我们已经看过 Load 或 Store 的单独过程了，`LoadOrStore` 方法无非是两则的结合，比较简单，这里就不再细说了。
 
 
-## 小结
+## 5.7.8 小结
 
 我们来回顾一下 sync.Map 中 read map 和 dirty map 的同步过程：
 
