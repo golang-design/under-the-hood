@@ -35,12 +35,12 @@ func (m *MutexMap) Store(k, v interface{}) {
 
 ## 5.7.1 sync.Map 的性能
 
-在讨论 `sync.Map` 的设计之前我们先通过一个基准测试来对这个优化场景进行一个初步的认识。
+在讨论 `sync.Map` 的设计之前我们不妨先通过基准测试来对其主要使用场景进行一个初步的认识。
+正如前面所说，`sync.Map` 的主要使用场景是「读多写少」，但即便是对于「读多写少」的场景，
+我们也需要对不同的情况进行讨论。作为抛砖引玉，这里我们只针对这一种场景进行基准测试，
+读者也可以自行据此举一反三：
 
-即便是对于「读多写少」的场景，我们也需要对不同的情况进行讨论。作为抛砖引玉，本节我们只针对
-这一种场景进行基准测试，读者也可以自行据此举一反三：对于一个给定的 sync.Map，并发场景下
-n 个 goroutine 同时产生对同一个 key 的并发读写行为，在 key 不存在时，向散列表进行写操作，
-在 key 存在时，进行读操作（即调用 LoadOrStore）。
+**对于一个给定的 sync.Map，并发场景下存在 1 个 goroutine 对某个 key 进行并发写，并同时存在 n-1 个 goroutine 对同一个 key产生并发读。**
 
 根据这个描述，我们不难写出如下的基准测试：
 
@@ -78,7 +78,7 @@ func BenchmarkLoadStoreCollision(b *testing.B) {
 ```
 
 其中 `mapInterface` 用于让基准测试可以针对具有相同操作不同实现的散列表进行循环处理；
-而 `RWMutexMap` 仅仅只是将 `mu` 字段从 `sync.Mutex` 改为了 `sync.RWMutex`
+而 `RWMutexMap` 仅仅只是将 `mu` 字段从 `sync.Mutex` 改为了 `sync.RWMutex`：
 
 ```go
 type mapInterface interface {
@@ -138,7 +138,7 @@ LoadStoreCollision/*sync.Map-256             6.69ns ± 3%
 LoadStoreCollision/*sync.Map-512             6.19ns ± 1%
 ```
 
-我们将这个结果进行可视化，如图 1 所示，展现了 sync.Map 与其他两种实现下，随并发数量 n 变化
+我们将这个结果进行可视化，如图 1 所示，展现了 `sync.Map` 与其他两种实现下，随并发数量 n 变化
 而产生的性能对比：
 
 <div class="img-center" style="margin: 20px auto; max-width: 70%">
@@ -146,8 +146,8 @@ LoadStoreCollision/*sync.Map-512             6.19ns ± 1%
 <strong>图1：<code>MutexMap</code> 、<code>RWMutexMap</code> 与 <code>sync.Map</code> 之间写少读多场景下的性能对比</strong>
 </div>
 
-从图 1 中我们可以非常直观的看出，随着并发数量的增加，sync.Map 在多读场景下始终保持非常优秀的性能，而 Mutex/RWMutex 则随着并发数量的增加导致性能稳步的下降，耗时越来越多。
-因此，sync.Map 针对读多写少的场景下确实存在非常强的优化。那么这究竟是如何做到的呢？接下来我们就来就据此逐步展开讨论 `sync.Map` 的优化设计。
+从图 1 中我们可以非常直观的看出，随着并发数量的增加，`sync.Map` 在多读场景下始终保持非常优秀的性能，而 `Mutex` / `RWMutex` 则随着并发数量的增加导致性能稳步的下降，耗时越来越多。
+因此，`sync.Map` 针对读多写少的场景下确实存在非常强的优化。那么这究竟是如何做到的呢？接下来我们就来就据此逐步展开讨论 `sync.Map` 的优化设计。
 
 ## 5.7.2 结构
 
