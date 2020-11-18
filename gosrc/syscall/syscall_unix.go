@@ -9,6 +9,7 @@ package syscall
 import (
 	"internal/oserror"
 	"internal/race"
+	"internal/unsafeheader"
 	"runtime"
 	"sync"
 	"unsafe"
@@ -21,7 +22,7 @@ var (
 )
 
 const (
-	darwin64Bit = runtime.GOOS == "darwin" && sizeofPtr == 8
+	darwin64Bit = (runtime.GOOS == "darwin" || runtime.GOOS == "ios") && sizeofPtr == 8
 	netbsd32Bit = runtime.GOOS == "netbsd" && sizeofPtr == 4
 )
 
@@ -60,15 +61,12 @@ func (m *mmapper) Mmap(fd int, offset int64, length int, prot int, flags int) (d
 		return nil, errno
 	}
 
-	// Slice memory layout
-	var sl = struct {
-		addr uintptr
-		len  int
-		cap  int
-	}{addr, length, length}
-
-	// Use unsafe to turn sl into a []byte.
-	b := *(*[]byte)(unsafe.Pointer(&sl))
+	// Use unsafe to turn addr into a []byte.
+	var b []byte
+	hdr := (*unsafeheader.Slice)(unsafe.Pointer(&b))
+	hdr.Data = unsafe.Pointer(addr)
+	hdr.Cap = length
+	hdr.Len = length
 
 	// Register mapping in m and return it.
 	p := &b[cap(b)-1]
@@ -100,9 +98,9 @@ func (m *mmapper) Munmap(data []byte) (err error) {
 	return nil
 }
 
-// Errno 是描述错误条件的无符号数。
-// 它实现了 error 接口。零 Errno 按惯例是非错误的，
-// 因此从 Errno 转换为错误的代码应该使用：
+// An Errno is an unsigned number describing an error condition.
+// It implements the error interface. The zero Errno is by convention
+// a non-error, so code to convert from Errno to error should use:
 //	err = nil
 //	if errno != 0 {
 //		err = errno
@@ -112,7 +110,7 @@ func (m *mmapper) Munmap(data []byte) (err error) {
 // using errors.Is. For example:
 //
 //	_, _, err := syscall.Syscall(...)
-//	if errors.Is(err, os.ErrNotExist) ...
+//	if errors.Is(err, fs.ErrNotExist) ...
 type Errno uintptr
 
 func (e Errno) Error() string {
@@ -145,14 +143,16 @@ func (e Errno) Timeout() bool {
 	return e == EAGAIN || e == EWOULDBLOCK || e == ETIMEDOUT
 }
 
-// 对于常见的 Errno 值，仅进行一次接口分配。
+// Do the interface allocations only once for common
+// Errno values.
 var (
 	errEAGAIN error = EAGAIN
 	errEINVAL error = EINVAL
 	errENOENT error = ENOENT
 )
 
-// errnoErr 返回常见的封装的 Errno 值，以防止在运行时进行分配。
+// errnoErr returns common boxed Errno values, to prevent
+// allocations at runtime.
 func errnoErr(e Errno) error {
 	switch e {
 	case 0:

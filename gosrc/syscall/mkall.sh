@@ -121,31 +121,15 @@ aix_ppc64)
 	mksyscall="./mksyscall_libc.pl -aix"
 	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
 	;;
-darwin_386)
-	mkerrors="$mkerrors -m32"
-	mksyscall="./mksyscall.pl -l32 -darwin"
-	mksysnum="./mksysnum_darwin.pl /usr/include/sys/syscall.h"
-	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
-	mkasm="go run mkasm_darwin.go"
-	;;
 darwin_amd64)
 	mkerrors="$mkerrors -m64"
 	mksyscall="./mksyscall.pl -darwin"
-	mksysnum="./mksysnum_darwin.pl /usr/include/sys/syscall.h"
 	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
 	mkasm="go run mkasm_darwin.go"
 	;;
 darwin_arm64)
 	mkerrors="$mkerrors -m64"
 	mksyscall="./mksyscall.pl -darwin"
-	mksysnum="./mksysnum_darwin.pl /usr/include/sys/syscall.h"
-	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
-	mkasm="go run mkasm_darwin.go"
-	;;
-darwin_arm)
-	mkerrors="$mkerrors -m32"
-	mksyscall="./mksyscall.pl -l32 -darwin"
-	mksysnum="./mksysnum_darwin.pl /usr/include/sys/syscall.h"
 	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
 	mkasm="go run mkasm_darwin.go"
 	;;
@@ -258,6 +242,15 @@ linux_ppc64le)
 	mksysnum="./mksysnum_linux.pl $unistd_h"
 	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
 	;;
+linux_riscv64)
+	unistd_h=$(ls -1 /usr/include/asm/unistd.h /usr/include/asm-generic/unistd.h 2>/dev/null | head -1)
+	if [ "$unistd_h" = "" ]; then
+		echo >&2 cannot find unistd_64.h
+		exit 1
+	fi
+	mksysnum="./mksysnum_linux.pl $unistd_h"
+	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
+	;;
 linux_s390x)
 	GOOSARCH_in=syscall_linux_s390x.go
 	unistd_h=/usr/include/asm/unistd.h
@@ -324,6 +317,17 @@ openbsd_arm64)
 	# Let the type of C char be signed to make the bare syscall
 	# API consistent between platforms.
 	mktypes="GOARCH=$GOARCH go tool cgo -godefs -- -fsigned-char"
+	;;
+openbsd_mips64)
+	mkerrors="$mkerrors -m64"
+	mksyscall="./mksyscall.pl -openbsd"
+	mksysctl="./mksysctl_openbsd.pl"
+	zsysctl="zsysctl_openbsd.go"
+	mksysnum="curl -s 'http://cvsweb.openbsd.org/cgi-bin/cvsweb/~checkout~/src/sys/kern/syscalls.master' | ./mksysnum_openbsd.pl"
+	# Let the type of C char be signed to make the bare syscall
+	# API consistent between platforms.
+	mktypes="GOARCH=$GOARCH go tool cgo -godefs -- -fsigned-char"
+	GOOSARCH_in=syscall_openbsd_mips64.go
 	;;
 plan9_386)
 	mkerrors=

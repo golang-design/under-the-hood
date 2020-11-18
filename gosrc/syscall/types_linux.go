@@ -77,8 +77,8 @@ struct sockaddr_any {
 // copied from /usr/include/linux/un.h
 struct my_sockaddr_un {
 	sa_family_t sun_family;
-#if defined(__ARM_EABI__) || defined(__powerpc64__) || defined(__s390x__)
-	// on ARM, PPC and s390x char is by default unsigned
+#if defined(__ARM_EABI__) || defined(__powerpc64__) || defined(__riscv__) || defined(__s390x__)
+	// on ARM, PPC, RISC-V, and s390x char is by default unsigned
 	signed char sun_path[108];
 #else
 	char sun_path[108];
