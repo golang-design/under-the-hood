@@ -28,9 +28,12 @@ var (
 	_cgo_yield                    unsafe.Pointer
 )
 
+// iscgo is set to true by the runtime/cgo package
 // iscgo 会被 runtime/cgo 包设置为 true
 var iscgo bool
 
+// cgoHasExtraM is set on startup when an extra M is created for cgo.
+// The extra M must be created before any C/C++ code calls cgocallback.
 // cgoHasExtraM 在启动阶段当为 cgo 创建一个额外的 M 而设置的
 // 额外的 M 必须在所有 C/C++ 代码调用和 cgocallback 之前创建。
 var cgoHasExtraM bool

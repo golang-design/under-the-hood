@@ -4,6 +4,7 @@
 
 package runtime
 
+// Numbers fundamental to the encoding.
 // 编码的数字基础
 const (
 	runeError = '\uFFFD'     // the "error" Rune or "Unicode replacement character"
@@ -11,6 +12,7 @@ const (
 	maxRune   = '\U0010FFFF' // Maximum valid Unicode code point.
 )
 
+// Code points in the surrogate range are not valid for UTF-8.
 // surrogate 范围内的代码点对 UTF-8 无效。
 const (
 	surrogateMin = 0xD800
@@ -34,11 +36,13 @@ const (
 	rune2Max = 1<<11 - 1
 	rune3Max = 1<<16 - 1
 
+	// The default lowest and highest continuation byte.
 	// 默认的最低和最高连续字节
 	locb = 0x80 // 1000 0000
 	hicb = 0xBF // 1011 1111
 )
 
+// countrunes returns the number of runes in s.
 // countrunes 返回了 s 中 rune 的个数，即 rune 关键字
 func countrunes(s string) int {
 	n := 0
@@ -48,6 +52,15 @@ func countrunes(s string) int {
 	return n
 }
 
+// decoderune returns the non-ASCII rune at the start of
+// s[k:] and the index after the rune in s.
+//
+// decoderune assumes that caller has checked that
+// the to be decoded rune is a non-ASCII rune.
+//
+// If the string appears to be incomplete or decoding problems
+// are encountered (runeerror, k + 1) is returned to ensure
+// progress when decoderune is used to iterate over a string.
 // decoderune 返回 s[k:] 开头的非 ASCII rune 和 s 中 rune 起后面的索引。
 //
 // decoderune 假设调用者已经检查过要解码的符文是非 ASCII rune。
@@ -64,6 +77,7 @@ func decoderune(s string, k int) (r rune, pos int) {
 
 	switch {
 	case t2 <= s[0] && s[0] < t3:
+		// 0080-07FF two byte sequence
 		// 0080-07FF 双字节序列
 		if len(s) > 1 && (locb <= s[1] && s[1] <= hicb) {
 			r = rune(s[0]&mask2)<<6 | rune(s[1]&maskx)
@@ -73,6 +87,7 @@ func decoderune(s string, k int) (r rune, pos int) {
 			}
 		}
 	case t3 <= s[0] && s[0] < t4:
+		// 0800-FFFF three byte sequence
 		// 0800-FFFF 三字节序列
 		if len(s) > 2 && (locb <= s[1] && s[1] <= hicb) && (locb <= s[2] && s[2] <= hicb) {
 			r = rune(s[0]&mask3)<<12 | rune(s[1]&maskx)<<6 | rune(s[2]&maskx)
@@ -82,6 +97,7 @@ func decoderune(s string, k int) (r rune, pos int) {
 			}
 		}
 	case t4 <= s[0] && s[0] < t5:
+		// 10000-1FFFFF four byte sequence
 		// 10000-1FFFFF 四字节序列
 		if len(s) > 3 && (locb <= s[1] && s[1] <= hicb) && (locb <= s[2] && s[2] <= hicb) && (locb <= s[3] && s[3] <= hicb) {
 			r = rune(s[0]&mask4)<<18 | rune(s[1]&maskx)<<12 | rune(s[2]&maskx)<<6 | rune(s[3]&maskx)
@@ -95,16 +111,19 @@ func decoderune(s string, k int) (r rune, pos int) {
 	return runeError, k + 1
 }
 
+// encoderune writes into p (which must be large enough) the UTF-8 encoding of the rune.
+// It returns the number of bytes written.
 // encoderune 将 rune 的 UTF-8 编码写入 p （必须足够大）。
 // 它返回写入的字节数。
 func encoderune(p []byte, r rune) int {
+	// Negative values are erroneous. Making it unsigned addresses the problem.
 	// 负值是错误的。将其转为无符号则解决此问题。
 	switch i := uint32(r); {
 	case i <= rune1Max:
 		p[0] = byte(r)
 		return 1
 	case i <= rune2Max:
-		_ = p[1] // 消除边界检查
+		_ = p[1] // eliminate bounds checks // 消除边界检查
 		p[0] = t2 | byte(r>>6)
 		p[1] = tx | byte(r)&maskx
 		return 2
@@ -112,13 +131,13 @@ func encoderune(p []byte, r rune) int {
 		r = runeError
 		fallthrough
 	case i <= rune3Max:
-		_ = p[2] // 消除边界检查
+		_ = p[2] // eliminate bounds checks
 		p[0] = t3 | byte(r>>12)
 		p[1] = tx | byte(r>>6)&maskx
 		p[2] = tx | byte(r)&maskx
 		return 3
 	default:
-		_ = p[3] // 消除边界检查
+		_ = p[3] // eliminate bounds checks
 		p[0] = t4 | byte(r>>18)
 		p[1] = tx | byte(r>>12)&maskx
 		p[2] = tx | byte(r>>6)&maskx

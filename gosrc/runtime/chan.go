@@ -4,6 +4,18 @@
 
 package runtime
 
+// This file contains the implementation of Go channels.
+
+// Invariants:
+//  At least one of c.sendq and c.recvq is empty,
+//  except for the case of an unbuffered channel with a single goroutine
+//  blocked on it for both sending and receiving using a select statement,
+//  in which case the length of c.sendq and c.recvq is limited only by the
+//  size of the select statement.
+//
+// For buffered channels, also:
+//  c.qcount > 0 implies that c.recvq is empty.
+//  c.qcount < c.dataqsiz implies that c.sendq is empty.
 // 此文件实现了 Go 的 channel
 
 // 变种:
@@ -28,17 +40,23 @@ const (
 )
 
 type hchan struct {
-	qcount   uint           // 队列中的所有数据数
-	dataqsiz uint           // 环形队列的大小
-	buf      unsafe.Pointer // 指向大小为 dataqsiz 的数组
-	elemsize uint16         // 元素大小
-	closed   uint32         // 是否关闭
-	elemtype *_type         // 元素类型
-	sendx    uint           // 发送索引
-	recvx    uint           // 接受索引
-	recvq    waitq          // recv 等待列表，即（ <-chan）
-	sendq    waitq          // send 等待列表，即（ ch<- ）
+	qcount   uint           // total data in the queue // 队列中的所有数据数
+	dataqsiz uint           // size of the circular queue // 环形队列的大小
+	buf      unsafe.Pointer // points to an array of dataqsiz elements // 指向大小为 dataqsiz 的数组
+	elemsize uint16
+	closed   uint32
+	elemtype *_type // element type// 元素类型
+	sendx    uint   // send index// 发送索引
+	recvx    uint   // receive index// 接受索引
+	recvq    waitq  // list of recv waiters 等待列表，即（ <-chan）
+	sendq    waitq  // list of send waiters 等待列表，即（ ch<- ）
 
+	// lock protects all fields in hchan, as well as several
+	// fields in sudogs blocked on this channel.
+	//
+	// Do not change another G's status while holding this lock
+	// (in particular, do not ready a G), as this can deadlock
+	// with stack shrinking.
 	// lock 保护了 hchan 的所有字段，以及在此 channel 上阻塞的 sudog 的一些字段
 	// 当持有此锁时不应该改变其他 G 的状态（特别的，不 ready 一个 G），因为它会在栈收缩时发生死锁
 	lock mutex
@@ -50,56 +68,9 @@ type waitq struct {
 	last  *sudog
 }
 
-// 入队
-func (q *waitq) enqueue(sgp *sudog) {
-	sgp.next = nil
-	x := q.last
-	if x == nil { // 此时队列空
-		sgp.prev = nil // 将 sgp 插入到队列中
-		q.first = sgp  // 队首指针指向 sgp
-		q.last = sgp   // 队尾指针指向 sgp
-		return
-	}
-	// 此时队列不空
-	sgp.prev = x
-	x.next = sgp // sgp 放到最后一个 sgp 的后面
-	q.last = sgp // 修改队尾指针
-}
-
-func (q *waitq) dequeue() *sudog {
-	for {
-		// 获得队首 sgp
-		sgp := q.first
-		// 如果队列空，直接返回
-		if sgp == nil {
-			return nil
-		}
-		// 获得队首的下一个元素
-		y := sgp.next
-		// 如果此时队列已空，清空队首队尾指针
-		if y == nil {
-			q.first = nil
-			q.last = nil
-		} else {
-			// 否则将队首指针移到下一个元素
-			y.prev = nil
-			q.first = y
-			sgp.next = nil // 标记为已移除 (see dequeueSudog)
-		}
-
-		// 如果一个 goroutine 由于一个 select 被放到此队列，则在 goroutine 唤醒前
-		// 如果由于 select 而将 goroutine 放在此队列中，则在由不同的情况唤醒的 goroutine 之间
-		// 存在一个小窗口并且它获取 channel lock。 一旦锁定，它会将自己从队列中删除，
-		// 因此我们不会在那之后看到它。
-		// 我们在 G 结构中使用一个标志来告诉我们其他人何时获得了这个竞争条件以告知这个 goroutine，
-		// 但是 goroutine 还没有将自己从队列中移除。
-		// 正在参与一个 select，如果将 g 标记为已完成失败，则说明此 sgp 已经不在队列中，继续循环并重新出队
-		if sgp.isSelect && !atomic.Cas(&sgp.g.selectDone, 0, 1) {
-			continue
-		}
-
-		return sgp
-	}
+//go:linkname reflect_makechan reflect.makechan
+func reflect_makechan(t *chantype, size int) *hchan {
+	return makechan(t, size)
 }
 
 func makechan64(t *chantype, size int64) *hchan {
@@ -113,6 +84,7 @@ func makechan64(t *chantype, size int64) *hchan {
 func makechan(t *chantype, size int) *hchan {
 	elem := t.elem
 
+	// compiler checks this but be safe.
 	// 编译器检查
 	if elem.size >= 1<<16 {
 		throw("makechan: invalid channel element type")
@@ -126,6 +98,9 @@ func makechan(t *chantype, size int) *hchan {
 		panic(plainError("makechan: size out of range"))
 	}
 
+	// Hchan does not contain pointers interesting for GC when elements stored in buf do not contain pointers.
+	// buf points into the same allocation, elemtype is persistent.
+	// SudoG's are referenced from their owning thread so they can't be collected.
 	// Hchan 在当元素存储在 buf 切不包含指针时，不包含对 GC 感兴趣的指针，
 	// buf 指向了相同的分配区，elemtype 是持久的。
 	// SudoG 则被他们拥有的线程索引，因此他们无法被搜集。
@@ -133,16 +108,21 @@ func makechan(t *chantype, size int) *hchan {
 	var c *hchan
 	switch {
 	case mem == 0:
+		// Queue or element size is zero.
 		// 队列或元素大小为零
 		c = (*hchan)(mallocgc(hchanSize, nil, true))
+		// Race detector uses this location for synchronization.
 		// 竞争检查使用此位置进行同步
 		c.buf = c.raceaddr()
 	case elem.ptrdata == 0:
+		// Elements do not contain pointers.
+		// Allocate hchan and buf in one call.
 		// 元素不包含指针
 		// 在一个调用中分配 hchan 和 buf
 		c = (*hchan)(mallocgc(hchanSize+mem, nil, true))
 		c.buf = add(unsafe.Pointer(c), hchanSize)
 	default:
+		// Elements contain pointers.
 		// 元素包含指针
 		c = new(hchan)
 		c.buf = mallocgc(mem, elem, true)
@@ -151,6 +131,7 @@ func makechan(t *chantype, size int) *hchan {
 	c.elemsize = uint16(elem.size)
 	c.elemtype = elem
 	c.dataqsiz = uint(size)
+	lockInit(&c.lock, lockRankHchan)
 
 	if debugChan {
 		print("makechan: chan=", c, "; elemsize=", elem.size, "; dataqsiz=", size, "\n")
@@ -163,19 +144,41 @@ func chanbuf(c *hchan, i uint) unsafe.Pointer {
 	return add(c.buf, uintptr(i)*uintptr(c.elemsize))
 }
 
+// full reports whether a send on c would block (that is, the channel is full).
+// It uses a single word-sized read of mutable state, so although
+// the answer is instantaneously true, the correct answer may have changed
+// by the time the calling function receives the return value.
+func full(c *hchan) bool {
+	// c.dataqsiz is immutable (never written after the channel is created)
+	// so it is safe to read at any time during channel operation.
+	if c.dataqsiz == 0 {
+		// Assumes that a pointer read is relaxed-atomic.
+		return c.recvq.first == nil
+	}
+	// Assumes that a uint read is relaxed-atomic.
+	return c.qcount == c.dataqsiz
+}
+
 // entry point for c <- x from compiled code
 //go:nosplit
 func chansend1(c *hchan, elem unsafe.Pointer) {
 	chansend(c, elem, true, getcallerpc())
 }
 
+/*
+ * generic single channel send/recv
+ * If block is not nil,
+ * then the protocol will not
+ * sleep but return if it could
+ * not complete.
 // 泛型单 channel send/recv
 // 如果 block 非空，则 protocol 在未完成的情况下会返回而非 sleep
-//
-// sleep can wake up with g.param == nil
-// when a channel involved in the sleep has
-// been closed.  it is easiest to loop and re-run
-// the operation; we'll see that it's now closed.
+ *
+ * sleep can wake up with g.param == nil
+ * when a channel involved in the sleep has
+ * been closed.  it is easiest to loop and re-run
+ * the operation; we'll see that it's now closed.
+*/
 func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 	// 当向 nil channel 发送数据时，会调用 gopark
 	// 而 gopark 会将当前的 goroutine 休眠，并用过第一个参数的 unlockf 来回调唤醒
@@ -197,14 +200,29 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 		racereadpc(c.raceaddr(), callerpc, funcPC(chansend))
 	}
 
+	// Fast path: check for failed non-blocking operation without acquiring the lock.
+	//
+	// After observing that the channel is not closed, we observe that the channel is
+	// not ready for sending. Each of these observations is a single word-sized read
+	// (first c.closed and second full()).
+	// Because a closed channel cannot transition from 'ready for sending' to
+	// 'not ready for sending', even if the channel is closed between the two observations,
+	// they imply a moment between the two when the channel was both not yet closed
+	// and not ready for sending. We behave as if we observed the channel at that moment,
+	// and report that the send cannot proceed.
+	//
+	// It is okay if the reads are reordered here: if we observe that the channel is not
+	// ready for sending and then observe that it is not closed, that implies that the
+	// channel wasn't closed during the first observation. However, nothing here
+	// guarantees forward progress. We rely on the side effects of lock release in
+	// chanrecv() and closechan() to update this thread's view of c.closed and full().
 	// 快速路径: 在不需要锁的情况下检查失败的非阻塞操作
 	//
 	// 注意到 channel 不可能从关闭转换为未关闭状态，因此这里的失败条件为：
 	// buffer 为空（或没有）时 c.recvq.first 为空，或 buffer 已满
 	// 当 c.closed 发生重排在条件之后被读取时，
 	// 其实已经隐含了上一个条件检查中 channel 未被关闭。
-	if !block && c.closed == 0 && ((c.dataqsiz == 0 && c.recvq.first == nil) ||
-		(c.dataqsiz > 0 && c.qcount == c.dataqsiz)) {
+	if !block && c.closed == 0 && full(c) {
 		return false
 	}
 
@@ -230,11 +248,11 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 
 	// 2. 判断 channel 中缓存是否仍然有空间剩余
 	if c.qcount < c.dataqsiz {
+		// Space is available in the channel buffer. Enqueue the element to send.
 		// 有空间剩余，入队
 		qp := chanbuf(c, c.sendx)
 		if raceenabled {
-			raceacquire(qp)
-			racerelease(qp)
+			racereleaseacquire(qp)
 		}
 		typedmemmove(c.elemtype, qp, ep)
 		c.sendx++
@@ -251,6 +269,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 		return false
 	}
 
+	// Block on the channel. Some receiver will complete our operation for us.
 	// 3. 阻塞在 channel 上，等待接收方接收数据
 	gp := getg()
 	mysg := acquireSudog()
@@ -268,34 +287,40 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 	gp.waiting = mysg
 	gp.param = nil
 	c.sendq.enqueue(mysg)
+	// Signal to anyone trying to shrink our stack that we're about
+	// to park on a channel. The window between when this G's status
+	// changes and when we set gp.activeStackChans is not safe for
+	// stack shrinking.
+	atomic.Store8(&gp.parkingOnChan, 1)
 	gopark(chanparkcommit, unsafe.Pointer(&c.lock), waitReasonChanSend, traceEvGoBlockSend, 2) // 将当前的 g 从调度队列移出
 	// 因为调度器在停止当前 g 的时候会记录运行现场，当恢复阻塞的发送操作时候，会从此处继续开始执行
-
 	// Ensure the value being sent is kept alive until the
 	// receiver copies it out. The sudog has a pointer to the
 	// stack object, but sudogs aren't considered as roots of the
 	// stack tracer.
 	KeepAlive(ep)
 
+	// someone woke us up.
 	// 被唤醒
 	if mysg != gp.waiting {
 		throw("G waiting list is corrupted")
 	}
 	gp.waiting = nil
 	gp.activeStackChans = false
-	if gp.param == nil {
+	closed := !mysg.success
+	gp.param = nil
+	if mysg.releasetime > 0 {
+		blockevent(mysg.releasetime-t0, 2)
+	}
+	mysg.c = nil
+	releaseSudog(mysg)
+	if closed {
 		// 正常唤醒状态，goroutine 应该包含需要传递的参数，但如果没有唤醒时的参数，且 channel 没有被关闭，则为虚假唤醒
 		if c.closed == 0 {
 			throw("chansend: spurious wakeup")
 		}
 		panic(plainError("send on closed channel"))
 	}
-	gp.param = nil
-	if mysg.releasetime > 0 {
-		blockevent(mysg.releasetime-t0, 2)
-	}
-	mysg.c = nil       // 取消与之前阻塞的 channel 的关联
-	releaseSudog(mysg) // 从 sudog 中移除
 	return true
 }
 
@@ -314,10 +339,8 @@ func send(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 			// we copy directly. Note that we need to increment
 			// the head/tail locations only when raceenabled.
 			qp := chanbuf(c, c.recvx)
-			raceacquire(qp)
-			racerelease(qp)
-			raceacquireg(sg.g, qp)
-			racereleaseg(sg.g, qp)
+			racereleaseacquire(qp)
+			racereleaseacquireg(sg.g, qp)
 			c.recvx++
 			if c.recvx == c.dataqsiz {
 				c.recvx = 0
@@ -332,6 +355,7 @@ func send(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 	gp := sg.g
 	unlockf()
 	gp.param = unsafe.Pointer(sg)
+	sg.success = true
 	if sg.releasetime != 0 {
 		sg.releasetime = cputicks()
 	}
@@ -395,6 +419,7 @@ func closechan(c *hchan) {
 
 	var glist gList
 
+	// release all readers
 	// 释放所有的读者
 	for {
 		sg := c.recvq.dequeue()
@@ -409,13 +434,15 @@ func closechan(c *hchan) {
 			sg.releasetime = cputicks()
 		}
 		gp := sg.g
-		gp.param = nil
+		gp.param = unsafe.Pointer(sg)
+		sg.success = false
 		if raceenabled {
 			raceacquireg(gp, c.raceaddr())
 		}
 		glist.push(gp)
 	}
 
+	// release all writers (they will panic)
 	// 释放所有的写者 (panic)
 	for {
 		sg := c.sendq.dequeue()
@@ -427,7 +454,8 @@ func closechan(c *hchan) {
 			sg.releasetime = cputicks()
 		}
 		gp := sg.g
-		gp.param = nil
+		gp.param = unsafe.Pointer(sg)
+		sg.success = false
 		if raceenabled {
 			raceacquireg(gp, c.raceaddr())
 		}
@@ -435,12 +463,23 @@ func closechan(c *hchan) {
 	}
 	unlock(&c.lock)
 
+	// Ready all Gs now that we've dropped the channel lock.
 	// 就绪所有的 G 即可释放 channel 锁
 	for !glist.empty() {
 		gp := glist.pop()
 		gp.schedlink = 0
 		goready(gp, 3)
 	}
+}
+
+// empty reports whether a read from c would block (that is, the channel is
+// empty).  It uses a single atomic read of mutable state.
+func empty(c *hchan) bool {
+	// c.dataqsiz is immutable.
+	if c.dataqsiz == 0 {
+		return atomic.Loadp(unsafe.Pointer(&c.sendq.first)) == nil
+	}
+	return atomic.Loaduint(&c.qcount) == 0
 }
 
 // entry points for <- c from compiled code
@@ -468,7 +507,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	if debugChan {
 		print("chanrecv: chan=", c, "\n")
 	}
-	// nil channel，同 send，会导致两个 goroutine 的死锁
+
 	if c == nil {
 		if !block {
 			return
@@ -484,10 +523,37 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	// 此处的 c.closed 必须在条件判断之后进行验证，
 	// 因为指令重排后，如果先判断 c.closed，得出 channel 未关闭，无法判断失败条件中
 	// channel 是已关闭还是未关闭（从而需要 atomic 操作）
-	if !block && (c.dataqsiz == 0 && c.sendq.first == nil ||
-		c.dataqsiz > 0 && atomic.Loaduint(&c.qcount) == 0) &&
-		atomic.Load(&c.closed) == 0 {
-		return
+	// Fast path: check for failed non-blocking operation without acquiring the lock.
+	if !block && empty(c) {
+		// After observing that the channel is not ready for receiving, we observe whether the
+		// channel is closed.
+		//
+		// Reordering of these checks could lead to incorrect behavior when racing with a close.
+		// For example, if the channel was open and not empty, was closed, and then drained,
+		// reordered reads could incorrectly indicate "open and empty". To prevent reordering,
+		// we use atomic loads for both checks, and rely on emptying and closing to happen in
+		// separate critical sections under the same lock.  This assumption fails when closing
+		// an unbuffered channel with a blocked send, but that is an error condition anyway.
+		if atomic.Load(&c.closed) == 0 {
+			// Because a channel cannot be reopened, the later observation of the channel
+			// being not closed implies that it was also not closed at the moment of the
+			// first observation. We behave as if we observed the channel at that moment
+			// and report that the receive cannot proceed.
+			return
+		}
+		// The channel is irreversibly closed. Re-check whether the channel has any pending data
+		// to receive, which could have arrived between the empty and closed checks above.
+		// Sequential consistency is also required here, when racing with such a send.
+		if empty(c) {
+			// The channel is irreversibly closed and empty.
+			if raceenabled {
+				raceacquire(c.raceaddr())
+			}
+			if ep != nil {
+				typedmemclr(c.elemtype, ep)
+			}
+			return true, false
+		}
 	}
 
 	var t0 int64
@@ -497,6 +563,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 
 	lock(&c.lock)
 	// 1. channel 已经 close，且 channel 中没有数据，则直接返回
+
 	if c.closed != 0 && c.qcount == 0 {
 		if raceenabled {
 			raceacquire(c.raceaddr())
@@ -521,8 +588,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 		// Receive directly from queue
 		qp := chanbuf(c, c.recvx)
 		if raceenabled {
-			raceacquire(qp)
-			racerelease(qp)
+			racereleaseacquire(qp)
 		}
 		if ep != nil {
 			typedmemmove(c.elemtype, ep, qp)
@@ -542,6 +608,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 		return false, false
 	}
 
+	// no sender available: block on this channel.
 	// 4. 没有更多的发送方，阻塞 channel
 	gp := getg()
 	mysg := acquireSudog()
@@ -559,21 +626,28 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 	mysg.c = c
 	gp.param = nil
 	c.recvq.enqueue(mysg)
+	// Signal to anyone trying to shrink our stack that we're about
+	// to park on a channel. The window between when this G's status
+	// changes and when we set gp.activeStackChans is not safe for
+	// stack shrinking.
+	atomic.Store8(&gp.parkingOnChan, 1)
 	gopark(chanparkcommit, unsafe.Pointer(&c.lock), waitReasonChanReceive, traceEvGoBlockRecv, 2)
 
+	// someone woke us up
 	// 唤醒
 	if mysg != gp.waiting {
 		throw("G waiting list is corrupted")
 	}
 	gp.waiting = nil
+	gp.activeStackChans = false
 	if mysg.releasetime > 0 {
 		blockevent(mysg.releasetime-t0, 2)
 	}
-	closed := gp.param == nil
+	success := mysg.success
 	gp.param = nil
 	mysg.c = nil
 	releaseSudog(mysg)
-	return true, !closed
+	return true, success
 }
 
 // recv processes a receive operation on a full channel c.
@@ -595,6 +669,7 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 			racesync(c, sg)
 		}
 		if ep != nil {
+			// copy data from sender
 			// 直接从对方的栈进行拷贝
 			recvDirect(c.elemtype, sg, ep)
 		}
@@ -606,15 +681,15 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 		// 从缓存队列拷贝
 		qp := chanbuf(c, c.recvx)
 		if raceenabled {
-			raceacquire(qp)
-			racerelease(qp)
-			raceacquireg(sg.g, qp)
-			racereleaseg(sg.g, qp)
+			racereleaseacquire(qp)
+			racereleaseacquireg(sg.g, qp)
 		}
+		// copy data from queue to receiver
 		// 从队列拷贝数据到接收方
 		if ep != nil {
 			typedmemmove(c.elemtype, ep, qp)
 		}
+		// copy data from sender to queue
 		// 从发送方拷贝数据到队列
 		typedmemmove(c.elemtype, qp, sg.elem)
 		c.recvx++
@@ -627,6 +702,7 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 	gp := sg.g
 	unlockf()
 	gp.param = unsafe.Pointer(sg)
+	sg.success = true
 	if sg.releasetime != 0 {
 		sg.releasetime = cputicks()
 	}
@@ -636,13 +712,25 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 func chanparkcommit(gp *g, chanLock unsafe.Pointer) bool {
 	// There are unlocked sudogs that point into gp's stack. Stack
 	// copying must lock the channels of those sudogs.
+	// Set activeStackChans here instead of before we try parking
+	// because we could self-deadlock in stack growth on the
+	// channel lock.
 	// 具有未解锁的指向 gp 栈的 sudog。栈的复制必须锁住那些 sudog 的 channel
 	gp.activeStackChans = true
+	// Mark that it's safe for stack shrinking to occur now,
+	// because any thread acquiring this G's stack for shrinking
+	// is guaranteed to observe activeStackChans after this store.
+	atomic.Store8(&gp.parkingOnChan, 0)
+	// Make sure we unlock after setting activeStackChans and
+	// unsetting parkingOnChan. The moment we unlock chanLock
+	// we risk gp getting readied by a channel operation and
+	// so gp could continue running before everything before
+	// the unlock is visible (even to gp itself).
 	unlock((*mutex)(chanLock))
 	return true
 }
 
-// 编译器会将这段语法：
+// compiler implements
 //
 //	select {
 //	case c <- v:
@@ -651,7 +739,7 @@ func chanparkcommit(gp *g, chanLock unsafe.Pointer) bool {
 //		... bar
 //	}
 //
-// 转换为：
+// as
 //
 //	if selectnbsend(c, v) {
 //		... foo
@@ -663,7 +751,7 @@ func selectnbsend(c *hchan, elem unsafe.Pointer) (selected bool) {
 	return chansend(c, elem, false, getcallerpc())
 }
 
-// 编译器会将这段语法：
+// compiler implements
 //
 //	select {
 //	case v = <-c:
@@ -672,7 +760,7 @@ func selectnbsend(c *hchan, elem unsafe.Pointer) (selected bool) {
 //		... bar
 //	}
 //
-// 转换为：
+// as
 //
 //	if selectnbrecv(&v, c) {
 //		... foo
@@ -685,7 +773,7 @@ func selectnbrecv(elem unsafe.Pointer, c *hchan) (selected bool) {
 	return
 }
 
-// 编译器会将这段语法：
+// compiler implements
 //
 //	select {
 //	case v, ok = <-c:
@@ -694,7 +782,7 @@ func selectnbrecv(elem unsafe.Pointer, c *hchan) (selected bool) {
 //		... bar
 //	}
 //
-// 转换为
+// as
 //
 //	if c != nil && selectnbrecv2(&v, &ok, c) {
 //		... foo
@@ -708,11 +796,6 @@ func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool
 	return
 }
 
-//go:linkname reflect_makechan reflect.makechan
-func reflect_makechan(t *chantype, size int) *hchan {
-	return makechan(t, size)
-}
-
 //go:linkname reflect_chansend reflect.chansend
 func reflect_chansend(c *hchan, elem unsafe.Pointer, nb bool) (selected bool) {
 	return chansend(c, elem, !nb, getcallerpc())
@@ -720,7 +803,7 @@ func reflect_chansend(c *hchan, elem unsafe.Pointer, nb bool) (selected bool) {
 
 //go:linkname reflect_chanrecv reflect.chanrecv
 func reflect_chanrecv(c *hchan, nb bool, elem unsafe.Pointer) (selected bool, received bool) {
-	return false, chanrecv(c, elem, !nb)
+	return chanrecv(c, elem, !nb)
 }
 
 //go:linkname reflect_chanlen reflect.chanlen
@@ -750,6 +833,59 @@ func reflect_chancap(c *hchan) int {
 //go:linkname reflect_chanclose reflect.chanclose
 func reflect_chanclose(c *hchan) {
 	closechan(c)
+}
+
+func (q *waitq) enqueue(sgp *sudog) {
+	sgp.next = nil
+	x := q.last
+	if x == nil {
+		sgp.prev = nil
+		q.first = sgp
+		q.last = sgp
+		return
+	}
+	sgp.prev = x
+	x.next = sgp
+	q.last = sgp
+}
+
+func (q *waitq) dequeue() *sudog {
+	for {
+		sgp := q.first
+		if sgp == nil {
+			return nil
+		}
+		y := sgp.next
+		if y == nil {
+			q.first = nil
+			q.last = nil
+		} else {
+			y.prev = nil
+			q.first = y
+			sgp.next = nil // mark as removed (see dequeueSudog)  // 标记为已移除 (see dequeueSudog)
+		}
+
+		// if a goroutine was put on this queue because of a
+		// select, there is a small window between the goroutine
+		// being woken up by a different case and it grabbing the
+		// channel locks. Once it has the lock
+		// it removes itself from the queue, so we won't see it after that.
+		// We use a flag in the G struct to tell us when someone
+		// else has won the race to signal this goroutine but the goroutine
+		// hasn't removed itself from the queue yet.
+		// 如果一个 goroutine 由于一个 select 被放到此队列，则在 goroutine 唤醒前
+		// 如果由于 select 而将 goroutine 放在此队列中，则在由不同的情况唤醒的 goroutine 之间
+		// 存在一个小窗口并且它获取 channel lock。 一旦锁定，它会将自己从队列中删除，
+		// 因此我们不会在那之后看到它。
+		// 我们在 G 结构中使用一个标志来告诉我们其他人何时获得了这个竞争条件以告知这个 goroutine，
+		// 但是 goroutine 还没有将自己从队列中移除。
+		// 正在参与一个 select，如果将 g 标记为已完成失败，则说明此 sgp 已经不在队列中，继续循环并重新出队
+		if sgp.isSelect && !atomic.Cas(&sgp.g.selectDone, 0, 1) {
+			continue
+		}
+
+		return sgp
+	}
 }
 
 func (c *hchan) raceaddr() unsafe.Pointer {

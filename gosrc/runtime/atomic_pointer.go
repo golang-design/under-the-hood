@@ -9,6 +9,13 @@ import (
 	"unsafe"
 )
 
+// These functions cannot have go:noescape annotations,
+// because while ptr does not escape, new does.
+// If new is marked as not escaping, the compiler will make incorrect
+// escape analysis decisions about the pointer value being stored.
+
+// atomicwb performs a write barrier before an atomic pointer write.
+// The caller should guard the call with "if writeBarrier.enabled".
 // 这些函数不能拥有 go:noescape 标记，因为虽然 ptr 没有逃逸，但是 new 会逃逸。
 // 如果 new 被标记为非逃逸，则编译器将不正确的对该指针变量存储的值进行逃逸分析决策。
 

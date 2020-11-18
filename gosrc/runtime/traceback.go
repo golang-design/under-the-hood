@@ -5,11 +5,34 @@
 package runtime
 
 import (
+	"internal/bytealg"
 	"runtime/internal/atomic"
 	"runtime/internal/sys"
 	"unsafe"
 )
 
+// The code in this file implements stack trace walking for all architectures.
+// The most important fact about a given architecture is whether it uses a link register.
+// On systems with link registers, the prologue for a non-leaf function stores the
+// incoming value of LR at the bottom of the newly allocated stack frame.
+// On systems without link registers, the architecture pushes a return PC during
+// the call instruction, so the return PC ends up above the stack frame.
+// In this file, the return PC is always called LR, no matter how it was found.
+//
+// To date, the opposite of a link register architecture is an x86 architecture.
+// This code may need to change if some other kind of non-link-register
+// architecture comes along.
+//
+// The other important fact is the size of a pointer: on 32-bit systems the LR
+// takes up only 4 bytes on the stack, while on 64-bit systems it takes up 8 bytes.
+// Typically this is ptrSize.
+//
+// As an exception, amd64p32 had ptrSize == 4 but the CALL instruction still
+// stored an 8-byte return PC onto the stack. To accommodate this, we used regSize
+// as the size of the architecture-pushed return PC.
+//
+// usesLR is defined below in terms of minFrameSize, which is defined in
+// arch_$GOARCH.go. ptrSize and regSize are defined in stubs.go.
 // 该文件中的代码实现了所有体系结构的 stack trace walking
 // 关于给定体系结构最重要的事实就是它是否使用链接寄存器 LR
 // 在具有链接寄存器的系统上，non-leaf 函数的 prologue 保存了 LR 的传入值在新分配的堆栈帧的底部。
@@ -28,16 +51,6 @@ import (
 // ptrSize 和 regSize 在 stubs.go 中定义。
 
 const usesLR = sys.MinFrameSize > 0
-
-var skipPC uintptr
-
-func tracebackinit() {
-	// Go variable initialization happens late during runtime startup.
-	// Instead of initializing the variables above in the declarations,
-	// schedinit calls this function so that the variables are
-	// initialized and available earlier in the startup sequence.
-	skipPC = funcPC(skipPleaseUseCallersFrames)
-}
 
 // Traceback over the deferred function calls.
 // Report them like calls that have been invoked but not started executing yet.
@@ -75,9 +88,6 @@ func tracebackdefers(gp *g, callback func(*stkframe, unsafe.Pointer) bool, v uns
 }
 
 const sizeofSkipFunction = 256
-
-// This function is defined in asm.s to be sizeofSkipFunction bytes long.
-func skipPleaseUseCallersFrames()
 
 // Generic traceback. Handles runtime stack prints (pcbuf == nil),
 // the runtime.Callers function (pcbuf != nil), as well as the garbage
@@ -275,9 +285,9 @@ func gentraceback(pc0, sp0, lr0 uintptr, gp *g, skip int, pcbuf *uintptr, max in
 			frame.varp -= sys.RegSize
 		}
 
-		// If framepointer_enabled and there's a frame, then
-		// there's a saved bp here.
-		if frame.varp > frame.sp && (framepointer_enabled && GOARCH == "amd64" || GOARCH == "arm64") {
+		// For architectures with frame pointers, if there's
+		// a frame, then there's a saved frame pointer here.
+		if frame.varp > frame.sp && (GOARCH == "amd64" || GOARCH == "arm64") {
 			frame.varp -= sys.RegSize
 		}
 
@@ -456,7 +466,7 @@ func gentraceback(pc0, sp0, lr0 uintptr, gp *g, skip int, pcbuf *uintptr, max in
 		}
 		n++
 
-		if f.funcID == funcID_cgocallback_gofunc && len(cgoCtxt) > 0 {
+		if f.funcID == funcID_cgocallback && len(cgoCtxt) > 0 {
 			ctxt := cgoCtxt[len(cgoCtxt)-1]
 			cgoCtxt = cgoCtxt[:len(cgoCtxt)-1]
 
@@ -485,7 +495,7 @@ func gentraceback(pc0, sp0, lr0 uintptr, gp *g, skip int, pcbuf *uintptr, max in
 		frame.argmap = nil
 
 		// On link register architectures, sighandler saves the LR on stack
-		// before faking a call to sigpanic.
+		// before faking a call.
 		if usesLR && injectedCall {
 			x := *(*uintptr)(unsafe.Pointer(frame.sp))
 			frame.sp += sys.MinFrameSize
@@ -842,7 +852,7 @@ func showfuncinfo(f funcInfo, firstFrame bool, funcID, childID funcID) bool {
 		return true
 	}
 
-	return contains(name, ".") && (!hasPrefix(name, "runtime.") || isExportedRuntime(name))
+	return bytealg.IndexByteString(name, '.') >= 0 && (!hasPrefix(name, "runtime.") || isExportedRuntime(name))
 }
 
 // isExportedRuntime reports whether name is an exported runtime function.
@@ -1004,6 +1014,10 @@ func topofstack(f funcInfo, g0 bool) bool {
 		(g0 && f.funcID == funcID_asmcgocall)
 }
 
+// isSystemGoroutine reports whether the goroutine g must be omitted
+// in stack dumps and deadlock detector. This is any goroutine that
+// starts at a runtime.* entry point, except for runtime.main,
+// runtime.handleAsyncEvent (wasm only) and sometimes runtime.runfinq.
 // isSystemGoroutine 报告 goroutine g 是否在 stack dump 和 deadlock 检测器中忽略
 // 这可以是除了 runtime.main, runtime.handleAsyncEvent (wasm only) 和某些时刻的 runtime.runfinq 的任何 runtime.* 的入口的 goroutine
 //

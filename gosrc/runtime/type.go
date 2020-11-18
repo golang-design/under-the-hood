@@ -2,12 +2,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// 运行时类型表示
+// Runtime type representation.
 
 package runtime
 
 import "unsafe"
 
+// tflag is documented in reflect/type.go.
+//
+// tflag values must be kept in sync with copies in:
 // tflag 在 reflect/type.go 中进行说明.
 //
 // tflag 的值必须与以下文件进行同步:
@@ -25,8 +28,8 @@ const (
 )
 
 // 需要与这些文件同步：
-// ../cmd/link/internal/ld/decodesym.go:/^func.commonsize,
-// ../cmd/compile/internal/gc/reflect.go:/^func.dcommontype,
+// Needs to be in sync with ../cmd/link/internal/ld/decodesym.go:/^func.commonsize,
+// ../cmd/compile/internal/gc/reflect.go:/^func.dcommontype and
 // ../reflect/type.go:/^type.rtype.
 // ../internal/reflectlite/type.go:/^type.rtype.
 type _type struct {
@@ -218,7 +221,9 @@ func (t *_type) nameOff(off nameOff) name {
 }
 
 func resolveTypeOff(ptrInModule unsafe.Pointer, off typeOff) *_type {
-	if off == 0 {
+	if off == 0 || off == -1 {
+		// -1 is the sentinel value for unreachable code.
+		// See cmd/link/internal/ld/data.go:relocsym.
 		return nil
 	}
 	base := uintptr(ptrInModule)
@@ -258,6 +263,11 @@ func (t *_type) typeOff(off typeOff) *_type {
 }
 
 func (t *_type) textOff(off textOff) unsafe.Pointer {
+	if off == -1 {
+		// -1 is the sentinel value for unreachable code.
+		// See cmd/link/internal/ld/data.go:relocsym.
+		return unsafe.Pointer(^uintptr(0))
+	}
 	base := uintptr(unsafe.Pointer(t))
 	var md *moduledata
 	for next := &firstmoduledata; next != nil; next = next.next {
@@ -305,6 +315,7 @@ func (t *_type) textOff(off textOff) unsafe.Pointer {
 			}
 		}
 	} else {
+		// single text section
 		// 单文本区
 		res = md.text + uintptr(off)
 	}
@@ -375,12 +386,11 @@ type maptype struct {
 	elem   *_type
 	bucket *_type // internal type representing a hash bucket
 	// function for hashing keys (ptr to key, seed) -> hash
-	hasher      func(unsafe.Pointer, uintptr) uintptr
-	keysize     uint8  // size of key slot
-	indirectkey bool   // store ptr to key instead of key itself
-	elemsize    uint8  // size of elem slot
-	bucketsize  uint16 // size of bucket
-	flags       uint32
+	hasher     func(unsafe.Pointer, uintptr) uintptr
+	keysize    uint8  // size of key slot
+	elemsize   uint8  // size of elem slot
+	bucketsize uint16 // size of bucket
+	flags      uint32
 }
 
 // Note: flag values must match those used in the TMAP case
@@ -446,8 +456,9 @@ type structtype struct {
 	fields  []structfield
 }
 
+// name is an encoded type name with optional extra data.
 // name 是带有可选附加数据的编码类型的名称。
-// 见 reflect/type.go.
+// See reflect/type.go for details.
 type name struct {
 	bytes *byte
 }
@@ -522,6 +533,8 @@ func (n name) isBlank() bool {
 	return *n.data(3) == '_'
 }
 
+// typelinksinit scans the types from extra modules and builds the
+// moduledata typemap used to de-duplicate type pointers.
 // typelinksinit 扫描额外模块的类型并将 moduledata typemap 用于消除类型指针的重新定义。
 func typelinksinit() {
 	if firstmoduledata.next == nil {
@@ -532,6 +545,7 @@ func typelinksinit() {
 	modules := activeModules()
 	prev := modules[0]
 	for _, md := range modules[1:] {
+		// Collect types from the previous module into typehash.
 		// 从先前的模块将类型搜集进 typehash
 	collect:
 		for _, tl := range prev.typelinks {
@@ -541,6 +555,7 @@ func typelinksinit() {
 			} else {
 				t = prev.typemap[typeOff(tl)]
 			}
+			// Add to typehash if not seen before.
 			// 如果 typehash 尚未出现则将其加入
 			tlist := typehash[t.hash]
 			for _, tcur := range tlist {
@@ -580,13 +595,23 @@ type _typePair struct {
 	t2 *_type
 }
 
+// typesEqual reports whether two types are equal.
 // typesEqual 报告两种类型是否相等。
 //
+// Everywhere in the runtime and reflect packages, it is assumed that
+// there is exactly one *_type per Go type, so that pointer equality
+// can be used to test if types are equal. There is one place that
+// breaks this assumption: buildmode=shared. In this case a type can
+// appear as two different pieces of memory. This is hidden from the
+// runtime and reflect package by the per-module typemap built in
+// typelinksinit. It uses typesEqual to map types from later modules
+// back into earlier ones.
 // 运行时和反射包中的任何地方，均假设每个 Go 类型只有一个 *_type，因此使用指针相等性
 // 来测试类型是否相等。有一个地方除外：buildmode=shared。在这种情况下，类型可以显示
 // 为两个不同的内存块。这种行为被运行时和反射包通过 typelinksinit 中各模块内建的
 // typemap 来隐藏。它使用 typesEqual 将以后模块中的类型映射回早起模块。
 //
+// Only typelinksinit needs this function.
 // 只有 typelinksinit 需要此函数
 func typesEqual(t, v *_type, seen map[_typePair]struct{}) bool {
 	tp := _typePair{t, v}
@@ -594,6 +619,9 @@ func typesEqual(t, v *_type, seen map[_typePair]struct{}) bool {
 		return true
 	}
 
+	// mark these types as seen, and thus equivalent which prevents an infinite loop if
+	// the two types are identical, but recursively defined and loaded from
+	// different modules
 	// 将这些类型标记为可见，因此如果两个类型相同，则可以防止无限循环，但从不同模块递归定义和加载。
 	seen[tp] = struct{}{}
 

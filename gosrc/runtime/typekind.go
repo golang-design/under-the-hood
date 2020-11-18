@@ -37,6 +37,7 @@ const (
 	kindMask        = (1 << 5) - 1 // 0001 1111
 )
 
+// isDirectIface reports whether t is stored directly in an interface value.
 // isDirectIface 报告了 t 是否直接存储在一个 interface 值中
 func isDirectIface(t *_type) bool {
 	return t.kind&kindDirectIface != 0
