@@ -11,6 +11,18 @@ import (
 	"unsafe"
 )
 
+// This implementation depends on OS-specific implementations of
+//
+//	func semacreate(mp *m)
+//		Create a semaphore for mp, if it does not already have one.
+//
+//	func semasleep(ns int64) int32
+//		If ns < 0, acquire m's semaphore and return 0.
+//		If ns >= 0, try to acquire m's semaphore for at most ns nanoseconds.
+//		Return 0 if the semaphore was acquired, -1 if interrupted or timed out.
+//
+//	func semawakeup(mp *m)
+//		Wake up mp, which is or will soon be sleeping on its semaphore.
 // 该实现取决于 OS 特定的实现：
 //
 //	func semacreate(mp *m)
@@ -33,12 +45,17 @@ const (
 )
 
 func lock(l *mutex) {
+	lockWithRank(l, getLockRank(l))
+}
+
+func lock2(l *mutex) {
 	gp := getg()
 	if gp.m.locks < 0 {
 		throw("runtime·lock: lock count")
 	}
 	gp.m.locks++
 
+	// Speculative grab for lock.
 	// 对锁进行推测，如果成功上锁，则立刻返回
 	if atomic.Casuintptr(&l.key, 0, locked) {
 		return
@@ -46,6 +63,8 @@ func lock(l *mutex) {
 	// 否则上说失败，创建 semaphore，进一步处理
 	semacreate(gp.m)
 
+	// On uniprocessor's, no point spinning.
+	// On multiprocessors, spin for ACTIVE_SPIN attempts.
 	// 在单一处理器上时，spinning 没有意义
 	// 在多个处理器上时，为 ACTIVE_SPIN 的尝试进行自旋
 	spin := 0
@@ -72,6 +91,10 @@ Loop:
 			// 则调用 sched_yield 系统调用
 			osyield()
 		} else {
+			// Someone else has it.
+			// l->waitm points to a linked list of M's waiting
+			// for this lock, chained through m->nextwaitm.
+			// Queue this M.
 			// 其他人拥有它
 			// l->waitm 指向 M 上等待此 lock 的链表通过 m->nextwaitm 链接
 			// 将此 M 入队
@@ -86,6 +109,7 @@ Loop:
 				}
 			}
 			if v&locked != 0 {
+				// Queued. Wait.
 				// 已入队. 等待.
 				semasleep(-1)
 				i = 0
@@ -94,13 +118,17 @@ Loop:
 	}
 }
 
-//go:nowritebarrier
-// 在这段代码中可能并不持有 P
 func unlock(l *mutex) {
+	unlockWithRank(l)
+}
+
+//go:nowritebarrier
+// We might not be holding a p in this code.
+// 在这段代码中可能并不持有 P
+func unlock2(l *mutex) {
 	gp := getg()
 	var mp *m
 	for {
-
 		v := atomic.Loaduintptr(&l.key)
 		// 如果此时处于上锁状态，则 cas 解锁
 		if v == locked {
@@ -108,10 +136,13 @@ func unlock(l *mutex) {
 				break
 			}
 		} else {
+			// Other M's are waiting for the lock.
+			// Dequeue an M.
 			// 否则其他 M 正在等待此锁
 			// 将其他 M 出队
 			mp = muintptr(v &^ locked).ptr()
 			if atomic.Casuintptr(&l.key, v, uintptr(mp.nextwaitm)) {
+				// Dequeued an M.  Wake it.
 				// 从队列中取出一个 M，并唤醒
 				semawakeup(mp)
 				break
@@ -127,6 +158,7 @@ func unlock(l *mutex) {
 	}
 }
 
+// One-time notifications.
 // 一次性通知.
 func noteclear(n *note) {
 	if GOOS == "aix" {
@@ -206,6 +238,7 @@ func notetsleep_internal(n *note, ns int64, gp *g, deadline int64) bool {
 		return true
 	}
 	if ns < 0 {
+		// Queued. Sleep.
 		// 已入队. 休眠.
 		gp.m.blocked = true
 		if *cgo_yield == nil {
@@ -275,7 +308,7 @@ func notetsleep_internal(n *note, ns int64, gp *g, deadline int64) bool {
 
 func notetsleep(n *note, ns int64) bool {
 	gp := getg()
-	if gp != gp.m.g0 && gp.m.preemptoff != "" {
+	if gp != gp.m.g0 {
 		throw("notetsleep not on g0")
 	}
 	semacreate(gp.m)
@@ -296,8 +329,8 @@ func notetsleepg(n *note, ns int64) bool {
 	return ok
 }
 
-func beforeIdle(int64) bool {
-	return false
+func beforeIdle(int64) (*g, bool) {
+	return nil, false
 }
 
 func checkTimeouts() {}

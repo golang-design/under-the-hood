@@ -11,6 +11,16 @@ import (
 	"unsafe"
 )
 
+// This implementation depends on OS-specific implementations of
+//
+//	futexsleep(addr *uint32, val uint32, ns int64)
+//		Atomically,
+//			if *addr == val { sleep }
+//		Might be woken up spuriously; that's allowed.
+//		Don't sleep longer than ns; ns < 0 means forever.
+//
+//	futexwakeup(addr *uint32, cnt uint32)
+//		If any procs are sleeping on addr, wake up at most cnt.
 // 该实现取决于 OS 特定的实现：
 //
 //	futexsleep(addr *uint32, val uint32, ns int64)
@@ -32,6 +42,12 @@ const (
 	passive_spin    = 1
 )
 
+// Possible lock states are mutex_unlocked, mutex_locked and mutex_sleeping.
+// mutex_sleeping means that there is presumably at least one sleeping thread.
+// Note that there can be spinning threads during all states - they do not
+// affect mutex's state.
+
+// We use the uintptr mutex.key and note.key as a uint32.
 // 可能的锁状态有：mutex_unlocked, mutex_locked 和 mutex_sleeping.
 // mutex_sleeping 表示当前可能至少有一个线程在休眠。
 // 注意所有状态都可以存在 spinning 的线程，他们不会影响 mutex 的状态
@@ -43,6 +59,10 @@ func key32(p *uintptr) *uint32 {
 }
 
 func lock(l *mutex) {
+	lockWithRank(l, getLockRank(l))
+}
+
+func lock2(l *mutex) {
 	gp := getg()
 
 	if gp.m.locks < 0 {
@@ -50,12 +70,20 @@ func lock(l *mutex) {
 	}
 	gp.m.locks++
 
+	// Speculative grab for lock.
 	// 锁的推测抓取
 	v := atomic.Xchg(key32(&l.key), mutex_locked)
 	if v == mutex_unlocked {
 		return
 	}
 
+	// wait is either MUTEX_LOCKED or MUTEX_SLEEPING
+	// depending on whether there is a thread sleeping
+	// on this mutex. If we ever change l->key from
+	// MUTEX_SLEEPING to some other value, we must be
+	// careful to change it back to MUTEX_SLEEPING before
+	// returning, to ensure that the sleeping thread gets
+	// its wakeup call.
 	// wait 可能是 MUTEX_LOCKED 或 MUTEX_SLEEPING
 	// 取决于是否有线程在此 mutex 上休眠。
 	// 如果我们没有将 l.key 从 MUTEX_SLEEPING 修改到其他值，
@@ -63,6 +91,8 @@ func lock(l *mutex) {
 	// 的线程能够获得唤醒调用
 	wait := v
 
+	// On uniprocessors, no point spinning.
+	// On multiprocessors, spin for ACTIVE_SPIN attempts.
 	// 在单处理器中，没有 spinning
 	// 在多处理器中，作为 ACTIVE_SPIN 尝试进行自旋
 	spin := 0
@@ -70,6 +100,7 @@ func lock(l *mutex) {
 		spin = active_spin
 	}
 	for {
+		// Try for lock, spinning.
 		// 尝试加锁, spinning
 		for i := 0; i < spin; i++ {
 			for l.key == mutex_unlocked {
@@ -101,6 +132,10 @@ func lock(l *mutex) {
 }
 
 func unlock(l *mutex) {
+	unlockWithRank(l)
+}
+
+func unlock2(l *mutex) {
 	v := atomic.Xchg(key32(&l.key), mutex_unlocked)
 	if v == mutex_unlocked {
 		throw("unlock of unlocked lock")
@@ -119,7 +154,7 @@ func unlock(l *mutex) {
 	}
 }
 
-// 一次性通知
+// One-time notifications.
 func noteclear(n *note) {
 	n.key = 0
 }
@@ -227,8 +262,8 @@ func notetsleepg(n *note, ns int64) bool {
 	return ok
 }
 
-func beforeIdle(int64) bool {
-	return false
+func beforeIdle(int64) (*g, bool) {
+	return nil, false
 }
 
 func checkTimeouts() {}

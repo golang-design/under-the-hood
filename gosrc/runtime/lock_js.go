@@ -10,6 +10,7 @@ import (
 	_ "unsafe"
 )
 
+// js/wasm has no support for threads yet. There is no preemption.
 // js/wasm 还不支持线程。因此不存在抢占一说。
 
 const (
@@ -26,6 +27,10 @@ const (
 )
 
 func lock(l *mutex) {
+	lockWithRank(l, getLockRank(l))
+}
+
+func lock2(l *mutex) {
 	if l.key == mutex_locked {
 		// js/wasm is single-threaded so we should never
 		// observe this.
@@ -36,9 +41,14 @@ func lock(l *mutex) {
 		throw("lock count")
 	}
 	gp.m.locks++
+	l.key = mutex_locked
 }
 
 func unlock(l *mutex) {
+	unlockWithRank(l)
+}
+
+func unlock2(l *mutex) {
 	if l.key == mutex_unlocked {
 		throw("unlock of unlocked lock")
 	}
@@ -134,7 +144,7 @@ func notetsleepg(n *note, ns int64) bool {
 	return true
 }
 
-// checkTimeouts 恢复那些在等待一个 note 且已经触发其 deadline 时的 goroutine。
+// checkTimeouts resumes goroutines that are waiting on a note which has reached its deadline.
 func checkTimeouts() {
 	now := nanotime()
 	for n, nt := range notesWithTimeout {
@@ -164,7 +174,9 @@ var idleID int32
 // beforeIdle gets called by the scheduler if no goroutine is awake.
 // If we are not already handling an event, then we pause for an async event.
 // If an event handler returned, we resume it and it will pause the execution.
-func beforeIdle(delay int64) bool {
+// beforeIdle either returns the specific goroutine to schedule next or
+// indicates with otherReady that some goroutine became ready.
+func beforeIdle(delay int64) (gp *g, otherReady bool) {
 	if delay > 0 {
 		clearIdleID()
 		if delay < 1e6 {
@@ -178,16 +190,17 @@ func beforeIdle(delay int64) bool {
 		}
 		idleID = scheduleTimeoutEvent(delay)
 	}
+
 	if len(events) == 0 {
 		go handleAsyncEvent()
-		return true
+		return nil, true
 	}
+
 	e := events[len(events)-1]
 	if e.returned {
-		goready(e.gp, 1)
-		return true
+		return e.gp, false
 	}
-	return false
+	return nil, false
 }
 
 func handleAsyncEvent() {
@@ -224,6 +237,7 @@ func handleEvent() {
 	events = append(events, e)
 
 	eventHandler()
+
 	clearIdleID()
 
 	// wait until all goroutines are idle
