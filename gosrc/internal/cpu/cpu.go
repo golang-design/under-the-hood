@@ -6,23 +6,24 @@
 // used by the Go standard library.
 package cpu
 
-// DebugOptions 会当如果操作系统在运行时启动时读取到 GODEBUG 时将其设置为 true
-// 初始化后不应该被修改
+// DebugOptions is set to true by the runtime if the OS supports reading
+// GODEBUG early in runtime startup.
+// This should not be changed after it is initialized.
 var DebugOptions bool
 
-// CacheLinePad 用于填补结构体进而避免 false sharing
+// CacheLinePad is used to pad structs to avoid false sharing.
 type CacheLinePad struct{ _ [CacheLinePadSize]byte }
 
-// CacheLineSize 是 CPU 的假设的缓存行大小
-// 当前没有对实际的缓存航大小在运行时检测，因此我们使用针对每个 GOARCH 的 CacheLinePadSize 进行估计
+// CacheLineSize is the CPU's assumed cache line size.
+// There is currently no runtime detection of the real cache line size
+// so we use the constant per GOARCH CacheLinePadSize as an approximation.
 var CacheLineSize uintptr = CacheLinePadSize
 
-var X86 x86
-
-// x86 中的布尔值包含相应命名的 cpuid 功能位。
-// 仅当操作系统支持 XMM 和 YMM 寄存器时，才设置 HasAVX 和 HasAVX2
-// 除了正在设置的 cpuid 功能位，填充结构以避免 false sharing。
-type x86 struct {
+// The booleans in X86 contain the correspondingly named cpuid feature bit.
+// HasAVX and HasAVX2 are only set if the OS does support XMM and YMM registers
+// in addition to the cpuid feature bit being set.
+// The struct is padded to avoid false sharing.
+var X86 struct {
 	_            CacheLinePad
 	HasAES       bool
 	HasADX       bool
@@ -43,14 +44,43 @@ type x86 struct {
 	_            CacheLinePad
 }
 
-var PPC64 ppc64
+// The booleans in ARM contain the correspondingly named cpu feature bit.
+// The struct is padded to avoid false sharing.
+var ARM struct {
+	_        CacheLinePad
+	HasVFPv4 bool
+	HasIDIVA bool
+	_        CacheLinePad
+}
+
+// The booleans in ARM64 contain the correspondingly named cpu feature bit.
+// The struct is padded to avoid false sharing.
+var ARM64 struct {
+	_            CacheLinePad
+	HasAES       bool
+	HasPMULL     bool
+	HasSHA1      bool
+	HasSHA2      bool
+	HasCRC32     bool
+	HasATOMICS   bool
+	HasCPUID     bool
+	IsNeoverseN1 bool
+	IsZeus       bool
+	_            CacheLinePad
+}
+
+var MIPS64X struct {
+	_      CacheLinePad
+	HasMSA bool // MIPS SIMD architecture
+	_      CacheLinePad
+}
 
 // For ppc64(le), it is safe to check only for ISA level starting on ISA v3.00,
 // since there are no optional categories. There are some exceptions that also
 // require kernel support to work (darn, scv), so there are feature bits for
 // those as well. The minimum processor requirement is POWER8 (ISA 2.07).
 // The struct is padded to avoid false sharing.
-type ppc64 struct {
+var PPC64 struct {
 	_        CacheLinePad
 	HasDARN  bool // Hardware random number generator (requires kernel enablement)
 	HasSCV   bool // Syscall vectored (requires kernel enablement)
@@ -59,53 +89,7 @@ type ppc64 struct {
 	_        CacheLinePad
 }
 
-var ARM arm
-
-// The booleans in arm contain the correspondingly named cpu feature bit.
-// The struct is padded to avoid false sharing.
-type arm struct {
-	_        CacheLinePad
-	HasVFPv4 bool
-	HasIDIVA bool
-	_        CacheLinePad
-}
-
-var ARM64 arm64
-
-// The booleans in arm64 contain the correspondingly named cpu feature bit.
-// The struct is padded to avoid false sharing.
-type arm64 struct {
-	_           CacheLinePad
-	HasFP       bool
-	HasASIMD    bool
-	HasEVTSTRM  bool
-	HasAES      bool
-	HasPMULL    bool
-	HasSHA1     bool
-	HasSHA2     bool
-	HasCRC32    bool
-	HasATOMICS  bool
-	HasFPHP     bool
-	HasASIMDHP  bool
-	HasCPUID    bool
-	HasASIMDRDM bool
-	HasJSCVT    bool
-	HasFCMA     bool
-	HasLRCPC    bool
-	HasDCPOP    bool
-	HasSHA3     bool
-	HasSM3      bool
-	HasSM4      bool
-	HasASIMDDP  bool
-	HasSHA512   bool
-	HasSVE      bool
-	HasASIMDFHM bool
-	_           CacheLinePad
-}
-
-var S390X s390x
-
-type s390x struct {
+var S390X struct {
 	_         CacheLinePad
 	HasZARCH  bool // z architecture mode is active [mandatory]
 	HasSTFLE  bool // store facility list extended [mandatory]
@@ -131,20 +115,22 @@ type s390x struct {
 	_         CacheLinePad
 }
 
-// Initialize 检查处理器并设置上面的相关变量。
-// 该函数在程序初始化的早期由运行时包调用，在运行正常的 init 函数之前。
-// 如果 go 是使用 GODEBUG 编译的，则 env 在 Linux/Darwin 上由运行时设置
+// Initialize examines the processor and sets the relevant variables above.
+// This is called by the runtime package early in program initialization,
+// before normal init functions are run. env is set by runtime if the OS supports
+// cpu feature options in GODEBUG.
 func Initialize(env string) {
 	doinit()
 	processOptions(env)
 }
 
-// options 包含可在 GODEBUG 中使用的 cpu 调试选项。
-// options 取决于架构，并由架构特定的 doinit 函数添加。
-// 不应将特定 GOARCH 必需的功能添加到选项中（例如 amd64 上的 SSE2）。
+// options contains the cpu debug options that can be used in GODEBUG.
+// Options are arch dependent and are added by the arch specific doinit functions.
+// Features that are mandatory for the specific GOARCH should not be added to options
+// (e.g. SSE2 on amd64).
 var options []option
 
-// Option 名称应为小写。 例如 avx 而不是 AVX。
+// Option names should be lower case. e.g. avx instead of AVX.
 type option struct {
 	Name      string
 	Feature   *bool
@@ -153,10 +139,12 @@ type option struct {
 	Required  bool // whether feature is mandatory and can not be disabled
 }
 
-// processOptions 根据解析的 env 字符串来禁用 CPU 功能值。
-// env 字符串应该是 cpu.feature1=value1,cpu.feature2=value2... 格式
-// 其中功能名称是存储在其中的体系结构特定列表之一 cpu 包选项变量，且这些值要么是 'on' 要么是 'off'。
-// 如果 env 包含 cpu.all=off 则所有功能通过 options 变量引用被禁用。其他功能名称和值将导致警告消息。
+// processOptions enables or disables CPU feature values based on the parsed env string.
+// The env string is expected to be of the form cpu.feature1=value1,cpu.feature2=value2...
+// where feature names is one of the architecture specific list stored in the
+// cpu packages options variable and values are either 'on' or 'off'.
+// If env contains cpu.all=off then all cpu features referenced through the options
+// variable are disabled. Other feature names and values result in warning messages.
 func processOptions(env string) {
 field:
 	for env != "" {
