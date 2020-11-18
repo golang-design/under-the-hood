@@ -38,7 +38,8 @@ func when(d Duration) int64 {
 
 func startTimer(*runtimeTimer)
 func stopTimer(*runtimeTimer) bool
-func resetTimer(*runtimeTimer, int64)
+func resetTimer(*runtimeTimer, int64) bool
+func modTimer(t *runtimeTimer, when, period int64, f func(interface{}, uintptr), arg interface{}, seq uintptr)
 
 // Timer 类型表示了一个单一的事件。
 // 当 Timer 过期时，除非 Timer 在 AfterFunc 之后创建，当前时间将发送到 C。
@@ -121,9 +122,7 @@ func (t *Timer) Reset(d Duration) bool {
 		panic("time: Reset called on uninitialized Timer")
 	}
 	w := when(d)
-	active := stopTimer(&t.r)
-	resetTimer(&t.r, w)
-	return active
+	return resetTimer(&t.r, w)
 }
 
 func sendTime(c interface{}, seq uintptr) {
