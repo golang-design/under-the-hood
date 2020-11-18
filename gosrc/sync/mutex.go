@@ -16,32 +16,32 @@ import (
 	"unsafe"
 )
 
-func throw(string) // 运行时实现
+func throw(string) // provided by runtime
 
-// Mutex 互斥锁
-// Mutex 的零值是一个未加锁状态的互斥锁
+// A Mutex is a mutual exclusion lock.
+// The zero value for a Mutex is an unlocked mutex.
 //
-// Mutex 在第一次使用后不能被复制
+// A Mutex must not be copied after first use.
 type Mutex struct {
-	state int32  // 表示 mutex 锁当前的状态
-	sema  uint32 // 信号量，用于唤醒 goroutine
+	state int32
+	sema  uint32
 }
 
-// Locker 接口，两个操作 Lock 和 Unlock
+// A Locker represents an object that can be locked and unlocked.
 type Locker interface {
 	Lock()
 	Unlock()
 }
 
 const (
-	mutexLocked = 1 << iota // 互斥锁已锁住
+	mutexLocked = 1 << iota // mutex is locked
 	mutexWoken
 	mutexStarving
 	mutexWaiterShift = iota
 
 	// Mutex fairness.
 	//
-	// Mutex 可能处于两种不同的模式：正常模式和饥饿模式。
+	// Mutex can be in 2 modes of operations: normal and starvation.
 	// In normal mode waiters are queued in FIFO order, but a woken up waiter
 	// does not own the mutex and competes with new arriving goroutines over
 	// the ownership. New arriving goroutines have an advantage -- they are
@@ -49,38 +49,28 @@ const (
 	// waiter has good chances of losing. In such case it is queued at front
 	// of the wait queue. If a waiter fails to acquire the mutex for more than 1ms,
 	// it switches mutex to the starvation mode.
-	// 在正常模式中，等待者按照 FIFO 的顺序排队获取锁，但是一个被唤醒的等待者有时候并不能获取 mutex，
-	// 它还需要和新到来的 goroutine 们竞争 mutex 的使用权。
-	// 新到来的 goroutine 存在一个优势，它们已经在 CPU 上运行且它们数量很多，
-	// 因此一个已经被唤醒的等待者有很大的概率获取不到锁，在这种情况下它处在等待队列的前面。
-	// 如果一个 goroutine 等待 mutex 释放的时间超过 1ms，它就会将 mutex 切换到饥饿模式
 	//
 	// In starvation mode ownership of the mutex is directly handed off from
 	// the unlocking goroutine to the waiter at the front of the queue.
 	// New arriving goroutines don't try to acquire the mutex even if it appears
 	// to be unlocked, and don't try to spin. Instead they queue themselves at
 	// the tail of the wait queue.
-	// 在饥饿模式中，mutex 的所有权直接从解锁的 goroutine 递交到等待队列中排在最前方的 goroutine。
-	// 新到达的 goroutine 不要尝试去获取 mutex，即使它看起来是在解锁状态，也不要试图自旋，
-	// 而是排到等待队列的尾部。
 	//
 	// If a waiter receives ownership of the mutex and sees that either
 	// (1) it is the last waiter in the queue, or (2) it waited for less than 1 ms,
 	// it switches mutex back to normal operation mode.
-	// 如果一个等待者获得 mutex 的所有权，并且看到以下两种情况中的任一种：
-	// 1. 它是等待队列中的最后一个
-	// 2. 它等待的时间少于 1ms，它将 mutex 切换回正常操作模式
 	//
-	// 正常模式已经被考虑为性能更好，因为一个 goroutine 能在即使有很多阻塞的等待着时，
-	// 多次连续的获取一个 mutex。
-	// 饥饿模式的重要性在于避免了病态情况下尾部延迟。
+	// Normal mode has considerably better performance as a goroutine can acquire
+	// a mutex several times in a row even if there are blocked waiters.
+	// Starvation mode is important to prevent pathological cases of tail latency.
 	starvationThresholdNs = 1e6
 )
 
-// Lock 将 m 锁住
-// 如果 lock 已经在使用，调用的 goroutine 会阻塞到锁被释放为止
+// Lock locks m.
+// If the lock is already in use, the calling goroutine
+// blocks until the mutex is available.
 func (m *Mutex) Lock() {
-	// Fast path: 抓取并锁上未锁住状态的互斥锁
+	// Fast path: grab unlocked mutex.
 	if atomic.CompareAndSwapInt32(&m.state, 0, mutexLocked) {
 		if race.Enabled {
 			race.Acquire(unsafe.Pointer(m))
@@ -91,7 +81,6 @@ func (m *Mutex) Lock() {
 	m.lockSlow()
 }
 
-// Slow path: 处理未锁住状态上锁失败、锁住状态的情况
 func (m *Mutex) lockSlow() {
 	var waitStartTime int64
 	starving := false

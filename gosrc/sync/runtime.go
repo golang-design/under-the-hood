@@ -8,8 +8,9 @@ import "unsafe"
 
 // defined in package runtime
 
-// Semacquire 阻塞到 *s > 0，然后会减 1
-// 它的目的是作为一个简单的睡眠原语，仅用于同步库，不应该直接使用。
+// Semacquire waits until *s > 0 and then atomically decrements it.
+// It is intended as a simple sleep primitive for use by the synchronization
+// library and should not be used directly.
 func runtime_Semacquire(s *uint32)
 
 // SemacquireMutex is like Semacquire, but for profiling contended Mutexes.
@@ -18,20 +19,14 @@ func runtime_Semacquire(s *uint32)
 // runtime_SemacquireMutex's caller.
 func runtime_SemacquireMutex(s *uint32, lifo bool, skipframes int)
 
-// Semrelease 自动增加 *s 的值，如果一个等待的 goroutine 被 Semacquire 阻塞则会被通知
-// 它的目的是作为一个简单的唤醒原语，用于同步库，不应该被直接使用。
-// 如果 handoff 为真，则将计数直接传递给下一个等待的 goroutine
-// skipframes 表示在 tracing 过程中忽略的帧的数量，从 runtime_Semrelease 调用方开始计数
+// Semrelease atomically increments *s and notifies a waiting goroutine
+// if one is blocked in Semacquire.
+// It is intended as a simple wakeup primitive for use by the synchronization
+// library and should not be used directly.
+// If handoff is true, pass count directly to the first waiter.
+// skipframes is the number of frames to omit during tracing, counting from
+// runtime_Semrelease's caller.
 func runtime_Semrelease(s *uint32, handoff bool, skipframes int)
-
-// runtime/sema.go 中的 notifyList 的近似，大小和对齐必须一致。
-type notifyList struct {
-	wait   uint32
-	notify uint32
-	lock   uintptr
-	head   unsafe.Pointer
-	tail   unsafe.Pointer
-}
 
 // See runtime/sema.go for documentation.
 func runtime_notifyListAdd(l *notifyList) uint32
@@ -53,7 +48,7 @@ func init() {
 }
 
 // Active spinning runtime support.
-// runtime_canSpin reports whether is spinning makes sense at the moment.
+// runtime_canSpin reports whether spinning makes sense at the moment.
 func runtime_canSpin(i int) bool
 
 // runtime_doSpin does active spinning.
