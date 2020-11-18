@@ -6,10 +6,14 @@ package fmt
 
 import "errors"
 
-// Errorf 根据一个格式指示器对值和错误进行格式化并返回一个字符串
+// Errorf formats according to a format specifier and returns the string as a
+// value that satisfies error.
 //
-// 格式指示器包含一个 %w 动词和一个 error 操作对象，返回的错误实现了 Unwrap 方法并返回操作对象。
-// 注意，包含多个 %w 是无效的，且其格式化结果等价于 %v
+// If the format specifier includes a %w verb with an error operand,
+// the returned error will implement an Unwrap method returning the operand. It is
+// invalid to include more than one %w verb or to supply it with an operand
+// that does not implement the error interface. The %w verb is otherwise
+// a synonym for %v.
 func Errorf(format string, a ...interface{}) error {
 	p := newPrinter()
 	p.wrapErrs = true
