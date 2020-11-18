@@ -31,5 +31,5 @@ func netpollBreak() {
 }
 
 func netpoll(delay int64) gList {
-	return gList
+	return gList{}
 }

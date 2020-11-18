@@ -81,11 +81,6 @@ func printunlock() {
 	}
 }
 
-// 向 std.err 写错误信息
-func writeErr(b []byte) {
-	write(2, unsafe.Pointer(&b[0]), int32(len(b)))
-}
-
 // write to goroutine-local buffer if diverting output,
 // or else standard error.
 func gwrite(b []byte) {
@@ -241,6 +236,9 @@ func printhex(v uint64) {
 
 func printpointer(p unsafe.Pointer) {
 	printhex(uint64(uintptr(p)))
+}
+func printuintptr(p uintptr) {
+	printhex(uint64(p))
 }
 
 func printstring(s string) {

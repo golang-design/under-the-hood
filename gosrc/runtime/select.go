@@ -7,30 +7,18 @@ package runtime
 // This file contains the implementation of Go select statements.
 
 import (
+	"runtime/internal/atomic"
 	"unsafe"
 )
 
 const debugSelect = false
 
-// scase.kind values.
-// Known to compiler.
-// Changes here must also be made in src/cmd/compile/internal/gc/select.go's walkselectcases.
-const (
-	caseNil = iota
-	caseRecv
-	caseSend
-	caseDefault
-)
-
 // Select case descriptor.
 // Known to compiler.
 // Changes here must also be made in src/cmd/internal/gc/select.go's scasetype.
 type scase struct {
-	c           *hchan         // chan
-	elem        unsafe.Pointer // data element
-	kind        uint16
-	pc          uintptr // race pc (for race detector / msan)
-	releasetime int64
+	c    *hchan         // chan
+	elem unsafe.Pointer // data element
 }
 
 var (
@@ -38,15 +26,15 @@ var (
 	chanrecvpc = funcPC(chanrecv)
 )
 
-func selectsetpc(cas *scase) {
-	cas.pc = getcallerpc()
+func selectsetpc(pc *uintptr) {
+	*pc = getcallerpc()
 }
 
 func sellock(scases []scase, lockorder []uint16) {
 	var c *hchan
 	for _, o := range lockorder {
 		c0 := scases[o].c
-		if c0 != nil && c0 != c {
+		if c0 != c {
 			c = c0
 			lock(&c.lock)
 		}
@@ -62,11 +50,8 @@ func selunlock(scases []scase, lockorder []uint16) {
 	// the G that calls select runnable again and schedules it for execution.
 	// When the G runs on another M, it locks all the locks and frees sel.
 	// Now if the first M touches sel, it will access freed memory.
-	for i := len(scases) - 1; i >= 0; i-- {
+	for i := len(lockorder) - 1; i >= 0; i-- {
 		c := scases[lockorder[i]].c
-		if c == nil {
-			break
-		}
 		if i > 0 && c == scases[lockorder[i-1]].c {
 			continue // will unlock it on the next iteration
 		}
@@ -77,7 +62,20 @@ func selunlock(scases []scase, lockorder []uint16) {
 func selparkcommit(gp *g, _ unsafe.Pointer) bool {
 	// There are unlocked sudogs that point into gp's stack. Stack
 	// copying must lock the channels of those sudogs.
+	// Set activeStackChans here instead of before we try parking
+	// because we could self-deadlock in stack growth on a
+	// channel lock.
 	gp.activeStackChans = true
+	// Mark that it's safe for stack shrinking to occur now,
+	// because any thread acquiring this G's stack for shrinking
+	// is guaranteed to observe activeStackChans after this store.
+	atomic.Store8(&gp.parkingOnChan, 0)
+	// Make sure we unlock after setting activeStackChans and
+	// unsetting parkingOnChan. The moment we unlock any of the
+	// channel locks we risk gp getting readied by a channel operation
+	// and so gp could continue running before everything before the
+	// unlock is visible (even to gp itself).
+
 	// This must not access gp's stack (see gopark). In
 	// particular, it must not access the *hselect. That's okay,
 	// because by the time this is called, gp.waiting has all
@@ -108,41 +106,52 @@ func block() {
 // selectgo implements the select statement.
 //
 // cas0 points to an array of type [ncases]scase, and order0 points to
-// an array of type [2*ncases]uint16. Both reside on the goroutine's
-// stack (regardless of any escaping in selectgo).
+// an array of type [2*ncases]uint16 where ncases must be <= 65536.
+// Both reside on the goroutine's stack (regardless of any escaping in
+// selectgo).
+//
+// For race detector builds, pc0 points to an array of type
+// [ncases]uintptr (also on the stack); for other builds, it's set to
+// nil.
 //
 // selectgo returns the index of the chosen scase, which matches the
 // ordinal position of its respective select{recv,send,default} call.
 // Also, if the chosen scase was a receive operation, it reports whether
 // a value was received.
-func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
+func selectgo(cas0 *scase, order0 *uint16, pc0 *uintptr, nsends, nrecvs int, block bool) (int, bool) {
 	if debugSelect {
 		print("select: cas0=", cas0, "\n")
 	}
 
+	// NOTE: In order to maintain a lean stack size, the number of scases
+	// is capped at 65536.
 	cas1 := (*[1 << 16]scase)(unsafe.Pointer(cas0))
 	order1 := (*[1 << 17]uint16)(unsafe.Pointer(order0))
 
+	ncases := nsends + nrecvs
 	scases := cas1[:ncases:ncases]
 	pollorder := order1[:ncases:ncases]
 	lockorder := order1[ncases:][:ncases:ncases]
+	// NOTE: pollorder/lockorder's underlying array was not zero-initialized by compiler.
 
-	// Replace send/receive cases involving nil channels with
-	// caseNil so logic below can assume non-nil channel.
-	// 替换 closed channel
-	for i := range scases {
-		cas := &scases[i]
-		if cas.c == nil && cas.kind != caseDefault {
-			*cas = scase{}
+	// Even when raceenabled is true, there might be select
+	// statements in packages compiled without -race (e.g.,
+	// ensureSigM in runtime/signal_unix.go).
+	var pcs []uintptr
+	if raceenabled && pc0 != nil {
+		pc1 := (*[1 << 16]uintptr)(unsafe.Pointer(pc0))
+		pcs = pc1[:ncases:ncases]
+	}
+	casePC := func(casi int) uintptr {
+		if pcs == nil {
+			return 0
 		}
+		return pcs[casi]
 	}
 
 	var t0 int64
 	if blockprofilerate > 0 {
 		t0 = cputicks()
-		for i := 0; i < ncases; i++ {
-			scases[i].releasetime = -1
-		}
 	}
 
 	// The compiler rewrites selects that statically have
@@ -153,20 +162,30 @@ func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
 	// cases correctly, and they are rare enough not to bother
 	// optimizing (and needing to test).
 
-	// 生成随机顺序
-	for i := 1; i < ncases; i++ {
-		j := fastrandn(uint32(i + 1))
-		pollorder[i] = pollorder[j]
+	// generate permuted order
+	norder := 0
+	for i := range scases {
+		cas := &scases[i]
+
+		// Omit cases without channels from the poll and lock orders.
+		if cas.c == nil {
+			cas.elem = nil // allow GC
+			continue
+		}
+
+		j := fastrandn(uint32(norder + 1))
+		pollorder[norder] = pollorder[j]
 		pollorder[j] = uint16(i)
+		norder++
 	}
+	pollorder = pollorder[:norder]
+	lockorder = lockorder[:norder]
 
 	// sort the cases by Hchan address to get the locking order.
 	// simple heap sort, to guarantee n log n time and constant stack footprint.
-	// 堆排, 根据 channel 的地址进行堆排序，决定获取锁的顺序
-	for i := 0; i < ncases; i++ {
+	for i := range lockorder {
 		j := i
 		// Start with the pollorder to permute cases on the same channel.
-		// 根据 pullorder 开始进而在同一 channel 上排序所有 case
 		c := scases[pollorder[i]].c
 		for j > 0 && scases[lockorder[(j-1)/2]].c.sortkey() < c.sortkey() {
 			k := (j - 1) / 2
@@ -175,7 +194,7 @@ func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
 		}
 		lockorder[j] = pollorder[i]
 	}
-	for i := ncases - 1; i >= 0; i-- {
+	for i := len(lockorder) - 1; i >= 0; i-- {
 		o := lockorder[i]
 		c := scases[o].c
 		lockorder[i] = lockorder[0]
@@ -199,7 +218,7 @@ func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
 	}
 
 	if debugSelect {
-		for i := 0; i+1 < ncases; i++ {
+		for i := 0; i+1 < len(lockorder); i++ {
 			if scases[lockorder[i]].c.sortkey() > scases[lockorder[i+1]].c.sortkey() {
 				print("i=", i, " x=", lockorder[i], " y=", lockorder[i+1], "\n")
 				throw("select: broken sort")
@@ -208,7 +227,6 @@ func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
 	}
 
 	// lock all the channels involved in the select
-	// 依次加锁
 	sellock(scases, lockorder)
 
 	var (
@@ -222,24 +240,18 @@ func selectgo(cas0 *scase, order0 *uint16, ncases int) (int, bool) {
 		nextp  **sudog
 	)
 
-loop:
 	// pass 1 - look for something already waiting
-	// 1 检查是否有正在等待
-	var dfli int
-	var dfl *scase
 	var casi int
 	var cas *scase
+	var caseSuccess bool
+	var caseReleaseTime int64 = -1
 	var recvOK bool
-	for i := 0; i < ncases; i++ {
-		casi = int(pollorder[i])
+	for _, casei := range pollorder {
+		casi = int(casei)
 		cas = &scases[casi]
 		c = cas.c
 
-		switch cas.kind {
-		case caseNil:
-			continue
-
-		case caseRecv:
+		if casi >= nsends {
 			sg = c.sendq.dequeue()
 			if sg != nil {
 				goto recv
@@ -250,10 +262,9 @@ loop:
 			if c.closed != 0 {
 				goto rclose
 			}
-
-		case caseSend:
+		} else {
 			if raceenabled {
-				racereadpc(c.raceaddr(), cas.pc, chansendpc)
+				racereadpc(c.raceaddr(), casePC(casi), chansendpc)
 			}
 			if c.closed != 0 {
 				goto sclose
@@ -265,22 +276,16 @@ loop:
 			if c.qcount < c.dataqsiz {
 				goto bufsend
 			}
-
-		case caseDefault:
-			dfli = casi
-			dfl = cas
 		}
 	}
-	// 存在 default 分支，直接去 retc 执行
-	if dfl != nil {
+
+	if !block {
 		selunlock(scases, lockorder)
-		casi = dfli
-		cas = dfl
+		casi = -1
 		goto retc
 	}
 
 	// pass 2 - enqueue on all chans
-	// 2 入队所有的 channel
 	gp = getg()
 	if gp.waiting != nil {
 		throw("gp.waiting != nil")
@@ -289,16 +294,12 @@ loop:
 	for _, casei := range lockorder {
 		casi = int(casei)
 		cas = &scases[casi]
-		if cas.kind == caseNil {
-			continue
-		}
 		c = cas.c
 		sg := acquireSudog()
 		sg.g = gp
 		sg.isSelect = true
 		// No stack splits between assigning elem and enqueuing
 		// sg on gp.waiting where copystack can find it.
-		// 在 gp.waiting 上分配 elem 和入队 sg 之间没有栈分段，copystack 可以在其中找到它。
 		sg.elem = cas.elem
 		sg.releasetime = 0
 		if t0 != 0 {
@@ -306,26 +307,26 @@ loop:
 		}
 		sg.c = c
 		// Construct waiting list in lock order.
-		// 按锁的顺序创建等待链表
 		*nextp = sg
 		nextp = &sg.waitlink
 
-		switch cas.kind {
-		case caseRecv:
-			c.recvq.enqueue(sg)
-
-		case caseSend:
+		if casi < nsends {
 			c.sendq.enqueue(sg)
+		} else {
+			c.recvq.enqueue(sg)
 		}
 	}
 
 	// wait for someone to wake us up
-	// 等待被唤醒
 	gp.param = nil
-	// selparkcommit 根据等待列表依次解锁
+	// Signal to anyone trying to shrink our stack that we're about
+	// to park on a channel. The window between when this G's status
+	// changes and when we set gp.activeStackChans is not safe for
+	// stack shrinking.
+	atomic.Store8(&gp.parkingOnChan, 1)
 	gopark(selparkcommit, nil, waitReasonSelect, traceEvGoBlockSelect, 1)
 	gp.activeStackChans = false
-	// 重新上锁
+
 	sellock(scases, lockorder)
 
 	gp.selectDone = 0
@@ -336,14 +337,11 @@ loop:
 	// otherwise they stack up on quiet channels
 	// record the successful case, if any.
 	// We singly-linked up the SudoGs in lock order.
-	// pass 3 - 从不成功的 channel 中出队
-	// 否则将它们堆到一个安静的 channel 上并记录所有成功的分支
-	// 我们按锁的顺序单向链接 sudog
 	casi = -1
 	cas = nil
+	caseSuccess = false
 	sglist = gp.waiting
 	// Clear all elem before unlinking from gp.waiting.
-	// 从 gp.waiting 取消链接之前清除所有的 elem
 	for sg1 := gp.waiting; sg1 != nil; sg1 = sg1.waitlink {
 		sg1.isSelect = false
 		sg1.elem = nil
@@ -353,20 +351,17 @@ loop:
 
 	for _, casei := range lockorder {
 		k = &scases[casei]
-		if k.kind == caseNil {
-			continue
-		}
-		if sglist.releasetime > 0 {
-			k.releasetime = sglist.releasetime
-		}
 		if sg == sglist {
 			// sg has already been dequeued by the G that woke us up.
-			// sg 已经被唤醒我们的 G 出队了。
 			casi = int(casei)
 			cas = k
+			caseSuccess = sglist.success
+			if sglist.releasetime > 0 {
+				caseReleaseTime = sglist.releasetime
+			}
 		} else {
 			c = k.c
-			if k.kind == caseSend {
+			if int(casei) < nsends {
 				c.sendq.dequeueSudoG(sglist)
 			} else {
 				c.recvq.dequeueSudoG(sglist)
@@ -379,46 +374,35 @@ loop:
 	}
 
 	if cas == nil {
-		// We can wake up with gp.param == nil (so cas == nil)
-		// when a channel involved in the select has been closed.
-		// It is easiest to loop and re-run the operation;
-		// we'll see that it's now closed.
-		// Maybe some day we can signal the close explicitly,
-		// but we'd have to distinguish close-on-reader from close-on-writer.
-		// It's easiest not to duplicate the code and just recheck above.
-		// We know that something closed, and things never un-close,
-		// so we won't block again.
-		// 当一个参与在 select 语句中的 channel 被关闭时，我们可以在 gp.param == nil 时进行唤醒(所以 cas == nil)
-		// 最简单的方法就是循环并重新运行该操作，然后就能看到它现在已经被关闭了
-		// 也许未来我们可以显式的发送关闭信号，
-		// 但我们就必须区分在接收方上关闭(close-on-reader)和在写入方上关闭(close-on-writer)这两种情况了
-		// 最简单的方法是不复制代码并重新检查上面的代码。
-		// 我们知道某些 channel 被关闭了，也知道某些可能永远不会被重新打开，因此我们不会再次阻塞
-		goto loop
+		throw("selectgo: bad wakeup")
 	}
 
 	c = cas.c
 
 	if debugSelect {
-		print("wait-return: cas0=", cas0, " c=", c, " cas=", cas, " kind=", cas.kind, "\n")
+		print("wait-return: cas0=", cas0, " c=", c, " cas=", cas, " send=", casi < nsends, "\n")
 	}
 
-	if cas.kind == caseRecv {
-		recvOK = true
+	if casi < nsends {
+		if !caseSuccess {
+			goto sclose
+		}
+	} else {
+		recvOK = caseSuccess
 	}
 
 	if raceenabled {
-		if cas.kind == caseRecv && cas.elem != nil {
-			raceWriteObjectPC(c.elemtype, cas.elem, cas.pc, chanrecvpc)
-		} else if cas.kind == caseSend {
-			raceReadObjectPC(c.elemtype, cas.elem, cas.pc, chansendpc)
+		if casi < nsends {
+			raceReadObjectPC(c.elemtype, cas.elem, casePC(casi), chansendpc)
+		} else if cas.elem != nil {
+			raceWriteObjectPC(c.elemtype, cas.elem, casePC(casi), chanrecvpc)
 		}
 	}
 	if msanenabled {
-		if cas.kind == caseRecv && cas.elem != nil {
-			msanwrite(cas.elem, c.elemtype.size)
-		} else if cas.kind == caseSend {
+		if casi < nsends {
 			msanread(cas.elem, c.elemtype.size)
+		} else if cas.elem != nil {
+			msanwrite(cas.elem, c.elemtype.size)
 		}
 	}
 
@@ -427,13 +411,11 @@ loop:
 
 bufrecv:
 	// can receive from buffer
-	// 可以从 buf 接收
 	if raceenabled {
 		if cas.elem != nil {
-			raceWriteObjectPC(c.elemtype, cas.elem, cas.pc, chanrecvpc)
+			raceWriteObjectPC(c.elemtype, cas.elem, casePC(casi), chanrecvpc)
 		}
-		raceacquire(chanbuf(c, c.recvx))
-		racerelease(chanbuf(c, c.recvx))
+		racereleaseacquire(chanbuf(c, c.recvx))
 	}
 	if msanenabled && cas.elem != nil {
 		msanwrite(cas.elem, c.elemtype.size)
@@ -454,11 +436,9 @@ bufrecv:
 
 bufsend:
 	// can send to buffer
-	// 可以发送到 buf
 	if raceenabled {
-		raceacquire(chanbuf(c, c.sendx))
-		racerelease(chanbuf(c, c.sendx))
-		raceReadObjectPC(c.elemtype, cas.elem, cas.pc, chansendpc)
+		racereleaseacquire(chanbuf(c, c.sendx))
+		raceReadObjectPC(c.elemtype, cas.elem, casePC(casi), chansendpc)
 	}
 	if msanenabled {
 		msanread(cas.elem, c.elemtype.size)
@@ -474,7 +454,6 @@ bufsend:
 
 recv:
 	// can receive from sleeping sender (sg)
-	// 可以从一个休眠的发送方 (sg)直接接收
 	recv(c, sg, cas.elem, func() { selunlock(scases, lockorder) }, 2)
 	if debugSelect {
 		print("syncrecv: cas0=", cas0, " c=", c, "\n")
@@ -484,7 +463,6 @@ recv:
 
 rclose:
 	// read at end of closed channel
-	// 在已经关闭的 channel 末尾进行读
 	selunlock(scases, lockorder)
 	recvOK = false
 	if cas.elem != nil {
@@ -497,9 +475,8 @@ rclose:
 
 send:
 	// can send to a sleeping receiver (sg)
-	// 可以向一个休眠的接收方 (sg) 发送
 	if raceenabled {
-		raceReadObjectPC(c.elemtype, cas.elem, cas.pc, chansendpc)
+		raceReadObjectPC(c.elemtype, cas.elem, casePC(casi), chansendpc)
 	}
 	if msanenabled {
 		msanread(cas.elem, c.elemtype.size)
@@ -511,8 +488,8 @@ send:
 	goto retc
 
 retc:
-	if cas.releasetime > 0 {
-		blockevent(cas.releasetime-t0, 1)
+	if caseReleaseTime > 0 {
+		blockevent(caseReleaseTime-t0, 1)
 	}
 	return casi, recvOK
 
@@ -551,23 +528,57 @@ func reflect_rselect(cases []runtimeSelect) (int, bool) {
 		block()
 	}
 	sel := make([]scase, len(cases))
-	order := make([]uint16, 2*len(cases))
-	for i := range cases {
-		rc := &cases[i]
+	orig := make([]int, len(cases))
+	nsends, nrecvs := 0, 0
+	dflt := -1
+	for i, rc := range cases {
+		var j int
 		switch rc.dir {
 		case selectDefault:
-			sel[i] = scase{kind: caseDefault}
+			dflt = i
+			continue
 		case selectSend:
-			sel[i] = scase{kind: caseSend, c: rc.ch, elem: rc.val}
+			j = nsends
+			nsends++
 		case selectRecv:
-			sel[i] = scase{kind: caseRecv, c: rc.ch, elem: rc.val}
+			nrecvs++
+			j = len(cases) - nrecvs
 		}
-		if raceenabled || msanenabled {
-			selectsetpc(&sel[i])
-		}
+
+		sel[j] = scase{c: rc.ch, elem: rc.val}
+		orig[j] = i
 	}
 
-	return selectgo(&sel[0], &order[0], len(cases))
+	// Only a default case.
+	if nsends+nrecvs == 0 {
+		return dflt, false
+	}
+
+	// Compact sel and orig if necessary.
+	if nsends+nrecvs < len(cases) {
+		copy(sel[nsends:], sel[len(cases)-nrecvs:])
+		copy(orig[nsends:], orig[len(cases)-nrecvs:])
+	}
+
+	order := make([]uint16, 2*(nsends+nrecvs))
+	var pc0 *uintptr
+	if raceenabled {
+		pcs := make([]uintptr, nsends+nrecvs)
+		for i := range pcs {
+			selectsetpc(&pcs[i])
+		}
+		pc0 = &pcs[0]
+	}
+
+	chosen, recvOK := selectgo(&sel[0], &order[0], pc0, nsends, nrecvs, dflt == -1)
+
+	// Translate chosen back to caller's ordering.
+	if chosen < 0 {
+		chosen = dflt
+	} else {
+		chosen = orig[chosen]
+	}
+	return chosen, recvOK
 }
 
 func (q *waitq) dequeueSudoG(sgp *sudog) {

@@ -10,7 +10,7 @@ import (
 	"unsafe"
 )
 
-// 公共 memory sanitizer API.
+// Public memory sanitizer API.
 
 func MSanRead(addr unsafe.Pointer, len int) {
 	msanread(addr, uintptr(len))
@@ -20,8 +20,8 @@ func MSanWrite(addr unsafe.Pointer, len int) {
 	msanwrite(addr, uintptr(len))
 }
 
+// Private interface for the runtime.
 // 运行时私有接口
-
 const msanenabled = true
 
 // If we are running on the system stack, the C program may have

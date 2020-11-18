@@ -71,6 +71,17 @@ noerr:
 	POPQ	BP
 	RET
 
+TEXT runtime·pipe_trampoline(SB),NOSPLIT,$0
+	PUSHQ	BP
+	MOVQ	SP, BP
+	CALL	libc_pipe(SB)		// pointer already in DI
+	TESTL	AX, AX
+	JEQ	3(PC)
+	CALL	libc_error(SB)		// return negative errno value
+	NEGL	AX
+	POPQ	BP
+	RET
+
 TEXT runtime·setitimer_trampoline(SB),NOSPLIT,$0
 	PUSHQ	BP
 	MOVQ	SP, BP
@@ -494,44 +505,64 @@ TEXT runtime·raise_trampoline(SB),NOSPLIT,$0
 	POPQ	BP
 	RET
 
-TEXT runtime·dispatch_semaphore_create_trampoline(SB),NOSPLIT,$0
+TEXT runtime·pthread_mutex_init_trampoline(SB),NOSPLIT,$0
 	PUSHQ	BP
 	MOVQ	SP, BP
-	MOVQ	DI, BX
-	MOVQ	0(BX), DI	// arg 1 value
-	CALL	libc_dispatch_semaphore_create(SB)
-	MOVQ	AX, 8(BX)	// result sema
+	MOVQ	8(DI), SI	// arg 2 attr
+	MOVQ	0(DI), DI	// arg 1 mutex
+	CALL	libc_pthread_mutex_init(SB)
 	POPQ	BP
 	RET
 
-TEXT runtime·dispatch_semaphore_wait_trampoline(SB),NOSPLIT,$0
+TEXT runtime·pthread_mutex_lock_trampoline(SB),NOSPLIT,$0
 	PUSHQ	BP
 	MOVQ	SP, BP
-	MOVQ	8(DI), SI	// arg 2 timeout
-	MOVQ	0(DI), DI	// arg 1 sema
-	CALL	libc_dispatch_semaphore_wait(SB)
-	TESTQ	AX, AX	// For safety convert 64-bit result to int32 0 or 1.
-	JEQ	2(PC)
-	MOVL	$1, AX
+	MOVQ	0(DI), DI	// arg 1 mutex
+	CALL	libc_pthread_mutex_lock(SB)
 	POPQ	BP
 	RET
 
-TEXT runtime·dispatch_semaphore_signal_trampoline(SB),NOSPLIT,$0
+TEXT runtime·pthread_mutex_unlock_trampoline(SB),NOSPLIT,$0
 	PUSHQ	BP
 	MOVQ	SP, BP
-	MOVQ	0(DI), DI	// arg 1 sema
-	CALL	libc_dispatch_semaphore_signal(SB)
+	MOVQ	0(DI), DI	// arg 1 mutex
+	CALL	libc_pthread_mutex_unlock(SB)
 	POPQ	BP
 	RET
 
-TEXT runtime·dispatch_time_trampoline(SB),NOSPLIT,$0
+TEXT runtime·pthread_cond_init_trampoline(SB),NOSPLIT,$0
 	PUSHQ	BP
 	MOVQ	SP, BP
-	MOVQ	DI, BX
-	MOVQ	0(BX), DI	// arg 1 base
-	MOVQ	8(BX), SI	// arg 2 delta
-	CALL	libc_dispatch_time(SB)
-	MOVQ	AX, 16(BX)
+	MOVQ	8(DI), SI	// arg 2 attr
+	MOVQ	0(DI), DI	// arg 1 cond
+	CALL	libc_pthread_cond_init(SB)
+	POPQ	BP
+	RET
+
+TEXT runtime·pthread_cond_wait_trampoline(SB),NOSPLIT,$0
+	PUSHQ	BP
+	MOVQ	SP, BP
+	MOVQ	8(DI), SI	// arg 2 mutex
+	MOVQ	0(DI), DI	// arg 1 cond
+	CALL	libc_pthread_cond_wait(SB)
+	POPQ	BP
+	RET
+
+TEXT runtime·pthread_cond_timedwait_relative_np_trampoline(SB),NOSPLIT,$0
+	PUSHQ	BP
+	MOVQ	SP, BP
+	MOVQ	8(DI), SI	// arg 2 mutex
+	MOVQ	16(DI), DX	// arg 3 timeout
+	MOVQ	0(DI), DI	// arg 1 cond
+	CALL	libc_pthread_cond_timedwait_relative_np(SB)
+	POPQ	BP
+	RET
+
+TEXT runtime·pthread_cond_signal_trampoline(SB),NOSPLIT,$0
+	PUSHQ	BP
+	MOVQ	SP, BP
+	MOVQ	0(DI), DI	// arg 1 cond
+	CALL	libc_pthread_cond_signal(SB)
 	POPQ	BP
 	RET
 
@@ -790,6 +821,32 @@ TEXT runtime·syscall6X(SB),NOSPLIT,$0
 	MOVQ	AX, (9*8)(DI) // err
 
 ok:
+	XORL	AX, AX        // no error (it's ignored anyway)
+	MOVQ	BP, SP
+	POPQ	BP
+	RET
+
+// syscallNoErr is like syscall6 but does not check for errors, and
+// only returns one value, for use with standard C ABI library functions.
+TEXT runtime·syscallNoErr(SB),NOSPLIT,$0
+	PUSHQ	BP
+	MOVQ	SP, BP
+	SUBQ	$16, SP
+	MOVQ	(0*8)(DI), R11// fn
+	MOVQ	(2*8)(DI), SI // a2
+	MOVQ	(3*8)(DI), DX // a3
+	MOVQ	(4*8)(DI), CX // a4
+	MOVQ	(5*8)(DI), R8 // a5
+	MOVQ	(6*8)(DI), R9 // a6
+	MOVQ	DI, (SP)
+	MOVQ	(1*8)(DI), DI // a1
+	XORL	AX, AX	      // vararg: say "no float args"
+
+	CALL	R11
+
+	MOVQ	(SP), DI
+	MOVQ	AX, (7*8)(DI) // r1
+
 	XORL	AX, AX        // no error (it's ignored anyway)
 	MOVQ	BP, SP
 	POPQ	BP

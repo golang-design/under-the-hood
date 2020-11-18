@@ -222,13 +222,19 @@ func panicmem() {
 	panic(memoryError)
 }
 
+func panicmemAddr(addr uintptr) {
+	panicCheck2("invalid memory address or nil pointer dereference")
+	panic(errorAddressString{msg: "invalid memory address or nil pointer dereference", addr: addr})
+}
+
 // Create a new deferred function fn with siz bytes of arguments.
 // The compiler turns a defer statement into a call to this.
 // 创建一个新的函数 fn 以及大小为 siz bytes 的参数
 // 编译器将 defer 语句转换为该调用
 //go:nosplit
 func deferproc(siz int32, fn *funcval) { // arguments of fn follow fn
-	if getg().m.curg != getg() {
+	gp := getg()
+	if gp.m.curg != gp {
 		// go code on the system stack can't defer
 		throw("defer on system stack")
 	}
@@ -250,6 +256,8 @@ func deferproc(siz int32, fn *funcval) { // arguments of fn follow fn
 	if d._panic != nil {
 		throw("deferproc: d.panic != nil after newdefer")
 	}
+	d.link = gp._defer
+	gp._defer = d
 	d.fn = fn
 	d.pc = callerpc
 	d.sp = sp
@@ -287,7 +295,6 @@ func deferproc(siz int32, fn *funcval) { // arguments of fn follow fn
 // defer 记录必须初始化它的 siz 和 fn。其他字段可以包含无用信息。
 // defer 记录必须立刻紧跟 defer 参数所在的内存之后。
 // Nosplit 是因为栈上的参数不会被扫描，直到 defer 记录被连接到 gp._defer 列表上。
-//
 //go:nosplit
 func deferprocStack(d *_defer) {
 	gp := getg()
@@ -407,7 +414,8 @@ func init() {
 }
 
 // Allocate a Defer, usually using per-P pool.
-// Each defer must be released with freedefer.
+// Each defer must be released with freedefer.  The defer is not
+// added to any defer chain yet.
 // 分配一个 defer, 通常使用了 per-P 池.
 // 每个 defer 必须由 freedefer 释放.
 //
@@ -447,20 +455,9 @@ func newdefer(siz int32) *_defer {
 			total := roundupsize(totaldefersize(uintptr(siz)))
 			d = (*_defer)(mallocgc(total, deferType, true))
 		})
-		if debugCachedWork {
-			// Duplicate the tail below so if there's a
-			// crash in checkPut we can tell if d was just
-			// allocated or came from the pool.
-			d.siz = siz
-			d.link = gp._defer
-			gp._defer = d
-			return d
-		}
 	}
 	d.siz = siz
 	d.heap = true
-	d.link = gp._defer
-	gp._defer = d
 	return d
 }
 
@@ -637,6 +634,9 @@ func deferreturn(arg0 uintptr) {
 // 该程序继续执行其他 goroutines。
 // 如果所有其他 goroutine 退出，程序崩溃。
 func Goexit() {
+	// Run all deferred functions for the current goroutine.
+	// This code is similar to gopanic, see that implementation
+	// for detailed comments.
 	// 为当前 goroutine 运行时偶有 defer 函数，此代码与 gopanic 类似
 	gp := getg()
 
@@ -1061,12 +1061,14 @@ func gopanic(e interface{}) {
 				throw("bypassed recovery failed") // mcall should not return
 			}
 			atomic.Xadd(&runningPanicDefers, -1)
+
 			if done {
-				// Remove any remaining non-started, open-coded defer
-				// entry after a recover (there's at most one, if we just
-				// ran a non-open-coded defer), since the entry will
-				// become out-dated and the defer will be executed
-				// normally.
+				// Remove any remaining non-started, open-coded
+				// defer entries after a recover, since the
+				// corresponding defers will be executed normally
+				// (inline). Any such entry will become stale once
+				// we run the corresponding defers inline and exit
+				// the associated stack frame.
 				d := gp._defer
 				var prev *_defer
 				for d != nil {
@@ -1084,8 +1086,9 @@ func gopanic(e interface{}) {
 						} else {
 							prev.link = d.link
 						}
+						newd := d.link
 						freedefer(d)
-						break
+						d = newd
 					} else {
 						prev = d
 						d = d.link

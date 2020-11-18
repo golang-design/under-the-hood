@@ -50,6 +50,7 @@ func futexsleep(addr *uint32, val uint32, ns int64) {
 	futex(unsafe.Pointer(addr), _FUTEX_WAIT_PRIVATE, val, unsafe.Pointer(&ts), nil, 0)
 }
 
+// If any procs are sleeping on addr, wake up at most cnt.
 // 如果任何 procs 在 addr 休眠，唤醒最多 cnt 次
 //go:nosplit
 func futexwakeup(addr *uint32, cnt uint32) {
@@ -134,6 +135,7 @@ const (
 //go:noescape
 func clone(flags int32, stk, mp, gp, fn unsafe.Pointer) int32
 
+// May run with m.p==nil, so write barriers are not allowed.
 // 可能在 m.p==nil 下运行，因此不允许写屏障
 //go:nowritebarrier
 func newosproc(mp *m) {
@@ -145,6 +147,8 @@ func newosproc(mp *m) {
 		print("newosproc stk=", stk, " m=", mp, " g=", mp.g0, " clone=", funcPC(clone), " id=", mp.id, " ostk=", &mp, "\n")
 	}
 
+	// Disable signals during clone, so that the new thread starts
+	// with signals disabled. It will enable them in minit.
 	// 在 clone 期间禁用信号，以便新线程启动时信号被禁止。
 	// 他们会在 minit 中重新启用。
 	var oset sigset
@@ -196,14 +200,17 @@ func mincore(addr unsafe.Pointer, n uintptr, dst *byte) int32
 func sysargs(argc int32, argv **byte) {
 	n := argc + 1
 
+	// skip over argv, envp to get to auxv
 	// 跳过 argv, envp 来获取 auxv
 	for argv_index(argv, n) != nil {
 		n++
 	}
 
+	// skip NULL separator
 	// 跳过 NULL 分隔符
 	n++
 
+	// now argv+n is auxv
 	// 现在 argv+n 即为 auxv
 	auxv := (*[1 << 28]uintptr)(add(unsafe.Pointer(argv), uintptr(n)*sys.PtrSize))
 
@@ -211,6 +218,9 @@ func sysargs(argc int32, argv **byte) {
 	if sysauxv(auxv[:]) != 0 {
 		return
 	}
+	// In some situations we don't get a loader-provided
+	// auxv, such as when loaded as a library on Android.
+	// Fall back to /proc/self/auxv.
 	// 某些情况下，我们无法获取装载器提供的 auxv，例如 Android 上的装载器
 	// 为一个库文件。这时退回到 /proc/self/auxv
 	// 使用 open 系统调用打开文件
@@ -218,10 +228,13 @@ func sysargs(argc int32, argv **byte) {
 
 	// 若 /proc/self/auxv 打开也失败了
 	if fd < 0 {
+		// On Android, /proc/self/auxv might be unreadable (issue 9229), so we fallback to
+		// try using mincore to detect the physical page size.
+		// mincore should return EINVAL when address is not a multiple of system page size.
 		// 在 Android 下，/proc/self/auxv 可能不可读取（见 #9229），因此我们再回退到
 		// 通过 mincore 来检测物理页的大小。
 		// mincore 会在地址不是系统页大小的倍数时返回 EINVAL。
-		const size = 256 << 10 // 需要分配的内存大小
+		const size = 256 << 10 // size of memory region to allocate // 需要分配的内存大小
 
 		// 使用 mmap 系统调用分配内存
 		p, err := mmap(nil, size, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_PRIVATE, -1, 0)
@@ -254,10 +267,16 @@ func sysargs(argc int32, argv **byte) {
 	if n < 0 {
 		return
 	}
+	// Make sure buf is terminated, even if we didn't read
+	// the whole file.
 	// 即便我们无法读取整个文件，也要确保 buf 已经被终止
 	buf[len(buf)-2] = _AT_NULL
 	sysauxv(buf[:]) // 调用并确定物理页的大小，读取 vdso 表
 }
+
+// startupRandomData holds random bytes initialized at startup. These come from
+// the ELF AT_RANDOM auxiliary vector.
+var startupRandomData []byte
 
 func sysauxv(auxv []uintptr) int {
 	var i int
@@ -266,6 +285,8 @@ func sysauxv(auxv []uintptr) int {
 		tag, val := auxv[i], auxv[i+1]
 		switch tag {
 		case _AT_RANDOM:
+			// The kernel provides a pointer to 16-bytes
+			// worth of random data.
 			// 内核提供了一个指针，指向16字节的随机数据
 			startupRandomData = (*[16]byte)(unsafe.Pointer(val))[:]
 
@@ -290,13 +311,14 @@ func getHugePageSize() uintptr {
 	if fd < 0 {
 		return 0
 	}
-	n := read(fd, noescape(unsafe.Pointer(&numbuf[0])), int32(len(numbuf)))
+	ptr := noescape(unsafe.Pointer(&numbuf[0]))
+	n := read(fd, ptr, int32(len(numbuf)))
 	closefd(fd)
 	if n <= 0 {
 		return 0
 	}
-	l := n - 1 // remove trailing newline
-	v, ok := atoi(slicebytetostringtmp(numbuf[:l]))
+	n-- // remove trailing newline
+	v, ok := atoi(slicebytetostringtmp((*byte)(ptr), int(n)))
 	if !ok || v < 0 {
 		v = 0
 	}
@@ -340,20 +362,13 @@ func libpreinit() {
 	initsig(true)
 }
 
-// gsignalInitQuirk, if non-nil, is called for every allocated gsignal G.
-//
-// TODO(austin): Remove this after Go 1.15 when we remove the
-// mlockGsignal workaround.
-var gsignalInitQuirk func(gsignal *g)
-
+// Called to initialize a new m (including the bootstrap m).
+// Called on the parent thread (main thread in case of bootstrap), can allocate memory.
 // 调用此方法来初始化一个新的 m (包含引导 m)
 // 从一个父线程上进行调用（引导时为主线程），可以分配内存
 func mpreinit(mp *m) {
-	mp.gsignal = malg(32 * 1024) // Linux 需要 >= 2K
+	mp.gsignal = malg(32 * 1024) // Linux wants >= 2K
 	mp.gsignal.m = mp
-	if gsignalInitQuirk != nil {
-		gsignalInitQuirk(mp.gsignal)
-	}
 }
 
 func gettid() uint32
@@ -462,6 +477,7 @@ func setSignalstackSP(s *stackt, sp uintptr) {
 func (c *sigctxt) fixsigcode(sig uint32) {
 }
 
+// sysSigaction calls the rt_sigaction system call.
 // sysSigaction 调用了 rt_sigaction 系统调用.
 //go:nosplit
 func sysSigaction(sig uint32, new, old *sigactiont) {
@@ -486,6 +502,7 @@ func sysSigaction(sig uint32, new, old *sigactiont) {
 	}
 }
 
+// rt_sigaction is implemented in assembly.
 // rt_sigaction 由汇编实现
 //go:noescape
 func rt_sigaction(sig uintptr, new, old *sigactiont, size uintptr) int32

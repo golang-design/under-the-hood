@@ -6,7 +6,7 @@
 
 package runtime
 
-// sbrk0 返回了当前进场的 brk, 如果为 0 则表示未实现
+// sbrk0 returns the current process brk, or 0 if not implemented.
 func sbrk0() uintptr {
 	return 0
 }

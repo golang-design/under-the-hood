@@ -4,6 +4,14 @@
 
 package runtime
 
+// This file contains the implementation of Go's map type.
+//
+// A map is just a hash table. The data is arranged
+// into an array of buckets. Each bucket contains up to
+// 8 key/elem pairs. The low-order bits of the hash are
+// used to select a bucket. Each bucket contains a few
+// high-order bits of each hash to distinguish the entries
+// within a single bucket.
 // 本文件包含了 Go map 类型的实现
 //
 // map 只是 hash 表。数据被排布到了一组 buckets 中。
@@ -31,7 +39,7 @@ package runtime
 // Picking loadFactor: too large and we have lots of overflow
 // buckets, too small and we waste a lot of space. I wrote
 // a simple program to check some stats for different loads:
-// (64-bit, 8 byte keys and elem)
+// (64-bit, 8 byte keys and elems)
 //  loadFactor    %overflow  bytes/entry     hitprobe    missprobe
 //        4.00         2.13        20.77         3.00         4.00
 //        4.50         4.05        17.30         3.25         4.50
@@ -64,7 +72,7 @@ const (
 	bucketCnt     = 1 << bucketCntBits
 
 	// Maximum average load of a bucket that triggers growth is 6.5.
-	// Represent as loadFactorNum/loadFactDen, to allow integer math.
+	// Represent as loadFactorNum/loadFactorDen, to allow integer math.
 	loadFactorNum = 13
 	loadFactorDen = 2
 
@@ -109,17 +117,15 @@ func isEmpty(x uint8) bool {
 	return x <= emptyOne
 }
 
-// Go map 的头部
+// A header for a Go map.
 type hmap struct {
 	// Note: the format of the hmap is also encoded in cmd/compile/internal/gc/reflect.go.
 	// Make sure this stays in sync with the compiler's definition.
-	// hmap 的格式在 cmd/compile/internal/gc/reflect.go 中编码
-	// 请确保此格式与编译器的定义同步
 	count     int // # live cells == size of map.  Must be first (used by len() builtin)
 	flags     uint8
 	B         uint8  // log_2 of # of buckets (can hold up to loadFactor * 2^B items)
 	noverflow uint16 // approximate number of overflow buckets; see incrnoverflow for details
-	hash0     uint32 // hash 种子
+	hash0     uint32 // hash seed
 
 	buckets    unsafe.Pointer // array of 2^B Buckets. may be nil if count==0.
 	oldbuckets unsafe.Pointer // previous bucket array of half the size, non-nil only when growing
@@ -162,8 +168,8 @@ type bmap struct {
 // If you modify hiter, also change cmd/compile/internal/gc/reflect.go to indicate
 // the layout of this structure.
 type hiter struct {
-	key         unsafe.Pointer // Must be in first position.  Write nil to indicate iteration end (see cmd/internal/gc/range.go).
-	elem        unsafe.Pointer // Must be in second position (see cmd/internal/gc/range.go).
+	key         unsafe.Pointer // Must be in first position.  Write nil to indicate iteration end (see cmd/compile/internal/gc/range.go).
+	elem        unsafe.Pointer // Must be in second position (see cmd/compile/internal/gc/range.go).
 	t           *maptype
 	h           *hmap
 	buckets     unsafe.Pointer // bucket ptr at hash_iter initialization time
@@ -599,7 +605,7 @@ again:
 	if h.growing() {
 		growWork(t, h, bucket)
 	}
-	b := (*bmap)(unsafe.Pointer(uintptr(h.buckets) + bucket*uintptr(t.bucketsize)))
+	b := (*bmap)(add(h.buckets, bucket*uintptr(t.bucketsize)))
 	top := tophash(hash)
 
 	var inserti *uint8
@@ -650,7 +656,7 @@ bucketloop:
 	}
 
 	if inserti == nil {
-		// all current buckets are full, allocate a new one.
+		// The current bucket and all the overflow buckets connected to it are full, allocate a new one.
 		newb := h.newoverflow(t, b)
 		inserti = &newb.tophash[0]
 		insertk = add(unsafe.Pointer(newb), dataOffset)
@@ -780,6 +786,11 @@ search:
 			}
 		notLast:
 			h.count--
+			// Reset the hash seed to make it more difficult for attackers to
+			// repeatedly trigger hash collisions. See issue 25237.
+			if h.count == 0 {
+				h.hash0 = fastrand()
+			}
 			break search
 		}
 	}
@@ -992,6 +1003,10 @@ func mapclear(t *maptype, h *hmap) {
 	h.nevacuate = 0
 	h.noverflow = 0
 	h.count = 0
+
+	// Reset the hash seed to make it more difficult for attackers to
+	// repeatedly trigger hash collisions. See issue 25237.
+	h.hash0 = fastrand()
 
 	// Keep the mapextra allocation but clear any extra information.
 	if h.extra != nil {
@@ -1371,5 +1386,5 @@ func reflectlite_maplen(h *hmap) int {
 	return h.count
 }
 
-const maxZero = 1024 // must match value in cmd/compile/internal/gc/walk.go:zeroValSize
+const maxZero = 1024 // must match value in reflect/value.go:maxZero cmd/compile/internal/gc/walk.go:zeroValSize
 var zeroVal [maxZero]byte

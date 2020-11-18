@@ -5,6 +5,7 @@
 package runtime
 
 import (
+	"internal/bytealg"
 	"runtime/internal/atomic"
 	"runtime/internal/sys"
 	"unsafe"
@@ -51,7 +52,7 @@ var (
 	argv **byte
 )
 
-// nosplit 用于 linux 中启动阶段的 sysargs
+// nosplit for use in linux startup sysargs
 //go:nosplit
 func argv_index(argv **byte, i int32) *byte {
 	return *(**byte)(add(unsafe.Pointer(argv), uintptr(i)*sys.PtrSize))
@@ -294,10 +295,13 @@ type dbgVar struct {
 	value *int32
 }
 
+// Holds variables parsed from GODEBUG env var,
+// except for "memprofilerate" since there is an
+// existing int var for that value, which may
+// already have an initial value.
 // 保存从 GODEBUG env var 解析的变量，
 // 除了 "memprofilerate"，因为该值存在一个int var，它可能已经有一个初始值。
 var debug struct {
-	allocfreetrace     int32
 	cgocheck           int32
 	clobberfree        int32
 	efence             int32
@@ -308,18 +312,26 @@ var debug struct {
 	gctrace            int32
 	invalidptr         int32
 	madvdontneed       int32 // for Linux; issue 28466
-	sbrk               int32
 	scavenge           int32
+	scavtrace          int32
 	scheddetail        int32
 	schedtrace         int32
 	tracebackancestors int32
 	asyncpreemptoff    int32
+
+	// debug.malloc is used as a combined debug check
+	// in the malloc function and should be set
+	// if any of the below debug options is != 0.
+	malloc         bool
+	allocfreetrace int32
+	inittrace      int32
+	sbrk           int32
 }
 
 var dbgvars = []dbgVar{
 	{"allocfreetrace", &debug.allocfreetrace},
-	{"cgocheck", &debug.cgocheck},
 	{"clobberfree", &debug.clobberfree},
+	{"cgocheck", &debug.cgocheck},
 	{"efence", &debug.efence},
 	{"gccheckmark", &debug.gccheckmark},
 	{"gcpacertrace", &debug.gcpacertrace},
@@ -327,28 +339,42 @@ var dbgvars = []dbgVar{
 	{"gcstoptheworld", &debug.gcstoptheworld},
 	{"gctrace", &debug.gctrace},
 	{"invalidptr", &debug.invalidptr},
+	{"madvdontneed", &debug.madvdontneed},
 	{"sbrk", &debug.sbrk},
 	{"scavenge", &debug.scavenge},
+	{"scavtrace", &debug.scavtrace},
 	{"scheddetail", &debug.scheddetail},
 	{"schedtrace", &debug.schedtrace},
 	{"tracebackancestors", &debug.tracebackancestors},
 	{"asyncpreemptoff", &debug.asyncpreemptoff},
+	{"inittrace", &debug.inittrace},
 }
 
 func parsedebugvars() {
 	// defaults
 	debug.cgocheck = 1
 	debug.invalidptr = 1
+	if GOOS == "linux" {
+		// On Linux, MADV_FREE is faster than MADV_DONTNEED,
+		// but doesn't affect many of the statistics that
+		// MADV_DONTNEED does until the memory is actually
+		// reclaimed. This generally leads to poor user
+		// experience, like confusing stats in top and other
+		// monitoring tools; and bad integration with
+		// management systems that respond to memory usage.
+		// Hence, default to MADV_DONTNEED.
+		debug.madvdontneed = 1
+	}
 
 	for p := gogetenv("GODEBUG"); p != ""; {
 		field := ""
-		i := index(p, ",")
+		i := bytealg.IndexByteString(p, ',')
 		if i < 0 {
 			field, p = p, ""
 		} else {
 			field, p = p[:i], p[i+1:]
 		}
-		i = index(field, "=")
+		i = bytealg.IndexByteString(field, '=')
 		if i < 0 {
 			continue
 		}
@@ -371,6 +397,8 @@ func parsedebugvars() {
 			}
 		}
 	}
+
+	debug.malloc = (debug.allocfreetrace | debug.inittrace | debug.sbrk) != 0
 
 	setTraceback(gogetenv("GOTRACEBACK"))
 	traceback_env = traceback_cache
@@ -449,14 +477,10 @@ func releasem(mp *m) {
 	_g_ := getg()
 	mp.locks--
 	if mp.locks == 0 && _g_.preempt {
+		// restore the preemption request in case we've cleared it in newstack
 		// 如果我们在 newstack 中清除了抢占请求，则恢复抢占请求
 		_g_.stackguard0 = stackPreempt
 	}
-}
-
-//go:nosplit
-func gomcache() *mcache {
-	return getg().m.mcache
 }
 
 //go:linkname reflect_typelinks reflect.typelinks
@@ -483,7 +507,7 @@ func reflect_resolveTypeOff(rtype unsafe.Pointer, off int32) unsafe.Pointer {
 	return unsafe.Pointer((*_type)(rtype).typeOff(typeOff(off)))
 }
 
-// reflect_resolveTextOff resolves an function pointer offset from a base type.
+// reflect_resolveTextOff resolves a function pointer offset from a base type.
 //go:linkname reflect_resolveTextOff reflect.resolveTextOff
 func reflect_resolveTextOff(rtype unsafe.Pointer, off int32) unsafe.Pointer {
 	return (*_type)(rtype).textOff(textOff(off))

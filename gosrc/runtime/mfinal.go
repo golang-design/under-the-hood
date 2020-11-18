@@ -88,7 +88,7 @@ func queuefinalizer(p unsafe.Pointer, fn *funcval, nret uintptr, fint *_type, ot
 	lock(&finlock)
 	if finq == nil || finq.cnt == uint32(len(finq.fin)) {
 		if finc == nil {
-			finc = (*finblock)(persistentalloc(_FinBlockSize, 0, &memstats.gc_sys))
+			finc = (*finblock)(persistentalloc(_FinBlockSize, 0, &memstats.gcMiscSys))
 			finc.alllink = allfin
 			allfin = finc
 			if finptrmask[0] == 0 {
@@ -293,15 +293,15 @@ func runfinq() {
 // pass the object to a call of the KeepAlive function to mark the
 // last point in the function where the object must be reachable.
 //
-// For example, if p points to a struct that contains a file descriptor d,
-// and p has a finalizer that closes that file descriptor, and if the last
-// use of p in a function is a call to syscall.Write(p.d, buf, size), then
-// p may be unreachable as soon as the program enters syscall.Write. The
-// finalizer may run at that moment, closing p.d, causing syscall.Write
-// to fail because it is writing to a closed file descriptor (or, worse,
-// to an entirely different file descriptor opened by a different goroutine).
-// To avoid this problem, call runtime.KeepAlive(p) after the call to
-// syscall.Write.
+// For example, if p points to a struct, such as os.File, that contains
+// a file descriptor d, and p has a finalizer that closes that file
+// descriptor, and if the last use of p in a function is a call to
+// syscall.Write(p.d, buf, size), then p may be unreachable as soon as
+// the program enters syscall.Write. The finalizer may run at that moment,
+// closing p.d, causing syscall.Write to fail because it is writing to
+// a closed file descriptor (or, worse, to an entirely different
+// file descriptor opened by a different goroutine). To avoid this problem,
+// call runtime.KeepAlive(p) after the call to syscall.Write.
 //
 // A single goroutine runs all finalizers for a program, sequentially.
 // If a finalizer must run for a long time, it should do so by starting
@@ -421,6 +421,28 @@ okarg:
 	})
 }
 
+// Mark KeepAlive as noinline so that it is easily detectable as an intrinsic.
+//go:noinline
+
+// KeepAlive marks its argument as currently reachable.
+// This ensures that the object is not freed, and its finalizer is not run,
+// before the point in the program where KeepAlive is called.
+//
+// A very simplified example showing where KeepAlive is required:
+// 	type File struct { d int }
+// 	d, err := syscall.Open("/file/path", syscall.O_RDONLY, 0)
+// 	// ... do something if err != nil ...
+// 	p := &File{d}
+// 	runtime.SetFinalizer(p, func(p *File) { syscall.Close(p.d) })
+// 	var buf [10]byte
+// 	n, err := syscall.Read(p.d, buf[:])
+// 	// Ensure p is not finalized until Read returns.
+// 	runtime.KeepAlive(p)
+// 	// No more uses of p after this point.
+//
+// Without the KeepAlive call, the finalizer could run at the start of
+// syscall.Read, closing the file descriptor before syscall.Read makes
+// the actual system call.
 // KeepAlive 将其参数标记为当前可达。
 // 这保证了对象在调用 KeepAlive 之前不会被释放，且它的 finalizer 不会运行，
 //
@@ -440,6 +462,9 @@ okarg:
 // 若没有调用 KeepAlive，则 finalizer 会在 syscall.Read 之前运行，在 syscall.Read
 // 之前关闭文件描述符
 func KeepAlive(x interface{}) {
+	// Introduce a use of x that the compiler can't eliminate.
+	// This makes sure x is alive on entry. We need x to be alive
+	// on entry for "defer runtime.KeepAlive(x)"; see issue 21402.
 	// 引入一个关于 x 的使用，使得编译器不会将其消除。从而保证了 x 保持活跃。
 	// 这段代码确保了 x 在入口处保持活跃，当使用 `defer runtime.KeepAlive(x)` 时
 	// 见 issue 21402
