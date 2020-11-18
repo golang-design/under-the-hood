@@ -3,11 +3,12 @@
 // license that can be found in the LICENSE file.
 
 /*
-Package signal 实现了输入信号的访问机制
+Package signal implements access to incoming signals.
 
-信号 Signal 主要在类 Unix 系统上使用。在 Windows 和 Plan9 上使用此包，请见下面的描述
+Signals are primarily used on Unix-like systems. For the use of this
+package on Windows and Plan 9, see below.
 
-信号的类型
+Types of signals
 
 The signals SIGKILL and SIGSTOP may not be caught by a program, and
 therefore cannot be affected by this package.
@@ -32,7 +33,7 @@ by default is ^\ (Control-Backslash). In general you can cause a
 program to simply exit by pressing ^C, and you can cause it to exit
 with a stack dump by pressing ^\.
 
-Go 程序的默认信号行为
+Default behavior of signals in Go programs
 
 By default, a synchronous signal is converted into a run-time panic. A
 SIGHUP, SIGINT, or SIGTERM signal causes the program to exit. A
@@ -54,7 +55,7 @@ and, on GNU/Linux, signals 32 (SIGCANCEL) and 33 (SIGSETXID)
 started by os.Exec, or by the os/exec package, will inherit the
 modified signal mask.
 
-改变 Go 程序的信号行为
+Changing the behavior of signals in Go programs
 
 The functions in this package allow a program to change the way Go
 programs handle signals.
@@ -108,7 +109,7 @@ This means that, by default, command line programs will behave like
 typical Unix command line programs, while other programs will not
 crash with SIGPIPE when writing to a closed network connection.
 
-使用 cgo 或 SWIG 的 Go 程序
+Go programs that use cgo or SWIG
 
 In a Go program that includes non-Go code, typically C/C++ code
 accessed using cgo or SWIG, Go's startup code normally runs first. It
@@ -165,7 +166,7 @@ signal, and raises it again, to invoke any non-Go handler or default
 system handler. If the program does not exit, the Go handler then
 reinstalls itself and continues execution of the program.
 
-非 Go 程序调用 Go 代码
+Non-Go programs that call Go code
 
 When Go code is built with options like -buildmode=c-shared, it will
 be run as part of an existing non-Go program. The non-Go code may
