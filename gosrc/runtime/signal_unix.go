@@ -68,7 +68,6 @@ const (
 // useless), and even if it is, the application has to be ready for
 // spurious SIGURG. SIGIO wouldn't be a bad choice either, but is more
 // likely to be used for real.
-//
 // sigPreempt 是用于非合作式抢占的信号。没有选择此信号的好方法，但是有一些启发式方法：
 // 1.默认情况下，它应该是调试器传递的信号。在Linux上，这是SIGALRM，SIGURG，
 //   SIGCHLD，SIGIO，SIGVTALRM，SIGPROF和SIGWINCH，以及一些glibc内部信号。
@@ -119,12 +118,15 @@ func init() {
 
 var signalsOK bool
 
+// Initialize signals.
+// Called by libpreinit so runtime may not be initialized.
 // 初始化 signal 信号
 // 由 libpreinit 调用，因此运行时可能没有被初始化
 //go:nosplit
 //go:nowritebarrierrec
 func initsig(preinit bool) {
 	if !preinit {
+		// It's now OK for signal handlers to run.
 		// 已经提前初始化过了，所以 signal handler 可以直接运行
 		signalsOK = true
 	}
@@ -142,10 +144,14 @@ func initsig(preinit bool) {
 			continue
 		}
 
+		// We don't need to use atomic operations here because
+		// there shouldn't be any other goroutines running yet.
 		// 此时不需要原子操作，因为此时没有其他运行的 goroutine
 		fwdSig[i] = getsig(i)
 
 		if !sigInstallGoHandler(i) {
+			// Even if we are not installing a signal handler,
+			// set SA_ONSTACK if necessary.
 			// 即使不设置 signal handler，在必要时设置 SA_ONSTACK
 			if fwdSig[i] != _SIG_DFL && fwdSig[i] != _SIG_IGN {
 				setsigstack(i)
@@ -286,6 +292,12 @@ func setProcessCPUProfiler(hz int32) {
 			atomic.Storeuintptr(&fwdSig[_SIGPROF], getsig(_SIGPROF))
 			setsig(_SIGPROF, funcPC(sighandler))
 		}
+
+		var it itimerval
+		it.it_interval.tv_sec = 0
+		it.it_interval.set_usec(1000000 / hz)
+		it.it_value = it.it_interval
+		setitimer(_ITIMER_PROF, &it, nil)
 	} else {
 		// If the Go signal handler should be disabled by default,
 		// switch back to the signal handler that was installed
@@ -310,23 +322,16 @@ func setProcessCPUProfiler(hz int32) {
 				setsig(_SIGPROF, h)
 			}
 		}
+
+		setitimer(_ITIMER_PROF, &itimerval{}, nil)
 	}
 }
 
 // setThreadCPUProfiler makes any thread-specific changes required to
 // implement profiling at a rate of hz.
+// No changes required on Unix systems.
 func setThreadCPUProfiler(hz int32) {
-	var it itimerval
-	if hz == 0 {
-		setitimer(_ITIMER_PROF, &it, nil)
-	} else {
-		it.it_interval.tv_sec = 0
-		it.it_interval.set_usec(1000000 / hz)
-		it.it_value = it.it_interval
-		setitimer(_ITIMER_PROF, &it, nil)
-	}
-	_g_ := getg()
-	_g_.m.profilehz = hz
+	getg().m.profilehz = hz
 }
 
 func sigpipe() {
@@ -336,19 +341,31 @@ func sigpipe() {
 	dieFromSignal(_SIGPIPE)
 }
 
+// doSigPreempt handles a preemption signal on gp.
 // doSigPreempt 处理了 gp 上的抢占信号
 func doSigPreempt(gp *g, ctxt *sigctxt) {
+	// Check if this G wants to be preempted and is safe to
+	// preempt.
 	// 检查 G 是否需要被抢占、抢占是否安全
-	if wantAsyncPreempt(gp) && isAsyncSafePoint(gp, ctxt.sigpc(), ctxt.sigsp(), ctxt.siglr()) {
-		// 插入抢占调用
-		ctxt.pushCall(funcPC(asyncPreempt))
+	if wantAsyncPreempt(gp) {
+		if ok, newpc := isAsyncSafePoint(gp, ctxt.sigpc(), ctxt.sigsp(), ctxt.siglr()); ok {
+			// Adjust the PC and inject a call to asyncPreempt.
+			// 插入抢占调用
+			ctxt.pushCall(funcPC(asyncPreempt), newpc)
+		}
 	}
 
+	// Acknowledge the preemption.
 	// 记录抢占失败
 	atomic.Xadd(&gp.m.preemptGen, 1)
+	atomic.Store(&gp.m.signalPending, 0)
+
+	if GOOS == "darwin" {
+		atomic.Xadd(&pendingPreemptSignals, -1)
+	}
 }
 
-const preemptMSupported = pushCallSupported
+const preemptMSupported = true
 
 // preemptM sends a preemption request to mp. This request may be
 // handled asynchronously and may be coalesced with other requests to
@@ -360,22 +377,28 @@ const preemptMSupported = pushCallSupported
 // 接收到该请求后，如果正在运行的 G 或 P 被标记为抢占，并且 goroutine 处于异步安全点，
 // 它将抢占 goroutine。在处理抢占请求后，它始终以原子方式递增 mp.preemptGen。
 func preemptM(mp *m) {
-	if !pushCallSupported {
-		// This architecture doesn't support ctxt.pushCall
-		// yet, so doSigPreempt won't work.
-		return
+	// On Darwin, don't try to preempt threads during exec.
+	// Issue #41702.
+	if GOOS == "darwin" {
+		execLock.rlock()
 	}
-	if GOOS == "darwin" && (GOARCH == "arm" || GOARCH == "arm64") && !iscgo {
-		// On darwin, we use libc calls, and cgo is required on ARM and ARM64
-		// so we have TLS set up to save/restore G during C calls. If cgo is
-		// absent, we cannot save/restore G in TLS, and if a signal is
-		// received during C execution we cannot get the G. Therefore don't
-		// send signals.
-		// This can only happen in the go_bootstrap program (otherwise cgo is
-		// required).
-		return
+
+	if atomic.Cas(&mp.signalPending, 0, 1) {
+		if GOOS == "darwin" {
+			atomic.Xadd(&pendingPreemptSignals, 1)
+		}
+
+		// If multiple threads are preempting the same M, it may send many
+		// signals to the same M such that it hardly make progress, causing
+		// live-lock problem. Apparently this could happen on darwin. See
+		// issue #37741.
+		// Only send a signal if there isn't already one pending.
+		signalM(mp, sigPreempt)
 	}
-	signalM(mp, sigPreempt)
+
+	if GOOS == "darwin" {
+		execLock.runlock()
+	}
 }
 
 // sigFetchG fetches the value of G safely when running in a signal handler.
@@ -423,9 +446,7 @@ func sigtrampgo(sig uint32, info *siginfo, ctx unsafe.Pointer) {
 	c := &sigctxt{info, ctx}
 	g := sigFetchG(c)
 	setg(g)
-	g := getg()
 	if g == nil {
-		c := &sigctxt{info, ctx}
 		if sig == _SIGPROF {
 			sigprofNonGoPC(c.sigpc())
 			return
@@ -438,12 +459,17 @@ func sigtrampgo(sig uint32, info *siginfo, ctx unsafe.Pointer) {
 			// no non-Go signal handler for sigPreempt.
 			// The default behavior for sigPreempt is to ignore
 			// the signal, so badsignal will be a no-op anyway.
+			if GOOS == "darwin" {
+				atomic.Xadd(&pendingPreemptSignals, -1)
+			}
 			return
 		}
 		c.fixsigcode(sig)
 		badsignal(uintptr(sig), c)
 		return
 	}
+
+	setg(g.m.gsignal)
 
 	// If some non-Go code called sigaltstack, adjust.
 	var gsignalStack gsignalStack
@@ -452,13 +478,10 @@ func sigtrampgo(sig uint32, info *siginfo, ctx unsafe.Pointer) {
 		g.m.gsignal.stktopsp = getcallersp()
 	}
 
-	setg(g.m.gsignal)
-
 	if g.stackguard0 == stackFork {
 		signalDuringFork(sig)
 	}
 
-	c := &sigctxt{info, ctx}
 	c.fixsigcode(sig)
 	sighandler(sig, info, ctx, g)
 	setg(g)
@@ -497,14 +520,14 @@ func adjustSignalStack(sig uint32, mp *m, gsigStack *gsignalStack) bool {
 	sigaltstack(nil, &st)
 	if st.ss_flags&_SS_DISABLE != 0 {
 		setg(nil)
-		needm(0)
+		needm()
 		noSignalStack(sig)
 		dropm()
 	}
 	stsp := uintptr(unsafe.Pointer(st.ss_sp))
 	if sp < stsp || sp >= stsp+st.ss_size {
 		setg(nil)
-		needm(0)
+		needm()
 		sigNotOnStack(sig)
 		dropm()
 	}
@@ -542,7 +565,6 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 	_g_ := getg()
 	c := &sigctxt{info, ctxt}
 
-	// profile 时钟超时
 	if sig == _SIGPROF {
 		sigprof(c.sigpc(), c.sigsp(), c.siglr(), gp, _g_.m)
 		return
@@ -556,7 +578,7 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 		return
 	}
 
-	if sig == sigPreempt {
+	if sig == sigPreempt && debug.asyncpreemptoff == 0 {
 		// Might be a preemption signal.
 		doSigPreempt(gp, c)
 		// Even if this was definitely a preemption signal, it
@@ -568,15 +590,20 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 	if sig < uint32(len(sigtable)) {
 		flags = sigtable[sig].flags
 	}
-	if flags&_SigPanic != 0 && gp.throwsplit {
+	if c.sigcode() != _SI_USER && flags&_SigPanic != 0 && gp.throwsplit {
+		// We can't safely sigpanic because it may grow the
+		// stack. Abort in the signal handler instead.
 		// 我们无法安全的 sigpanic 因为它可能造成栈的增长，因此忽略它
-		flags = (flags &^ _SigPanic) | _SigThrow
+		flags = _SigThrow
 	}
 	if isAbortPC(c.sigpc()) {
+		// On many architectures, the abort function just
+		// causes a memory fault. Don't turn that into a panic.
 		// 很多架构中，abort 函数会导致内存段错误，不将其作为 panic
 		flags = _SigThrow
 	}
 	if c.sigcode() != _SI_USER && flags&_SigPanic != 0 {
+		// The signal is going to cause a panic.
 		// 产生 panic 的信号
 		// Arrange the stack so that it looks like the point
 		// where the signal occurred made a call to the
@@ -611,8 +638,11 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 		dieFromSignal(sig)
 	}
 
-	// 非 THROW， 返回
-	if flags&_SigThrow == 0 {
+	// _SigThrow means that we should exit now.
+	// If we get here with _SigPanic, it means that the signal
+	// was sent to us by a program (c.sigcode() == _SI_USER);
+	// in that case, if we didn't handle it in sigsend, we exit now.
+	if flags&(_SigThrow|_SigPanic) == 0 {
 		return
 	}
 
@@ -633,6 +663,30 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 	if _g_.m.lockedg != 0 && _g_.m.ncgo > 0 && gp == _g_.m.g0 {
 		print("signal arrived during cgo execution\n")
 		gp = _g_.m.lockedg.ptr()
+	}
+	if sig == _SIGILL || sig == _SIGFPE {
+		// It would be nice to know how long the instruction is.
+		// Unfortunately, that's complicated to do in general (mostly for x86
+		// and s930x, but other archs have non-standard instruction lengths also).
+		// Opt to print 16 bytes, which covers most instructions.
+		const maxN = 16
+		n := uintptr(maxN)
+		// We have to be careful, though. If we're near the end of
+		// a page and the following page isn't mapped, we could
+		// segfault. So make sure we don't straddle a page (even though
+		// that could lead to printing an incomplete instruction).
+		// We're assuming here we can read at least the page containing the PC.
+		// I suppose it is possible that the page is mapped executable but not readable?
+		pc := c.sigpc()
+		if n > physPageSize-pc%physPageSize {
+			n = physPageSize - pc%physPageSize
+		}
+		print("instruction bytes:")
+		b := (*[maxN]byte)(unsafe.Pointer(pc))
+		for i := uintptr(0); i < n; i++ {
+			print(" ", hex(b[i]))
+		}
+		println()
 	}
 	print("\n")
 
@@ -705,7 +759,7 @@ func sigpanic() {
 		}
 		// Support runtime/debug.SetPanicOnFault.
 		if g.paniconfault {
-			panicmem()
+			panicmemAddr(g.sigcode1)
 		}
 		print("unexpected fault address ", hex(g.sigcode1), "\n")
 		throw("fault")
@@ -715,7 +769,7 @@ func sigpanic() {
 		}
 		// Support runtime/debug.SetPanicOnFault.
 		if g.paniconfault {
-			panicmem()
+			panicmemAddr(g.sigcode1)
 		}
 		print("unexpected fault address ", hex(g.sigcode1), "\n")
 		throw("fault")
@@ -924,7 +978,7 @@ func badsignal(sig uintptr, c *sigctxt) {
 		exit(2)
 		*(*uintptr)(unsafe.Pointer(uintptr(123))) = 2
 	}
-	needm(0)
+	needm()
 	if !sigsend(uint32(sig)) {
 		// A foreign thread received the signal sig, and the
 		// Go code does not want to handle it.
@@ -970,7 +1024,7 @@ func sigfwdgo(sig uint32, info *siginfo, ctx unsafe.Pointer) bool {
 	// This function and its caller sigtrampgo assumes SIGPIPE is delivered on the
 	// originating thread. This property does not hold on macOS (golang.org/issue/33384),
 	// so we have no choice but to ignore SIGPIPE.
-	if GOOS == "darwin" && sig == _SIGPIPE {
+	if (GOOS == "darwin" || GOOS == "ios") && sig == _SIGPIPE {
 		return true
 	}
 
@@ -1004,14 +1058,19 @@ func sigfwdgo(sig uint32, info *siginfo, ctx unsafe.Pointer) bool {
 	return true
 }
 
+// sigsave saves the current thread's signal mask into *p.
+// This is used to preserve the non-Go signal mask when a non-Go
+// thread calls a Go function.
+// This is nosplit and nowritebarrierrec because it is called by needm
+// which may be called on a non-Go thread with no g available.
 // msigsave 将当前线程的 signal mask 保存到 mp.sigmask。
 // 当一个非 Go 线程调用 Go 函数时，用于保留非 Go signal mask。
 // 这个函数是 nosplit 和 nowritebarrierrec 的，因为它由 needm 调用，即
 // 在一个非 Go 线程上调用时候，没有 G。
 //go:nosplit
 //go:nowritebarrierrec
-func msigsave(mp *m) {
-	sigprocmask(_SIG_SETMASK, nil, &mp.sigmask)
+func sigsave(p *sigset) {
+	sigprocmask(_SIG_SETMASK, nil, p)
 }
 
 // msigrestore sets the current thread's signal mask to sigmask.
@@ -1056,6 +1115,16 @@ func minitSignals() {
 	minitSignalMask()
 }
 
+// minitSignalStack is called when initializing a new m to set the
+// alternate signal stack. If the alternate signal stack is not set
+// for the thread (the normal case) then set the alternate signal
+// stack to the gsignal stack. If the alternate signal stack is set
+// for the thread (the case when a non-Go thread sets the alternate
+// signal stack and then calls a Go function) then set the gsignal
+// stack to the alternate signal stack. We also set the alternate
+// signal stack to the gsignal stack if cgo is not used (regardless
+// of whether it is already set). Record which choice was made in
+// newSigstack, so that it can be undone in unminit.
 // 初始化新 m 以设置备用信号栈时调用 minitSignalStack。
 // 如果没有为线程设置备用信号栈（正常情况），则将备用信号栈设置为 gsignal 栈。
 // 如果为线程设置了备用信号栈（非 Go 线程设置备用信号栈然后调用 Go 函数的情况），
@@ -1084,7 +1153,7 @@ func minitSignalStack() {
 // thread's signal mask. When this is called all signals have been
 // blocked for the thread.  This starts with m.sigmask, which was set
 // either from initSigmask for a newly created thread or by calling
-// msigsave if this is a non-Go thread calling a Go function. It
+// sigsave if this is a non-Go thread calling a Go function. It
 // removes all essential signals from the mask, thus causing those
 // signals to not be blocked. Then it sets the thread's signal mask.
 // After this is called the thread can receive signals.
@@ -1150,6 +1219,11 @@ type gsignalStack struct {
 	stktopsp    uintptr
 }
 
+// setGsignalStack sets the gsignal stack of the current m to an
+// alternate signal stack returned from the sigaltstack system call.
+// It saves the old values in *old for use by restoreGsignalStack.
+// This is used when handling a signal if non-Go code has set the
+// alternate signal stack.
 // setGsignalStack 将当前 m 的 gsignal 栈设置为从 sigaltstack 系统调用返回的备用信号堆栈。
 // 它将旧值保存在 *old 中以供 restoreGsignalStack 使用。
 // 如果非 Go 代码设置了，则在处理信号时使用备用栈。
@@ -1182,6 +1256,7 @@ func restoreGsignalStack(st *gsignalStack) {
 	gp.stktopsp = st.stktopsp
 }
 
+// signalstack sets the current thread's alternate signal stack to s.
 // signalstack 设置当前线程的额外信号栈 G
 //go:nosplit
 func signalstack(s *stack) {
@@ -1190,7 +1265,7 @@ func signalstack(s *stack) {
 	sigaltstack(&st, nil)
 }
 
-// setsigsegv is used on darwin/arm{,64} to fake a segmentation fault.
+// setsigsegv is used on darwin/arm64 to fake a segmentation fault.
 //
 // This is exported via linkname to assembly in runtime/cgo.
 //

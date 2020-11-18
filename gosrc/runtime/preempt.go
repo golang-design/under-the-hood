@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Goroutine 抢占
+// Goroutine preemption
 //
 // A goroutine can be preempted at any safe-point. Currently, there
 // are a few categories of safe-points:
@@ -269,9 +269,19 @@ func suspendG(gp *g) suspendGState {
 
 			casfrom_Gscanstatus(gp, _Gscanrunning, _Grunning)
 
+			// Send asynchronous preemption. We do this
+			// after CASing the G back to _Grunning
+			// because preemptM may be synchronous and we
+			// don't want to catch the G just spinning on
+			// its status.
 			// 发送异步抢占。我们在将 G 的状态改为 _Grunning 后进行，因为 preemptM
 			// 可能会同步执行，且我们不希望在 G 在其状态自旋时进行捕获。
 			if preemptMSupported && debug.asyncpreemptoff == 0 && needAsync {
+				// Rate limit preemptM calls. This is
+				// particularly important on Windows
+				// where preemptM is actually
+				// synchronous and the spin loop here
+				// can lead to live-lock.
 				// 当 preemptM 同步执行，且这里的自旋循环将导致活锁时，对
 				// preemptM 调用的速率限制。这一点在 Windows 上非常重要。
 				now := nanotime()
@@ -327,6 +337,7 @@ func resumeG(state suspendGState) {
 	}
 }
 
+// canPreemptM reports whether mp is in a state that is safe to preempt.
 // canPreemptM 报告 mp 是否处于可抢占的安全状态。
 //
 // It is nosplit because it has nosplit callers.
@@ -338,6 +349,12 @@ func canPreemptM(mp *m) bool {
 
 //go:generate go run mkpreempt.go
 
+// asyncPreempt saves all user registers and calls asyncPreempt2.
+//
+// When stack scanning encounters an asyncPreempt frame, it scans that
+// frame and its parent frame conservatively.
+//
+// asyncPreempt is implemented in assembly.
 // asyncPreempt 保存了所有用户寄存器，并调用 asyncPreempt2
 //
 // 当栈扫描遭遇 asyncPreempt 栈帧时，将会保守的扫描调用方栈帧
@@ -384,8 +401,11 @@ func init() {
 	}
 }
 
+// wantAsyncPreempt returns whether an asynchronous preemption is
+// queued for gp.
 // wantAsyncPreempt 返回异步抢占是否被 gp 请求
 func wantAsyncPreempt(gp *g) bool {
+	// Check both the G and the P.
 	// 同时检查 G 和 P
 	return (gp.preempt || gp.m.p != 0 && gp.m.p.ptr().preempt) && readgstatus(gp)&^_Gscan == _Grunning
 }
@@ -402,31 +422,35 @@ func wantAsyncPreempt(gp *g) bool {
 // 3. It's generally safe to interact with the runtime, even if we're
 // in a signal handler stopped here. For example, there are no runtime
 // locks held, so acquiring a runtime lock won't self-deadlock.
-func isAsyncSafePoint(gp *g, pc, sp, lr uintptr) bool {
+//
+// In some cases the PC is safe for asynchronous preemption but it
+// also needs to adjust the resumption PC. The new PC is returned in
+// the second result.
+func isAsyncSafePoint(gp *g, pc, sp, lr uintptr) (bool, uintptr) {
 	mp := gp.m
 
 	// Only user Gs can have safe-points. We check this first
 	// because it's extremely common that we'll catch mp in the
 	// scheduler processing this G preemption.
 	if mp.curg != gp {
-		return false
+		return false, 0
 	}
 
 	// Check M state.
 	if mp.p == 0 || !canPreemptM(mp) {
-		return false
+		return false, 0
 	}
 
 	// Check stack space.
 	if sp < gp.stack.lo || sp-gp.stack.lo < asyncPreemptStack {
-		return false
+		return false, 0
 	}
 
 	// Check if PC is an unsafe-point.
 	f := findfunc(pc)
 	if !f.valid() {
 		// Not Go code.
-		return false
+		return false, 0
 	}
 	if (GOARCH == "mips" || GOARCH == "mipsle" || GOARCH == "mips64" || GOARCH == "mips64le") && lr == pc+8 && funcspdelta(f, pc, nil) == 0 {
 		// We probably stopped at a half-executed CALL instruction,
@@ -437,14 +461,14 @@ func isAsyncSafePoint(gp *g, pc, sp, lr uintptr) bool {
 		// stack for unwinding, not the LR value. But if this is a
 		// call to morestack, we haven't created the frame, and we'll
 		// use the LR for unwinding, which will be bad.
-		return false
+		return false, 0
 	}
-	smi := pcdatavalue(f, _PCDATA_RegMapIndex, pc, nil)
-	if smi == -2 {
+	up, startpc := pcdatavalue2(f, _PCDATA_UnsafePoint, pc)
+	if up != _PCDATA_UnsafePointSafe {
 		// Unsafe-point marked by compiler. This includes
 		// atomic sequences (e.g., write barrier) and nosplit
 		// functions (except at calls).
-		return false
+		return false, 0
 	}
 	if fd := funcdata(f, _FUNCDATA_LocalsPointerMaps); fd == nil || fd == unsafe.Pointer(&no_pointers_stackmap) {
 		// This is assembly code. Don't assume it's
@@ -455,7 +479,7 @@ func isAsyncSafePoint(gp *g, pc, sp, lr uintptr) bool {
 		//
 		// TODO: Are there cases that are safe but don't have a
 		// locals pointer map, like empty frame functions?
-		return false
+		return false, 0
 	}
 	name := funcname(f)
 	if inldata := funcdata(f, _FUNCDATA_InlTree); inldata != nil {
@@ -478,10 +502,21 @@ func isAsyncSafePoint(gp *g, pc, sp, lr uintptr) bool {
 		//
 		// TODO(austin): We should improve this, or opt things
 		// in incrementally.
-		return false
+		return false, 0
 	}
-
-	return true
+	switch up {
+	case _PCDATA_Restart1, _PCDATA_Restart2:
+		// Restartable instruction sequence. Back off PC to
+		// the start PC.
+		if startpc == 0 || startpc > pc || pc-startpc > 20 {
+			throw("bad restart PC")
+		}
+		return true, startpc
+	case _PCDATA_RestartAtEntry:
+		// Restart from the function entry at resumption.
+		return true, f.entry
+	}
+	return true, pc
 }
 
 var no_pointers_stackmap uint64 // defined in assembly, for NO_LOCAL_POINTERS macro

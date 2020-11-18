@@ -6,6 +6,8 @@
 
 package runtime
 
+// This version is used on Linux and FreeBSD systems on which we don't
+// use cgo to call the C version of sigaction.
 // 此版本用于 Linux 和 FreeBSD 系统，我们不使用 cgo 来调用 sigaction 的 C 版本。
 
 //go:nosplit
