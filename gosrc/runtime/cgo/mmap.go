@@ -14,7 +14,6 @@ import _ "unsafe"
 // sanitizer with Go programs. The memory sanitizer only applies to
 // C/C++ code; this permits that code to see the Go code as normal
 // program addresses that have been initialized.
-// 使用 cgo 时，为 mmap 调用 C 库
 
 // To support interceptors that look for both mmap and munmap,
 // also call the C library for munmap.

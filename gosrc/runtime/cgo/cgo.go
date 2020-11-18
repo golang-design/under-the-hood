@@ -3,14 +3,15 @@
 // license that can be found in the LICENSE file.
 
 /*
-Package cgo 包含了通过 cgo 工具生成代码的运行时支持。更多细节请查看 cgo 命令。
+Package cgo contains runtime support for code generated
+by the cgo tool.  See the documentation for the cgo command
+for details on using cgo.
 */
 package cgo
 
 /*
 
-#cgo darwin,!arm,!arm64 LDFLAGS: -lpthread
-#cgo darwin,arm LDFLAGS: -framework CoreFoundation
+#cgo darwin,!arm64 LDFLAGS: -lpthread
 #cgo darwin,arm64 LDFLAGS: -framework CoreFoundation
 #cgo dragonfly LDFLAGS: -lpthread
 #cgo freebsd LDFLAGS: -lpthread
@@ -20,9 +21,11 @@ package cgo
 #cgo openbsd LDFLAGS: -lpthread
 #cgo aix LDFLAGS: -Wl,-berok
 #cgo solaris LDFLAGS: -lxnet
+#cgo illumos LDFLAGS: -lsocket
 
 // Issue 35247.
 #cgo darwin CFLAGS: -Wno-nullability-completeness
+
 #cgo CFLAGS: -Wall -Werror
 
 #cgo solaris CPPFLAGS: -D_POSIX_PTHREAD_SEMANTICS

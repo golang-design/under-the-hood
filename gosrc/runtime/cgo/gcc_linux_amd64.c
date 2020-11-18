@@ -15,7 +15,6 @@ static void (*setg_gcc)(void*);
 
 // This will be set in gcc_android.c for android-specific customization.
 void (*x_cgo_inittls)(void **tlsg, void **tlsbase);
-void* (*x_cgo_threadentry)(void*);
 
 void
 x_cgo_init(G *g, void (*setg)(void*), void **tlsg, void **tlsbase)
