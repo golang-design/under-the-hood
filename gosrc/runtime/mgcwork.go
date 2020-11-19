@@ -11,21 +11,20 @@ import (
 )
 
 const (
-	_WorkbufSize = 2048 // 单位为字节; 值越大，争用越少
+	_WorkbufSize = 2048 // in bytes; larger values result in less contention
 
+	// workbufAlloc is the number of bytes to allocate at a time
+	// for new workbufs. This must be a multiple of pageSize and
+	// should be a multiple of _WorkbufSize.
+	//
+	// Larger values reduce workbuf allocation overhead. Smaller
+	// values reduce heap fragmentation.
 	// workbufAlloc 是一次为新的 workbuf 分配的字节数。
 	// 必须是 pageSize 的倍数，并且应该是 _WorkbufSize 的倍数。
 	//
 	// 较大的值会减少 workbuf 分配开销。较小的值可减少堆碎片。
 	workbufAlloc = 32 << 10
 )
-
-// throwOnGCWork causes any operations that add pointers to a gcWork
-// buffer to throw.
-//
-// TODO(austin): This is a temporary debugging measure for issue
-// #27993. To be removed before release.
-var throwOnGCWork bool
 
 func init() {
 	if workbufAlloc%pageSize != 0 || workbufAlloc%_WorkbufSize != 0 {
@@ -51,7 +50,7 @@ func init() {
 //
 //     (preemption must be disabled)
 //     gcw := &getg().m.p.ptr().gcw
-//     .. call gcw.put() to produce and gcw.get() to consume ..
+//     .. call gcw.put() to produce and gcw.tryGet() to consume ..
 //
 // It's important that any use of gcWork during the mark phase prevent
 // the garbage collector from transitioning to mark termination since
@@ -91,17 +90,6 @@ type gcWork struct {
 	// termination check. Specifically, this indicates that this
 	// gcWork may have communicated work to another gcWork.
 	flushedWork bool
-
-	// pauseGen causes put operations to spin while pauseGen ==
-	// gcWorkPauseGen if debugCachedWork is true.
-	pauseGen uint32
-
-	// putGen is the pauseGen of the last putGen.
-	putGen uint32
-
-	// pauseStack is the stack at which this P was paused if
-	// debugCachedWork is true.
-	pauseStack [16]uintptr
 }
 
 // Most of the methods of gcWork are go:nowritebarrierrec because the
@@ -120,62 +108,16 @@ func (w *gcWork) init() {
 	w.wbuf2 = wbuf2
 }
 
-func (w *gcWork) checkPut(ptr uintptr, ptrs []uintptr) {
-	if debugCachedWork {
-		alreadyFailed := w.putGen == w.pauseGen
-		w.putGen = w.pauseGen
-		if !canPreemptM(getg().m) {
-			// If we were to spin, the runtime may
-			// deadlock. Since we can't be preempted, the
-			// spin could prevent gcMarkDone from
-			// finishing the ragged barrier, which is what
-			// releases us from the spin.
-			return
-		}
-		for atomic.Load(&gcWorkPauseGen) == w.pauseGen {
-		}
-		if throwOnGCWork {
-			printlock()
-			if alreadyFailed {
-				println("runtime: checkPut already failed at this generation")
-			}
-			println("runtime: late gcWork put")
-			if ptr != 0 {
-				gcDumpObject("ptr", ptr, ^uintptr(0))
-			}
-			for _, ptr := range ptrs {
-				gcDumpObject("ptrs", ptr, ^uintptr(0))
-			}
-			println("runtime: paused at")
-			for _, pc := range w.pauseStack {
-				if pc == 0 {
-					break
-				}
-				f := findfunc(pc)
-				if f.valid() {
-					// Obviously this doesn't
-					// relate to ancestor
-					// tracebacks, but this
-					// function prints what we
-					// want.
-					printAncestorTracebackFuncInfo(f, pc)
-				} else {
-					println("\tunknown PC ", hex(pc), "\n")
-				}
-			}
-			throw("throwOnGCWork")
-		}
-	}
-}
-
 // put enqueues a pointer for the garbage collector to trace.
 // obj must point to the beginning of a heap object or an oblet.
 //go:nowritebarrierrec
 func (w *gcWork) put(obj uintptr) {
-	w.checkPut(obj, nil)
-
 	flushed := false
 	wbuf := w.wbuf1
+	// Record that this may acquire the wbufSpans or heap lock to
+	// allocate a workbuf.
+	lockWithRankMayAcquire(&work.wbufSpans.lock, lockRankWbufSpans)
+	lockWithRankMayAcquire(&mheap_.lock, lockRankMheap)
 	if wbuf == nil {
 		w.init()
 		wbuf = w.wbuf1
@@ -204,12 +146,10 @@ func (w *gcWork) put(obj uintptr) {
 	}
 }
 
-// putFast does a put and reports whether if it can be done quickly
+// putFast does a put and reports whether it can be done quickly
 // otherwise it returns false and the caller needs to call put.
 //go:nowritebarrierrec
 func (w *gcWork) putFast(obj uintptr) bool {
-	w.checkPut(obj, nil)
-
 	wbuf := w.wbuf1
 	if wbuf == nil {
 		return false
@@ -230,8 +170,6 @@ func (w *gcWork) putBatch(obj []uintptr) {
 	if len(obj) == 0 {
 		return
 	}
-
-	w.checkPut(0, obj)
 
 	flushed := false
 	wbuf := w.wbuf1
@@ -354,12 +292,10 @@ func (w *gcWork) balance() {
 		return
 	}
 	if wbuf := w.wbuf2; wbuf.nobj != 0 {
-		w.checkPut(0, wbuf.obj[:wbuf.nobj])
 		putfull(wbuf)
 		w.flushedWork = true
 		w.wbuf2 = getempty()
 	} else if wbuf := w.wbuf1; wbuf.nobj > 4 {
-		w.checkPut(0, wbuf.obj[:wbuf.nobj])
 		w.wbuf1 = handoff(wbuf)
 		w.flushedWork = true // handoff did putfull
 	} else {
@@ -371,7 +307,7 @@ func (w *gcWork) balance() {
 	}
 }
 
-// empty reports whether if w has no mark work available.
+// empty reports whether w has no mark work available.
 //go:nowritebarrierrec
 func (w *gcWork) empty() bool {
 	return w.wbuf1 == nil || (w.wbuf1.nobj == 0 && w.wbuf2.nobj == 0)
@@ -421,6 +357,10 @@ func getempty() *workbuf {
 			b.checkempty()
 		}
 	}
+	// Record that this may acquire the wbufSpans or heap lock to
+	// allocate a workbuf.
+	lockWithRankMayAcquire(&work.wbufSpans.lock, lockRankWbufSpans)
+	lockWithRankMayAcquire(&mheap_.lock, lockRankMheap)
 	if b == nil {
 		// Allocate more workbufs.
 		var s *mspan
@@ -435,7 +375,7 @@ func getempty() *workbuf {
 		}
 		if s == nil {
 			systemstack(func() {
-				s = mheap_.allocManual(workbufAlloc/pageSize, &memstats.gc_sys)
+				s = mheap_.allocManual(workbufAlloc/pageSize, spanAllocWorkBuf)
 			})
 			if s == nil {
 				throw("out of memory")
@@ -520,9 +460,11 @@ func prepareFreeWorkbufs() {
 	unlock(&work.wbufSpans.lock)
 }
 
+// freeSomeWbufs frees some workbufs back to the heap and returns
+// true if it should be called again to free more.
 // freeSomeWbufs 释放一些 workbufs 回到堆中，如果需要再次调用则返回 true
 func freeSomeWbufs(preemptible bool) bool {
-	const batchSize = 64 // 每个 span 需要 ~1–2 µs
+	const batchSize = 64 // ~1–2 µs per span.  // 每个 span 需要 ~1–2 µs
 	lock(&work.wbufSpans.lock)
 	// 如果此时在标记阶段、或者 wbufSpans 为空，则不需要进行释放
 	// 因为标记阶段 workbufs 需要被标记，而 workbufs 为空则更不需要释放
@@ -542,7 +484,7 @@ func freeSomeWbufs(preemptible bool) bool {
 			// 将 span 移除 wbufSpans 的空闲链表中
 			work.wbufSpans.free.remove(span)
 			// 将 span 归还到 mheap 中
-			mheap_.freeManual(span, &memstats.gc_sys)
+			mheap_.freeManual(span, spanAllocWorkBuf)
 		}
 	})
 	// workbufs 的空闲 span 列表尚未清空，还需要更多清扫

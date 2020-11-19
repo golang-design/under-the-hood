@@ -2,6 +2,23 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// This implements the write barrier buffer. The write barrier itself
+// is gcWriteBarrier and is implemented in assembly.
+//
+// See mbarrier.go for algorithmic details on the write barrier. This
+// file deals only with the buffer.
+//
+// The write barrier has a fast path and a slow path. The fast path
+// simply enqueues to a per-P write barrier buffer. It's written in
+// assembly and doesn't clobber any general purpose registers, so it
+// doesn't have the usual overheads of a Go call.
+//
+// When the buffer fills up, the write barrier invokes the slow path
+// (wbBufFlush) to flush the buffer to the GC work queues. In this
+// path, since the compiler didn't spill registers, we spill *all*
+// registers and disallow any GC safe points that could observe the
+// stack frame (since we don't know the types of the spilled
+// registers).
 // 此文件实现了写屏障缓存（write barrier buffer）。
 // 写屏障自身为 gcWriteBarrier，并在汇编中实现。
 //
@@ -13,7 +30,6 @@
 // 当 buffer 被填满时，write barrier 调用 slow path （wbBufFlush）将缓冲区刷新到 GC 工作队列。
 // 在这条 path 中，由于编译器没有移动（spill）寄存器，我们移动所有寄存器，并禁止任何可以观察栈帧的 GC 安全点
 // （因为我们不知道移动寄存器的类型）。
-//
 
 package runtime
 
@@ -27,10 +43,23 @@ import (
 // barrier flushing.
 const testSmallBuf = false
 
+// wbBuf is a per-P buffer of pointers queued by the write barrier.
+// This buffer is flushed to the GC workbufs when it fills up and on
+// various GC transitions.
+//
+// This is closely related to a "sequential store buffer" (SSB),
+// except that SSBs are usually used for maintaining remembered sets,
+// while this is used for marking.
 // wbBuf 是一个由写屏障入队的指针的 per-P 缓存。这个缓存由 GC workbufs 当在多个 GC 转换填满时候刷新。
 //
 // 这与"顺序存储缓冲区"（SSB）密切相关，除了SSB通常用于维护记忆集，而这用于标记。
 type wbBuf struct {
+	// next points to the next slot in buf. It must not be a
+	// pointer type because it can point past the end of buf and
+	// must be updated without write barriers.
+	//
+	// This is a pointer rather than an index to optimize the
+	// write barrier assembly.
 	// next 指向 buf 中的下一个 slot. 它不能是一个指针类型，因为它可以指向 buf 的末端，
 	// 并且必须在没有 write barrier 的情况下进行更新。
 	//
@@ -46,12 +75,6 @@ type wbBuf struct {
 	// on. This must be a multiple of wbBufEntryPointers because
 	// the write barrier only checks for overflow once per entry.
 	buf [wbBufEntryPointers * wbBufEntries]uintptr
-
-	// debugGen causes the write barrier buffer to flush after
-	// every write barrier if equal to gcWorkPauseGen. This is for
-	// debugging #27993. This is only set if debugCachedWork is
-	// set.
-	debugGen uint32
 }
 
 const (
@@ -71,11 +94,12 @@ const (
 	wbBufEntryPointers = 2
 )
 
+// reset empties b by resetting its next and end pointers.
 // 通过重置 b 的 next 与 end 指针来清空 p
 func (b *wbBuf) reset() {
 	start := uintptr(unsafe.Pointer(&b.buf[0]))
 	b.next = start
-	if writeBarrier.cgo || (debugCachedWork && (throwOnGCWork || b.debugGen == atomic.Load(&gcWorkPauseGen))) {
+	if writeBarrier.cgo {
 		// Effectively disable the buffer by forcing a flush
 		// on every barrier.
 		b.end = uintptr(unsafe.Pointer(&b.buf[wbBufEntryPointers]))
@@ -144,6 +168,9 @@ func (b *wbBuf) putFast(old, new uintptr) bool {
 	return b.next != b.end
 }
 
+// wbBufFlush flushes the current P's write barrier buffer to the GC
+// workbufs. It is passed the slot and value of the write barrier that
+// caused the flush so that it can implement cgocheck.
 // wbBufFlush 将当前 P 的写屏障缓存刷新到 GC workbufs 中。它传递了 slot 和导致
 // 刷新的写屏障的值，以至于能够实现 cgocheck。
 //
@@ -192,30 +219,8 @@ func wbBufFlush(dst *uintptr, src uintptr) {
 	// Switch to the system stack so we don't have to worry about
 	// the untyped stack slots or safe points.
 	systemstack(func() {
-		if debugCachedWork {
-			// For debugging, include the old value of the
-			// slot and some other data in the traceback.
-			wbBuf := &getg().m.p.ptr().wbBuf
-			var old uintptr
-			if dst != nil {
-				// dst may be nil in direct calls to wbBufFlush.
-				old = *dst
-			}
-			wbBufFlush1Debug(old, wbBuf.buf[0], wbBuf.buf[1], &wbBuf.buf[0], wbBuf.next)
-		} else {
-			wbBufFlush1(getg().m.p.ptr())
-		}
+		wbBufFlush1(getg().m.p.ptr())
 	})
-}
-
-// wbBufFlush1Debug is a temporary function for debugging issue
-// #27993. It exists solely to add some context to the traceback.
-//
-//go:nowritebarrierrec
-//go:systemstack
-//go:noinline
-func wbBufFlush1Debug(old, buf1, buf2 uintptr, start *uintptr, next uintptr) {
-	wbBufFlush1(getg().m.p.ptr())
 }
 
 // wbBufFlush1 flushes p's write barrier buffer to the GC work queue.
@@ -284,6 +289,13 @@ func wbBufFlush1(_p_ *p) {
 			continue
 		}
 		mbits.setMarked()
+
+		// Mark span.
+		arena, pageIdx, pageMask := pageIndexOf(span.base())
+		if arena.pageMarks[pageIdx]&pageMask == 0 {
+			atomic.Or8(&arena.pageMarks[pageIdx], pageMask)
+		}
+
 		if span.spanclass.noscan() {
 			gcw.bytesMarked += uint64(span.elemsize)
 			continue
