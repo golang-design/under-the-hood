@@ -2,6 +2,101 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Memory allocator.
+//
+// This was originally based on tcmalloc, but has diverged quite a bit.
+// http://goog-perftools.sourceforge.net/doc/tcmalloc.html
+
+// The main allocator works in runs of pages.
+// Small allocation sizes (up to and including 32 kB) are
+// rounded to one of about 70 size classes, each of which
+// has its own free set of objects of exactly that size.
+// Any free page of memory can be split into a set of objects
+// of one size class, which are then managed using a free bitmap.
+//
+// The allocator's data structures are:
+//
+//	fixalloc: a free-list allocator for fixed-size off-heap objects,
+//		used to manage storage used by the allocator.
+//	mheap: the malloc heap, managed at page (8192-byte) granularity.
+//	mspan: a run of in-use pages managed by the mheap.
+//	mcentral: collects all spans of a given size class.
+//	mcache: a per-P cache of mspans with free space.
+//	mstats: allocation statistics.
+//
+// Allocating a small object proceeds up a hierarchy of caches:
+//
+//	1. Round the size up to one of the small size classes
+//	   and look in the corresponding mspan in this P's mcache.
+//	   Scan the mspan's free bitmap to find a free slot.
+//	   If there is a free slot, allocate it.
+//	   This can all be done without acquiring a lock.
+//
+//	2. If the mspan has no free slots, obtain a new mspan
+//	   from the mcentral's list of mspans of the required size
+//	   class that have free space.
+//	   Obtaining a whole span amortizes the cost of locking
+//	   the mcentral.
+//
+//	3. If the mcentral's mspan list is empty, obtain a run
+//	   of pages from the mheap to use for the mspan.
+//
+//	4. If the mheap is empty or has no page runs large enough,
+//	   allocate a new group of pages (at least 1MB) from the
+//	   operating system. Allocating a large run of pages
+//	   amortizes the cost of talking to the operating system.
+//
+// Sweeping an mspan and freeing objects on it proceeds up a similar
+// hierarchy:
+//
+//	1. If the mspan is being swept in response to allocation, it
+//	   is returned to the mcache to satisfy the allocation.
+//
+//	2. Otherwise, if the mspan still has allocated objects in it,
+//	   it is placed on the mcentral free list for the mspan's size
+//	   class.
+//
+//	3. Otherwise, if all objects in the mspan are free, the mspan's
+//	   pages are returned to the mheap and the mspan is now dead.
+//
+// Allocating and freeing a large object uses the mheap
+// directly, bypassing the mcache and mcentral.
+//
+// If mspan.needzero is false, then free object slots in the mspan are
+// already zeroed. Otherwise if needzero is true, objects are zeroed as
+// they are allocated. There are various benefits to delaying zeroing
+// this way:
+//
+//	1. Stack frame allocation can avoid zeroing altogether.
+//
+//	2. It exhibits better temporal locality, since the program is
+//	   probably about to write to the memory.
+//
+//	3. We don't zero pages that never get reused.
+
+// Virtual memory layout
+//
+// The heap consists of a set of arenas, which are 64MB on 64-bit and
+// 4MB on 32-bit (heapArenaBytes). Each arena's start address is also
+// aligned to the arena size.
+//
+// Each arena has an associated heapArena object that stores the
+// metadata for that arena: the heap bitmap for all words in the arena
+// and the span map for all pages in the arena. heapArena objects are
+// themselves allocated off-heap.
+//
+// Since arenas are aligned, the address space can be viewed as a
+// series of arena frames. The arena map (mheap_.arenas) maps from
+// arena frame number to *heapArena, or nil for parts of the address
+// space not backed by the Go heap. The arena map is structured as a
+// two-level array consisting of a "L1" arena map and many "L2" arena
+// maps; however, since arenas are large, on many architectures, the
+// arena map consists of a single, large L2 map.
+//
+// The arena map covers the entire possible address space, allowing
+// the Go heap to use any part of the address space. The allocator
+// attempts to keep arenas contiguous so that large spans (and hence
+// large objects) can cross arenas.
 // 内存分配器
 //
 // 基于 tcmalloc (thread caching malloc)，有些许不同。
@@ -98,21 +193,28 @@ const (
 
 	concurrentSweep = _ConcurrentSweep
 
-	_PageSize = 1 << _PageShift // 8KB
+	_PageSize = 1 << _PageShift
 	_PageMask = _PageSize - 1
 
 	// _64bit = 1 on 64-bit systems, 0 on 32-bit systems
 	_64bit = 1 << (^uintptr(0) >> 63) / 2
 
-	// Tiny allocator 参数, see "Tiny allocator" comment in malloc.go.
+	// Tiny allocator parameters, see "Tiny allocator" comment in malloc.go.
 	_TinySize      = 16
 	_TinySizeClass = int8(2)
 
-	_FixAllocChunk = 16 << 10 // FixAlloc 一个 Chunk 的大小
+	_FixAllocChunk = 16 << 10 // Chunk size for FixAlloc
 
+	// Per-P, per order stack segment cache size.
 	// Per-P, 每个 order 对应栈所分割的缓存大小
 	_StackCacheSize = 32 * 1024
 
+	// Number of orders that get caching. Order 0 is FixedStack
+	// and each successive order is twice as large.
+	// We want to cache 2KB, 4KB, 8KB, and 16KB stacks. Larger stacks
+	// will be allocated directly.
+	// Since FixedStack is different on different systems, we
+	// must vary NumStackOrders to keep the same maximum cached size.
 	// 获得缓存的 order 数。order 0 为 FixedStack，每个后序都是前一个的两倍
 	// 我们需要缓存 2KB, 4KB, 8KB 和 16KB 的栈，更大的栈则会直接分配.
 	// 由于 FixedStack 与操作系统相关，必须动态的计算 NumStackOrders 来保证相同的最大缓存大小
@@ -170,7 +272,7 @@ const (
 	// mips32 only has access to the low 2GB of virtual memory, so
 	// we further limit it to 31 bits.
 	//
-	// On darwin/arm64, although 64-bit pointers are presumably
+	// On ios/arm64, although 64-bit pointers are presumably
 	// available, pointers are truncated to 33 bits. Furthermore,
 	// only the top 4 GiB of the address space are actually available
 	// to the application, but we allow the whole 33 bits anyway for
@@ -179,7 +281,7 @@ const (
 	// arenaBaseOffset to offset into the top 4 GiB.
 	//
 	// WebAssembly currently has a limit of 4GB linear memory.
-	heapAddrBits = (_64bit*(1-sys.GoarchWasm)*(1-sys.GoosDarwin*sys.GoarchArm64))*48 + (1-_64bit+sys.GoarchWasm)*(32-(sys.GoarchMips+sys.GoarchMipsle)) + 33*sys.GoosDarwin*sys.GoarchArm64
+	heapAddrBits = (_64bit*(1-sys.GoarchWasm)*(1-sys.GoosIos*sys.GoarchArm64))*48 + (1-_64bit+sys.GoarchWasm)*(32-(sys.GoarchMips+sys.GoarchMipsle)) + 33*sys.GoosIos*sys.GoarchArm64
 
 	// maxAlloc is the maximum size of an allocation. On 64-bit,
 	// it's theoretically possible to allocate 1<<heapAddrBits bytes. On
@@ -198,11 +300,13 @@ const (
 	//       Platform  Addr bits  Arena size  L1 entries   L2 entries
 	// --------------  ---------  ----------  ----------  -----------
 	//       */64-bit         48        64MB           1    4M (32MB)
-	//     aix/64-bit         60       256MB        4096    4M (32MB)
 	// windows/64-bit         48         4MB          64    1M  (8MB)
 	//       */32-bit         32         4MB           1  1024  (4KB)
 	//     */mips(le)         31         4MB           1   512  (2KB)
 
+	// heapArenaBytes is the size of a heap arena. The heap
+	// consists of mappings of size heapArenaBytes, aligned to
+	// heapArenaBytes. The initial heap mapping is one arena.
 	// heapArenaBytes 为 heap arena 的大小。
 	// heap 由大小为 heapArenaBytes 的映射构成，与 heapArenaBytes 对齐。
 	// 初始的 heap 只有一个 arena。
@@ -215,7 +319,6 @@ const (
 	// This is particularly important with the race detector,
 	// since it significantly amplifies the cost of committed
 	// memory.
-	//
 	heapArenaBytes = 1 << logHeapArenaBytes
 
 	// logHeapArenaBytes is log_2 of heapArenaBytes. For clarity,
@@ -223,6 +326,7 @@ const (
 	// constant to compute some other constants).
 	logHeapArenaBytes = (6+20)*(_64bit*(1-sys.GoosWindows)*(1-sys.GoarchWasm)) + (2+20)*(_64bit*sys.GoosWindows) + (2+20)*(1-_64bit) + (2+20)*sys.GoarchWasm
 
+	// heapArenaBitmapBytes is the size of each heap arena's bitmap.
 	// heapArenaBitmapBytes 为每个 heap arena 的 bitmap 的大小
 	heapArenaBitmapBytes = heapArenaBytes / (sys.PtrSize * 8 / 2)
 
@@ -276,7 +380,9 @@ const (
 	//
 	// On other platforms, the user address space is contiguous
 	// and starts at 0, so no offset is necessary.
-	arenaBaseOffset = sys.GoarchAmd64*(1<<47) + (^0x0a00000000000000+1)&uintptrMask*sys.GoosAix
+	arenaBaseOffset = 0xffff800000000000*sys.GoarchAmd64 + 0x0a00000000000000*sys.GoosAix
+	// A typed version of this constant that will make it into DWARF (for viewcore).
+	arenaBaseOffsetUintptr = uintptr(arenaBaseOffset)
 
 	// Max number of threads to run garbage collection.
 	// 2, 3, and 4 are all plausible maximums depending
@@ -292,14 +398,20 @@ const (
 	minLegalPointer uintptr = 4096
 )
 
+// physPageSize is the size in bytes of the OS's physical pages.
+// Mapping and unmapping operations must be done at multiples of
+// physPageSize.
 // physPageSize 是操作系统的物理页字节大小。内存页的映射和反映射操作必须以
 // physPageSize 的整数倍完成
 //
+// This must be set by the OS init code (typically in osinit) before
+// mallocinit.
 // 它必须在操作系统初始化代码中、mallocinit 之前进行设置（通常在 osinit）
 var physPageSize uintptr
 
 // physHugePageSize is the size in bytes of the OS's default physical huge
-// page size whose allocation is opaque to the application.
+// page size whose allocation is opaque to the application. It is assumed
+// and verified to be a power of two.
 //
 // If set, this must be set by the OS init code (typically in osinit) before
 // mallocinit. However, setting it at all is optional, and leaving the default
@@ -360,6 +472,9 @@ var (
 // If the pointer passed to it is non-nil, the caller wants the
 // reservation there, but sysReserve can still choose another
 // location if that one is unavailable.
+// NOTE: sysReserve returns OS-aligned memory, but the heap allocator
+// may use larger alignment, so the caller must be careful to realign the
+// memory obtained by sysReserve.
 // 注意: sysReserve 返回的是操作系统排布的内存，但堆分配器可能使用更大的布局。
 // 因此调用方必须谨慎的重排从 sysReserve 获得的内存。
 //
@@ -395,33 +510,25 @@ func mallocinit() {
 		throw("heapArenaBitmapBytes not a power of 2")
 	}
 
+	// Copy class sizes out for statistics table.
 	// 将 class size 复制到统计表中
 	for i := range class_to_size {
 		memstats.by_size[i].size = uint32(class_to_size[i])
 	}
 
-	// 检查 physPageSize
+	// Check physPageSize.
 	if physPageSize == 0 {
-		// 获取系统物理 page 大小失败
+		// The OS init code failed to fetch the physical page size.
 		throw("failed to get system page size")
 	}
 	if physPageSize > maxPhysPageSize {
 		print("system page size (", physPageSize, ") is larger than maximum page size (", maxPhysPageSize, ")\n")
 		throw("bad system page size")
 	}
-	if physHugePageSize > maxPhysHugePageSize {
-		// physHugePageSize is greater than the maximum supported huge page size.
-		// Don't throw here, like in the other cases, since a system configured
-		// in this way isn't wrong, we just don't have the code to support them.
-		// Instead, silently set the huge page size to zero.
-		physHugePageSize = 0
-	}
-	// 如果 page 太小也失败 4KB
 	if physPageSize < minPhysPageSize {
 		print("system page size (", physPageSize, ") is smaller than minimum page size (", minPhysPageSize, ")\n")
 		throw("bad system page size")
 	}
-	// 系统 page 大小必须是 2 的任意指数大小
 	if physPageSize&(physPageSize-1) != 0 {
 		print("system page size (", physPageSize, ") must be a power of 2\n")
 		throw("bad system page size")
@@ -430,6 +537,13 @@ func mallocinit() {
 		print("system huge page size (", physHugePageSize, ") must be a power of 2\n")
 		throw("bad system huge page size")
 	}
+	if physHugePageSize > maxPhysHugePageSize {
+		// physHugePageSize is greater than the maximum supported huge page size.
+		// Don't throw here, like in the other cases, since a system configured
+		// in this way isn't wrong, we just don't have the code to support them.
+		// Instead, silently set the huge page size to zero.
+		physHugePageSize = 0
+	}
 	if physHugePageSize != 0 {
 		// Since physHugePageSize is a power of 2, it suffices to increase
 		// physHugePageShift until 1<<physHugePageShift == physHugePageSize.
@@ -437,14 +551,58 @@ func mallocinit() {
 			physHugePageShift++
 		}
 	}
+	if pagesPerArena%pagesPerSpanRoot != 0 {
+		print("pagesPerArena (", pagesPerArena, ") is not divisible by pagesPerSpanRoot (", pagesPerSpanRoot, ")\n")
+		throw("bad pagesPerSpanRoot")
+	}
+	if pagesPerArena%pagesPerReclaimerChunk != 0 {
+		print("pagesPerArena (", pagesPerArena, ") is not divisible by pagesPerReclaimerChunk (", pagesPerReclaimerChunk, ")\n")
+		throw("bad pagesPerReclaimerChunk")
+	}
 
+	// Initialize the heap.
 	// 初始化堆
 	mheap_.init()
-	_g_ := getg()
-	_g_.m.mcache = allocmcache()
+	mcache0 = allocmcache()
+	lockInit(&gcBitsArenas.lock, lockRankGcBitsArenas)
+	lockInit(&proflock, lockRankProf)
+	lockInit(&globalAlloc.mutex, lockRankGlobalAlloc)
 
-	// 创建初始的 arena 增长 hint
+	// Create initial arena growth hints.
 	if sys.PtrSize == 8 {
+		// On a 64-bit machine, we pick the following hints
+		// because:
+		//
+		// 1. Starting from the middle of the address space
+		// makes it easier to grow out a contiguous range
+		// without running in to some other mapping.
+		//
+		// 2. This makes Go heap addresses more easily
+		// recognizable when debugging.
+		//
+		// 3. Stack scanning in gccgo is still conservative,
+		// so it's important that addresses be distinguishable
+		// from other data.
+		//
+		// Starting at 0x00c0 means that the valid memory addresses
+		// will begin 0x00c0, 0x00c1, ...
+		// In little-endian, that's c0 00, c1 00, ... None of those are valid
+		// UTF-8 sequences, and they are otherwise as far away from
+		// ff (likely a common byte) as possible. If that fails, we try other 0xXXc0
+		// addresses. An earlier attempt to use 0x11f8 caused out of memory errors
+		// on OS X during thread allocations.  0x00c0 causes conflicts with
+		// AddressSanitizer which reserves all memory up to 0x0100.
+		// These choices reduce the odds of a conservative garbage collector
+		// not collecting memory because some non-pointer block of memory
+		// had a bit pattern that matched a memory address.
+		//
+		// However, on arm64, we ignore all this advice above and slam the
+		// allocation at 0x40 << 32 because when using 4k pages with 3-level
+		// translation buffers, the user address space is limited to 39 bits
+		// On ios/arm64, the address space is even smaller.
+		//
+		// On AIX, mmaps starts at 0x0A00000000000000 for 64-bit.
+		// processes.
 		// 64 位机器上，我们选取下面的 hint，因为：
 		//
 		// 1.从地址空间的中间开始，可以更容易地扩展连续范围，而无需进入其他映射。
@@ -471,7 +629,15 @@ func mallocinit() {
 		for i := 0x7f; i >= 0; i-- {
 			var p uintptr
 			switch {
-			case GOARCH == "arm64" && GOOS == "darwin":
+			case raceenabled:
+				// The TSAN runtime requires the heap
+				// to be in the range [0x00c000000000,
+				// 0x00e000000000).
+				p = uintptr(i)<<32 | uintptrMask&(0x00c0<<32)
+				if p >= uintptrMask&0x00e000000000 {
+					continue
+				}
+			case GOARCH == "arm64" && GOOS == "ios":
 				p = uintptr(i)<<40 | uintptrMask&(0x0013<<28)
 			case GOARCH == "arm64":
 				p = uintptr(i)<<40 | uintptrMask&(0x0040<<32)
@@ -482,12 +648,6 @@ func mallocinit() {
 					continue
 				}
 				p = uintptr(i)<<40 | uintptrMask&(0xa0<<52)
-			case raceenabled:
-				// TSAN 运行时需要堆地址在 [0x00c000000000, 0x00e000000000) 范围内
-				p = uintptr(i)<<32 | uintptrMask&(0x00c0<<32)
-				if p >= uintptrMask&0x00e000000000 {
-					continue
-				}
 			default:
 				p = uintptr(i)<<40 | uintptrMask&(0x00c0<<32)
 			}
@@ -554,7 +714,7 @@ func mallocinit() {
 			a, size := sysReserveAligned(unsafe.Pointer(p), arenaSize, heapArenaBytes)
 			if a != nil {
 				mheap_.arena.init(uintptr(a), size)
-				p = uintptr(a) + size // For hint below
+				p = mheap_.arena.end // For hint below
 				break
 			}
 		}
@@ -575,6 +735,8 @@ func mallocinit() {
 //
 // h must be locked.
 func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) {
+	assertLockHeld(&h.lock)
+
 	n = alignUp(n, heapArenaBytes)
 
 	// First, try the arena pre-reservation.
@@ -691,9 +853,9 @@ mapped:
 			throw("arena already initialized")
 		}
 		var r *heapArena
-		r = (*heapArena)(h.heapArenaAlloc.alloc(unsafe.Sizeof(*r), sys.PtrSize, &memstats.gc_sys))
+		r = (*heapArena)(h.heapArenaAlloc.alloc(unsafe.Sizeof(*r), sys.PtrSize, &memstats.gcMiscSys))
 		if r == nil {
-			r = (*heapArena)(persistentalloc(unsafe.Sizeof(*r), sys.PtrSize, &memstats.gc_sys))
+			r = (*heapArena)(persistentalloc(unsafe.Sizeof(*r), sys.PtrSize, &memstats.gcMiscSys))
 			if r == nil {
 				throw("out of memory allocating heap arena metadata")
 			}
@@ -705,7 +867,7 @@ mapped:
 			if size == 0 {
 				size = physPageSize
 			}
-			newArray := (*notInHeap)(persistentalloc(size, sys.PtrSize, &memstats.gc_sys))
+			newArray := (*notInHeap)(persistentalloc(size, sys.PtrSize, &memstats.gcMiscSys))
 			if newArray == nil {
 				throw("out of memory allocating allArenas")
 			}
@@ -783,13 +945,16 @@ retry:
 	}
 }
 
+// base address for all 0-byte allocations
 // 适用于所有的 0 字节分配的基地址
 var zerobase uintptr
 
+// nextFreeFast returns the next free object if one is quickly available.
+// Otherwise it returns 0.
 // nextFreeFast 在快速有效的情况下返回了存在的空闲对象
 // 否则返回 0
 func nextFreeFast(s *mspan) gclinkptr {
-	theBit := sys.Ctz64(s.allocCache) // allocCache 中是否有空闲对象?
+	theBit := sys.Ctz64(s.allocCache) // Is there a free object in the allocCache?
 	if theBit < 64 {
 		result := s.freeindex + uintptr(theBit)
 		if result < s.nelems {
@@ -806,6 +971,15 @@ func nextFreeFast(s *mspan) gclinkptr {
 	return 0
 }
 
+// nextFree returns the next free object from the cached span if one is available.
+// Otherwise it refills the cache with a span with an available object and
+// returns that object along with a flag indicating that this was a heavy
+// weight allocation. If it is a heavy weight allocation the caller must
+// determine whether a new GC cycle needs to be started or if the GC is active
+// whether this goroutine needs to assist the GC.
+//
+// Must run in a non-preemptible context since otherwise the owner of
+// c could change.
 // 如果可能的话，nextFree 从缓存的 span 中返回下一个空闲对象。
 // 否则，它会使用带有可用对象的 span 来重新填充缓存
 // 返回该对象以及一个标志，表明这是一个有重开销的分配。
@@ -819,6 +993,7 @@ func (c *mcache) nextFree(spc spanClass) (v gclinkptr, s *mspan, shouldhelpgc bo
 	// 获得 s.freeindex 中或之后 s 中下一个空闲对象的索引
 	freeIndex := s.nextFreeIndex()
 	if freeIndex == s.nelems {
+		// The span is full.
 		// span 已满，进行填充
 		if uintptr(s.allocCount) != s.nelems {
 			println("runtime: s.allocCount=", s.allocCount, "s.nelems=", s.nelems)
@@ -829,6 +1004,7 @@ func (c *mcache) nextFree(spc spanClass) (v gclinkptr, s *mspan, shouldhelpgc bo
 
 		// 再次获取 freeIndex
 		s = c.alloc[spc]
+
 		freeIndex = s.nextFreeIndex()
 	}
 
@@ -845,6 +1021,9 @@ func (c *mcache) nextFree(spc spanClass) (v gclinkptr, s *mspan, shouldhelpgc bo
 	return
 }
 
+// Allocate an object of size bytes.
+// Small objects are allocated from the per-P cache's free lists.
+// Large objects (> 32 kB) are allocated straight from the heap.
 // 分配大小为字节的对象。
 // 从每个 P 缓存的空闲列表中分配小对象。
 // 大对象（> 32 kB）直接从堆中分配。
@@ -853,32 +1032,38 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		throw("mallocgc called with gcphase == _GCmarktermination")
 	}
 
-	// 创建大小为零的对象，例如空结构体
 	if size == 0 {
 		return unsafe.Pointer(&zerobase)
 	}
 
-	if debug.sbrk != 0 {
-		align := uintptr(16)
-		if typ != nil {
-			// TODO(austin): This should be just
-			//   align = uintptr(typ.align)
-			// but that's only 4 on 32-bit platforms,
-			// even if there's a uint64 field in typ (see #599).
-			// This causes 64-bit atomic accesses to panic.
-			// Hence, we use stricter alignment that matches
-			// the normal allocator better.
-			if size&7 == 0 {
-				align = 8
-			} else if size&3 == 0 {
-				align = 4
-			} else if size&1 == 0 {
-				align = 2
-			} else {
-				align = 1
+	if debug.malloc {
+		if debug.sbrk != 0 {
+			align := uintptr(16)
+			if typ != nil {
+				// TODO(austin): This should be just
+				//   align = uintptr(typ.align)
+				// but that's only 4 on 32-bit platforms,
+				// even if there's a uint64 field in typ (see #599).
+				// This causes 64-bit atomic accesses to panic.
+				// Hence, we use stricter alignment that matches
+				// the normal allocator better.
+				if size&7 == 0 {
+					align = 8
+				} else if size&3 == 0 {
+					align = 4
+				} else if size&1 == 0 {
+					align = 2
+				} else {
+					align = 1
+				}
 			}
+			return persistentalloc(size, align, &memstats.other_sys)
 		}
-		return persistentalloc(size, align, &memstats.other_sys)
+
+		if inittrace.active && inittrace.id == getg().goid {
+			// Init functions are executed sequentially in a single Go routine.
+			inittrace.allocs += 1
+		}
 	}
 
 	// assistG is the G to charge for this allocation, or nil if
@@ -914,12 +1099,44 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 
 	shouldhelpgc := false
 	dataSize := size
-	// 获取 mcache
-	c := gomcache()
+	c := getMCache()
+	if c == nil {
+		throw("mallocgc called without a P or outside bootstrapping")
+	}
+	var span *mspan
 	var x unsafe.Pointer
 	noscan := typ == nil || typ.ptrdata == 0
 	if size <= maxSmallSize {
 		if noscan && size < maxTinySize {
+			// Tiny allocator.
+			//
+			// Tiny allocator combines several tiny allocation requests
+			// into a single memory block. The resulting memory block
+			// is freed when all subobjects are unreachable. The subobjects
+			// must be noscan (don't have pointers), this ensures that
+			// the amount of potentially wasted memory is bounded.
+			//
+			// Size of the memory block used for combining (maxTinySize) is tunable.
+			// Current setting is 16 bytes, which relates to 2x worst case memory
+			// wastage (when all but one subobjects are unreachable).
+			// 8 bytes would result in no wastage at all, but provides less
+			// opportunities for combining.
+			// 32 bytes provides more opportunities for combining,
+			// but can lead to 4x worst case wastage.
+			// The best case winning is 8x regardless of block size.
+			//
+			// Objects obtained from tiny allocator must not be freed explicitly.
+			// So when an object will be freed explicitly, we ensure that
+			// its size >= maxTinySize.
+			//
+			// SetFinalizer has a special case for objects potentially coming
+			// from tiny allocator, it such case it allows to set finalizers
+			// for an inner byte of a memory block.
+			//
+			// The main targets of tiny allocator are small strings and
+			// standalone escaping variables. On a json benchmark
+			// the allocator reduces number of allocations by ~12% and
+			// reduces heap size by ~20%.
 			// 微型分配器 (tiny allocator)
 			//
 			// 微型分配器结合了多个的微型分配请求，并将其合并到一个单一的内存块中。
@@ -942,40 +1159,50 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 			//
 			// 微型分配器的主要目标是小字符串和独立的逃逸变量。
 			// 在 json 性能测试中，分配器将分配次数减少了大约 12％，并将堆大小占用减少了大约 20％。
-
-			// 偏移量
 			off := c.tinyoffset
+			// Align tiny pointer for required (conservative) alignment.
 			// 将微型指针对齐以进行所需（保守）对齐。
 			if size&7 == 0 {
+				off = alignUp(off, 8)
+			} else if sys.PtrSize == 4 && size == 12 {
+				// Conservatively align 12-byte objects to 8 bytes on 32-bit
+				// systems so that objects whose first field is a 64-bit
+				// value is aligned to 8 bytes and does not cause a fault on
+				// atomic access. See issue 37262.
+				// TODO(mknyszek): Remove this workaround if/when issue 36606
+				// is resolved.
 				off = alignUp(off, 8)
 			} else if size&3 == 0 {
 				off = alignUp(off, 4)
 			} else if size&1 == 0 {
 				off = alignUp(off, 2)
 			}
-
 			if off+size <= maxTinySize && c.tiny != 0 {
+				// The object fits into existing tiny block.
 				// 能直接被当前的内存块容纳
 				x = unsafe.Pointer(c.tiny + off)
 				// 增加 offset
 				c.tinyoffset = off + size
 				// 统计数量
-				c.local_tinyallocs++
+				c.tinyAllocs++
 				// 完成分配，释放 m
 				mp.mallocing = 0
 				releasem(mp)
 				return x
 			}
+			// Allocate a new maxTinySize block.
 			// 根据 tinySpan 的大小等级获得对应的 span 链表
 			// 从而用于分配一个新的 maxTinySize 块
-			span := c.alloc[tinySpanClass]
+			span = c.alloc[tinySpanClass]
 			v := nextFreeFast(span)
 			if v == 0 {
-				v, _, shouldhelpgc = c.nextFree(tinySpanClass)
+				v, span, shouldhelpgc = c.nextFree(tinySpanClass)
 			}
 			x = unsafe.Pointer(v)
 			(*[2]uint64)(x)[0] = 0
 			(*[2]uint64)(x)[1] = 0
+			// See if we need to replace the existing tiny block with the new one
+			// based on amount of remaining free space.
 			// 看看我们是否需要根据剩余可用空间量替换现有的小块
 			if size < c.tinyoffset || c.tiny == 0 {
 				c.tiny = uintptr(x)
@@ -986,14 +1213,14 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 			// 计算 size class
 			var sizeclass uint8
 			if size <= smallSizeMax-8 {
-				sizeclass = size_to_class8[(size+smallSizeDiv-1)/smallSizeDiv]
+				sizeclass = size_to_class8[divRoundUp(size, smallSizeDiv)]
 			} else {
-				sizeclass = size_to_class128[(size-smallSizeMax+largeSizeDiv-1)/largeSizeDiv]
+				sizeclass = size_to_class128[divRoundUp(size-smallSizeMax, largeSizeDiv)]
 			}
 			size = uintptr(class_to_size[sizeclass])
 			spc := makeSpanClass(sizeclass, noscan)
 			// 获得对应 size 的 span 列表
-			span := c.alloc[spc]
+			span = c.alloc[spc]
 			v := nextFreeFast(span)
 			if v == 0 {
 				v, span, shouldhelpgc = c.nextFree(spc)
@@ -1004,15 +1231,12 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 			}
 		}
 	} else {
-		var s *mspan
 		shouldhelpgc = true
-		systemstack(func() {
-			s = largeAlloc(size, needzero, noscan)
-		})
-		s.freeindex = 1
-		s.allocCount = 1
-		x = unsafe.Pointer(s.base())
-		size = s.elemsize
+		span = c.allocLarge(size, needzero, noscan)
+		span.freeindex = 1
+		span.allocCount = 1
+		x = unsafe.Pointer(span.base())
+		size = span.elemsize
 	}
 
 	var scanSize uintptr
@@ -1037,7 +1261,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		} else {
 			scanSize = typ.ptrdata
 		}
-		c.local_scan += scanSize
+		c.scanAlloc += scanSize
 	}
 
 	// Ensure that the stores above that initialize x to
@@ -1053,7 +1277,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	// This may be racing with GC so do it atomically if there can be
 	// a race marking the bit.
 	if gcphase != _GCoff {
-		gcmarknewobject(uintptr(x), size, scanSize)
+		gcmarknewobject(span, uintptr(x), size, scanSize)
 	}
 
 	if raceenabled {
@@ -1067,13 +1291,20 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	mp.mallocing = 0
 	releasem(mp)
 
-	if debug.allocfreetrace != 0 {
-		tracealloc(x, size, typ)
+	if debug.malloc {
+		if debug.allocfreetrace != 0 {
+			tracealloc(x, size, typ)
+		}
+
+		if inittrace.active && inittrace.id == getg().goid {
+			// Init functions are executed sequentially in a single Go routine.
+			inittrace.bytes += uint64(size)
+		}
 	}
 
 	if rate := MemProfileRate; rate > 0 {
-		if rate != 1 && int32(size) < c.next_sample {
-			c.next_sample -= int32(size)
+		if rate != 1 && size < c.nextSample {
+			c.nextSample -= size
 		} else {
 			mp := acquirem()
 			profilealloc(mp, x, size)
@@ -1096,35 +1327,9 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	return x
 }
 
-func largeAlloc(size uintptr, needzero bool, noscan bool) *mspan {
-	// print("largeAlloc size=", size, "\n")
-
-	// 对象太大，溢出
-	if size+_PageSize < size {
-		throw("out of memory")
-	}
-	// 根据分配的大小计算需要分配的页数
-	npages := size >> _PageShift
-	if size&_PageMask != 0 {
-		npages++
-	}
-
-	// Deduct credit for this span allocation and sweep if
-	// necessary. mHeap_Alloc will also sweep npages, so this only
-	// pays the debt down to npage pages.
-	deductSweepCredit(npages*_PageSize, npages)
-
-	// 从堆上分配
-	s := mheap_.alloc(npages, makeSpanClass(0, noscan), needzero)
-	if s == nil {
-		throw("out of memory")
-	}
-	s.limit = s.base() + size
-	heapBitsForAddr(s.base()).initSpan(s)
-	return s
-}
-
-// new 关键字的实现，编译器（前端和SSA后端）的实现知道此函数的签名
+// implementation of new builtin
+// compiler (both frontend and SSA backend) knows the signature
+// of this function
 func newobject(typ *_type) unsafe.Pointer {
 	return mallocgc(typ.size, typ, true)
 }
@@ -1157,15 +1362,33 @@ func reflect_unsafe_NewArray(typ *_type, n int) unsafe.Pointer {
 }
 
 func profilealloc(mp *m, x unsafe.Pointer, size uintptr) {
-	mp.mcache.next_sample = nextSample()
+	c := getMCache()
+	if c == nil {
+		throw("profilealloc called without a P or outside bootstrapping")
+	}
+	c.nextSample = nextSample()
 	mProf_Malloc(x, size)
 }
 
+// nextSample returns the next sampling point for heap profiling. The goal is
+// to sample allocations on average every MemProfileRate bytes, but with a
+// completely random distribution over the allocation timeline; this
+// corresponds to a Poisson process with parameter MemProfileRate. In Poisson
+// processes, the distance between two samples follows the exponential
+// distribution (exp(MemProfileRate)), so the best return value is a random
+// number taken from an exponential distribution whose mean is MemProfileRate.
 // nextSample 返回堆分析的下一个采样点。目标是平均每个 MemProfileRate 字节采样分配，
 // 但在分配时间线上具有完全随机的分布；这对应于带有参数 MemProfileRate 的泊松过程。
 // 在泊松过程中，两个样本之间的距离遵循指数分布（exp(MemProfileRate)），
 // 因此最佳返回值是取自指数分布的随机数，其均值为 MemProfileRate。
 func nextSample() uintptr {
+	if MemProfileRate == 1 {
+		// Callers assign our return value to
+		// mcache.next_sample, but next_sample is not used
+		// when the rate is 1. So avoid the math below and
+		// just return something.
+		return 0
+	}
 	if GOOS == "plan9" {
 		// Plan 9 doesn't support floating point in note handler.
 		if g := getg(); g == g.m.gsignal {
@@ -1221,8 +1444,8 @@ func nextSampleNoFP() uintptr {
 }
 
 type persistentAlloc struct {
-	base *notInHeap // 空结构，内存首地址
-	off  uintptr    // 偏移量
+	base *notInHeap
+	off  uintptr
 }
 
 var globalAlloc struct {
@@ -1239,6 +1462,13 @@ const persistentChunkSize = 256 << 10
 // persistent chunk. This is updated atomically.
 var persistentChunks *notInHeap
 
+// Wrapper around sysAlloc that can allocate small chunks.
+// There is no associated free operation.
+// Intended for things like function/type/debug-related persistent data.
+// If align is 0, uses default align (currently 8).
+// The returned memory will be zeroed.
+//
+// Consider marking persistentalloc'd types go:notinheap.
 // sysAlloc 的一层封装，能够分配小的 chunk
 // 没有释放操作
 // 用于 函数、类型、调试相关的持久型数据分配。
@@ -1246,7 +1476,7 @@ var persistentChunks *notInHeap
 // 返回的内存会被清零
 //
 // 考虑使此函数类型为 go:notinheap
-func persistentalloc(size, align uintptr, sysStat *uint64) unsafe.Pointer {
+func persistentalloc(size, align uintptr, sysStat *sysMemStat) unsafe.Pointer {
 	var p *notInHeap
 	systemstack(func() {
 		p = persistentalloc1(size, align, sysStat)
@@ -1254,9 +1484,11 @@ func persistentalloc(size, align uintptr, sysStat *uint64) unsafe.Pointer {
 	return unsafe.Pointer(p)
 }
 
+// Must run on system stack because stack growth can (re)invoke it.
+// See issue 9174.
 // 必须在系统栈上执行，因为栈增长可以（再）调用它。见 issues/9174
 //go:systemstack
-func persistentalloc1(size, align uintptr, sysStat *uint64) *notInHeap {
+func persistentalloc1(size, align uintptr, sysStat *sysMemStat) *notInHeap {
 	const (
 		maxBlock = 64 << 10 // VM reservation granularity is 64K on windows
 	)
@@ -1322,8 +1554,8 @@ func persistentalloc1(size, align uintptr, sysStat *uint64) *notInHeap {
 	}
 
 	if sysStat != &memstats.other_sys {
-		mSysStatInc(sysStat, size)
-		mSysStatDec(&memstats.other_sys, size)
+		sysStat.add(int64(size))
+		memstats.other_sys.add(-int64(size))
 	}
 	return p
 }
@@ -1343,20 +1575,30 @@ func inPersistentAlloc(p uintptr) bool {
 	return false
 }
 
+// linearAlloc is a simple linear allocator that pre-reserves a region
+// of memory and then maps that region into the Ready state as needed. The
+// caller is responsible for locking.
 // linearAlloc 是一个简单的线性分配器，它预留一块内存区域并按需将其映射到 Ready 状态。
 // 调用方有责任对齐进行加锁。
 type linearAlloc struct {
-	next   uintptr // 下一个可用的字节
-	mapped uintptr // 映射空间后的一个字节
-	end    uintptr // 保留空间的末尾
+	next   uintptr // next free byte // 下一个可用的字节
+	mapped uintptr // one byte past end of mapped space // 映射空间后的一个字节
+	end    uintptr // end of reserved space // 保留空间的末尾
 }
 
 func (l *linearAlloc) init(base, size uintptr) {
+	if base+size < base {
+		// Chop off the last byte. The runtime isn't prepared
+		// to deal with situations where the bounds could overflow.
+		// Leave that memory reserved, though, so we don't map it
+		// later.
+		size -= 1
+	}
 	l.next, l.mapped = base, base
 	l.end = base + size
 }
 
-func (l *linearAlloc) alloc(size, align uintptr, sysStat *uint64) unsafe.Pointer {
+func (l *linearAlloc) alloc(size, align uintptr, sysStat *sysMemStat) unsafe.Pointer {
 	p := alignUp(l.next, align)
 	if p+size > l.end {
 		return nil
@@ -1365,11 +1607,18 @@ func (l *linearAlloc) alloc(size, align uintptr, sysStat *uint64) unsafe.Pointer
 	if pEnd := alignUp(l.next-1, physPageSize); pEnd > l.mapped {
 		// Transition from Reserved to Prepared to Ready.
 		sysMap(unsafe.Pointer(l.mapped), pEnd-l.mapped, sysStat)
+		sysUsed(unsafe.Pointer(l.mapped), pEnd-l.mapped)
 		l.mapped = pEnd
 	}
 	return unsafe.Pointer(p)
 }
 
+// notInHeap is off-heap memory allocated by a lower-level allocator
+// like sysAlloc or persistentAlloc.
+//
+// In general, it's better to use real types marked as go:notinheap,
+// but this serves as a generic type for situations where that isn't
+// possible (like in the allocators).
 // notInHeap 是类似于 sysAlloc 或 persistentAlloc 等底层分配器分配的堆外内存。
 //
 // 一般来说，最好使用标记为 go:notinheap 的实际类型，但这对于无法实现的情况
