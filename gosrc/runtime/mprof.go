@@ -476,6 +476,20 @@ func (r *StackRecord) Stack() []uintptr {
 	return r.Stack0[0:]
 }
 
+// MemProfileRate controls the fraction of memory allocations
+// that are recorded and reported in the memory profile.
+// The profiler aims to sample an average of
+// one allocation per MemProfileRate bytes allocated.
+//
+// To include every allocated block in the profile, set MemProfileRate to 1.
+// To turn off profiling entirely, set MemProfileRate to 0.
+//
+// The tools that process the memory profiles assume that the
+// profile rate is constant across the lifetime of the program
+// and equal to the current value. Programs that change the
+// memory profiling rate should do so just once, as early as
+// possible in the execution of the program (for example,
+// at the beginning of main).
 // MemProfileRate 控制在内存配置文件中记录和报告的内存分配比例。
 // 分析器旨在为每个分配的 MemProfileRate 字节平均分配一个分配。
 // 要在配置文件中包含每个已分配的块，请将 MemProfileRate 设置为1。
@@ -703,13 +717,16 @@ func ThreadCreateProfile(p []StackRecord) (n int, ok bool) {
 	return
 }
 
-// GoroutineProfile returns n, the number of records in the active goroutine stack profile.
-// If len(p) >= n, GoroutineProfile copies the profile into p and returns n, true.
-// If len(p) < n, GoroutineProfile does not change p and returns n, false.
-//
-// Most clients should use the runtime/pprof package instead
-// of calling GoroutineProfile directly.
-func GoroutineProfile(p []StackRecord) (n int, ok bool) {
+//go:linkname runtime_goroutineProfileWithLabels runtime/pprof.runtime_goroutineProfileWithLabels
+func runtime_goroutineProfileWithLabels(p []StackRecord, labels []unsafe.Pointer) (n int, ok bool) {
+	return goroutineProfileWithLabels(p, labels)
+}
+
+// labels may be nil. If labels is non-nil, it must have the same length as p.
+func goroutineProfileWithLabels(p []StackRecord, labels []unsafe.Pointer) (n int, ok bool) {
+	if labels != nil && len(labels) != len(p) {
+		labels = nil
+	}
 	gp := getg()
 
 	isOK := func(gp1 *g) bool {
@@ -729,7 +746,7 @@ func GoroutineProfile(p []StackRecord) (n int, ok bool) {
 
 	if n <= len(p) {
 		ok = true
-		r := p
+		r, lbl := p, labels
 
 		// Save current goroutine.
 		sp := getcallersp()
@@ -738,6 +755,12 @@ func GoroutineProfile(p []StackRecord) (n int, ok bool) {
 			saveg(pc, sp, gp, &r[0])
 		})
 		r = r[1:]
+
+		// If we have a place to put our goroutine labelmap, insert it there.
+		if labels != nil {
+			lbl[0] = gp.labels
+			lbl = lbl[1:]
+		}
 
 		// Save other goroutines.
 		for _, gp1 := range allgs {
@@ -748,14 +771,28 @@ func GoroutineProfile(p []StackRecord) (n int, ok bool) {
 					break
 				}
 				saveg(^uintptr(0), ^uintptr(0), gp1, &r[0])
+				if labels != nil {
+					lbl[0] = gp1.labels
+					lbl = lbl[1:]
+				}
 				r = r[1:]
 			}
 		}
 	}
 
 	startTheWorld()
-
 	return n, ok
+}
+
+// GoroutineProfile returns n, the number of records in the active goroutine stack profile.
+// If len(p) >= n, GoroutineProfile copies the profile into p and returns n, true.
+// If len(p) < n, GoroutineProfile does not change p and returns n, false.
+//
+// Most clients should use the runtime/pprof package instead
+// of calling GoroutineProfile directly.
+func GoroutineProfile(p []StackRecord) (n int, ok bool) {
+
+	return goroutineProfileWithLabels(p, nil)
 }
 
 func saveg(pc, sp uintptr, gp *g, r *StackRecord) {
