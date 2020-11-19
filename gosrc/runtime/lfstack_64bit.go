@@ -9,6 +9,19 @@ package runtime
 import "unsafe"
 
 const (
+	// addrBits is the number of bits needed to represent a virtual address.
+	//
+	// See heapAddrBits for a table of address space sizes on
+	// various architectures. 48 bits is enough for all
+	// architectures except s390x.
+	//
+	// On AMD64, virtual addresses are 48-bit (or 57-bit) numbers sign extended to 64.
+	// We shift the address left 16 to eliminate the sign extended part and make
+	// room in the bottom for the count.
+	//
+	// On s390x, virtual addresses are 64-bit. There's not much we
+	// can do about this, so we just hope that the kernel doesn't
+	// get to really high addresses and panic if it does.
 	// addrBits 是用于表示一个虚拟地址所需要的位数
 	//
 	// 请参阅 heapAddrBits 以获取地址空间大小表各种架构。
@@ -21,11 +34,11 @@ const (
 	// 不会增长到如此高的空间并产生崩溃。
 	addrBits = 48
 
+	// In addition to the 16 bits taken from the top, we can take 3 from the
+	// bottom, because node must be pointer-aligned, giving a total of 19 bits
+	// of count.
 	// 除了从顶部取 16 位之外，我们可以从底部取 3，因为节点必须是指针对齐的，总计19位计数。
 	cntBits = 64 - addrBits + 3
-	// 0x0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000
-	//          cntBits -------|
-	//                       |------------ addrBits ----------
 
 	// On AIX, 64-bit addresses are split into 36-bit segment number and 28-bit
 	// offset in segment.  Segment numbers in the range 0x0A0000000-0x0AFFFFFFF(LSA)
@@ -45,6 +58,8 @@ func lfstackPack(node *lfnode, cnt uintptr) uint64 {
 
 func lfstackUnpack(val uint64) *lfnode {
 	if GOARCH == "amd64" {
+		// amd64 systems can place the stack above the VA hole, so we need to sign extend
+		// val before unpacking.
 		// amd64 系统可以将栈放在虚拟地址孔之上，因此我们需要在解包之前对 val 进行符号扩充。
 		return (*lfnode)(unsafe.Pointer(uintptr(int64(val) >> cntBits << 3)))
 	}

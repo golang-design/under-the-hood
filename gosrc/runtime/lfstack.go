@@ -11,6 +11,15 @@ import (
 	"unsafe"
 )
 
+// lfstack is the head of a lock-free stack.
+//
+// The zero value of lfstack is an empty list.
+//
+// This stack is intrusive. Nodes must embed lfnode as the first field.
+//
+// The stack does not keep GC-visible pointers to nodes, so the caller
+// is responsible for ensuring the nodes are not garbage collected
+// (typically by allocating them from manually-managed memory).
 // lfstack 是无锁栈的栈顶
 //
 // lfstack 的零值是一个空列表。
@@ -27,8 +36,6 @@ func (head *lfstack) push(node *lfnode) {
 		print("runtime: lfstack.push invalid packing: node=", node, " cnt=", hex(node.pushcnt), " packed=", hex(new), " -> node=", node1, "\n")
 		throw("lfstack.push")
 	}
-
-	// 普通的 cas 原语
 	for {
 		old := atomic.Load64((*uint64)(head))
 		node.next = old

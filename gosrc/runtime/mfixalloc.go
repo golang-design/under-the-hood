@@ -2,14 +2,28 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// 固定大小对象分配器。返回的内存没有归零。
+// Fixed-size object allocator. Returned memory is not zeroed.
 //
-// 见 malloc.go 中的综述.
+// See malloc.go for overview.
 
 package runtime
 
 import "unsafe"
 
+// FixAlloc is a simple free-list allocator for fixed size objects.
+// Malloc uses a FixAlloc wrapped around sysAlloc to manage its
+// mcache and mspan objects.
+//
+// Memory returned by fixalloc.alloc is zeroed by default, but the
+// caller may take responsibility for zeroing allocations by setting
+// the zero flag to false. This is only safe if the memory never
+// contains heap pointers.
+//
+// The caller is responsible for locking around FixAlloc calls.
+// Callers can keep state in the object but the first word is
+// smashed by freeing and reallocating.
+//
+// Consider marking fixalloc'd types go:notinheap.
 // FixAlloc 是一个简单的固定大小对象的自由表内存分配器。
 // Malloc 使用围绕 sysAlloc 的 FixAlloc 来管理其 mcache 和 mspan 对象。
 //
@@ -22,16 +36,21 @@ import "unsafe"
 // 考虑使 fixalloc 的类型变为 go:notinheap.
 type fixalloc struct {
 	size   uintptr
-	first  func(arg, p unsafe.Pointer) // 首次调用时返回 p
+	first  func(arg, p unsafe.Pointer) // called first time p is returned // 首次调用时返回 p
 	arg    unsafe.Pointer
 	list   *mlink
-	chunk  uintptr // 使用 uintptr 而非 unsafe.Pointer 来避免 write barrier
+	chunk  uintptr // use uintptr instead of unsafe.Pointer to avoid write barriers // 使用 uintptr 而非 unsafe.Pointer 来避免 write barrier
 	nchunk uint32
-	inuse  uintptr // 正在使用的字节
-	stat   *uint64
-	zero   bool // 归零的分配
+	inuse  uintptr // in-use bytes now // 正在使用的字节
+	stat   *sysMemStat
+	zero   bool // zero allocations // 归零的分配
 }
 
+// A generic linked list of blocks.  (Typically the block is bigger than sizeof(MLink).)
+// Since assignments to mlink.next will result in a write barrier being performed
+// this cannot be used by some of the internal GC structures. For example when
+// the sweeper is placing an unmarked object on the free list it does not want the
+// write barrier to be called since that could result in the object being reachable.
 // 通用的 block 链表（通常 block 大于 sizeof(MLink)）
 // 由于对 mlink.next 的赋值将导致执行 write barrier，因此某些内部 GC 结构无法使用。
 // 例如，当 sweeper 将未标记的对象放置在空闲列表上时，它不希望调用 write barrier，因为这可能导致对象可到达。
@@ -41,9 +60,11 @@ type mlink struct {
 	next *mlink
 }
 
+// Initialize f to allocate objects of the given size,
+// using the allocator to obtain chunks of memory.
 // 初始化 f 来分配给定大小的对象。
 // 使用分配器来按 chunk 获取
-func (f *fixalloc) init(size uintptr, first func(arg, p unsafe.Pointer), arg unsafe.Pointer, stat *uint64) {
+func (f *fixalloc) init(size uintptr, first func(arg, p unsafe.Pointer), arg unsafe.Pointer, stat *sysMemStat) {
 	f.size = size
 	f.first = first
 	f.arg = arg

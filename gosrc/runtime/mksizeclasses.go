@@ -4,6 +4,28 @@
 
 // +build ignore
 
+// Generate tables for small malloc size classes.
+//
+// See malloc.go for overview.
+//
+// The size classes are chosen so that rounding an allocation
+// request up to the next size class wastes at most 12.5% (1.125x).
+//
+// Each size class has its own page count that gets allocated
+// and chopped up when new objects of the size class are needed.
+// That page count is chosen so that chopping up the run of
+// pages into objects of the given size wastes at most 12.5% (1.125x)
+// of the memory. It is not necessary that the cutoff here be
+// the same as above.
+//
+// The two sources of waste multiply, so the worst possible case
+// for the above constraints would be that allocations of some
+// size might have a 26.6% (1.266x) overhead.
+// In practice, only one of the wastes comes into play for a
+// given size (sizes < 512 waste mainly on the round-up,
+// sizes > 512 waste mainly on the page chopping).
+// For really small sizes, alignment constraints force the
+// overhead higher.
 // 为小型分配大小等级生成表
 //
 // 参见 malloc.go 了解综述
@@ -31,7 +53,7 @@ import (
 	"os"
 )
 
-// 生成 msize.go
+// Generate msize.go
 
 var stdout = flag.Bool("stdout", false, "write to stdout instead of sizeclasses.go")
 
@@ -101,8 +123,8 @@ func makeClasses() []class {
 				align = 256
 			} else if size >= 128 {
 				align = size / 8
-			} else if size >= 16 {
-				align = 16 // required for x86 SSE instructions, if we want to use them
+			} else if size >= 32 {
+				align = 16 // heap bitmaps assume 16 byte alignment for allocations >= 32 bytes.
 			}
 		}
 		if !powerOfTwo(align) {
@@ -148,7 +170,7 @@ func makeClasses() []class {
 		}
 	}
 
-	if len(classes) != 67 {
+	if len(classes) != 68 {
 		panic("number of size classes has changed")
 	}
 
