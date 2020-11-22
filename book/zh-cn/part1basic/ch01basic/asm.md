@@ -61,7 +61,7 @@ GLOBL runtime·tlsoffset(SB), NOPTR, $4
 
 下边连续多条`DATA...`都一样，注意偏移发生了变化，以 4 递增。最终偏移是`0x3c`
 
-然后继续看`GLOBL divtab<>(SB), RODATA, $64` ，这条给变量`divtab<>`加了一个 flag `RODATA` ，表示里边存的是自读变量，最后的`$64`表示的是这个变量占用了 64 字节的空间（容易看出来`0x3c + 4 = 0x40= 10进制的64`
+然后继续看`GLOBL divtab<>(SB), RODATA, $64` ，这条给变量`divtab<>`加了一个 flag `RODATA` ，表示里边存的是只读变量，最后的`$64`表示的是这个变量占用了 64 字节的空间（容易看出来`0x3c + 4 = 0x40= 10进制的64`
 
 `GLOBL runtime·tlsoffset(SB), NOPTR, $4` 这条指令中，`NOPTR`这个 flag 表示这个变量中存的不是指针
 
@@ -85,25 +85,27 @@ TEXT runtime·profileloop(SB),NOSPLIT,$8
 
 ## 指令(instruction)
 
-| 指令 | 操作符 | 解释 |
-| :--- | :----- | :--- |
+指令有几大类，**一类是用于数据移动的**，比如 MOV 系列，MOVQ、MOVL 等等(都是 MOV，只不过 Q 和 L 的后缀表示了指令操作数的字节大小)，还有**一类是用于跳转的**，无条件跳转，有条件跳转等等。还有**一类是用于逻辑运算和算术运算**的。（PS：应该还有其他的类）
 
+还有一些类似于指令，但是其实是指令的 prefix，比如 `LOCK` （但是如果理解为指令也可以吧）关于 LOCK 的解释，下文中还会有涉及
 
-| JMP
-| MOVL
-| MOVQ
-| MOVEQ
-| LEAQ
-| SUBQ
-| ANDQ
-| CALL
-| PUSHQ
-| POPQ
-| CLD
-| CMPQ
-| CPUID
-| JEQ
-|
+| 指令                                           | 操作符 | 解释 |
+| ---------------------------------------------- | ------ | ---- |
+| JMP                                            |        |      |
+| MOVL                                           |        |      |
+| MOVQ                                           |        |      |
+| MOVEQ                                          |        |      |
+| LEAQ                                           |        |      |
+| SUBQ                                           |        |      |
+| ANDQ                                           |        |      |
+| CALL                                           |        |      |
+| PUSHQ                                          |        |      |
+| POPQ                                           |        |      |
+| CLD                                            |        |      |
+| CMPQ                                           |        |      |
+| CPUID                                          |        |      |
+| JEQ                                            |        |      |
+| ...还有很多（TODO：按指令的类型、功能 进行分类 |        |      |
 
 ## 运行时协调
 
@@ -206,6 +208,55 @@ symbol+offset(SP) 引用函数的局部变量，offset 的合法取值是 [-fram
 TEXT pkgname·funcname(SB),NOSPLIT,$-8
     JMP	_rt0_amd64(SB)
 ```
+
+## 实战
+
+接下来，我们一起阅读 `asm_amd64.s`中的汇编
+
+#### 第一个汇编：实现 CAS 操作
+
+```assembly
+// asm_amd64.s
+
+// bool Cas(int32 *val, int32 old, int32 new)
+// Atomically:
+//	if(*val == old){
+//		*val = new;
+//		return 1;
+//	} else
+//		return 0;
+TEXT runtime∕internal∕atomic·Cas(SB),NOSPLIT,$0-17
+	MOVQ	ptr+0(FP), BX
+	MOVL	old+8(FP), AX
+	MOVL	new+12(FP), CX
+	LOCK
+	CMPXCHGL	CX, 0(BX)
+	SETEQ	ret+16(FP)
+	RET
+```
+
+我们先看第一个汇编，使用汇编实现 CAS (compare and swap)操作
+
+我们一条一条的看，先看`TEXT runtime∕internal∕atomic·Cas(SB),NOSPLIT,$0-17` 。`$0-17`表示的意思是这个`TEXT block`运行的时候，需要开辟的栈帧大小是 0 ，而`17 = 8 + 4 + 4 + 1 = sizeof(pointer of int32) + sizeof(int32) + sizeof(int32) + sizeof(bool)` （返回值是 bool ，占据 1 个字节
+
+然后我们再看 block 内的第一条指令 ， 这里的 FP，是伪寄存器(pseudo) ，里边存的是 Frame Pointer, FP 配合偏移 可以指向函数调用参数或者临时变量
+
+`MOVQ ptr+0(FP), BX` 这一句话是指把函数的第一个参数`ptr+0(FP)`移动到 BX 寄存器中
+
+`MOVQ` 代表移动的是 8 个字节,Q 代表 64bit ，参数的引用是 `参数名称+偏移(FP)`,可以看到这里名称用了 ptr,并不是 val,变量名对汇编不会有什么影响，但是语法上是必须带上的，可读性也会更好些。
+
+后边两条 MOVL 不再赘述
+
+`LOCK` 并不是指令，而是一个指令的前缀 (instruction prefix)，是用来修饰 `CMPXCHGL CX,0(BX)` 的
+
+> The LOCK prefix ensures that the CPU has exclusive ownership of the appropriate cache line for the duration of the operation, and provides certain additional ordering guarantees. This may be achieved by asserting a bus lock, but the CPU will avoid this where possible. If the bus is locked then it is only for the duration of the locked instruction
+
+`CMPXCHGL` 有两个操作数，`CX` 和 `0(BX)` ,`0(BX)` 代表的是 val 的地址  
+`offset(BX)` 是一种 `addressing model` , 把寄存器里存的值 + offset 作为目标地址
+
+CMPXCHGL 指令做的事情，首先会把 `destination operand`(也就是 `0(BX)`)里的值 和 AX 寄存器里存的值做比较，如果一样的话会把 CX 里边存的值保存到 `0(BX)` 这块地址里 (虽然这条指令里并没有出现 AX，但是还是用到了，汇编里还是有不少这样的情况)  
+CMPXCHGL 最后的那个 L 应该表示的是操作长度是 32 bit ，从函数的定义来看 old 和 new 都是 int32
+函数返回一个 Bool 占用 8bit ，`SETEQ` 会在 AX 和 CX 相等的时候把 1 写进 ret+16(FP) (否则写 0
 
 ## 进一步阅读的参考文献
 
