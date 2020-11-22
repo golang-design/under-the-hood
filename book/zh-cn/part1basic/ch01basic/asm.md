@@ -5,8 +5,6 @@ title: "1.4 Plan 9 汇编语言"
 
 # 1.4 Plan 9 汇编语言
 
-
-
 本节我们快速介绍 Go 语言使用的 Plan 9 汇编，以方便在后续章节中能够流畅的阅读 Go 源码中关于汇编的部分。
 
 对于一段 Go 程序，我们可以通过下面的命令来获得编译后的汇编代码：
@@ -26,14 +24,16 @@ FUNCDATA 和 PCDATA 指令包含了由垃圾回收器使用的信息，他们由
 
 ## 符号
 
-## 指令
+## 汇编程序指令(assembler directives)
 
-全局数据符号由以 DATA 指令开头的序列
+#### DATA
+
+全局数据符号由以 **DATA 指令**开头的序列
 全局数据符号由一系列以 DATA 指令起始和一个 GLOBL 指令定义。
 每个 DATA 指令初始化相应内存的一部分。未明确初始化的内存为零。
 该 DATA 指令的一般形式是
 
-```
+```assembly
 DATA	symbol+offset(SB)/width, value
 ```
 
@@ -45,7 +45,7 @@ DATA 必须使用增加的偏移量来写入给定符号的指令。
 
 例如：
 
-```
+```assembly
 DATA divtab<>+0x00(SB)/4, $0xf4f8fcff
 DATA divtab<>+0x04(SB)/4, $0xe6eaedf0
 ...
@@ -55,8 +55,40 @@ GLOBL divtab<>(SB), RODATA, $64
 GLOBL runtime·tlsoffset(SB), NOPTR, $4
 ```
 
+为了更加方便读者更加容易上手，对上述指令再做一些**冗余的解释**
+
+首先看`DATA divtab<>+0x00(SB)/4, $0xf4f8fcff` 表示的是`divtab<>` 在 0 偏移处有一个 4 字节大小的值`0xf4f8fcff`
+
+下边连续多条`DATA...`都一样，注意偏移发生了变化，以 4 递增。最终偏移是`0x3c`
+
+然后继续看`GLOBL divtab<>(SB), RODATA, $64` ，这条给变量`divtab<>`加了一个 flag `RODATA` ，表示里边存的是自读变量，最后的`$64`表示的是这个变量占用了 64 字节的空间（容易看出来`0x3c + 4 = 0x40= 10进制的64`
+
+`GLOBL runtime·tlsoffset(SB), NOPTR, $4` 这条指令中，`NOPTR`这个 flag 表示这个变量中存的不是指针
+
+关于更多 flag，[请查看源码](https://github.com/golang/go/blob/c53315d6cf1b4bfea6ff356b4a1524778c683bb9/src/runtime/textflag.h)
+
+#### TEXT
+
+```asm
+TEXT runtime·profileloop(SB),NOSPLIT,$8
+	MOVQ	$runtime·profileloop1(SB), CX
+	MOVQ	CX, 0(SP)
+	CALL	runtime·externalthreadhandler(SB)
+	RET
+```
+
+上边整段汇编代码称为一个`TEXT block` ，`runtime.profileloop(SB)`后边有一个`NOSPLIT` flag，紧随其后的`$8`表示`frame size` 通常 `frame size` 的构成都是形如`$24-8` (中间的`-`只起到分隔的作用)，表示的是这个`TEXT block` 运行的时候需要占用 24 字节空间，参数和返回值要额外占用 8 字节空间（这 8 字节占用的是调用方栈帧里的空间）
+
+但是如果有 NOSPLIT 这个 flag，则可以忽略参数和返回值占用的空间，就像上述这个例子，只有一个`$8` 。表示 frame size 只有 8 字节大小。这从汇编中也能看出来 `MOVQ CX, 0(SP)` ,因为 MOVQ 表示这个操作的操作对象是 8 字节的
+
+> MOV 指令有有好几种后缀 MOVB MOVW MOVL MOVQ 分别对应的是 1 字节 、2 字节 、4 字节、8 字节
+
+## 指令(instruction)
+
 | 指令 | 操作符 | 解释 |
-|:-----|:-----|:------|
+| :--- | :----- | :--- |
+
+
 | JMP
 | MOVL
 | MOVQ
@@ -71,7 +103,7 @@ GLOBL runtime·tlsoffset(SB), NOPTR, $4
 | CMPQ
 | CPUID
 | JEQ
-| 
+|
 
 ## 运行时协调
 
@@ -88,17 +120,17 @@ Go 编译器会将这部分信息耦合到 Go 源码文件中，但汇编程序�
 对于没有指针结果且没有本地堆栈帧或没有函数调用的汇编函数，
 唯一的要求是在同一个包中的 Go 源文件中为函数定义 Go 原型。
 汇编函数的名称不能包含包名称组件
-（例如，`syscall` 包中的函数 `Syscall` 应使用名称 `·Syscall` 而不是 `syscall·Syscall` 其TEXT指令中的等效名称）。
+（例如，`syscall` 包中的函数 `Syscall` 应使用名称 `·Syscall` 而不是 `syscall·Syscall` 其 TEXT 指令中的等效名称）。
 对于更复杂的情况，需要显式注释。
 这些注释使用标准 `#include` 文件中定义的伪指令 `funcdata.h`。
 
 如果函数没有参数且没有结果，则可以省略指针信息。这是由一个参数大小 `$n-0` 注释指示 `TEXT` 对指令。
-否则，指针信息必须由Go源文件中的函数的Go原型提供，即使对于未直接从Go调用的汇编函数也是如此。
+否则，指针信息必须由 Go 源文件中的函数的 Go 原型提供，即使对于未直接从 Go 调用的汇编函数也是如此。
 （原型也将 `go vet` 检查参数引用。）在函数的开头，假定参数被初始化但结果假定未初始化。
 如果结果将在调用指令期间保存实时指针，则该函数应首先将结果归零，
 然后执行伪指令 `GO_RESULTS_INITIALIZED`。
 此指令记录结果现在已初始化，应在堆栈移动和垃圾回收期间进行扫描。
-通常更容易安排汇编函数不返回指针或不包含调用指令; 
+通常更容易安排汇编函数不返回指针或不包含调用指令;
 标准库中没有汇编函数使用 `GO_RESULTS_INITIALIZED`。
 
 如果函数没有本地堆栈帧，则可以省略指针信息。这由 `TEXT` 指令上的本地帧大小 `$0-n` 注释表示。如果函数不包含调用指令，也可以省略指针信息。否则，本地堆栈帧不能包含指针，并且汇编必须通过执行伪指令 `TEXTNO_LOCAL_POINTERS` 来确认这一事实。因为通过移动堆栈来实现堆栈大小调整，所以堆栈指针可能在任何函数调用期间发生变化：甚至指向堆栈数据的指针也不能保存在局部变量中。
@@ -111,21 +143,21 @@ Go 编译器会将这部分信息耦合到 Go 源码文件中，但汇编程序�
 
 Plan 9 中的通用寄存器包括：
 
-AX	
-BX	
-CX	
-DX	
-DI	
-SI	
-BP	
-SP	
-R8	
-R9	
-R10	
-R11	
-R12	
-R13	
-R14	
+AX
+BX
+CX
+DX
+DI
+SI
+BP
+SP
+R8
+R9
+R10
+R11
+R12
+R13
+R14
 PC
 
 ### 伪寄存器
@@ -139,6 +171,8 @@ SP, Stack Pointer: 当前栈帧开始的地方
 
 所有用户定义的符号都作为偏移量写入伪寄存器 FP 和 SB。
 
+汇编代码中需要表示用户定义的符号(变量)时，可以通过 SP 与偏移还有变量名的组合，比如`x-8(SP)` ，因为 SP 指向的是栈顶，所以偏移值都是负的，`x`则表示变量名
+
 ## 寻址模式
 
 汇编语言的一个很重要的概念就是它的寻址模式，Plan 9 汇编也不例外，它支持如下寻址模式：
@@ -148,7 +182,7 @@ R0              数据寄存器
 A0              地址寄存器
 F0              浮点寄存器
 CAAR, CACR, 等  特殊名字
-$con            常量 
+$con            常量
 $fcon           浮点数常量
 name+o(SB)      外部符号
 name<>+o(SB)    局部符号
@@ -158,7 +192,7 @@ $name+o(SB)     外部地址
 $name<>+o(SB)   局部地址
 (A0)+           间接后增量
 -(A0)           间接前增量
-o(A0)           
+o(A0)
 o()(R0.s)
 
 symbol+offset(SP) 引用函数的局部变量，offset 的合法取值是 [-framesize, 0)
@@ -172,7 +206,6 @@ symbol+offset(SP) 引用函数的局部变量，offset 的合法取值是 [-fram
 TEXT pkgname·funcname(SB),NOSPLIT,$-8
     JMP	_rt0_amd64(SB)
 ```
-
 
 ## 进一步阅读的参考文献
 
