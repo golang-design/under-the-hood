@@ -1,5 +1,5 @@
 ---
-解释weight: 1104
+weight: 1104
 title: "1.4 Plan 9 汇编语言"
 ---
 
