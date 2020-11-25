@@ -1051,4 +1051,4 @@ Timer 的实现已经经历了好几次大幅度的优化。如今的 Timer 生�
 
 ## 许可
 
-[Go under the hood](https://github.com/golang-design/under-the-hood) | CC-BY-NC-ND 4.0 & MIT &copy; [changkun](https://changkun.de)
+&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
