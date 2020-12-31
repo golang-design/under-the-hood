@@ -7,7 +7,6 @@
 ![](https://img.shields.io/badge/lang-简体中文-red.svg?longCache=true&style=flat-square)
 ![](https://img.shields.io/github/license/golang-design/under-the-hood.svg?style=flat-square)
 ![](https://img.shields.io/badge/license-CC%20BY--NC--ND%204.0-lightgrey.svg?style=flat-square)
-[![](https://img.shields.io/badge/chat-telegram-%232CA5E0.svg?logo=telegram&logoColor=white&style=flat-square)](https://t.me/joinchat/FEeulA4zgj2DsBbudBqMcQ)
 [![](https://img.shields.io/badge/捐赠-微信-68b600.svg?style=popout-square&logo=WeChat)](https://golang.design/under-the-hood/assets/wechat.jpg)
 [![](https://img.shields.io/badge/捐赠-支付宝-00a2ef.svg?style=popout-square&logo=AliPay)](https://golang.design/under-the-hood/assets/alipay.jpg)
 [![](https://img.shields.io/badge/捐赠-PayPal-104098.svg?style=popout-square&logo=PayPal)](https://www.paypal.me/changkunde/4.99eur)

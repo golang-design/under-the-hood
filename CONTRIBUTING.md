@@ -1,8 +1,6 @@
 
 # 如何参与贡献
 
-[![](https://img.shields.io/badge/chat-telegram-%232CA5E0.svg?logo=telegram&logoColor=white&style=flat-square)](https://t.me/joinchat/FEeulA4zgj2DsBbudBqMcQ)
-
 本文描述了如何参与贡献『Go under the hood』。
 
 ## 提交 Issue
@@ -53,7 +51,6 @@ In general, if there is such a problem, we encourage you to submit an improvemen
 please also [submit an issue](https://github.com/golang-design/under-the-hood/issues/new) to ask the author to express you doubt. 
 The author will rephrase the content of this section based on the actual situation, 
 thus helping others to read this part of the content more easily. 
-Of course, you can also participate in source-related discussions through the telegram group above.
 
 - We also welcome you to submit relevant suggestions for the content of this book. 
 In particular, if you think that the source code of a module or file not covered in the book is worth discussing, 
