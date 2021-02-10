@@ -4,12 +4,12 @@
 
 当前内容基于 `go1.15`
 
-![](https://img.shields.io/badge/lang-简体中文-red.svg?longCache=true&style=flat-square)
-![](https://img.shields.io/github/license/golang-design/under-the-hood.svg?style=flat-square)
-![](https://img.shields.io/badge/license-CC%20BY--NC--ND%204.0-lightgrey.svg?style=flat-square)
-[![](https://img.shields.io/badge/捐赠-微信-68b600.svg?style=popout-square&logo=WeChat)](https://golang.design/under-the-hood/assets/wechat.jpg)
-[![](https://img.shields.io/badge/捐赠-支付宝-00a2ef.svg?style=popout-square&logo=AliPay)](https://golang.design/under-the-hood/assets/alipay.jpg)
-[![](https://img.shields.io/badge/捐赠-PayPal-104098.svg?style=popout-square&logo=PayPal)](https://www.paypal.me/changkunde/4.99eur)
+![](https://img.shields.io/badge/lang-简体中文-red.svg?longCache=true)
+![](https://img.shields.io/github/license/golang-design/under-the-hood.svg)
+![](https://img.shields.io/badge/license-CC%20BY--NC--ND%204.0-lightgrey.svg)
+[![](https://img.shields.io/badge/捐赠-微信-68b600.svg?logo=WeChat)](https://golang.design/under-the-hood/assets/wechat.jpg)
+[![](https://img.shields.io/badge/捐赠-支付宝-00a2ef.svg?logo=AliPay)](https://golang.design/under-the-hood/assets/alipay.jpg)
+[![](https://img.shields.io/badge/捐赠-PayPal-104098.svg?logo=PayPal)](https://www.paypal.me/changkunde/4.99eur) ![](https://changkun.de/urlstat?mode=github&repo=golang-design/under-the-hood)
 
 Go 语言从 2009 年诞生之初已有十余年的历史。
 纵观大多数编程语言的历史进程，令人惊讶的是 Go 语言自身在进化的这十余年间，
