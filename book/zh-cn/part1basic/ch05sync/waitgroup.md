@@ -41,8 +41,8 @@ func (wg *WaitGroup) state() (statep *uint64, semap *uint32) {
 }
 ```
 
-- 在 32 位机器上 `state1[0]` 和 `state1[1]` 分别用于计数和等待计数，而最后一个 `state1[2]` 用于存储原语。
-- 在 64 位机器上 `state1[0]` 作为存储原语，而 `state[1]` 和 `state[2]` 用于计数和等待计数
+- 在 64 位机器上 `state1[0]` 和 `state1[1]` 分别用于等待计数和计数，而最后一个 `state1[2]` 用于存储原语。
+- 在 32 位机器上 `state1[0]` 作为存储原语，而 `state[1]` 和 `state[2]` 用于等待计数和计数
 
 ## `Add()`/`Done()`
 
