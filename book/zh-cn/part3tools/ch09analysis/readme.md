@@ -23,7 +23,7 @@ bookCollapseSection: true
 Everyone knows that debugging is twice as hard as writing a program in the first place. So if you are as clever as you can be when you write it, how will you ever debug it?
 </I></br>
 <div class="quote-right">
--- Brain Kernighan
+-- Brian Kernighan
 </div>
 </div>
 
