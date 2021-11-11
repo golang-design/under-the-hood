@@ -1,16 +1,17 @@
 name: Website
-on: [push]
+on:
+  push:
+    branches: [ main ]
 jobs:
-
   build:
     name: Website
     runs-on: ubuntu-latest
     steps:
 
-    - name: Set up Go 1.15
+    - name: Set up Go 1.16
       uses: actions/setup-go@v1
       with:
-        go-version: 1.15
+        go-version: 1.16
       id: go
 
     - name: Setup Hugo
@@ -31,9 +32,9 @@ jobs:
       run: |
         cd website && make
         mkdir ~/.ssh
-        echo "$KEY" | tr -d '\r' > ~/.ssh/id_rsa
-        chmod 400 ~/.ssh/id_rsa
+        echo "$KEY" | tr -d '\r' > ~/.ssh/id_ed25519
+        chmod 400 ~/.ssh/id_ed25519
         eval "$(ssh-agent -s)"
-        ssh-add ~/.ssh/id_rsa
+        ssh-add ~/.ssh/id_ed25519
         ssh-keyscan -H $DOMAIN >> ~/.ssh/known_hosts
         scp -r public/* $USER@$DOMAIN:$TARGET
