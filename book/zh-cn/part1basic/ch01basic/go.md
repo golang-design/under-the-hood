@@ -169,13 +169,7 @@ type struct interface
 
 ### 类型别名
 
-语言自身的类型别名包括：
-const (
-	true  = 0 == 0 
-	false = 0 != 0
-	iota  = 0
-)
-别名类型包括：byte rune
+语言自身的类型别名包括：byte rune
 
 还可以使用 type 关键字来定义类型别名：
 
