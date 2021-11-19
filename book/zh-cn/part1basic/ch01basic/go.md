@@ -266,14 +266,15 @@ close(ch)
 
 但语言规范规定了一些要求：
 
+- 读写 nil Channel 会永远阻塞，关闭 nil Channel 会导致 panic
 - 关闭一个已关闭的 Channel 会导致 panic
 - 向已经关闭的 Channel 发送数据会导致 panic
-- 向已经关闭的 Channel 读取数据不会导致 panic，但读取的值为 Channel 缓存数据的零值，可以通过接受语句第二个返回值来检查 Channel 是否关闭：
+- 向已经关闭的 Channel 读取数据不会导致 panic，但读取的值为 Channel 传递的数据类型的零值，可以通过接受语句第二个返回值来检查 Channel 是否关闭且排空：
   
   ```go
   v, ok := <- ch
   if !ok {
-  	... // Channel 已经关闭
+  	... // 如果是非缓冲 Channel ，说明已经关闭；如果是带缓冲 Channel ，说明已经关闭，且其内部缓冲区已经排空
   }
   ```
 
