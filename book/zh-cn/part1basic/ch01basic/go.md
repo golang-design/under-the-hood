@@ -174,7 +174,28 @@ type struct interface
 还可以使用 type 关键字来定义类型别名：
 
 ```
-type New Old
+type Alias = Origin
+```
+
+需要注意别名和原类型之间的等号，Go源代码举例：
+
+```golang
+// byte is an alias for uint8 and is equivalent to uint8 in all ways. It is
+// used, by convention, to distinguish byte values from 8-bit unsigned
+// integer values.
+type byte = uint8
+
+// rune is an alias for int32 and is equivalent to int32 in all ways. It is
+// used, by convention, to distinguish character values from integer values.
+type rune = int32
+```
+
+别名和原类型是等同的，不需要显式转换：
+
+```golang
+var a uint8
+var b byte = 1
+a = b // 不需要写成 a = uint8(b)
 ```
 
 ### 指针与零值
