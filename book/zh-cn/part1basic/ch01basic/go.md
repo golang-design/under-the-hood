@@ -169,18 +169,33 @@ type struct interface
 
 ### 类型别名
 
-语言自身的类型别名包括：
-const (
-	true  = 0 == 0 
-	false = 0 != 0
-	iota  = 0
-)
-别名类型包括：byte rune
+语言自身的类型别名包括：byte rune
 
 还可以使用 type 关键字来定义类型别名：
 
 ```
-type New Old
+type Alias = Origin
+```
+
+需要注意别名和原类型之间的等号，Go源代码举例：
+
+```golang
+// byte is an alias for uint8 and is equivalent to uint8 in all ways. It is
+// used, by convention, to distinguish byte values from 8-bit unsigned
+// integer values.
+type byte = uint8
+
+// rune is an alias for int32 and is equivalent to int32 in all ways. It is
+// used, by convention, to distinguish character values from integer values.
+type rune = int32
+```
+
+别名和原类型是等同的，不需要显式转换：
+
+```golang
+var a uint8
+var b byte = 1
+a = b // 不需要写成 a = uint8(b)
 ```
 
 ### 指针与零值
@@ -251,14 +266,15 @@ close(ch)
 
 但语言规范规定了一些要求：
 
+- 读写 nil Channel 会永远阻塞，关闭 nil Channel 会导致 panic
 - 关闭一个已关闭的 Channel 会导致 panic
 - 向已经关闭的 Channel 发送数据会导致 panic
-- 向已经关闭的 Channel 读取数据不会导致 panic，但读取的值为 Channel 缓存数据的零值，可以通过接受语句第二个返回值来检查 Channel 是否关闭：
+- 向已经关闭的 Channel 读取数据不会导致 panic，但读取的值为 Channel 传递的数据类型的零值，可以通过接受语句第二个返回值来检查 Channel 是否关闭且排空：
   
   ```go
   v, ok := <- ch
   if !ok {
-  	... // Channel 已经关闭
+  	... // 如果是非缓冲 Channel ，说明已经关闭；如果是带缓冲 Channel ，说明已经关闭，且其内部缓冲区已经排空
   }
   ```
 
