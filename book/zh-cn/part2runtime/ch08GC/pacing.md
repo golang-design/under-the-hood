@@ -239,7 +239,7 @@ const (
 	gcTriggerCycle
 )
 
-// test 报告当前出发条件是否满足，换句话说 _GCoff 阶段的退出条件已满足。
+// test 报告当前触发条件是否满足，换句话说 _GCoff 阶段的退出条件已满足。
 // 退出条件应该在分配阶段已完成测试。
 func (t gcTrigger) test() bool {
 	// 如果已禁用 GC
