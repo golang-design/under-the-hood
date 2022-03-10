@@ -42,7 +42,7 @@ func mstart() {
 	_g_ := getg()
 
 	// 终于开始确定执行栈的边界了
-	// 通过检查 g 执行占的边界来确定是否为系统栈
+	// 通过检查 g 执行栈的边界来确定是否为系统栈
 	osStack := _g_.stack.lo == 0
 	if osStack {
 		// 根据系统栈初始化执行栈的边界
@@ -64,7 +64,7 @@ func mstart() {
 
 	// 退出线程
 	if GOOS == "windows" || GOOS == "solaris" || GOOS == "plan9" || GOOS == "darwin" || GOOS == "aix" {
-		// 由于 windows, solaris, darwin, aix 和 plan9 总是系统分配的栈，在在 mstart 之前放进 _g_.stack 的
+		// 由于 windows, solaris, darwin, aix 和 plan9 总是系统分配的栈，在 mstart 之前放进 _g_.stack 的
 		// 因此上面的逻辑还没有设置 osStack。
 		osStack = true
 	}
