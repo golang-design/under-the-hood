@@ -61,7 +61,7 @@ Journal of the ACM, Vol. 46, No.5, Spectember 1999, pp. 720-748
 
 TODO:
 
-**定理1 （贪心调度定理）**：对于具有工作 $T1$ 和临界路径长度 $T_\infty$ 􏱇的任何多线程计算，对于任何数量为 $P$ 的处理器，任何贪婪的 $P$ 处理器执行调度 $X$ 达到 $T(X) \leq T_1 / P + T_\infty$。
+**定理1 （贪心调度定理）**：对于具有工作 $T1$ 和临界路径长度 $T_\infty$ 的任何多线程计算，对于任何数量为 $P$ 的处理器，任何贪婪的 $P$ 处理器执行调度 $X$ 达到 $T(X) \leq T_1 / P + T_\infty$。
 
 ## 3 Busy-Leaves 属性
 
@@ -75,7 +75,7 @@ TODO:
 
 TODO:
 
-**引理4**：在通过工作窃取算法执行任何完全严格的多线程计算时，考虑任何处理器 $p$ 以及 $p$ 在线程上工作的任何给定时间步长。设 $\Gamma_0$ 是 $p$ 正在处理的线程，令 $k$ 为 $p$ 的就绪队列的线程数，令$\Gamma_0$，$\Gamma_1$，$\Gamma_k$表示从下到上排序的 $p$ 的就绪队列线程，使得 $\Gamma_􏱃1$ 在最底端，而 $\Gamma_k$ 在最顶端。如果我们有 $k>0$，则 p 的就绪队列中的线程满足以下性质：
+**引理4**：在通过工作窃取算法执行任何完全严格的多线程计算时，考虑任何处理器 $p$ 以及 $p$ 在线程上工作的任何给定时间步长。设 $\Gamma_0$ 是 $p$ 正在处理的线程，令 $k$ 为 $p$ 的就绪队列的线程数，令$\Gamma_0$，$\Gamma_1$，$\Gamma_k$表示从下到上排序的 $p$ 的就绪队列线程，使得 $\Gamma_1$ 在最底端，而 $\Gamma_k$ 在最顶端。如果我们有 $k>0$，则 p 的就绪队列中的线程满足以下性质：
 
 1. 对于 $i = 1,2, ..., k$，线程 $\Gamma_i$ 为 $\Gamma_{i-1}$ 的父线程。
 2. 如果有 $k>1$，则对于 $i=1,2,...,k-1$，线程 $\Gamma_{i}$ 没有执行工作因为它尚未被 $\Gamma_{i-1}$ 创建。
@@ -98,13 +98,13 @@ TODO:
 
 本文分析的方法有多实用？我们一直积极致力于构建一种基于 C 语言的名为 Cilk（发音为 "silk"）的编程语言，并用于编程多线程计算（参见，例如，[Blumofe 1995]，[Blumofe et al. 1996]，[Frigo et al. 1998]，[Joerg, 1996] 和 [Randall, 1998]）。Cilk 源自 PCM（Parallel Continuation Machine）系统 [Halbherr et al. 1994]，其本身一部分受到此处研究报告的启发。Cilk 运行时系统采用本文中描述的工作窃取算法。由于 Cilk 采用了可证明有效的调度算法，因此 Cilk 为用户应用程序提供了有保证的性能。具体来说，我们已经凭经验发现使用模型 $T_1/P+T_\infty$ 可以准确预测用 Cilk 语言编写的应用程序在具有 P 个处理器上的运行性能。
 
-Cilk 系统目前运行在现代共享内存多处理器上，例如 Sun Enterprise，Silicon Graphics Origin，Intel Quad Pentium 和 DEC Alphaserver（早期版本的 Cilk 运行在 Thinking Machines CM-5 MPP，Intel Paragon MPP 和 IBM SP-2 上）。迄今为止，用 Cilk 编写的应用程序包括蛋白质折叠 [Pande et al. 1994]，图形渲染 [Stark 1998]，回溯搜索和 *􏱑Socrates 国际象棋程序 [Joerg and Kuszmaul, 1994]，它在 1995 年 ICCA 世界计算机国际象棋锦标赛中获得二等奖，该锦标赛在桑迪亚国家实验室的 1824-node Paragon上运行。我们最近的国际象棋程序 Cilkchess 赢得了 1996 年荷兰公开赛计算机国际象棋锦标赛。 Cilk 的团队编程在国际功能编程大会主办的 ICFP'98 编程竞赛中获得了一等奖（不败）。
+Cilk 系统目前运行在现代共享内存多处理器上，例如 Sun Enterprise，Silicon Graphics Origin，Intel Quad Pentium 和 DEC Alphaserver（早期版本的 Cilk 运行在 Thinking Machines CM-5 MPP，Intel Paragon MPP 和 IBM SP-2 上）。迄今为止，用 Cilk 编写的应用程序包括蛋白质折叠 [Pande et al. 1994]，图形渲染 [Stark 1998]，回溯搜索和 *Socrates 国际象棋程序 [Joerg and Kuszmaul, 1994]，它在 1995 年 ICCA 世界计算机国际象棋锦标赛中获得二等奖，该锦标赛在桑迪亚国家实验室的 1824-node Paragon上运行。我们最近的国际象棋程序 Cilkchess 赢得了 1996 年荷兰公开赛计算机国际象棋锦标赛。 Cilk 的团队编程在国际功能编程大会主办的 ICFP'98 编程竞赛中获得了一等奖（不败）。
 
 作为我们研究的一部分，我们在工作站网络上为 Cilk 实现了原型运行时系统。这个运行时系统叫做 Cilk-NOW [Blumofe 1995; Blumofe and Lisiecki 1997; Lisiecki 1996] 支持自适应并行，其中工作站环境中的处理器可以加入用户的计算，如果它们在其他方面处于空闲状态，并且可以立即使用，以便在需要时由其所有者再次离开计算。 Cilk-NOW 还支持透明容错，这意味着即使面对程序员以完全错误的方式编写的代码导致处理器崩溃，计算也可以继续进行。[Randall, 1998] 描述了更新的 SMP 集群分布式实现。
 
 我们还调查了与 Cilk 相关的其他主题，包括分布式共享内存和调试工具（有关分布式共享内存的示例，请参阅 [Blumofe et al, 1996a; 1996b]，[Frigo, 1998]，[Frigo and Luchangco, 1998]。有关调试工具的示例，请参见 [Cheng, 1998]，[Cheng et al. 1998]，[Feng and Leiserson, 1997]，和 [Stark, 1998]）可以在 http://supertech.lcs.mit.edu/cilk 上找到论文和软件版本的最新信息。
 
-对于共享内存多处理器的情况，我们最近推广了两个维度的时间界限（但不是空间或通信边界）[Arora et al. 1998]。首先，我们已经证明，对于任意（不一定是完全严格甚至严格的）多线程计算，预期的执行时间是 $O(T_{1}/P+T_{\infty})$􏱇。该界限基于新的结构引理和使用潜在函数的摊销分析。其次，我们开发了工作窃取算法的非阻塞式实现，并且我们分析了它在多程序环境中的执行时间，其中计算在一组数量随时间增长和缩小的处理器上执行，这种增长和缩小是由争用对手控制。如果攻击者选择不增加或缩小处理器数量，则绑定专门用于匹配我们之前的绑定。非阻塞工作窃取调度器已在 Hood 用户级线程库中实现 [Blumofe and Papadopoulos 1998; Papadopoulos 1998]。可以在万维网上找到论文和软件版本的最新的信息，网址为 http://www.cs.utexas.edu/users/hood。
+对于共享内存多处理器的情况，我们最近推广了两个维度的时间界限（但不是空间或通信边界）[Arora et al. 1998]。首先，我们已经证明，对于任意（不一定是完全严格甚至严格的）多线程计算，预期的执行时间是 $O(T_{1}/P+T_{\infty})$。该界限基于新的结构引理和使用潜在函数的摊销分析。其次，我们开发了工作窃取算法的非阻塞式实现，并且我们分析了它在多程序环境中的执行时间，其中计算在一组数量随时间增长和缩小的处理器上执行，这种增长和缩小是由争用对手控制。如果攻击者选择不增加或缩小处理器数量，则绑定专门用于匹配我们之前的绑定。非阻塞工作窃取调度器已在 Hood 用户级线程库中实现 [Blumofe and Papadopoulos 1998; Papadopoulos 1998]。可以在万维网上找到论文和软件版本的最新的信息，网址为 http://www.cs.utexas.edu/users/hood。
 
 ## 参考文献
 
