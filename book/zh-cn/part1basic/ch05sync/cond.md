@@ -81,8 +81,8 @@ L 的类型为 Locker 因此可以包含任何实现了 Lock 和 Unlock 的锁�
 
 ## copyChecker
 
-copyChecker 非常简单，它实现了一个 `check()` 方法，这个方法以 copyChecker 的指针作为 reciever，
-因为 copyChecker 在一个 Cond 中并非指针，因此当 Cond 发生拷贝行为后，这个 reciever 会
+copyChecker 非常简单，它实现了一个 `check()` 方法，这个方法以 copyChecker 的指针作为 receiver，
+因为 copyChecker 在一个 Cond 中并非指针，因此当 Cond 发生拷贝行为后，这个 receiver 会
 发生变化，从而检测到拷贝行为，使用 panic 以警示用户：
 
 ```go
