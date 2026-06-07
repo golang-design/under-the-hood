@@ -3,7 +3,7 @@ weight: 3200
 title: "第 10 章 通道与 select"
 ---
 
-# 3.6 通信原语
+# 第 10 章 通道与 select
 
 > 本节内容提供一个线上演讲：[YouTube 在线](https://www.youtube.com/watch?v=d7fFCGGn0Wc)，[Google Slides 讲稿](https://changkun.de/s/chansrc/)。
 
