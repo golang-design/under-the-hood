@@ -4,16 +4,17 @@ title: "第 12 章 内存分配器"
 bookCollapseSection: true
 ---
 
-# 第 7 章 内存分配
+# 第 12 章 内存分配器
 
-- [7.1 设计原则](./basic.md)
-- [7.2 组件](./component.md)
-- [7.3 初始化](./init.md)
-- [7.4 大对象分配](./largealloc.md)
-- [7.5 小对象分配](./smallalloc.md)
-- [7.6 微对象分配](./tinyalloc.md)
-- [7.7 页分配器](./pagealloc.md)
-- [7.9 过去、现在与未来](./history.md)
+- [12.1 设计原则](./basic.md)
+- [12.2 组件](./component.md)
+- [12.3 初始化](./init.md)
+- [12.4 大对象分配](./largealloc.md)
+- [12.5 小对象分配](./smallalloc.md)
+- [12.6 微对象分配](./tinyalloc.md)
+- [12.7 页分配器](./pagealloc.md)
+- [12.8 内存统计](./mstats.md)
+- [12.9 过去、现在与未来](./history.md)
 
 <div class="quote">
 <i class="quote-mark fas fa-thumbtack"></i>
@@ -30,4 +31,4 @@ bookCollapseSection: true
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

@@ -3,74 +3,46 @@ weight: 4103
 title: "12.3 初始化"
 ---
 
-# 7.3 初始化
+# 12.3 初始化
 
-除去执行栈外，内存分配器是最先完成初始化的，我们先来看这个初始化的过程。
-内存分配器的初始化除去一些例行的检查之外，就是对堆的初始化了：
+分配器在程序启动的 `schedinit`（[3.5](../../part1overview/ch03life/boot.md)）阶段由 `mallocinit`
+完成奠基。这一节看它启动时铺设的内存版图,尤其是"虚拟地址空间"与"物理内存"的分离，这是
+理解 Go 内存占用的关键。
 
-```go
-func mallocinit() {
-	// 一些涉及内存分配器的常量的检查，包括
-	// heapArenaBitmapBytes, physPageSize 等等
-	...
+## 12.3.1 arena：以巨块组织地址空间
 
-	// 初始化堆
-	mheap_.init()
-	_g_ := getg()
-	_g_.m.mcache = allocmcache()
+Go 把堆的地址空间切成固定大小的 **arena**（64 位平台上每个 64MB）。arena 是地址空间管理的
+基本粒度,堆按需一个个 arena 地扩张。每个 arena 配有一份**元数据**：记录其中每个字是否为指针的
+位图（供 GC 扫描，[13 垃圾回收](../../part4memory/ch13gc)）、以及指向各 span 的索引。这套
+"arena + 元数据"的布局，让运行时能从任意一个堆地址快速反查出"它属于哪个 span、是不是指针、
+是否存活",这些查询是 GC 与分配的高频操作。
 
-	// 创建初始的 arena 增长 hint
-	if sys.PtrSize == 8 && GOARCH != "wasm" {
-		for i := 0x7f; i >= 0; i-- {
-			var p uintptr
-			switch {
-			case GOARCH == "arm64" && GOOS == "darwin":
-				p = uintptr(i)<<40 | uintptrMask&(0x0013<<28)
-			(...)
-			default:
-				p = uintptr(i)<<40 | uintptrMask&(0x00c0<<32)
-			}
-			hint := (*arenaHint)(mheap_.arenaHintAlloc.alloc())
-			hint.addr = p
-			hint.next, mheap_.arenaHints = mheap_.arenaHints, hint
-		}
-	} else {
-		// 32 位机器，不关心
-		(...)
-	}
-}
-```
+## 12.3.2 保留 vs 提交：虚拟内存的两段式
 
-堆的初始化：
+一个常让人误解 Go 内存占用的点，是**保留**（reserve）与**提交**（commit）的区别。`mallocinit`
+会向操作系统**保留**一大片虚拟地址空间,但保留只是"占个号"，并不真正消耗物理内存。只有当某段
+地址真正被写入时，操作系统才**提交**物理页给它。所以你可能看到一个 Go 进程的虚拟内存
+（VIRT）很大、而实际驻留内存（RES）小得多,这通常不是泄漏，而是分配器预留了地址空间以备
+增长。这种"先廉价地占地址、用时才费物理内存"的两段式，是现代分配器的通行做法,它让堆能在
+一片连续的地址区间里平滑增长，避免地址碎片。
 
-```go
-// 堆初始化
-func (h *mheap) init() {
-	// 初始化堆中各个组件的分配器
-	h.treapalloc.init(unsafe.Sizeof(treapNode{}), nil, nil, &memstats.other_sys)
-	h.spanalloc.init(unsafe.Sizeof(mspan{}), recordspan, unsafe.Pointer(h), &memstats.mspan_sys)
-	h.cachealloc.init(unsafe.Sizeof(mcache{}), nil, nil, &memstats.mcache_sys)
-	h.specialfinalizeralloc.init(unsafe.Sizeof(specialfinalizer{}), nil, nil, &memstats.other_sys)
-	h.specialprofilealloc.init(unsafe.Sizeof(specialprofile{}), nil, nil, &memstats.other_sys)
-	h.arenaHintAlloc.init(unsafe.Sizeof(arenaHint{}), nil, nil, &memstats.other_sys)
+## 12.3.3 启动即就位
 
-	// 不对 mspan 的分配清零，后台扫描可以通过分配它来并发的检查一个 span
-	// 因此 span 的 sweepgen 在释放和重新分配时候能存活，从而可以防止后台扫描
-	// 不正确的将其从 0 进行 CAS。
-	//
-	// 因为 mspan 不包含堆指针，因此它是安全的
-	h.spanalloc.zero = false
+`mallocinit` 跑完，分配器的骨架就立起来了：arena 的组织方式确定、元数据结构就位、页分配器
+（[12.7](./pagealloc.md)）初始化、各级缓存（mcache 随 P 创建、mcentral 按尺寸类建立）准备完毕。
+此后程序的每一次分配，都是在这套版图上取一块、记一笔。把初始化看清楚，就明白了 Go 程序
+"还没怎么干活内存就占了一截"的由来,那多半是地址保留与元数据，而非真实的堆使用。本章接下来
+三节，走一遍在这套版图上分配大、小、微对象的具体路径。
 
-	// h->mapcache 不需要初始化
-	for i := range h.central {
-		h.central[i].mcentral.init(spanClass(i))
-	}
-}
-```
+## 延伸阅读的文献
 
-在这个过程中还包含对 mcache 初始化 `allocmcache()`，这个 mcache 会在 `procresize` 中将 mcache
-转移到 P 的门下，而并非属于 M，这个我们在已经在 [内存管理: 组件](./component.md) 中讨论过了。
+1. The Go Authors. *runtime/malloc.go：mallocinit / arena 布局.*
+   https://github.com/golang/go/blob/master/src/runtime/malloc.go
+2. The Go Authors. *runtime/mheap.go：heapArena.*
+   https://github.com/golang/go/blob/master/src/runtime/mheap.go
+3. 本书 [3.5 启动引导](../../part1overview/ch03life/boot.md)、[12.7 页分配器](./pagealloc.md)、
+   [13 垃圾回收](../../part4memory/ch13gc).
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
