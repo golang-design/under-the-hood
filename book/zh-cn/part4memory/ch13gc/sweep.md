@@ -1,247 +1,52 @@
 ---
 weight: 4205
-title: "13.5 免清扫式位图技术"
+title: "13.5 清扫与位图"
 ---
 
-# 8.5 免清扫式位图技术
+# 13.5 清扫与位图
 
-清扫过程非常简单，它与赋值器（用户代码）并发执行。
-它的主要职能便是如何将一个已经从内存分配器中分配出得内存回收到内存分配器中。
+标记（[13.4](./mark.md)）结束后，仍为白色的对象就是垃圾。把它们占的内存收回、供再分配，是
+**清扫**（sweep）。Go 的清扫有两个特点值得讲：它是**并发**且**惰性**的，以及它靠**位图翻转**而非
+逐对象处理来高效完成。
 
-## 启动方式
+## 13.5.1 清扫即位图翻转
 
-标记终止结束后，会进入 `GCoff` 阶段，并调用 `gcSweep` 来并发的使后台清扫器 Goroutine 与赋值器并发执行。
+得益于尺寸类分配（[12.1](../ch12alloc/basic.md)），清扫不必逐个对象地"释放"。每个 span 有两份
+位图：标记位图（`gcmarkBits`，本轮标记中被置位的=存活）与分配位图（`allocBits`，哪些槽在用）。
+清扫一个 span，本质就是把**标记位图变成新的分配位图**:被标记的槽继续算"在用"，没被标记的槽
+就此变成"空闲"，可供再分配。整段 span 若一个存活对象都没有，则把它整个还给 mcentral / mheap
+（[12.2](../ch12alloc/component.md)）。这种"翻转位图"的做法，把清扫从"逐对象释放"降成了"按
+span 改几个位",又一次，尺寸类的规整让回收退化成位操作。这正是本节标题"免清扫式位图"的含义,
+死对象无需被显式"清理"，它们的槽只是在位图翻转后被标记为可复用，下次分配直接覆写。
 
-```go
-func gcMarkTermination(nextTriggerRatio float64) {
-	...
-	systemstack(func() {
-		...
-		// 标记阶段已经完成，关闭写屏障，开始并发清扫
-		setGCPhase(_GCoff)
-		gcSweep(work.mode)
-	})
-	...
-}
-```
+## 13.5.2 并发且惰性
 
-其实现非常简单，只需要将 mheap_ 相关的标志位清零，并唤醒后台清扫器 Goroutine 即可。
+清扫与用户程序**并发**进行（在 `_GCoff` 阶段由后台 sweeper 推进，[13.3](./pacing.md)），不占
+STW。更巧的是它**惰性**：并不在标记一结束就把所有 span 都扫一遍，而是**按需**,当某个 P 要
+分配、需要一个该尺寸类的 span 时，顺手清扫一个待扫的 span 再用（"分配即清扫一点"）。这样
+清扫的开销被自然地分摊到分配路径上，且只清扫真正要用到的部分。后台 sweeper 则兜底地推进剩余
+未扫的 span，保证在下一轮 GC 开始前扫完。惰性清扫体现了 Go 运行时一贯的"把集中开销摊薄"
+思路,与标记辅助（[13.4](./mark.md)）、写屏障（[13.2](./barrier.md)）异曲同工。
 
-```go
-//go:systemstack
-func gcSweep(mode gcMode) { // 此时为 GCoff 阶段
-	...
-	lock(&mheap_.lock)
-	mheap_.sweepgen += 2
-	mheap_.sweepdone = 0
-	...
-	mheap_.pagesSwept = 0
-	mheap_.sweepArenas = mheap_.allArenas
-	mheap_.reclaimIndex = 0
-	mheap_.reclaimCredit = 0
-	unlock(&mheap_.lock)
+## 13.5.3 为何不整理碎片
 
-	// 出于调试目的，用户可以让 sweep 过程阻塞执行，但我们并不感兴趣
-	...
+标记清扫不移动对象（[13.1](./basic.md)），所以会留下**碎片**:span 内死对象的槽变空，但若整个
+span 没全空就还不能整体归还，空槽只能等同尺寸类的新对象来填。Go 接受这种碎片，不做**整理**
+（compaction，把存活对象搬到一起腾出连续空间），原因有二：整理要**移动对象**，就得更新所有
+指向它们的指针,这既复杂又与 cgo（外部 C 持有 Go 指针）冲突;而尺寸类分配本就把碎片限制在
+"同尺寸类内的空槽"，相对可控。这是一处明确的取舍：**放弃整理换取指针稳定与实现简单**，用
+尺寸类把碎片代价压到可接受。值得一提，go1.25/1.26 的 Green Tea GC（[13.11](./history.md)）
+正是在"以 span/页为粒度组织扫描与回收、改善局部性"方向上的新探索,清扫与回收的设计仍在演进。
 
-	// 并发清扫（唤醒后台 Goroutine）
-	lock(&sweep.lock)
-	if sweep.parked {
-		sweep.parked = false
-		ready(sweep.g, 0, true)
-	}
-	unlock(&sweep.lock)
-}
-```
+## 延伸阅读的文献
 
-## 并发清扫
-
-清扫过程依赖下面的结构：
-
-```go
-var sweep sweepdata
-
-type sweepdata struct {
-	lock    mutex
-	g       *g
-	parked  bool
-	started bool
-
-	nbgsweep    uint32
-	npausesweep uint32
-}
-```
-
-该结构通过：
-
-1. mutex 保证清扫过程的原子性
-2. g 指针来保存所在的 Goroutine
-3. started 判断是否开始
-4. nbgsweep 和 npausesweep 来统计清扫过程
-
-
-当一个后台 sweeper 从应用程序启动时休眠后，再重新唤醒时，会进入如下循环，并一直在次循环中反复休眠与被唤醒：
-
-
-```go
-func bgsweep(c chan int) {
-	...
-	for {
-		// 清扫 span，如果清扫了一部分 span，则记录 bgsweep 的次数
-		for sweepone() != ^uintptr(0) {
-			sweep.nbgsweep++
-			Gosched()
-		}
-		// 可抢占的释放一些 workbufs 到堆中
-		for freeSomeWbufs(true) {
-			Gosched()
-		}
-		// 在 mheap_ 上判断是否完成清扫，若未完成，则继续进行清扫
-		lock(&sweep.lock)
-		if !isSweepDone() {  // 即 mheap_.sweepdone != 0
-			unlock(&sweep.lock)
-			continue
-		}
-		// 否则让 Goroutine 进行 park
-		sweep.parked = true
-		goparkunlock(&sweep.lock, waitReasonGCSweepWait, traceEvGoBlock, 1)
-	}
-}
-```
-
-sweepone 从堆中清理
-
-```go
-func sweepone() uintptr {
-	_g_ := getg()
-	...
-
-	// 增加锁的数量确保 Goroutine 在 sweep 中不会被抢占，进而不会将 span 留到下个 GC 产生不一致
-	_g_.m.locks++
-	if atomic.Load(&mheap_.sweepdone) != 0 {
-		_g_.m.locks--
-		return ^uintptr(0)
-	}
-	// 记录 sweeper 的数量
-	atomic.Xadd(&mheap_.sweepers, +1)
-
-	// 寻找需要 sweep 的 span
-	var s *mspan
-	sg := mheap_.sweepgen
-	for {
-		s = mheap_.sweepSpans[1-sg/2%2].pop()
-		if s == nil {
-			atomic.Store(&mheap_.sweepdone, 1)
-			break
-		}
-		if s.state != mSpanInUse {
-			...
-			continue
-		}
-		if s.sweepgen == sg-2 && atomic.Cas(&s.sweepgen, sg-2, sg-1) {
-			break
-		}
-	}
-
-	// sweep 找到的 span
-	npages := ^uintptr(0)
-	if s != nil {
-		npages = s.npages
-		if s.sweep(false) { // false 表示将其归还到 heap 中
-			// 整个 span 都已被释放，记录释放的额度，因为整个页都能用作 span 分配了
-			atomic.Xadduintptr(&mheap_.reclaimCredit, npages)
-		} else {
-			// span 还在被使用，因此返回零
-			// 并需要 span 移动到已经 sweep 的 in-use 列表中。
-			npages = 0
-		}
-	}
-
-	// 减少 sweeper 的数量并确保最后一个运行的 sweeper 正常标记了 mheap.sweepdone
-	if atomic.Xadd(&mheap_.sweepers, -1) == 0 && atomic.Load(&mheap_.sweepdone) != 0 {
-		...
-	}
-	_g_.m.locks--
-	return npages
-}
-```
-
-```go
-// freeSomeWbufs 释放一些 workbufs 回到堆中，如果需要再次调用则返回 true
-func freeSomeWbufs(preemptible bool) bool {
-	const batchSize = 64 // 每个 span 需要 ~1–2 µs
-	lock(&work.wbufSpans.lock)
-	// 如果此时在标记阶段、或者 wbufSpans 为空，则不需要进行释放
-	// 因为标记阶段 workbufs 需要被标记，而 workbufs 为空则更不需要释放
-	if gcphase != _GCoff || work.wbufSpans.free.isEmpty() {
-		unlock(&work.wbufSpans.lock)
-		return false
-	}
-	systemstack(func() {
-		gp := getg().m.curg
-		// 清扫一批 span，64 个，大约 ~1–2 µs
-		// 在需要被抢占时停止、在清扫完毕后停止
-		for i := 0; i < batchSize && !(preemptible && gp.preempt); i++ {
-			span := work.wbufSpans.free.first
-			if span == nil {
-				break
-			}
-			// 将 span 移除 wbufSpans 的空闲链表中
-			work.wbufSpans.free.remove(span)
-			// 将 span 归还到 mheap 中
-			mheap_.freeManual(span, &memstats.gc_sys)
-		}
-	})
-	// workbufs 的空闲 span 列表尚未清空，还需要更多清扫
-	more := !work.wbufSpans.free.isEmpty()
-	unlock(&work.wbufSpans.lock)
-	return more
-}
-```
-
-```go
-//go:systemstack
-func (h *mheap) freeManual(s *mspan, stat *uint64) {
-	s.needzero = 1 // span 在下次被分配走时需要对该段内存进行清零
-	lock(&h.lock)
-	*stat -= uint64(s.npages << _PageShift)
-	memstats.heap_sys += uint64(s.npages << _PageShift) // 记录并增加堆中的剩余空间
-	h.freeSpanLocked(s, false, true) // 将其释放会堆中
-	unlock(&h.lock)
-}
-func (h *mheap) freeSpanLocked(s *mspan, acctinuse, acctidle bool) {
-	switch s.state {
-	case mSpanManual:
-		... // panic
-	case mSpanInUse:
-		...
-		h.pagesInUse -= uint64(s.npages)
-
-		// 清除 arena page bitmap 正在使用的二进制位
-		arena, pageIdx, pageMask := pageIndexOf(s.base())
-		arena.pageInUse[pageIdx] &^= pageMask
-	default:
-		... // panic
-	}
-
-	if acctinuse {
-		memstats.heap_inuse -= uint64(s.npages << _PageShift)
-	}
-	if acctidle {
-		memstats.heap_idle += uint64(s.npages << _PageShift)
-	}
-	s.state = mSpanFree
-
-	// 与邻居进行结合
-	h.coalesce(s)
-
-	// 插入回 treap
-	h.free.insert(s)
-}
-```
-
-<!-- 位图技术 -->
+1. The Go Authors. *runtime/mgcsweep.go（清扫、惰性 sweep、位图翻转）.*
+   https://github.com/golang/go/blob/master/src/runtime/mgcsweep.go
+2. Rick Hudson. *Getting to Go: The Journey of Go's GC.* https://go.dev/blog/ismmkeynote
+3. Richard Jones et al. *The Garbage Collection Handbook*（清扫与碎片整理的取舍）. 2023.
+4. 本书 [12.2 组件](../ch12alloc/component.md)、[13.4 标记](./mark.md)、
+   [13.11 过去现在未来](./history.md).
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

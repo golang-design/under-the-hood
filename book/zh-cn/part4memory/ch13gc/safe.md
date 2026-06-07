@@ -3,105 +3,48 @@ weight: 4207
 title: "13.7 安全点分析"
 ---
 
-# 8.7 安全点分析
+# 13.7 安全点分析
 
+GC 要扫描一个 goroutine 的栈、要让所有 goroutine 配合开启写屏障，都需要在它们停于**安全点**
+时进行,只有此刻，运行时才确切知道栈上每个槽是不是活指针。安全点这个概念在调度的抢占一节
+（[9.7](../../part3concurrency/ch09sched/preemption.md)）已系统讲过，这里从 GC 的角度补足它与
+栈扫描、写屏障的关系。
 
+## 13.7.1 安全点与栈图
 
-<!-- + enlistWorker
-+ gcStart: gcbgmarkworker
-+ gcStart: marktermination -->
+GC 扫描栈（[13.4](./mark.md)）时，必须知道**每个栈帧里哪些槽是活指针**。编译器为每个**安全点**
+生成一份**栈图**（stack map）,记录在该程序点上，栈帧中哪些位置存着活指针。只有停在有栈图的
+安全点，GC 才能准确地扫描栈、不遗漏也不误判。这就是为什么扫描栈要先把 goroutine 停到安全点,
+非安全点处缺乏精确的指针信息（[9.7](../../part3concurrency/ch09sched/preemption.md) 详述了协作式
+与异步两类安全点，以及异步抢占处用保守扫描内层帧的取舍）。
 
-## 回收的安全点
+## 13.7.2 GC 与抢占的合流
 
-什么时候才能进行抢占呢？如何才能区分该抢占信号是运行时发出的还是用户代码发出的呢？
-TODO:
-<!-- 例如 GC 标记阶段的存活指针， -->
+GC 需要"把某个 goroutine 停到安全点以扫它的栈"，调度器需要"把某个 goroutine 停到安全点以
+抢占它",这两件事用的是**同一套机制**。GC 标记开始时要扫描各 goroutine 的栈（混合写屏障下，
+开始时把栈置黑、之后不再重扫，[13.2](./barrier.md)），正是借助抢占机制把目标 goroutine 停到
+安全点来完成的。一个忙等的紧致循环（[9.7](../../part3concurrency/ch09sched/preemption.md) 的
+经典难题）若不能被抢占到安全点，就会拖住 GC,这正是 Go 1.14 异步抢占要解决的核心动因之一。
+GC 与调度在安全点这件事上深度合流:抢占机制既服务于调度公平，也服务于 GC 的栈扫描。
 
-TODO: 解释执行栈映射补充寄存器映射，中断信号 SIGURG
+## 13.7.3 安全点的成本与意义
 
-```go
-// wantAsyncPreempt 返回异步抢占是否被 gp 请求
-func wantAsyncPreempt(gp *g) bool {
-	// 同时检查 G 和 P
-	return (gp.preempt || gp.m.p != 0 && gp.m.p.ptr().preempt) && readgstatus(gp)&^_Gscan == _Grunning
-}
-```
+维护安全点不是免费的：编译器要在安全点生成栈图（增大二进制）、运行时要能把 goroutine 停到
+安全点（抢占机制的全部复杂度）。但它换来的是**精确 GC**,Go 能准确分辨指针与非指针，从而安全地
+扫描、（未来若做整理则）移动对象，且不会把恰好像地址的整数误当指针保留。这与保守式 GC
+（不区分指针、把所有像指针的字都当指针）形成对比:精确 GC 更彻底（不会因"假指针"而漏收内存）、
+为移动式回收留了可能，代价是需要编译器与运行时维护这套安全点与栈图基础设施。Go 选择精确 GC，
+是它"编译器与运行时深度协同"（[3.2](../../part1overview/ch03life/compile.md)）的又一体现,也是
+它能持续优化 GC（如向 Green Tea 演进）的底气所在。
 
-什么时候才是安全的异步抢占点呢？
-TODO:
+## 延伸阅读的文献
 
-```go
-func isAsyncSafePoint(gp *g, pc, sp, lr uintptr) bool {
-	mp := gp.m
-
-	// Only user Gs can have safe-points. We check this first
-	// because it's extremely common that we'll catch mp in the
-	// scheduler processing this G preemption.
-	if mp.curg != gp {
-		return false
-	}
-
-	// Check M state.
-	if mp.p == 0 || !canPreemptM(mp) {
-		return false
-	}
-
-	// Check stack space.
-	if sp < gp.stack.lo || sp-gp.stack.lo < asyncPreemptStack {
-		return false
-	}
-
-	// Check if PC is an unsafe-point.
-	f := findfunc(pc)
-	if !f.valid() {
-		// Not Go code.
-		return false
-	}
-	...
-	smi := pcdatavalue(f, _PCDATA_RegMapIndex, pc, nil)
-	if smi == -2 {
-		// Unsafe-point marked by compiler. This includes
-		// atomic sequences (e.g., write barrier) and nosplit
-		// functions (except at calls).
-		return false
-	}
-	if fd := funcdata(f, _FUNCDATA_LocalsPointerMaps); fd == nil || fd == unsafe.Pointer(&no_pointers_stackmap) {
-		// This is assembly code. Don't assume it's
-		// well-formed. We identify assembly code by
-		// checking that it has either no stack map, or
-		// no_pointers_stackmap, which is the stack map
-		// for ones marked as NO_LOCAL_POINTERS.
-		//
-		// TODO: Are there cases that are safe but don't have a
-		// locals pointer map, like empty frame functions?
-		return false
-	}
-	if hasPrefix(funcname(f), "runtime.") ||
-		hasPrefix(funcname(f), "runtime/internal/") ||
-		hasPrefix(funcname(f), "reflect.") {
-		// For now we never async preempt the runtime or
-		// anything closely tied to the runtime. Known issues
-		// include: various points in the scheduler ("don't
-		// preempt between here and here"), much of the defer
-		// implementation (untyped info on stack), bulk write
-		// barriers (write barrier check),
-		// reflect.{makeFuncStub,methodValueCall}.
-		//
-		// TODO(austin): We should improve this, or opt things
-		// in incrementally.
-		return false
-	}
-
-	return true
-}
-```
-
-#### 其他抢占触发点
-
-TODO: 一些 GC 的处理， suspendG
-
-preemptStop 会在什么时候被设置为抢占呢？GC。
+1. 本书 [9.7 协作与抢占](../../part3concurrency/ch09sched/preemption.md)（安全点、TTSP、异步抢占）.
+2. The Go Authors. *runtime: stack maps / safepoints*（栈图与安全点实现）.
+   https://github.com/golang/go/blob/master/src/runtime/stack.go
+3. Richard Jones et al. *The Garbage Collection Handbook*（精确 vs 保守 GC）. 2023.
+4. 本书 [13.2 写屏障](./barrier.md)、[13.4 标记](./mark.md).
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
