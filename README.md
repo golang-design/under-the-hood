@@ -2,7 +2,7 @@
 
 # Go 语言原本
 
-当前内容基于 `go1.15`
+当前内容基于 `go1.26`
 
 ![](https://img.shields.io/badge/lang-简体中文-red.svg?longCache=true)
 ![](https://img.shields.io/github/license/golang-design/under-the-hood.svg)
@@ -68,4 +68,4 @@ Go 语言从 2009 年诞生之初已有十余年的历史。
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
