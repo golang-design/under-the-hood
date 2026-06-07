@@ -3,294 +3,65 @@ weight: 2502
 title: "8.2 基于合约的泛型"
 ---
 
-# 12.2 基于合约的泛型
+# 8.2 基于合约的泛型
 
-> 本节内容提供一个线上演讲：[YouTube 在线](https://www.youtube.com/watch?v=E16Y6bI2S08) [Google Slides 讲稿](https://changkun.de/s/go2generics/)
+[8.1](./history.md) 提到，Go 泛型在落地前曾走过一版"合约"（contracts）设计，后来才转向"接口即
+约束"。这段被放弃的设计值得专门一看,它解释了今天 `[T any]` 语法的由来，也展示了一个好设计
+是如何在简化中诞生的。
 
-TODO: 需要补充并丰富描述
+## 8.2.1 合约想解决的问题
 
-## 12.2.1 泛型问题的本质
-
-- 泛型从本质上是一个编译期特性
-- 「泛型困境」其实是一个伪命题
-- 牺牲运行时性能的做法显然不是我们所希望的
-- 不加以限制的泛型机制将严重拖慢编译性能
-- 什么时候才能决定一个泛型函数应该编译多少份不同的版本？
-- 不同的生成策略会遇到什么问题？
-- 加以限制的泛型机制将提高程序的可读性
-- 如何妥当的描述对类型的限制？
-
-## 12.2.2 合约函数
-
-合约是一个描述了一组类型且不会被执行的函数体。
+泛型的核心难题之一是**约束**：`func Max[T](a, b T) T` 里的 `T` 不能是任意类型,要支持 `>` 才能
+比较。必须有一种方式声明"`T` 得能做哪些操作"。2018 年的合约提案给出的答案，是用一段**形似
+函数体的代码**来描述这些要求：
 
 ```go
-contract Comparable(x T) {
-	x > x
-      x < x
-      x == x
+// 2018 年合约提案的设想写法（已废弃，仅作历史展示）
+contract Ordered(t T) {
+    t < t
 }
-func Max(type T Comparable)(v0 T, vn ...T) T {
-	switch l := len(vn); {
-	case l == 0:
-		return v0
-	case l == 1:
-		if v0 > vn[0] { return v0 }
-		return vn[0]
-	default:
-		vv := Max(vn[0], vn[1:]...)
-		if v0 > vv { return v0 }
-		return vv
-	}
-}
+func Max(type T Ordered)(a, b T) T { ... }
 ```
 
-关键设计
+合约体里写上"`t < t`"，意思是"凡满足本合约的类型都得支持 `<`"。它很有表达力,能描述运算符、
+方法、甚至类型之间的关系。
 
-- 在合约中写 Go 语句对类型进行保障
-- 甚至写出条件、循环、赋值语句
+## 8.2.2 为何被放弃
 
-评述
+问题恰恰出在"表达力"上。社区与团队反馈：合约**像是嵌进 Go 里的第二种语言**,你要学一套
+专门的、只在合约体里有效的语法去描述约束，而它又和真正的 Go 代码似是而非。它太灵活、规则
+太多，违背了 Go"少即是多"的口味。
 
-- 复杂的合约写法（合约内的代码写法可以有多少种？）
-- 「一个不会执行的函数体」太具迷惑性
-- 实现上估计是一个比较麻烦的问题
-
-## 12.2.3 合约条件集
-
-合约描述了一组类型的必要条件。
-
-关键设计
-
-- 使用方法及穷举类型来限制并描述可能的参数类型
-- comparable/arithmetic 等内建合约
-
-评述
-
-- 这样的代码合法吗？
-  + _ = Max(1.0, 2)
-- 如何写出更一般的形式？
-- 可变模板参数的支持情况缺失（后面会提）
-- 没有算符函数、重载
+转折点是一个简化的洞察：**约束所要表达的"一个类型必须支持哪些操作"，和接口要表达的东西高度
+重合。** 接口本来就描述"一个类型得有哪些方法"。如果把接口从"方法集"推广为"**类型集**"
+（[8.1](./history.md)），它就能同时描述方法**与**运算符要求,于是不必再发明合约这门小语言，
+复用接口即可。`Ordered` 不再是一段合约代码，而是一个普通（约束）接口：
 
 ```go
-contract Comparable(T) {
-	T int, int8, int16, int32, int64,
-	uint, uint8, uint16, uint32, uint64, uintptr,
-	float32, float64,
-	string
+type Ordered interface {
+    ~int | ~int64 | ~float64 | ~string | /* ... */
 }
-func Max(type T Comparable)(v0 T, vn ...T) T {
-	switch l := len(vn); {
-	case l == 0:
-		return v0
-	case l == 1:
-		if v0 > vn[0] { return v0 }
-		return vn[0]
-	default:
-		vv := Max(vn[0], vn[1:]...)
-		if v0 > vv { return v0 }
-		return vv
-	}
-}
+func Max[T Ordered](a, b T) T { ... }
 ```
 
+## 8.2.3 这次取舍说明了什么
 
+从合约到类型集，是 Go 设计过程的一个缩影：**先有一个表达力强但复杂的方案，再反复追问"能不能
+用已有的概念来表达"，最终把新机制压到最小。** 合约被否，不是因为它做不到，而是因为它要求
+用户学习一套新东西;而类型集复用了人人已懂的接口，认知负担小得多。这正呼应 [8.1](./history.md)
+那条主线,Go 对引入新概念极度审慎，宁可在已有抽象上做推广，也不轻易增添"第二种语言"。
+读懂了这段被放弃的历史，就更能体会今天 `[T Constraint]` 语法那份"恰到好处的朴素"是如何
+得来的。
 
-类型参数可能出现的位置：
+## 延伸阅读的文献
 
-| 声明 | 写法 |
-|:---:|:----:|
-| 函数 | `func F(type T C)(params ...T) T { … }` |
-| 结构体 | `type S(type T C) struct { … }` |
-| 接口 | `type I(type T C) interface { … }` |
-
-合约的形式，例：
-
-```go
-contract C1(T1, T2, T3) {
-    C2(T1)              // 允许与合约 C2 进行组合
-    T2 int, float64     // 允许对类型 T1 进行限制
-    T3 Method(T1) T1    // 允许对类型 T2 进行限制
-}
-```
-
-## 12.2.4 合约与参数化接口的区别
-
-思考：
-
-- 接口 Interface 是一组方法，描述了值
-- 合约 Contract 是一组条件，描述了类型
-  + 加上类型参数的接口 —— 参数化的  I(type T C) 的与合约的本质区别是什么？
-
-基于合约的参数化函数的写法：
-
-```go
-contract Greater(T) {
-   IsGreaterThan(T) bool
-}
-func Max(type T Greater) (a, b T) T { ... }
-```
-
-基于参数化结构的参数化函数的写法：
-
-```go
-type Greater(type T) {
-   IsGreaterThan(T)
-}
-func Max(type T Greater(T)) (a, b T) T { ... }
-```
-
-合约 C(T) 的本质是参数化接口 I(type T C) 的语法糖，一个更复杂的例子：
-
-```go
-contract C(P1, P2) {
-   P1 m1(x P1)
-   P2 m2(x P1) P2
-   P2 int, float64
-}
-func F(type P1, P2 C) (x P1, y P2) P2 { ... }
-```
-
-```go
-type I1 (type P1) interface {
-   m1(x P1)
-}
-type I2 (type P1, P2) interface {
-   m2(x P1) P2
-   type int, float64
-}
-// 在实例化的过程中保障了 I2 中的 P1 与 I1 的 P1 是同一类型
-func F(type P1 I1(P1), P2 I2(P1, P2)) (x P1, y P2) P2 { ... }
-```
-
-
-## 12.2.5 示例程序
-
-### 例1: 泛型式排序
-
-```go
-type wrapSort(type T) struct {
-    s   []T
-    cmp func(T, T) bool
-}
-func (s wrapSort(T)) Len() int           { return len(s.s) }
-func (s wrapSort(T)) Less(i, j int) bool { return s.cmp(s.s[i], s.s[j]) }
-func (s wrapSort(T)) Swap(i, j int)      { s.s[i], s.s[j] = s.s[j], s.s[i] }
-func Sort(type T)(s []T, cmp func(T, T) bool) {
-    sort.Sort(wrapSort(T){s, cmp})
-}
-```
-
-### 例2: 泛型式 MapReduce
-
-```go
-func Map(type T1, T2)(s []T1, f func(T1) T2) []T2 {
-    r := make([]T2, len(s))
-    for i, v := range s {
-        r[i] = f(v)
-    }
-    return r
-}
-func Reduce(type T1, T2)(s []T1, init T2, f func(T2, T1) T2) T2 {
-    r := init
-    for _, v := range s {
-        r = f(r, v)
-    }
-    return r
-}
-```
-
-### 例3: 泛型式栈
-
-```go
-type Stack(type E) []E
-func NewStack(type E) () Stack(E) {
-    return Stack(E){}
-}
-func (s *Stack(E)) Pop() (r E, success bool) {
-    l := len(*s)
-    if l == 0 { return }
-    r, *s = (*s)[l - 1], (*s)[:l - 1]
-    success = true
-    return
-}
-func (s *Stack(E)) Push(e E)      { *s = append(*s, e) }
-func (s *Stack(E)) IsEmpty() bool { return len(*s) == 0 }
-func (s *Stack(E)) Len() int      { return len(*s) }
-```
-
-### 例4: 泛型式散列表
-
-```go
-type Pair(type T1, T2) struct {
-    Key   T1
-    Value T2
-}
-type Map(type T1, T2 contracts.Comparable(T1)) struct {
-    s []Pair(T1, T2)
-}
-func NewMap(type T1, T2) () Map(T1, T2) {
-    return Map(T1, T2){s: [](Pair(T1, T2)){}}
-}
-func (m *Map(T1, T2)) Set(k T1, v T2) {
-    m.s = append(m.s, Pair(T1, T2){k, v})
-}
-func (m *Map(T1, T2)) Get(k T1) (v T2, ok bool) {
-    for _, p := range m.s {
-        if p.Key == k {
-            return p.Value, true
-        }
-    }
-    return
-}
-```
-
-### 例4: 泛型式扇入扇出负载均衡
-
-```go
-func Fanin(type T)(ins ...<-chan T) <-chan T {
-    buf := 0
-    for _, ch := range ins {
-        if len(ch) > buf { buf = len(ch) }
-    }
-    out := make(chan T, buf)
-    wg := sync.WaitGroup{}
-    wg.Add(len(chans))
-    for _, ch := range ins {
-        go func(ch <-chan T) {
-            for v := range ch { out <- v }
-            wg.Done()
-        }(ch)
-    }
-    go func() {
-        wg.Wait()
-        close(out)
-    }()
-    return out
-}
-```
-
-```go
-func Fanout(type T)(r func(max int) int, in <-chan T, outs ...chan T) {
-    l := len(outs)
-    for v := range in {
-        i := r(l)
-        if i < 0 || i > l { i = rand.Intn(l) }
-        outs[i] <- v
-    }
-    for i := range outs {
-        close(Outs[i])
-    }
-}
-```
-
-```go
-func LB(type T)(randomizer func(max int) int, ins []<-chan T, outs []chan T) {
-    Fanout(randomizer, Fanin(ins...), outs...)
-}
-```
+1. Ian Lance Taylor, Robert Griesemer. *Contracts — Draft Design*（2018，已被取代）.
+   https://go.googlesource.com/proposal/+/master/design/go2draft-contracts.md
+2. Ian Lance Taylor, Robert Griesemer. *Type Parameters Proposal*（最终方案，接口即约束）.
+   https://go.googlesource.com/proposal/+/refs/heads/master/design/43651-type-parameters.md
+3. The Go Authors. *Why Generics?* Go 博客, 2019. https://go.dev/blog/why-generics
+4. The Go Authors. *The Next Step for Generics.* 2020. https://go.dev/blog/generics-next-step
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
