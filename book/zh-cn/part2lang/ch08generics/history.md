@@ -3,347 +3,87 @@ weight: 2501
 title: "8.1 泛型设计的演进"
 ---
 
-# 12.1 泛型设计的演进
+# 8.1 泛型设计的演进
 
-> 本节内容提供一个线上演讲：[YouTube 在线](https://www.youtube.com/watch?v=E16Y6bI2S08) [Google Slides 讲稿](https://changkun.de/s/go2generics/)
+泛型是 Go 等待最久、争论最烈、也最能体现其设计哲学的一项特性。从 2009 年开源到 2022 年的
+Go 1.18 才落地，这十三年的迟疑与最终的取舍，本身就是一堂语言设计课。这一节讲清 Go 为何久久
+不加泛型、最终怎样加的，以及它在底层是如何实现的,后者尤其关键，因为 Go 的实现走了一条
+独特的中间道路。
 
-TODO: 需要补充并丰富描述
+## 8.1.1 久拖不决：泛型的两难
 
-多态（Polymorphism）是同一形式表现出不同行为的一种特性。早期学者们对于多态的理解不如现在丰富，在编程语言理论中最早被分为两类 [Strachey and Christopher 1967]，同时也是如今被广泛实践的两类泛型的核心思想：临时性多态和参数化多态。
+Go 团队并非不知道泛型有用,缺了它，写一个通用的容器或算法，要么用 `interface{}` 加类型断言
+（丢掉类型安全、有装箱开销），要么用代码生成（笨重）。久拖的原因，Russ Cox 在 2009 年就点破，
+即**泛型的两难**：在"慢的程序员、慢的编译器、慢的运行时"之间，任何泛型实现似乎只能三选其二。
+C++ 模板选了快运行时（牺牲编译速度与代码体积），Java 选了快编译（牺牲运行时的装箱开销）。
+Go 极度看重编译速度与运行时简洁，迟迟没找到一个三者都不太差的方案,于是宁可不做，也不愿
+草率引入会侵蚀这些价值的设计。这种"想清楚再做"的克制，是 Go 一贯的性格。
 
-**临时性多态（Ad hoc Polymorphism）** 根据实参类型调用对应的版本，仅支持数量有限的调用。也被翻译为特设多态。
-例如：函数重载：
+## 8.1.2 从合约到类型集
 
-```go
-func Add(a, b int) int { return a+b }
-func Add(a, b float64) float64 { return a+b } // 注意: Go 语言中不允许同名函数
+第一次认真的尝试是 2018 年的**合约**（contracts）提案：用一段类似函数体的代码来描述类型参数
+必须支持的操作。社区反馈它"像第二种语言"，太复杂。团队据此大幅简化，2020 年的提案改用一个
+更优雅的想法：**让接口承担约束的职责**。Go 1.18 最终落地的语法是 `func F[T any](x T)`,
+方括号声明类型参数，约束就是一个接口。关键的概念创新是把接口从"方法集"推广为**类型集**
+（type set）：一个约束接口描述的是"哪些类型满足它"。于是 `comparable`（可比较的类型）、
+`~int`（底层类型为 int 的类型）、`int | string`（并集）都能作为约束写进接口。用既有的接口概念
+去承载泛型约束，避免了引入"第二种语言",这正是简化后方案的精髓。
 
-Add(1, 2)     // 调用第一个
-Add(1.0, 2.0) // 调用第二个
-Add("1", "2") // 编译时不检查，运行时找不到实现，崩溃
+## 8.1.3 实现：GC 形状 stenciling 加字典
+
+实现才是 Go 破解"两难"的地方。两个极端各有代价：**完全单态化**（C++ 模板、Rust,为每个具体
+类型生成一份专门代码）运行时快，但代码膨胀、编译变慢;**完全类型擦除**（Java,所有类型共用
+一份代码、值装箱）代码紧凑，但有装箱与间接开销。Go 选了一条中间路。
+
+```mermaid
+flowchart LR
+    M["完全单态化<br/>C++ 模板 / Rust<br/>每类型一份代码：快，但代码膨胀、编译慢"]
+    G["Go：GC 形状 stenciling + 字典<br/>按内存布局分组生成代码<br/>+ 运行时字典补类型相关信息"]
+    E["类型擦除<br/>Java 泛型<br/>一份代码 + 装箱：紧凑，但有装箱开销"]
+    M --- G --- E
 ```
 
-**参数化多态（Parametric Polymorphism）** 根据实参类型生成不同的版本，支持任意数量的调用，即我们常说的**泛型**。
-
-```go
-func Add(a, b T) T{ return a+b }
-
-Add(1, 2)              // 编译器生成 T = int 的 Add
-Add(float64(1.0), 2.0) // 编译器生成 T = float64 的 Add
-Add("1", "2")          // 编译器生成 T = string 的 Add
-```
-
-当使用 `interface{}` 时，a、b、返回值都可以在运行时表现为不同类型，取决于内部实现如何对参数进行断言：
-
-```go
-type I interface { ... }
-func Max(a, b I) I { ... } // T 是接口
-```
-
-当使用泛型时，a、b、返回值必须为同一类型，类型参数施加了这一强制性保障：
-
-```go
-func Max(a, b T) T { ... } // T 是类型参数
-```
-
-泛型的总体目标就是：快且安全。在这里：
-
-- 快：意味着静态类型
-- 安全：意味着编译早期的错误甄别
-
-## 12.1.1 从 Go 1 谈起
-
-在 Go 语言不支持泛型之前，Go 程序员通常需要产出针对不同类型，但实现方式完全相同的代码，例如下面的 `Max` 函数：
-
-```go
-func MaxInt(a, b int) int {
-    if a > b {
-        return a
-    }
-    return b
-}
-func MaxFloat64(a, b float64) float64 {
-    if a > b {
-        return a
-    }
-    return b
-}
-func MaxUintptr(a, b uintptr) uintptr {
-    if a > b {
-        return a
-    }
-    return b
-}
-...
-```
-
-Max 是一个看似简单，实则复杂的例子，有这些问题可以被考虑：
-
-- 能否将类型作为参数进行传递？
-- 如何对类型参数的行为进行检查？
-- 如何支持多个相同类型的参数？
-- 如何支持多个不同类型的参数？
-
-综合来说，泛型版的 `Min/Max` 函数是一个比较有代表性的例子，本章对 Go 语言泛型的介绍将全程围绕这个例子展开。
-
-早年 Go 语言在考虑泛型设计时，以「不牺牲编译效率的情况下，提供泛型」为目标。
-但在现在看来其实有些过时，因为早在 Go 1 的年代，编译速度是首要目标。
-但实际上复杂的模板用例肯定会拖慢编译速度，
-真正的问题是如何在语言设计（用户的使用成本）和实现（编译器的实现成本）上进行取舍和权衡。
-
-## 12.1.2 类型函数（2010）
-
-最早的 Go 语言泛型被称为类型函数（Type Functions）。
-
-- 基本想法：对函数参数类型声明处进行替换
-- 在标识符后使用 (t) 作为类型参数的缺省值，语法存在二义性
-- 既可以表示使用类型参数 Greater(t)，也可以表示实例化一个具体类型 Greater(t)，其中 t 为推导的具体类型，如 int
-- 为了解决二义性，使用 type 进行限定：Greater(t type)
-
-    ```go
-    func F(arg0, arg1 t type) t { ... }
-    ```
-
-- 使用接口 Greater(t) 对类型参数进行约束，跟在 type 后修饰
-提案还包含一些其他的备选语法：
-
-  + `generic(t) func ..`
-  + 使用类型参数 `$t`
-  + 实例化具体类型 `t`
-
-```go
-type Greater(t) interface {
-    IsGreaterThan(t) bool
-}
-func Max(a, b t type Greater(t)) t {
-    if a.IsGreaterThan(b) {
-        return a
-    }
-    return b
-}
-```
-
-
-回顾来看，类型函数确实是一个糟糕的设计。
-
-- x := Vector(t)(v0) 这是两个函数调用吗？
-- 尝试借用使用 C++ 的 Concepts 对类型参数的约束
-
-C++ Concepts 这一特性直到 2020 年正式定稿的 C++20 标准才被最终纳入标准，
-在当时比较下来，类型参数约束是个优点。
-
-教训：直接将类型作为参数将产生二义性，对编译器和用户而言都不是一件好事，需要加以区分，例如使用额外的关键字。
-
-## 12.1.3 泛用类型（2011）
-
-经过一年的思考，泛型的设计被修改泛用类型（Generalized Types）。
-
-基本想法：上一个设计中，直接替换类型所在的位置出现的局限性比较大，
-于是借用 C++ 模板声明的方式 `template<T> T name(a T)`，将类型参数提前到所有声明之前，并使用了一个关键字 `gen`：
-
-```go
-gen [T] type Greater interface {
-   IsGreaterThan(T) bool
-}
-gen [T Greater[T]] func Max(arg0, arg1 T) T {
-   if arg0.IsGreaterThan(arg1) {
-      return arg0
-   }
-   return arg1
-}
-```
-
-```go
-gen [T1, T2] (
-   type Pair struct { first T1; second T2 }
-  
-   func MakePair(first T1, second T2) Pair {
-       return &Pair{first, second}
-   }
-) // end of gen
-```
-
-关键设计
-
-- 使用 `gen [T]` 来声明一个类型参数
-使用接口对类型进行约束
-- 使用 `gen [T] ( … )` 来复用类型参数的名称
-
-评述
-
-- 没有脱离糟糕设计的命运
-- `gen [T] ( … )` 引入了作用域的概念
-  + 需要缩进吗？
-  + 除了注释还有更好的方式快速定位作用域的结束吗？
-- 复杂的类型参数声明
-
-教训：不那么像 Go :)
-
-## 12.1.4 泛用类型（2013）
-
-泛用类型在初次尝试后显然失败了，但两年后又发布了一个修订后的设计。
-
-- 致敬：Parameterized Types for C++ 
-
-```go
-gen [T] (
-   type Greater interface {
-       IsGreaterThan(T) bool
-   }
-   func Max(arg0, arg1 T) T {
-       if arg0.IsGreaterThan(arg1) { return arg0 }
-       return arg1
-   }
-)
-type Int int
-func (i Int) IsGreaterThan(j Int) bool {
-   return i > j
-}
-func F() {
-   a, b := 0, Int(1)
-   m := Max(a, b) // 0 先被忽略，解析 b 时确认为 Int
-   if m != b { panic("wrong max") }
-   ...
-}
-```
-
-关键设计
-
-- 使用 `gen [T]` 来声明一个类型参数
-- 使用 `gen [T] ( … )` 来传播类型参数的名称
-- 使用类型推导来进行约束
-
-评述
-
-- 语法相对简洁了许多
-- 利用类型推导的想法看似很巧妙，但能够实现吗？
-- `gen [T] ( … )` 引入了作用域的概念
-- 缩进？
-- 如何快速定位作用域在何时结束？
-- 企图通过实例化过程中类型推导来直接进行约束，可能吗？
-- 出现多个参数时，应该选取哪个参数进行约束？
-- 如果一个类型不能进行 `>` 将怎么处理？
-- `arg0/arg1` 同 `T` 为什么推导为不同类型？
-
-教训：类型推导是化简泛型用法的一个重要手段
-
-## 12.1.5 类型参数（2013）
-
-泛用类型的设计在参数推导这个想法上突破后，进一步优化其推导规则，得出了
-类型参数（Type Parameters）的设计。
-
-```go
-type [T] Greater interface {
-   IsGreaterThan(T) bool
-}
-func [T] Max(arg0, arg1 T) T {
-   if arg0.IsGreaterThan(arg1) {
-       return arg0
-   }
-   return arg1
-}
-type Int int
-func (i Int) IsGreaterThan(j Int) bool {
-   return i > j
-}
-func F() {
-   _ = Max(0, Int(1)) // 推导为 Int
-}
-```
-
-关键设计
-
-- 直接在类型、接口、函数名前使用 `[T]` 表示类型参数
-- 进一步细化了类型推导作为约束的可能性
-
-评述
-
-- 目前为止最好的设计
-- 无显式类型参数的类型推导非常复杂
-- 常量究竟应该被推导为什么类型？
-- `[T]` 的位置很诡异，声明在左，使用在右，例如：
-
-    ```go
-    type [T1, T2] Pair struct { … }
-    var v Pair[T1, T2]
-    ```
-
-这个设计最终没有采纳的原因：在代码层面上实现时受阻、类型检查非常困难（复杂）等等有关语言语义表现的问题没有得到解答
-
-教训：复杂的功能同时存在实现上的难度，需要对设计进行进一步化简。参加提案中复杂的推导规则
-
-## 12.1.6 代码自动生成（2014）
-
-早年的 Go 是 C 语言写成的，那个时候维护不同平台的汇编代码是一件比较痛苦的，对此 Russ Cox 做过一个分析 [Cox 2012]。
-后来 Rob Pike 在没有泛型的情况下，为了解决代码复用的问题，做了一个折中的方案就是 Go Generate
-
-```go
-import "github.com/cheekybits/genny/generic"
-// cat 201401.go | genny gen "T=NUMBERS" > 201401_gen.go
-type T generic.Type
-func MaxT(fn func(a, b T) bool, a, b T) T {
-   if fn(a, b) {
-       return a
-   }
-   return b
-}
-```
-
-关键设计
-
-- 通过 `//go:generate` 编译器指示来自动生成代码
-- 利用这一特性比较优秀的实现是 cheekybits/genny
-
-评述
-
-- 维护成本
-- 需要重新生成代码
-- 没有类型检查，需要程序员自行判断
-
-教训：至少目前来说，是成功的
-
-## 12.1.7 类型作为一等公民（2015）
-
-在经历过多轮设计失败后，Bryan Mills 提出将类型作为一等公民（First Class Types）的概念，引入 `gotype` 内建类型。
-
-```go
-const func Max(a, b gotype) gotype {
-   switch a.(type) {
-   case int, float64, uintptr:
-       if a > b { return a}
-       return b
-   default:
-       aa, ok := a.(interface{
-           IsGreaterThan(gotype) bool
-       })
-       if !ok {
-           panic("a must implements IsGreaterThan")
-       }
-       if aa.IsGreaterThan(b) {
-           return a
-       }
-       return b
-   }
-}
-```
-
-关键设计
-
-- 引入 `gotype` 内建类型
-- 扩展 `.(type)` 的编译期特性
-- `const` 前缀强化函数的编译期特性
-- 灵感来源 C++ SFINAE
-
-评述
-
-- 设计上需要额外思考 SFINAE
-- 只有泛型函数的支持，泛型结构需要通过函数来构造
-- 接口二义性 `interface X { Y(Z) }`
-- Z 可以是类型或常量名
-- 不太可能实现可类型推导
-
-教训：不明，可能提案在 Go 团队内部被 reject 了；大概率是不能类型推导、检查
+Go 的办法是 **GC 形状（GC shape）stenciling 加字典（dictionary）**。它不为每个具体类型都生成
+一份代码，而是按 **GC 形状**分组,内存布局相同、指针位置相同的一组类型（例如所有指针类型）
+共用一份生成的代码（一个 stencil）。同一份代码要处理不同的具体类型，缺的那部分类型相关信息
+（具体类型的描述符、方法、用到的其他泛型函数的实例等）则在调用时通过一个**运行时字典**传进去。
+这条思路与 [4.2](../ch04type/interface.md) 提到的 Haskell **类型类的字典传递**一脉相承,把"类型
+相关的东西"显式地作为一个隐藏参数传递。如此，Go 在代码体积（不为每个类型都复制）、编译速度、
+与运行时性能之间取得了折中,这是它对那个十三年两难的回答。代价是：经字典的间接访问，使泛型
+代码有时未必比手写的具体类型代码快，这也是 Go 团队后续版本持续优化的方向。
+
+## 8.1.4 跨语言对照
+
+把实现策略排开看，泛型的版图很清晰。**C++ 模板**与 **Rust** 走完全单态化：运行时零开销、
+能高度特化，代价是代码膨胀、编译慢，以及（C++ 模板）出了名难懂的错误信息。**Java** 走类型擦除：
+泛型只存在于编译期，运行时被擦成 `Object` 加装箱，因此 Java 泛型没有运行时类型信息（`List<int>`
+不存在、要 `List<Integer>`）。**C#** 则做了**具体化**（reified）泛型,运行时保留类型参数，值类型
+不装箱，比 Java 更进一步。**Haskell** 用类型类加字典传递,而 Go 的字典法正是这条线在命令式
+语言里的回响。Go 在这张版图上的位置是"中间偏务实"：既不像模板那样追求零开销与特化，也不像
+擦除那样彻底放弃类型信息，而是用 GC 形状分组加字典，求一个各方面都还不错的平衡。
+
+## 8.1.5 取舍与未来
+
+Go 泛型刻意**省略**了许多别家有的东西：没有模板元编程、没有特化（specialization）、没有
+高阶类型、没有运算符重载。这种克制是有意的,团队反复强调"先加最小可用的泛型，再看实践
+需要什么"，避免重蹈"加了一大堆复杂特性却尾大不掉"的覆辙。后续的演进延续这一节奏：Go 1.21
+为标准库加了 `slices`、`maps`、`cmp` 等泛型工具包，Go 1.24 补上了泛型类型别名
+（[4.3](../ch04type/alias.md)），而字典间接带来的性能开销仍在被逐步打磨。泛型这十三年的故事，
+是 Go 设计哲学的缩影：**对复杂度极度警惕，宁可慢一步也要想清楚，最终用一个并不炫技、却各方面
+都站得住的方案落地。**
+
+## 延伸阅读的文献
+
+1. Russ Cox. *The Generic Dilemma.* 2009. https://research.swtch.com/generic
+2. Ian Lance Taylor, Robert Griesemer. *Type Parameters Proposal*（Go 1.18 泛型，
+   合约→类型集的演进）.
+   https://go.googlesource.com/proposal/+/refs/heads/master/design/43651-type-parameters.md
+3. The Go Authors. *Go 1.18 Generics implementation: GC shape stenciling with dictionaries*
+   （设计文档）.
+   https://go.googlesource.com/proposal/+/refs/heads/master/design/generics-implementation-dictionaries-go1.18.md
+4. The Go Authors. *Go 1.18 Release Notes（泛型）.* https://go.dev/doc/go1.18 ；
+   *An Introduction To Generics.* https://go.dev/blog/intro-generics
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
