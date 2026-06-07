@@ -1,9 +1,20 @@
 {{ if not (.Page.Scratch.Get "mermaid") }}
-<!-- Include mermaid only first time -->
+<!-- Load mermaid once per page, then render every diagram after the DOM is parsed. -->
 <script src="{{ "mermaid.min.js" | relURL }}"></script>
+<script>
+  window.addEventListener("DOMContentLoaded", function () {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "neutral",
+      securityLevel: "strict",
+      fontFamily: "inherit",
+    });
+    mermaid.run({ querySelector: ".mermaid" });
+  });
+</script>
 {{ .Page.Scratch.Set "mermaid" true }}
 {{ end }}
 
-<p class="mermaid{{ with .Get "class" }} {{ . }}{{ end }}">
-  {{- .Inner -}}
-</p>
+<pre class="mermaid{{ with .Get "class" }} {{ . }}{{ end }}">
+{{- .Inner -}}
+</pre>
