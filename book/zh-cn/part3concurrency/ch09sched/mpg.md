@@ -26,6 +26,27 @@ P。真正在 CPU 上执行指令的是 M，但它必须先取得一个 P 才被
 绑在 P 上而非 M 上，是 [9.1](./model.md) 讲过的 GM 到 GMP 演进的关键：资源的份数就此固定为
 `GOMAXPROCS`，局部性也随之改善。
 
+把三者裁剪成只剩设计相关的字段，它们的分工一目了然：
+
+```go
+type g struct {            // goroutine
+    stack       stack      // 执行栈的上下界
+    sched       gobuf      // 被切下 CPU 时保存的现场（PC、SP 等）
+    atomicstatus uint32    // 状态：Runnable / Running / Waiting / ...（见下文）
+    m           *m         // 当前正在运行它的 M（若在运行）
+}
+type m struct {            // machine：OS 线程
+    g0   *g                // 运行调度与运行时代码的系统栈
+    curg *g                // 当前正在运行的用户 G
+    p    puintptr          // 当前绑定的 P（运行 Go 代码必须持有）
+}
+type p struct {            // processor：执行 Go 代码的许可
+    runq     [256]guintptr // 本地运行队列（定长环形）
+    runnext  guintptr      // 下一个优先运行的 G（LIFO，利于局部性）
+    mcache   *mcache       // 本地内存分配缓存
+}
+```
+
 ## 9.3.2 goroutine 的生命周期
 
 一个 G 在它的一生中会在若干状态间迁移。理解这台状态机，就理解了调度器在对 G 做什么。

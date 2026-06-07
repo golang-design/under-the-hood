@@ -26,6 +26,17 @@ flowchart TD
     GE --> SC
 ```
 
+骨架剥到最简，就是这样一个永不返回的两步循环：
+
+```go
+// 每个 M 的调度循环（伪代码），运行在系统栈 g0 上，永不返回
+func schedule() {
+    gp := findRunnable()  // 见 9.2；找不到就阻塞在这里，直到有活儿
+    execute(gp)           // gogo 切到 gp 的栈执行
+    // gp 让出（阻塞/Gosched/被抢占）时经 mcall 切回 g0，并再次进入 schedule
+}
+```
+
 有一处细节值得点明：`schedule` 与 `findRunnable` 这些调度逻辑，本身并不跑在用户 G 的栈上，
 而是跑在 M 那条专用的系统栈 `g0` 上（[9.3](./mpg.md)）。这带来一个清晰的分工：`g0` 负责
 「调度」，用户 G 负责「干活」，两者通过栈切换往返。也正因为如此，`schedule` 从不真正返回，

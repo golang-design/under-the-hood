@@ -39,6 +39,23 @@ flowchart TD
     W -- 否 --> P[转入自旋或休眠 park]
 ```
 
+写成伪代码，这条顺序一目了然：
+
+```go
+// findRunnable：M 找下一个可运行的 G（伪代码）
+func findRunnable() *g {
+    // 1. 每 61 次调度，先瞄一眼全局队列，保证公平
+    if pp.schedtick%61 == 0 && !sched.runq.empty() {
+        if gp := globrunqget(); gp != nil { return gp }
+    }
+    if gp := runqget(pp); gp != nil { return gp }   // 2. 本地队列（含 runnext）
+    if gp := globrunqget(); gp != nil { return gp }  // 3. 全局队列
+    if gp := netpoll(); gp != nil { return gp }      // 4. 网络轮询器
+    if gp := stealWork(); gp != nil { return gp }    // 5. 从其他 P 窃取一半
+    stopm()                                          // 6. 实在没有：自旋或休眠
+}
+```
+
 先看本地：`runnext` 槽里那个刚被唤醒、最该接着跑的 G 优先，然后是本地队列。本地空了，
 才去看全局队列与网络轮询器（[9.9](./poller.md)）。这些都没有，才进入窃取：随机挑一个别的 P
 作为目标，把它本地队列里的 G 偷走一半。一半这个比例是经验之选，既能一次拿到足够的活儿
