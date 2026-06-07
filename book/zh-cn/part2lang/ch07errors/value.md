@@ -3,191 +3,80 @@ weight: 2401
 title: "7.1 问题的演化"
 ---
 
-# 4.1 问题的演化
+# 7.1 问题的演化
 
-错误 `error` 在 Go 中表现为一个内建的接口类型，任何实现了 `Error() string`
-方法的类型都能作为 `error` 类型进行传递，成为错误值：
+Go 的错误处理是它最具辨识度、也最受争议的设计之一。满屏的 `if err != nil` 让一些人皱眉，却
+也让错误路径无处遁形。这一节讲清"错误即值"这一核心主张的由来、它如何随版本演化，以及社区
+为改进它做过的尝试与争论。理解这段历史，比记住 API 更重要。
+
+## 7.1.1 错误即值
+
+Go 没有异常式的 `try/catch`（[6.3](../ch06func/panic.md) 解释了 panic 为何不算）。它的主张是
+**错误是普通的值**：`error` 只是一个内建接口，只要求一个 `Error() string` 方法;函数把错误作为
+**最后一个返回值**显式交还，调用方用 `if err != nil` 显式处理。
 
 ```go
-type error interface {
-	Error() string
+type error interface { Error() string }
+
+f, err := os.Open(name)
+if err != nil {
+    return err   // 显式传递，无处可藏
 }
 ```
 
-作为内建接口类型，编译器负责在参数传递检查时，对值类型所实现的方法进行检查。
-当类型实现了 `Error() string` 方法后，才允许其作为 error 进行传递：
+这套设计的哲学，Rob Pike 用一句话概括："**Errors are values**",既然是值，就能被编程,被比较、
+被包装、被存进结构体、被函数处理，而不是一种特殊的、只能 `catch` 的控制流。代价是冗长，
+收益是错误路径白纸黑字、显式可见、可被工具检查。这与 [6.3](../ch06func/panic.md) 的"异常 vs 值"
+之争一脉相承：Go 坚定地站在"值"这一边。
 
-```go
-// go/src/cmd/compile/internal/gc/universe.go
-func makeErrorInterface() *types.Type {
-	field := types.NewField()
-	field.Type = types.Types[TSTRING]
-	f := functypefield(fakeRecvField(), nil, []*types.Field{field})
+## 7.1.2 从字符串到可检查的错误
 
-	// 查找是否实现了 Error
-	field = types.NewField()
-	field.Sym = lookup("Error")
-	field.Type = f
+最初，错误几乎只是带文字的值（`errors.New`、`fmt.Errorf`）。但实践很快暴露需求：调用方常常
+不只想知道"出错了"，还想知道"是不是某种特定的错误"（如 `io.EOF`、`os.ErrNotExist`），以便
+分别处理。早期只能比较字符串或用类型断言，既脆弱又不统一。
 
-	t := types.New(TINTER)
-	t.SetInterface([]*types.Field{field})
-	return t
-}
-```
+转折点是 **Go 1.13（2019）的错误包装**。`fmt.Errorf` 增加了 `%w` 动词，把一个底层错误**包进**
+一个新错误，形成一条**错误链**;配套的 `errors.Unwrap`、`errors.Is`、`errors.As` 让调用方能
+穿过这条链去检查：
 
-## 4.1.1 错误的历史形态
+- `errors.Is(err, target)`：沿链查找是否有某个**哨兵错误**（如 `errors.Is(err, io.EOF)`），
+  取代脆弱的 `err == io.EOF`。
+- `errors.As(err, &target)`：沿链查找是否有某个**类型**的错误，并取出它（如取出
+  `*os.PathError` 读它的字段）。
 
-早期的 Go 甚至没有错误处理 [Gerrand, 2010] [Cox, 2019b]，
-当时的 `os.Read` 函数进行系统调用可能产生错误，而该接口是通过 `int64` 类型进行错误返回的：
+这让"错误即值"真正好用起来：错误可以分层包装（每层加上下文），又能被可靠地检查。
+Go 1.20 进一步加了 `errors.Join`,把多个错误合成一个（一个错误可以有多个被包装者），
+以及 `fmt.Errorf` 支持多个 `%w`。错误从"一句话"演化成了"一棵可检查、可携带上下文的结构"。
 
-```go
-export func Read(fd int64, b *[]byte) (ret int64, errno int64) {
-	r, e := syscall.read(fd, &b[0], int64(len(b)));
-	return r, e
-}
-```
+## 7.1.3 改进语法的尝试与争论
 
-随后，Go 团队将这一 `errno` 转换抽象成了一个类型：
+冗长的 `if err != nil` 一直是改进呼声的焦点，但历次尝试都未被采纳，这本身很说明 Go 的取舍。
+2018–2019 年的 **`check`/`handle`** 提案想引入专门的错误处理语法;2019 年的 **`try`** 内建函数
+提案想用 `x := try(f())` 在出错时自动返回。后者引发了社区极其激烈的讨论，最终因"隐藏了控制流、
+与'错误路径要显式'的核心价值冲突"等理由被**撤回**。团队的结论是：与其用语法糖把错误处理藏
+起来，不如保持它的显式,哪怕啰嗦。这场争论是观察 Go 设计价值观的绝佳样本：**显式与简单，
+被置于简洁之上。** 此后改进转向务实的小步：1.13 的包装、1.20 的 `Join`，都在不改变"显式返回"
+这一根基的前提下，让错误更好用。
 
-```go
-export type Error struct { s string }
+## 7.1.4 跨语言对照
 
-func (e *Error) Print() { ... }
-func (e *Error) String() string { ... }
+错误处理是语言哲学的分水岭（[6.3](../ch06func/panic.md) 已概述异常 vs 值）。这里补充"值派"内部
+的差异：**Rust** 同样用值（`Result<T, E>`），但提供了 `?` 运算符,`f()?` 在出错时自动向上返回，
+既保持显式又消除样板，可谓"Go 的 `try` 提案想要、却没做成的东西"。**Swift** 用 `throws` + `try`，
+是介于异常与值之间的折中（错误是值，但传播靠 `throw`/`try` 标注）。**Haskell** 用 `Either`/`Maybe`
+单子，把错误传播抽象成单子组合。相比之下，Go 的选择最"朴素"：不引入任何专门的传播语法，
+全靠普通的 `if`,它用最大的冗长，换取了最小的语言机制与最强的显式性。是否值得，至今仍是
+社区津津乐道的话题,而这场持续的讨论，恰恰证明了这个设计触及了语言哲学的根本。
 
-export func Read(fd int64, b *[]byte) (ret int64, err *Error) {
-	r, e := syscall.read(fd, &b[0], int64(len(b)));
-	return r, ErrnoToError(e)
-}
-```
+## 延伸阅读的文献
 
-之后才演变为了 Go 1 中被人们熟知的 `error` 接口类型。
-
-可见之所以从理解上我们可以将 error 认为是一个接口，是因为在编译器实现中，
-是通过查询某个类型是否实现了 `Error` 方法来创建 Error 类型的。
-
-<!-- TODO: go 1.0 russ cox 关于错误处理的言论 -->
-
-## 4.1.2 处理错误的基本策略
-
-由于 Go 中的错误处理设计得非常简洁，在其他现代编程语言里都几乎找不见此类做法。
-Go 团队也曾多次撰写文章来教导 Go 语言的用户 [Gerrand, 2011] [Pike, 2015]。
-无论怎样，非常常见的策略包含哨兵错误、自定义错误以及隐式错误三种。
-
-### 哨兵错误
-
-哨兵错误的处理方式通过特定值表示成功和不同错误，依靠调用方对错误进行检查：
-
-```go
-if err === ErrSomething { ... }
-```
-
-例如，比较著名的 `io.EOF = errors.New("EOF")`。
-
-这种错误处理的方式引入了上下层代码的依赖，如果被调用方的错误类型发生了变化，
-则调用方也需要对代码进行修改：
-
-```go
-func readf(path string) error {
-	err := file.Open(path)
-	if err != nil {
-		return fmt.Errorf("cannot open file: %v", err)
-	}
-}
-
-func main() {
-	err := readf("~/.ssh/id_rsa.pub")
-	if strings.Contains(err.Error(), "not found") {
-		...
-	}
-}
-```
-
-这类错误处理的方式是非常危险的，因为它在调用方和被调用方之间建立了牢不可破的依赖关系。
-除此之外，哨兵错误还有一个相当致命的危险，那就是这种方式所定义的错误并非常量，例如：
-
-```go
-package io
-var EOF = errors.New("EOF")
-```
-
-而当我们将此错误类型公开给其他包使用后，我们非常难以避免这种事情发生：
-
-```go
-package main
-import "io"
-func init() {
-	io.EOF = nil
-}
-```
-
-这种事情甚至严重到，如果在引入的依赖中，有人恶意将这样验证错误值进行修改的代码包含进去，
-将导致重大的安全问题：
-
-```go
-import "cropto/rsa"
-func init() {
-	rsa.ErrVerification = nil
-}
-```
-
-在硕大的代码依赖中，我们几乎无法保证这种恶意代码不会出现在某个依赖的包中。
-为了安全起见，变量错误类型可以修改为常量错误：
-
-```diff
--var EOF = errors.New("EOF")
-+const EOF = ioError("EOF")
-+type ioEorror string
-+
-+func (e ioError) Error() string { return string(e) }
-```
-
-### 自定义错误
-
-```go
-if err, ok := err.(SomeErrorType); ok { ... }
-```
-
-这类错误处理的方式通过自定义的错误类型来表示特定的错误，同样依赖上层代码对错误值进行检查，
-不同的是需要使用类型断言进行检查。
-例如：
-
-```go
-type CustomizedError struct {
-	Line int
-	Msg  string
-	File string
-}
-func (e CustomizedError) Error() string {
-	return fmt.Sprintf("%s:%d: %s", e.File, e.Line, e.Msg)
-}
-```
-
-这种错误处理的好处在于，可以将错误包装起来，提供更多的上下文信息，
-但错误的实现方必须向上层公开实现的错误类型，不可避免的同样需要产生依赖关系。
-
-### 隐式错误
-
-```go
-if err != nil { return err }
-```
-
-这种错误处理的方式直接返回错误的任何细节，直接将错误进一步报告给上层。这种情况下，
-错误在当前调用方这里完全没有进行任何加工，与没有进行处理几乎是等价的，
-这会产生的一个致命问题在于：丢失调用的上下文信息，如果某个错误连续向上层传播了多次，
-那么上层代码可能在输出某个错误时，根本无法判断该错误的错误信息究竟从哪儿传播而来。
-以上面提到的文件打开的例子为例，错误信息可能就只有一个 `not found`。
-
-## 4.1.3 处理错误的本质
-
-回顾处理错误的基本策略我们可以看出，在 Go 语言中错误处理这一话题基本上是围绕以下三个问题进行的：
-
-1. 错误值检查：如何对一个传播链条中的错误类型进行断言？
-2. 错误格式与上下文：出现错误时，没有足够的堆栈信息，如何增强错误发生时的上下文信息并合理格式化一个错误？
-3. 错误处理语义：每个返回错误的函数都要求调用方进行显式处理，处理方式啰嗦而冗长，如何减少这种代码出现的密集程度？
-
-我们在后面的小节中对这些问题进行一一讨论。
+1. Rob Pike. *Errors are values.* Go 博客, 2015. https://go.dev/blog/errors-are-values
+2. The Go Authors. *Working with Errors in Go 1.13*（%w 包装、Is/As）, 2019.
+   https://go.dev/blog/go1.13-errors
+3. Robert Griesemer 等. *Proposal: A built-in Go error check function, "try"*（已撤回）, 2019.
+   https://go.googlesource.com/proposal/+/master/design/32437-try-builtin.md
+4. Go 1.20 Release Notes（errors.Join、多 %w）. https://go.dev/doc/go1.20
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
