@@ -86,6 +86,9 @@ stateDiagram-v2
 - 在引入概念时给出**最小自洽**的背景，使该节不必跳读即可理解。
 - 把 Go 的具体取舍放到更大的**学术与工业脉络**中（CSP、内存模型、GC 算法谱系、
   调度理论）。
+- **数学公式一律用行内 LaTeX**：行内用 `$...$`，行间用 `$$...$$`。GitHub 原生渲染，
+  站点侧由 KaTeX（已 vendored 于 `themes/book/static/katex/`，并在 `config.toml` 的
+  goldmark passthrough 中放行）渲染。不要用纯文本拼写 ∀、≤、⇒ 等符号。
 
 ## 六、学术与一手文献
 

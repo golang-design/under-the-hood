@@ -15,3 +15,10 @@ theme = "book"
     tabWidth = 4
 [markup.goldmark.renderer]
     unsafe= true
+# Pass LaTeX math through to the HTML so KaTeX can render it client-side.
+# Same delimiters GitHub understands, so the .md stays readable there too.
+[markup.goldmark.extensions.passthrough]
+    enable = true
+    [markup.goldmark.extensions.passthrough.delimiters]
+        block = [['$$', '$$'], ['\[', '\]']]
+        inline = [['$', '$'], ['\(', '\)']]

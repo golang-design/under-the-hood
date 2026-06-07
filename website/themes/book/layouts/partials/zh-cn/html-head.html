@@ -16,6 +16,17 @@
 {{- $styles := resources.Get "book.scss" | resources.ExecuteAsTemplate "book.scss" . | css.Sass | resources.Minify | resources.Fingerprint }}
 <link rel="stylesheet" href="{{ $styles.RelPermalink }}" integrity="{{ $styles.Data.Integrity }}">
 
+<!-- KaTeX (vendored) renders LaTeX math passed through by goldmark. -->
+<link rel="stylesheet" href="{{ "katex/katex.min.css" | relURL }}">
+<script defer src="{{ "katex/katex.min.js" | relURL }}"></script>
+<script defer src="{{ "katex/auto-render.min.js" | relURL }}"
+  onload="renderMathInElement(document.body, {delimiters: [
+    {left: '$$', right: '$$', display: true},
+    {left: '\\[', right: '\\]', display: true},
+    {left: '$', right: '$', display: false},
+    {left: '\\(', right: '\\)', display: false}
+  ], throwOnError: false});"></script>
+
 {{ if default true .Site.Params.BookSearch }}
 {{- .Scratch.Set "bookSearchConfig" (i18n "bookSearchConfig") -}} <!-- Remove after https://github.com/gohugoio/hugo/issues/6331 -->
 {{- $searchJSFile := printf "%s.search.js" .Language.Lang -}}
