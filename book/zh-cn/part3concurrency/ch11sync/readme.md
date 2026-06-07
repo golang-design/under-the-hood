@@ -4,18 +4,18 @@ title: "第 11 章 同步原语与模式"
 bookCollapseSection: true
 ---
 
-# 第 5 章 同步模式
+# 第 11 章 同步原语与模式
 
-- [5.1 共享内存式同步模式](./basic.md)
-- [5.2 互斥](./mutex.md)
-- [5.3 原子操作](./atomic.md)
-- [5.4 条件变量](./cond.md)
-- [5.5 同步组](./waitgroup.md)
-- [5.6 缓存池](./pool.md)
-- [5.7 并发安全散列表](./map.md)
-- [5.8 上下文](./context.md)
-- [5.9 内存一致模型](./mem.md)
-- [5.10 进一步阅读的参考文献](./ref.md)
+- [11.1 共享内存式同步模式](./basic.md)
+- [11.2 互斥锁](./mutex.md)
+- [11.3 原子操作](./atomic.md)
+- [11.4 条件变量](./cond.md)
+- [11.5 同步组](./waitgroup.md)
+- [11.6 缓存池](./pool.md)
+- [11.7 并发安全散列表](./map.md)
+- [11.8 上下文](./context.md)
+- [11.9 内存一致模型](./mem.md)
+- [11.10 进一步阅读的参考文献](./ref.md)
 
 <div class="quote">
 <i class="quote-mark fas fa-thumbtack"></i>
@@ -33,4 +33,4 @@ bookCollapseSection: true
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

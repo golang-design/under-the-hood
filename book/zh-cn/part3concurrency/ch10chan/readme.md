@@ -84,12 +84,23 @@ channel 不只是传数据，它还建立内存可见性的次序。一次发送
 （[11.9 内存一致模型](../ch11sync/mem.md)），所以「发送前写下的数据，接收后一定看得见」。
 这正是把 channel 当同步原语使用的根基，也是 Go 推荐「以通信共享内存」的底气。
 
-实现上，channel 走的是有锁路径，而非无锁。Go 团队权衡过：channel 的语义（配对、阻塞唤醒、
-select 多路等待、关闭广播）相当复杂，一把每通道的细粒度锁已经足够快，且远比无锁实现易于保证
-正确。这是一处「正确与可维护优先于极致性能」的典型取舍，与 [11.9](../ch11sync/mem.md) 里
-Go 只暴露顺序一致原子的选择一脉相承。最后值得提醒：channel 优雅，但并非万灵药。表达
-「保护一小段共享状态」时，一把 `sync.Mutex`（[11.2](../ch11sync/mutex.md)）往往比 channel
-更直接也更快，该用哪个，取决于你要表达的是「通信」还是「互斥」。
+实现上，channel 走的是有锁路径，而非无锁，这背后有一段值得一提的历史。2014 年前后，
+Vyukov 提出过给 channel 提速的一系列设计，包括「channels on steroids」的优化，以及一个更激进的
+**无锁 channel** 方案（runtime: lock-free channels, #8899）。无锁版本在某些基准上确有优势，
+但 channel 的语义实在太复杂：收发配对、阻塞与唤醒、select 多路等待、关闭时的广播，要在无锁
+之下同时把这些做对，复杂度与正确性风险都很高，社区后续的讨论也表明它在多核扩展性上的收益
+并不稳定。最终无锁方案没有落地，channel 保留了每通道一把细粒度锁的有锁实现，转而在有锁
+框架内做简化与优化（Randall 在 2015 年的两轮 simplify chan ops 即是此类）。这又是一处
+「正确与可维护优先于极致性能」的取舍，与 [11.9](../ch11sync/mem.md) 里 Go 只暴露顺序一致原子
+的选择一脉相承。
+
+同期还有两处与正确性相关的演进值得记一笔：Cox 在 2015 年明确了阻塞 channel 上的操作必须按
+**FIFO** 次序进行（#11506），消除了等待者被饿死的可能；而 select 的公平性也几经讨论
+（#21806），最终以 [10.4](#104-select多路等待) 提到的随机化收敛。
+
+最后值得提醒：channel 优雅，但并非万灵药。表达「保护一小段共享状态」时，一把 `sync.Mutex`
+（[11.2](../ch11sync/mutex.md)）往往比 channel 更直接也更快，该用哪个，取决于你要表达的是
+「通信」还是「互斥」。
 
 ## 进一步阅读的文献
 
@@ -97,6 +108,20 @@ Go 只暴露顺序一致原子的选择一脉相承。最后值得提醒：chann
    21(8), 1978. https://doi.org/10.1145/359576.359585
 2. The Go Authors. *The Go Memory Model：Channel communication.* https://go.dev/ref/mem
 3. Go 博客. *Share Memory By Communicating.* https://go.dev/blog/codelab-share
+4. Dmitry Vyukov. *Go channels on steroids*, 2014.
+   https://docs.google.com/document/d/1yIAYmbvL3JxOKOjuCyon7JhW4cSv1wy5hC0ApeGMV9s/pub
+5. Dmitry Vyukov. *runtime: lock-free channels* (#8899), 2014.
+   https://github.com/golang/go/issues/8899 ；配套 CL：https://codereview.appspot.com/12544043 ；
+   后续讨论：https://groups.google.com/forum/#!msg/golang-dev/0IElw_BbTrk/cGHMdNoHGQEJ
+6. Russ Cox. *runtime: make sure blocked channels run operations in FIFO order* (#11506), 2015.
+   https://github.com/golang/go/issues/11506
+7. Keith Randall. *runtime: simplify buffered channels / simplify chan ops, take 2*, 2015.
+   https://go-review.googlesource.com/c/go/+/9345 ，https://go-review.googlesource.com/c/go/+/16740
+8. *runtime: select is not fair* (#21806), 2017. https://github.com/golang/go/issues/21806
+9. OneOfOne. *A scalable lock-free channel*, 2016. https://github.com/OneOfOne/lfchan ；
+   及其多核扩展性讨论：https://github.com/OneOfOne/lfchan/issues/3
+10. Gerard J. Holzmann. *The SPIN Model Checker.*（以模型检验验证并发，
+    http://spinroot.com/spin/whatispin.html ）
 
 ## 许可
 
