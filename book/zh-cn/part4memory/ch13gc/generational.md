@@ -3,10 +3,56 @@ weight: 4208
 title: "13.8 分代假设与代际回收"
 ---
 
-# 8.8 分代假设与代际回收
+# 13.8 分代假设与代际回收
 
+学过 JVM 的人常会问：Go 为什么**不做分代 GC**？分代是 Java、.NET 等主流托管运行时 GC 的标配，
+被认为是高效回收的关键。Go 偏偏没采用。这一节讲清分代的思想、它的威力，以及 Go 不走这条路
+的理由,这是一处颇能体现"没有放之四海皆准的设计"的取舍。
 
+## 13.8.1 分代假设
+
+分代 GC 建立在一条经验观察上,**分代假设**（generational hypothesis）：**绝大多数对象都"英年
+早逝"**,刚分配不久就不再被引用（弱分代假设）。既然如此，把对象按"年龄"分代：**新生代**装新
+分配的对象，**老年代**装活过几轮回收的对象。回收时多数时候只扫新生代（**minor GC**），因为
+垃圾大多在这里、且新生代小、扫得快;偶尔才全堆扫一次（**major GC**）。这样，大部分回收工作
+集中在小而垃圾密集的新生代上，效率很高。这是分代 GC 威力的来源。
+
+代价是要**记住跨代指针**：老年代对象指向新生代对象时，扫新生代必须把这些老年代对象也当作根,
+这需要一个**写屏障**来记录跨代指针（记忆集 / 卡表）。
+
+## 13.8.2 Go 为何不分代
+
+Go 至今用的是**非分代**的并发标记清扫。原因是多方面的取舍：
+
+- **逃逸分析削弱了分代假设的收益**：Go 编译器的逃逸分析（[15.escape](../../part5toolchain/ch15compile)）
+  把大量"短命"对象直接分配在**栈**上,它们随函数返回自动消失，根本不进堆、不劳 GC。也就是说，
+  分代假设里那批"早逝的年轻对象"，很多在 Go 里已经被栈分配消化掉了,留给堆 GC 的，"早逝"
+  特征已没那么强，分代的收益因此打了折扣。
+- **非移动式回收让分代更难**：高效的分代通常配合**复制/移动**新生代（把幸存者晋升到老年代）。
+  Go 是非移动的标记清扫（[13.1](./basic.md)，为指针稳定与 cgo 友好），在不移动的前提下做分代，
+  收益和实现都更尴尬。
+- **已有方案够好**：Go 的并发标记清扫加混合写屏障（[13.2](./barrier.md)）已经把停顿压到亚毫秒,
+  目标（低延迟）已达成。分代主要优化的是**吞吐**，而 Go 在延迟与吞吐间本就偏向延迟。
+
+## 13.8.3 取舍的启示
+
+Go 不分代，不是因为不懂分代，而是因为**在它的整体设计下，分代的性价比不够高**,逃逸分析吃掉了
+一部分收益，非移动回收抬高了一部分成本，而它最在意的低延迟已由别的机制达成。这是一个绝佳的
+例子：**一个在别处（JVM）被奉为圭臬的技术，换一套上下文（栈分配 + 非移动 + 低延迟优先）就
+未必划算。** 它提醒我们评估任何"最佳实践"都要看上下文。当然，这并非定论,Go 团队多年来一直在
+研究是否、以及如何引入某种形式的分代或局部性优化，go1.25/1.26 的 Green Tea GC
+（[13.11](./history.md)）就是在"改善回收局部性"方向上的新尝试。下一节看 Go 曾认真试过、却最终
+放弃的另一条路,基于"请求假设"的回收（[13.9](./roc.md)）。
+
+## 延伸阅读的文献
+
+1. David Ungar. "Generation Scavenging: A non-disruptive high performance storage
+   reclamation algorithm." *SDE 1984*. https://doi.org/10.1145/800020.808261 （分代 GC 源头）.
+2. Go Team. *Why is Go's GC not generational?*（FAQ / 设计讨论与逃逸分析的关系）.
+   https://go.dev/doc/gc-guide
+3. Rick Hudson. *Getting to Go: The Journey of Go's GC.* https://go.dev/blog/ismmkeynote
+4. 本书 [13.9 请求制导回收](./roc.md)、[15 编译器（逃逸分析）](../../part5toolchain/ch15compile).
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

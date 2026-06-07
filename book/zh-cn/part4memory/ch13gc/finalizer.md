@@ -3,335 +3,56 @@ weight: 4210
 title: "13.10 终结器"
 ---
 
-# 8.10 终结器
+# 13.10 终结器
 
-TODO:
+有时一个对象在被回收前需要做点收尾,关闭文件描述符、释放 C 分配的内存。**终结器**（finalizer）
+让你给对象注册一个"临终回调"。它好用，却也是 Go 里最容易被误用的特性之一。这一节讲清它的
+机制、陷阱，以及 Go 1.24 给出的更好替代 `AddCleanup`。
 
-## 存活与终结
+## 13.10.1 SetFinalizer 的机制
 
-### SetFinalizer
+`runtime.SetFinalizer(obj, fn)` 给 `obj` 注册一个终结函数 `fn`。当 GC 发现 `obj` **不再可达**时，
+不立即回收它，而是：把它交给一个专门的**终结器 goroutine** 去运行 `fn`,运行完，`obj` 才在
+**下一轮** GC 真正被回收。这意味着带终结器的对象要**多活一个 GC 周期**：第一轮发现它不可达、
+跑终结器，第二轮才回收。机制本身不复杂，复杂的是它的语义后果。
 
-```go
-type eface struct {
-	_type *_type
-	data  unsafe.Pointer
-}
+## 13.10.2 为什么充满陷阱
 
-func efaceOf(ep *interface{}) *eface {
-	return (*eface)(unsafe.Pointer(ep))
-}
+终结器看着方便，实则地雷遍布：
 
-func SetFinalizer(obj interface{}, finalizer interface{}) {
-	...
-	e := efaceOf(&obj)
-	etyp := e._type
-	...
-	ot := (*ptrtype)(unsafe.Pointer(etyp))
-	...
+- **时机不确定**：`fn` 何时运行，取决于 GC 何时发现对象不可达、何时调度终结器 goroutine,
+  完全不可预测，甚至**程序退出前可能根本不运行**。所以**绝不能用终结器来做必须发生的释放**
+  （如刷新缓冲、提交事务）。
+- **延迟回收**：带终结器的对象多活一轮 GC，增加了内存压力。
+- **复活问题**：终结器 `fn` 里若不小心又让 `obj` 变回可达（"复活"），语义会变得极其微妙。
+- **顺序问题**：一组相互引用、都带终结器的对象，终结顺序没有保证。
 
-	// find the containing object
-	base, _, _ := findObject(uintptr(e.data), 0, 0)
+正因如此，社区的共识是：**终结器只该作为"忘记显式释放时的最后兜底/告警"，而非正常的资源管理
+手段**。正常的资源释放应当用 `defer`（[6.2](../../part2lang/ch06func/defer.md)）显式地做。
 
-	if base == 0 {
-		if e.data == unsafe.Pointer(&zerobase) {
-			return
-		}
-		for datap := &firstmoduledata; datap != nil; datap = datap.next {
-			if datap.noptrdata <= uintptr(e.data) && uintptr(e.data) < datap.enoptrdata ||
-				datap.data <= uintptr(e.data) && uintptr(e.data) < datap.edata ||
-				datap.bss <= uintptr(e.data) && uintptr(e.data) < datap.ebss ||
-				datap.noptrbss <= uintptr(e.data) && uintptr(e.data) < datap.enoptrbss {
-				return
-			}
-		}
-		throw("runtime.SetFinalizer: pointer not in allocated block")
-	}
+## 13.10.3 Go 1.24 的 AddCleanup
 
-	if uintptr(e.data) != base {
-		// As an implementation detail we allow to set finalizers for an inner byte
-		// of an object if it could come from tiny alloc (see mallocgc for details).
-		if ot.elem == nil || ot.elem.kind&kindNoPointers == 0 || ot.elem.size >= maxTinySize {
-			throw("runtime.SetFinalizer: pointer not at beginning of allocated block")
-		}
-	}
+终结器的 API（`SetFinalizer`）设计上还有更深的毛病：它的回调直接拿到对象本身，容易引发复活;
+且一个对象只能有一个终结器;它与对象生命周期的耦合也容易出错。Go 1.24 引入了更好的替代,
+`runtime.AddCleanup[T, S](ptr, cleanup, arg)`：它把"清理动作"与"被清理对象"解耦,清理函数
+拿到的是你预先给的 `arg`（而非对象本身，杜绝复活），一个对象可注册**多个**清理，且语义更清晰、
+更不易误用。新代码应优先用 `AddCleanup` 而非 `SetFinalizer`。这次 API 更替是一个典型的"吸取
+旧设计教训、给出更安全替代"的例子,它没有移除 `SetFinalizer`（向后兼容），而是提供了一条更
+稳妥的新路。
 
-	f := efaceOf(&finalizer)
-	ftyp := f._type
-	if ftyp == nil {
-		// switch to system stack and remove finalizer
-		systemstack(func() {
-			removefinalizer(e.data)
-		})
-		return
-	}
+终结器的故事再次印证了 Go 的资源管理哲学：**确定性的清理用显式的 `defer`，不确定的终结器只作
+兜底**。把"必须发生的事"交给不确定的 GC 时机，是危险的,这与 [11.8](../../part3concurrency/ch11sync/context.md)
+强调显式、[6.2](../../part2lang/ch06func/defer.md) 推崇 `defer` 的取向完全一致。
 
-	if ftyp.kind&kindMask != kindFunc {
-		throw("runtime.SetFinalizer: second argument is " + ftyp.string() + ", not a function")
-	}
-	ft := (*functype)(unsafe.Pointer(ftyp))
-	if ft.dotdotdot() {
-		throw("runtime.SetFinalizer: cannot pass " + etyp.string() + " to finalizer " + ftyp.string() + " because dotdotdot")
-	}
-	if ft.inCount != 1 {
-		throw("runtime.SetFinalizer: cannot pass " + etyp.string() + " to finalizer " + ftyp.string())
-	}
-	fint := ft.in()[0]
-	switch {
-	case fint == etyp:
-		// ok - same type
-		goto okarg
-	case fint.kind&kindMask == kindPtr:
-		if (fint.uncommon() == nil || etyp.uncommon() == nil) && (*ptrtype)(unsafe.Pointer(fint)).elem == ot.elem {
-			// ok - not same type, but both pointers,
-			// one or the other is unnamed, and same element type, so assignable.
-			goto okarg
-		}
-	case fint.kind&kindMask == kindInterface:
-		ityp := (*interfacetype)(unsafe.Pointer(fint))
-		if len(ityp.mhdr) == 0 {
-			// ok - satisfies empty interface
-			goto okarg
-		}
-		if _, ok := assertE2I2(ityp, *efaceOf(&obj)); ok {
-			goto okarg
-		}
-	}
-	throw("runtime.SetFinalizer: cannot pass " + etyp.string() + " to finalizer " + ftyp.string())
-okarg:
-	// compute size needed for return parameters
-	nret := uintptr(0)
-	for _, t := range ft.out() {
-		nret = round(nret, uintptr(t.align)) + uintptr(t.size)
-	}
-	nret = round(nret, sys.PtrSize)
+## 延伸阅读的文献
 
-	// make sure we have a finalizer goroutine
-	createfing()
-
-	systemstack(func() {
-		if !addfinalizer(e.data, (*funcval)(f.data), nret, fint, ot) {
-			throw("runtime.SetFinalizer: finalizer already set")
-		}
-	})
-}
-```
-
-
-```go
-func removefinalizer(p unsafe.Pointer) {
-	s := (*specialfinalizer)(unsafe.Pointer(removespecial(p, _KindSpecialFinalizer)))
-	if s == nil {
-		return // there wasn't a finalizer to remove
-	}
-	lock(&mheap_.speciallock)
-	mheap_.specialfinalizeralloc.free(unsafe.Pointer(s))
-	unlock(&mheap_.speciallock)
-}
-func removespecial(p unsafe.Pointer, kind uint8) *special {
-	span := spanOfHeap(uintptr(p))
-	if span == nil {
-		throw("removespecial on invalid pointer")
-	}
-
-	// Ensure that the span is swept.
-	// Sweeping accesses the specials list w/o locks, so we have
-	// to synchronize with it. And it's just much safer.
-	mp := acquirem()
-	span.ensureSwept()
-
-	offset := uintptr(p) - span.base()
-
-	lock(&span.speciallock)
-	t := &span.specials
-	for {
-		s := *t
-		if s == nil {
-			break
-		}
-		// This function is used for finalizers only, so we don't check for
-		// "interior" specials (p must be exactly equal to s->offset).
-		if offset == uintptr(s.offset) && kind == s.kind {
-			*t = s.next
-			unlock(&span.speciallock)
-			releasem(mp)
-			return s
-		}
-		t = &s.next
-	}
-	unlock(&span.speciallock)
-	releasem(mp)
-	return nil
-}
-```
-
-```go
-func createfing() {
-	// start the finalizer goroutine exactly once
-	if fingCreate == 0 && atomic.Cas(&fingCreate, 0, 1) {
-		go runfinq()
-	}
-}
-func runfinq() {
-	var (
-		frame    unsafe.Pointer
-		framecap uintptr
-	)
-
-	for {
-		lock(&finlock)
-		fb := finq
-		finq = nil
-		if fb == nil {
-			gp := getg()
-			fing = gp
-			fingwait = true
-			goparkunlock(&finlock, waitReasonFinalizerWait, traceEvGoBlock, 1)
-			continue
-		}
-		unlock(&finlock)
-		...
-		for fb != nil {
-			for i := fb.cnt; i > 0; i-- {
-				f := &fb.fin[i-1]
-
-				framesz := unsafe.Sizeof((interface{})(nil)) + f.nret
-				if framecap < framesz {
-					// The frame does not contain pointers interesting for GC,
-					// all not yet finalized objects are stored in finq.
-					// If we do not mark it as FlagNoScan,
-					// the last finalized object is not collected.
-					frame = mallocgc(framesz, nil, true)
-					framecap = framesz
-				}
-
-				if f.fint == nil {
-					throw("missing type in runfinq")
-				}
-				// frame is effectively uninitialized
-				// memory. That means we have to clear
-				// it before writing to it to avoid
-				// confusing the write barrier.
-				*(*[2]uintptr)(frame) = [2]uintptr{}
-				switch f.fint.kind & kindMask {
-				case kindPtr:
-					// direct use of pointer
-					*(*unsafe.Pointer)(frame) = f.arg
-				case kindInterface:
-					ityp := (*interfacetype)(unsafe.Pointer(f.fint))
-					// set up with empty interface
-					(*eface)(frame)._type = &f.ot.typ
-					(*eface)(frame).data = f.arg
-					if len(ityp.mhdr) != 0 {
-						// convert to interface with methods
-						// this conversion is guaranteed to succeed - we checked in SetFinalizer
-						*(*iface)(frame) = assertE2I(ityp, *(*eface)(frame))
-					}
-				default:
-					throw("bad kind in runfinq")
-				}
-				fingRunning = true
-				reflectcall(nil, unsafe.Pointer(f.fn), frame, uint32(framesz), uint32(framesz))
-				fingRunning = false
-
-				// Drop finalizer queue heap references
-				// before hiding them from markroot.
-				// This also ensures these will be
-				// clear if we reuse the finalizer.
-				f.fn = nil
-				f.arg = nil
-				f.ot = nil
-				atomic.Store(&fb.cnt, i-1)
-			}
-			next := fb.next
-			lock(&finlock)
-			fb.next = finc
-			finc = fb
-			unlock(&finlock)
-			fb = next
-		}
-	}
-}
-```
-
-```go
-func addfinalizer(p unsafe.Pointer, f *funcval, nret uintptr, fint *_type, ot *ptrtype) bool {
-	lock(&mheap_.speciallock)
-	s := (*specialfinalizer)(mheap_.specialfinalizeralloc.alloc())
-	unlock(&mheap_.speciallock)
-	s.special.kind = _KindSpecialFinalizer
-	s.fn = f
-	s.nret = nret
-	s.fint = fint
-	s.ot = ot
-	if addspecial(p, &s.special) {
-		// This is responsible for maintaining the same
-		// GC-related invariants as markrootSpans in any
-		// situation where it's possible that markrootSpans
-		// has already run but mark termination hasn't yet.
-		if gcphase != _GCoff {
-			base, _, _ := findObject(uintptr(p), 0, 0)
-			mp := acquirem()
-			gcw := &mp.p.ptr().gcw
-			// Mark everything reachable from the object
-			// so it's retained for the finalizer.
-			scanobject(base, gcw)
-			// Mark the finalizer itself, since the
-			// special isn't part of the GC'd heap.
-			scanblock(uintptr(unsafe.Pointer(&s.fn)), sys.PtrSize, &oneptrmask[0], gcw)
-			if gcBlackenPromptly {
-				gcw.dispose()
-			}
-			releasem(mp)
-		}
-		return true
-	}
-
-	// There was an old finalizer
-	lock(&mheap_.speciallock)
-	mheap_.specialfinalizeralloc.free(unsafe.Pointer(s))
-	unlock(&mheap_.speciallock)
-	return false
-}
-```
-
-### KeepAlive
-
-KeepAlive 会将某个参数标记为可达，从而能够保证某个对象在
-调用 KeepAlive 之前都不会被垃圾回收所释放（因为被引用），进而这个对象设置的
-Finalizer 也不会被运行，考虑下面的例子：
-
-```go
-type File struct {d int}
-
-d, err := syscall.Open("/file/path", syscall.O_RDONLY, 0)
-
-// ...
-
-p := &File{d}
-runtime.SetFinalizer(p, func(p *File) {
-	syscall.Close(p.d)
-})
-var buf [10]byte
-n, err := syscall.Read(p.d, buf[:])
-
-// 确保在 Read 返回之前， p 都不会被 finalize 掉
-runtime.KeepAlive(p)
-// 此后不再使用 p
-```
-
-KeepAlive 的源码非常简单：
-
-```go
-func KeepAlive(x interface{}) {
-	if cgoAlwaysFalse {
-		println(x)
-	}
-}
-```
-
-保留一个引用只需要产生一个参数传递，而这里针对 cgo 做了特殊处理，即
-产生了一个 `println` 调用来保证编译器不会将其优化掉。
+1. The Go Authors. *runtime.SetFinalizer / runtime.AddCleanup 文档.*
+   https://pkg.go.dev/runtime#SetFinalizer ，https://pkg.go.dev/runtime#AddCleanup
+2. Go 1.24 Release Notes（AddCleanup）. https://go.dev/doc/go1.24
+3. The Go Authors. *runtime/mfinal.go、runtime/mcleanup.go.*
+   https://github.com/golang/go/blob/master/src/runtime/mcleanup.go
+4. 本书 [6.2 延迟语句](../../part2lang/ch06func/defer.md)（确定性清理）.
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
