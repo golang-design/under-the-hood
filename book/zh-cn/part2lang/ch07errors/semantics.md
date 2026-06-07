@@ -3,191 +3,58 @@ weight: 2404
 title: "7.4 错误语义"
 ---
 
-# 4.4 错误语义
+# 7.4 错误语义
 
-我们其实已经在前面的讨论中详细讨论过了错误值检查与错误上下文的增强手段，
-处理方式啰嗦而冗长，减少这种代码出现的密集程度真的是一个实际的问题吗？换句话说：
-社区里怨声载道的冗长的错误处理语义，真的有必要进行改进吗？
+会用 `Is`/`As`（[7.2](./inspect.md)）只是手段，真正的难题是**设计**：一个库该把错误暴露成什么
+形态，调用方又该依据什么来分支处理？这一节梳理错误的几种语义形态及其耦合代价,这部分思考
+很大程度上由 Dave Cheney 的系列文章塑造。
 
-### 4.4.1 check/handle 关键字
+## 7.4.1 错误的三种形态
 
-Go 团队在重新考虑错误处理的时候提出过两种不同的方案，
-由 Russ Cox 提出的第一种方案就是引入新的关键字 `check`/`handle` 进行组合。
+- **哨兵错误**（sentinel）：预定义的固定值，如 `io.EOF`、`sql.ErrNoRows`。调用方用
+  `errors.Is(err, io.EOF)` 判断。简单直接，但它**成为你 API 的一部分**,一旦导出，调用方就会
+  依赖它，你再也不能改，且它在包之间制造了耦合（调用方得 import 你的包就为比较一个值）。
+- **错误类型**（custom type）：自定义的实现了 `error` 的结构体，能携带字段（出错的路径、行号、
+  状态码），调用方用 `errors.As` 取出来读。比哨兵能传更多信息，但把**整个类型**暴露成了 API，
+  耦合更深。
+- **不透明错误**（opaque）：只返回 `error`，不导出任何具体值或类型，调用方只知道"出错了"、
+  顶多读 `Error()`。耦合最低、最灵活,你可以随意改内部实现，因为调用方什么都没法依赖。
 
-我们来看这样一个复制文件的例子。复制文件操作涉及到源文件的打开、目标文件的创建、
-内容的复制、源文件和目标文件的关闭。这之间任何一个环节出错，都需要错误进行处理：
+## 7.4.2 断行为，而非断类型
+
+不透明错误看似什么都判断不了，但有一个优雅的折中：**让调用方依据"行为"而非"具体类型"分支**。
+经典例子是 `net.Error`,它是一个接口，带 `Timeout() bool` 方法。调用方不去断言"这是不是
+`*net.OpError`"，而是断言"这个错误**是否具备 Timeout 行为**"：
 
 ```go
-func CopyFile(src, dst string) error {
-	r, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("copy %s %s: %v", src, dst, err)
-	}
-	defer r.Close()
-
-	w, err := os.Create(dst)
-	if err != nil {
-		return fmt.Errorf("copy %s %s: %v", src, dst, err)
-	}
-
-	if _, err := io.Copy(w, r); err != nil {
-		w.Close()
-		os.Remove(dst)
-		return fmt.Errorf("copy %s %s: %v", src, dst, err)
-	}
-
-	if err := w.Close(); err != nil {
-		os.Remove(dst)
-		return fmt.Errorf("copy %s %s: %v", src, dst, err)
-	}
+var nerr interface{ Timeout() bool }
+if errors.As(err, &nerr) && nerr.Timeout() {
+    // 按"超时"处理，无需知道错误的具体类型
 }
 ```
 
-在使用 `check`/`handle` 组合后，我们可以将前面的代码进行化简，较少 `if err != nil`
-的出现频率，并统一在 `handle` 代码块中对错误进行处理：
+这样，库可以自由更换错误的具体类型，只要它仍实现 `Timeout()`，调用方代码就不受影响。Dave
+Cheney 把这条原则概括为"**Assert errors for behaviour, not type**",它把哨兵/类型那种"对具体
+身份的依赖"，松绑成"对一个小接口的依赖"，与 [4.2](../ch04type/interface.md) 推崇小接口、
+结构化满足的精神完全一致。
 
-```go
-func CopyFile(src, dst string) error {
-	handle err {
-		return fmt.Errorf("copy %s %s: %v", src, dst, err)
-	}
+## 7.4.3 怎么选
 
-	r := check os.Open(src)
-	defer r.Close()
+一条务实的排序：**默认用不透明错误**（耦合最低）;调用方确实需要区分某种特定情形时，
+**优先用"断行为"**（暴露一个小接口方法）;再不够，才考虑哨兵（信息少、固定）或类型
+（信息多、耦合深）。核心判断是：**你愿意把多少东西纳入 API 契约？** 暴露得越多，调用方能做的
+判断越精细，你日后能改的也越少。这与本书反复出现的主题相通,API 设计的本质，是想清楚"什么
+是承诺、什么是实现细节"，而错误的语义形态，正是这个抉择在错误处理上的投影。
 
-	w := check os.Create(dst)
-	handle err {
-		w.Close()
-		os.Remove(dst) // (only if a check fails)
-	}
+## 延伸阅读的文献
 
-	check io.Copy(w, r)
-	check w.Close()  // 此处发生 err 调用上方的 handle 块时还会再额外调用一次 w.Close()
-	return nil
-}
-```
-
-这种使用 `check` 和 `handle` 的方式会当 `err` 发生时，直接进入 `check` 关键字上方
-最近的一个 `handle err` 块进行错误处理。在官方的这个例子中其实就已经发生了语言上模棱两可的地方，
-当函数最下方的 `w.Close` 产生调用时，
-上方与其最近的一个 `handle err` 还会再一次调用 `w.Close`，这其实是多余的。
-
-此外，这种方式看似对代码进行了简化，但仔细一看这种方式与 `defer` 函数进行错误处理之间，
-除了减少了 `if err != nil { return err }` 出现的频率，并没有带来任何本质区别。
-例如，我们完全可以使用 `defer` 来实现 `handle` 的功能：
-
-```go
-func CopyFile(src, dst string) (err error) {
-	defer func() {
-		if err != nil {
-			err = fmt.Errorf("copy %s %s: %v", src, dst, err)
-		}
-	}()
-
-	r, err := os.Open(src)
-	if err != nil { return }
-	defer r.Close()
-
-	w, err := os.Create(dst)
-	if err != nil { return }
-
-	defer func() {
-		if err != nil {
-			w.Close()
-			os.Remove(dst)
-		}
-	}()
-	_, err = io.Copy(w, r)
-	if err != nil { return }
-
-	err = w.Close()
-	if err != nil { return }
-}
-```
-
-在仔细衡量后不难看出，`check`/`handle` 关键字的设计中，`handle` 仅仅只是对现有的语义的一个化简。
-具体来说，`handle` 关键字等价于 `defer`：
-
-```go
-handle err { ... }
-=>
-defer func() {
-	if err != nil {
-		err = ...
-	}
-}()
-```
-
-而 `check` 关键字则等价于：
-
-```go
-check F()
-=>
-err = F()
-if err != nil {
-	return
-}
-```
-
-那么能不能仅实现一个 `check` 关键字呢？
-
-### 4.4.2 内建函数 `try()`
-
-紧随 `check/handle` 的提案，Robert Griesemer 提出了使用内建函数 `try()`
-配合延迟语句来替代 `check`，它能够接收最后一个返回值为 `error` 的函数，
-并将除 `error` 之外的返回值进行返回，即：
-
-```go
-x1, x2, ..., xn = try(F())
-=>
-t1, ..., tn, te := F()
-if te != nil {
-		err = te
-		return
-}
-x1, ..., xn = t1, ..., tn
-```
-
-有了 `try()` 函数后，可以将复制文件例子中的代码化简为：
-
-```go
-func CopyFile(src, dst string) (err error) {
-		defer func() {
-				if err != nil {
-					err = fmt.Errorf("copy %s %s: %v", src, dst, err)
-				}
-		}()
-
-		r := try(os.Open(src))
-		defer r.Close()
-
-		w := try(os.Create(dst))
-		defer func() {
-				w.Close()
-				if err != nil {
-					os.Remove(dst) // 仅当 try 失败时才调用
-				}
-		}()
-
-		try(io.Copy(w, r))
-		try(w.Close())
-		return nil
-}
-```
-
-可见，这种做法与 `check/handle` 的关键字组合本质上也没有代码更多思想上的变化，
-尤其是 `try()` 内建函数仅仅在在形式上对 `if err != nil { ... }` 起到了化简的作用。
-
-但这一错误处理语义并没有在最后被纳入语言规范。
-这一设计被拒绝的核心原因是 `try()` 函数将使对错误的调试变得不够透明，
-其本质在于将一个显式返回的错误值进行隐藏。例如，在调试过程中由于被调试函数被包裹在 `try()`
-内，这种不包含错误分支的代码形式，对追踪错误本身是一个毁灭性的打击，为此用户不得不在调试时
-引入错误分支，在调试结束后将错误分支消除，烦琐不堪。
-
-我们从这前后两份提案中，可以看到 Go 团队将错误处理语义上的改进与
-『如何减少 `if err != nil { ... }` 的出现』直接化了等号，这种纯粹写法风格上的问题，
-与 Go 语言早期设计中显式错误值的设计相比，就显得相形见绌了。
+1. Dave Cheney. *Don't just check errors, handle them gracefully.* GopherCon India, 2016.
+   https://dave.cheney.net/2016/04/27/dont-just-check-errors-handle-them-gracefully
+2. Dave Cheney. *Inspecting errors.* 2014.
+   https://dave.cheney.net/2014/12/24/inspecting-errors
+3. The Go Authors. *net.Error*（断行为：Timeout()）. https://pkg.go.dev/net#Error
+4. The Go Authors. *Error handling and Go.* https://go.dev/blog/error-handling-and-go
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

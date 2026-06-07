@@ -4,14 +4,14 @@ title: "第 7 章 错误处理"
 bookCollapseSection: true
 ---
 
-# 第 4 章 错误
+# 第 7 章 错误处理
 
-- [4.1 问题的演化](./value.md)
-- [4.2 错误值检查](./inspect.md)
-- [4.3 错误格式与上下文](./context.md)
-- [4.4 错误语义](./semantics.md)
-- [4.5 错误处理的未来](./future.md)
-- [4.6 进一步阅读的参考文献](./ref.md)
+- [7.1 问题的演化](./value.md)
+- [7.2 错误值检查](./inspect.md)
+- [7.3 错误格式与上下文](./context.md)
+- [7.4 错误语义](./semantics.md)
+- [7.5 错误处理的未来](./future.md)
+- [7.6 进一步阅读的参考文献](./ref.md)
 
 <div class="quote">
 <i class="quote-mark fas fa-thumbtack"></i>
@@ -33,4 +33,4 @@ bookCollapseSection: true
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

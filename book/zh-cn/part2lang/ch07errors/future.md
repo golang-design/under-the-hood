@@ -3,243 +3,57 @@ weight: 2405
 title: "7.5 错误处理的未来"
 ---
 
-# 4.5 错误处理的未来
+# 7.5 错误处理的未来
 
-TODO: 讨论社区里的一些优秀的方案、以及未来可能的设计
+Go 的错误处理是它被讨论得最多、改进提案被否得也最多的部分。回顾这些尝试与它们的结局，
+能看清 Go 团队在这件事上的稳定立场,也能对"未来会怎样"有一个清醒的预期。
 
-## 4.5.1 来自社区的方案
+## 7.5.1 被否决的语法尝试
 
-在错误处理这件事情上，其实社区提供了许多非常优秀的方案，
-其中一个非常出色的工作来自 Dave Cheney 和他的错误原语。
+冗长的 `if err != nil` 催生了一系列简化语法的提案，但它们大多止步于讨论：
 
-### 错误原语
+- **`check`/`handle`（2018）**：引入 `check` 表达式与 `handle` 块，把错误检查与处理从主干里
+  抽出来。社区担心它引入了新的控制流概念、复杂度不小，未被采纳。
+- **`try` 内建函数（2019）**：`x := try(f())`,出错时自动从当前函数返回。它引发了 Go 历史上最
+  热烈的讨论之一，最终被**撤回**，核心理由是它**隐藏了控制流**：一个不起眼的 `try` 背后藏着一个
+  return，与 Go"错误路径应当显式可见"的根本价值冲突。
+- **更轻的 `if err != nil` 语法尝试（2020 前后）**：也都未能形成共识。
 
-`pkg/errors` 与标准库中 `errors` 包不同，它首先提供了 `Wrap`：
+这一连串"提了又否"本身就是结论：**Go 团队宁可保留冗长，也不愿用语法糖把错误处理藏起来。**
+2025 年，团队更是公开表示**不再推进**对 `if err != nil` 的专门语法改造,这场持续多年的讨论
+就此告一段落。
 
-```go
-func Wrap(err error, message string) error {
-	if err == nil {
-		return nil
-	}
-	
-	// 首先将错误产生的上下文进行保存
-	err = &withMessage{
-		cause: err,
-		msg:   message,
-	}
-	
-	// 再将 withMessage 错误的调用堆栈保存为 withStack 错误
-	return &withStack{
-		err,
-		callers(),
-	}
-}
+## 7.5.2 实际发生的演进
 
-type withMessage struct {
-	cause error
-	msg   string
-}
+语法没变，能力却在务实地增强,而且都不触动"显式返回"这一根基：
 
-func (w *withMessage) Error() string { return w.msg + ": " + w.cause.Error() }
-func (w *withMessage) Cause() error  { return w.cause }
+- **Go 1.13（2019）**：`%w` 包装 + `errors.Is`/`As`/`Unwrap`，让错误可分层、可检查
+  （[7.2](./inspect.md)）。
+- **Go 1.20（2023）**：`errors.Join` 与多重 `%w`，一个错误可包装多个子错误。
+- **Go 1.21（2023）**：`log/slog` 结构化日志，让错误更好地融入可观测性。
+- **泛型相关**：`errors.AsType[E]` 等泛型化的辅助，让取用类型错误更顺手（[7.2](./inspect.md)）。
 
-type withStack struct {
-	error
-	*stack // 携带 stack 的信息
-}
+可以看到，所有真正落地的改进，都在"包装、检查、记录"这些**库层面**做文章，而非改动语言。
 
-func (w *withStack) Cause() error { return w.error }
+## 7.5.3 一个稳定的哲学
 
-func callers() *stack {
-	const depth = 32
-	var pcs [depth]uintptr
-	n := runtime.Callers(3, pcs[:])
-	var st stack = pcs[0:n]
-	return &st
-}
-```
+把这段历史压缩成一句话：**Go 的错误处理几乎不会再有重大的语法变革，演进会继续发生在库与
+惯用法层面。** 这不是停滞，而是一种深思熟虑的稳定,团队反复用否决来守护"错误即值、错误路径
+显式可见"这两条核心价值。对写 Go 的人来说，这意味着可以放心地把 `if err != nil`、`%w` 包装、
+`Is`/`As`、断行为（[7.4](./semantics.md)）这套工具学透用熟，而不必担心它们被推倒重来。
+一门语言敢于长期对"看起来很烦"的东西说"就这样"，本身就是一种设计自信,Go 在错误处理上，
+选择了这种自信。
 
-这是一种依赖运行时接口的解决方案，通过 `runtime.Caller` 来获取错误出现时的堆栈信息。通过 `Wrap()` 产生的错误类型 `withMessage` 还实现了 `causer` 接口：
+## 延伸阅读的文献
 
-```go
-type causer interface {
-	Cause() error
-}
-```
-
-当我们需要对一个错误进行检查时，则可以通过 `errors.Cause(err error)` 来返回一个错误产生的原因，进而获得了错误产生的上下文信息：
-
-```go
-func Cause(err error) error {
-	type causer interface {
-		Cause() error
-	}
-
-	for err != nil {
-		cause, ok := err.(causer)
-		if !ok { break }
-		err = cause.Cause()
-	}
-	return err
-}
-```
-
-进而可以做到：
-
-```go
-switch err := errors.Cause(err).(type) {
-case *CustomError:
-	// ...
-}
-```
-
-得益于 `fmt.Formatter` 接口，`pkg/errors` 还实现了 `Fomat(fmt.State, rune)` 方法，
-进而在使用 `%+v` 进行错误打印时，能携带堆栈信息：
-
-```go
-func (w *withStack) Format(s fmt.State, verb rune) {
-	switch verb {
-	case 'v':
-		if s.Flag('+') {			// %+v 支持携带堆栈信息的输出
-			fmt.Fprintf(s, "%+v", w.Cause())
-			w.stack.Format(s, verb) // 将 runtime.Caller 获得的信息进行打印
-			return
-		}
-		fallthrough
-	case 's':
-		io.WriteString(s, w.Error())
-	case 'q':
-		fmt.Fprintf(s, "%q", w.Error())
-	}
-}
-```
-
-得到形如下面格式的错误输出：
-
-```go
-current message: causer message
-main.causer
-	/path/to/caller/main.go:5
-main.caller
-	/path/to/caller/main.go:12
-main.main
-	/path/to/caller/main.go:27
-```
-
-### 基于错误链的高层抽象
-
-我们再来看另一种错误处理的哲学，现在我们来考虑下面这个例子：
-
-```go
-conn, err := net.Dial("tcp", "localhost:1234")
-if err != nil {
-	panic(err)
-}
-_, err := conn.Write(command1)
-if err != nil {
-	panic(err)
-}
-
-r := bufio.NewReader(conn)
-status, err := r.ReadString('\n')
-if err != nil {
-	panic(err)
-}
-if status == "ok" {
-	_, err := conn.Write(command2)
-	if err != nil {
-		panic(err)
-	}
-}
-```
-
-我们很明确的能够观察到错误处理带来的问题：为清晰的阅读代码的整体逻辑带来了障碍。我们希望上面的代码能够清晰的展现最重要的代码逻辑：
-
-```go
-conn := net.Dial("tcp", "localhost:1234")
-conn.Write(command1)
-r := bufio.NewReader(conn)
-status := r.ReadString('\n')
-if status == "ok" {
-	conn.Write(command2)
-}
-```
-
-如果我们进一步观察这个问题的现象，可以将整段代码抽象为图 1 所示的逻辑结构。
-
-<div class="img-center" style="margin: 0 auto; max-width: 50%">
-<img src="./../../../assets/errors-branch.png"/>
-<strong>图 1: 产生分支的错误处理手段</strong>
-</div>
-
-如果我们尝试将这段充满分支的逻辑进行高层抽象，将其转化为一个单一链条，则能够得到 图 2 所示的隐式错误链条。
-
-<div class="img-center" style="margin: 0 auto; max-width: 50%">
-<img src="./../../../assets/errors-chan.png"/>
-<strong>图 2: 消除分支的链式错误处理手段</strong>
-</div>
-
-则能够得到下面的代码：
-
-```go
-type SafeConn struct {
-	conn   net.Conn
-	r      *bufio.Reader
-	status string
-	err    error
-}
-func safeDial(n, addr string) SafeConn {
-	conn, err := net.Dial(n, addr)
-	r := bufio.NewReader(conn)
-	return SafeConn{conn, r, "ok", err}
-}
-
-func (c *SafeConn) write(b []byte) {
-	if c.err != nil && status == "ok" { return }
-	_, c.err = c.conn.Write(b)
-}
-func (c *SafeConn) read() {
-	if err != nil { return }
-	c.status, c.err = c.r.ReadString('\n')
-}
-```
-
-则当建立连接时候：
-
-```go
-c := safeDial("tcp", "localhost:1234") // 如果此条指令出错
-c.write(command1) // 不会发生任何事情
-c.read()          // 不会发生任何事情
-c.write(command2) // 不会发生任何事情
-
-// 最后对进行整个流程的错误处理
-if c.err != nil || c.status != "ok" {
-	panic("bad connection")
-}
-```
-
-这种将错误进行高层抽象的方法通常包含以下四个一般性的步骤：
-
-1. 建立一种新的类型
-2. 将原始值进行封装
-3. 将原始行为进行封装
-4. 将分支条件进行封装
-
-## 4.5.2 其他可能的设计
-
-TODO:
-
-Generics + Error handling? 
-
-Either Coproduct
-
-https://www.ituring.com.cn/article/508191
-https://www.bookstack.cn/read/mostly-adequate-guide-chinese/ch8.4.md
-
-## 4.5.3 历史性评述
-
-TODO:
+1. Robert Griesemer 等. *Proposal: A built-in Go error check function, "try"*（已撤回）, 2019.
+   https://go.googlesource.com/proposal/+/master/design/32437-try-builtin.md
+2. The Go Authors. *Error Handling — Problem Overview / Draft Designs（check/handle）*, 2018.
+   https://go.googlesource.com/proposal/+/master/design/go2draft-error-handling-overview.md
+3. Russ Cox. *Go 2 草案与错误处理的讨论历程.* https://go.dev/blog/go2-here-we-come
+4. Go 官方关于不再推进 `if err != nil` 语法改造的说明（2025）.
+   https://go.dev/blog/error-syntax
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
