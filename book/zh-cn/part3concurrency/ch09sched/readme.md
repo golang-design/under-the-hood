@@ -4,21 +4,22 @@ title: "第 9 章 goroutine 调度器"
 bookCollapseSection: true
 ---
 
-# 第 6 章 并发调度
+# 第 9 章 goroutine 调度器
 
-- [6.1 调度问题与 GMP 模型](./model.md)
-- [6.2 工作窃取式调度](./steal.md)
-- [6.3 MPG 模型与并发调度单元](./mpg.md)
-- [6.4 调度循环](./schedule.md)
-- [6.5 线程管理](./thread.md)
-- [6.6 信号处理机制](./signal.md)
-- [6.7 执行栈管理](./stack.md)
-- [6.8 协作与抢占](./preemption.md)
-- [6.9 系统监控](./sysmon.md)
-- [6.10 网络轮询器](./poller.md)
-- [6.11 计时器](./timer.md)
-- [6.12 非均匀访存下的调度模型](./numa.md)
-- [6.13 进一步阅读的参考文献](./ref.md)
+- [9.1 调度问题与 GMP 模型](./model.md)
+- [9.2 工作窃取式调度](./steal.md)
+- [9.3 MPG 模型与并发调度单元](./mpg.md)
+- [9.4 调度循环](./schedule.md)
+- [9.5 线程管理](./thread.md)
+- [9.6 信号处理机制](./signal.md)
+- [9.7 协作与抢占](./preemption.md)
+- [9.8 系统监控](./sysmon.md)
+- [9.9 网络轮询器](./poller.md)
+- [9.10 计时器](./timer.md)
+- [9.11 NUMA 感知与调度器的未来](./numa.md)
+- [9.12 进一步阅读的参考文献](./ref.md)
+
+（执行栈管理原属本章，现已移至 [第 14 章 执行栈管理](../../part4memory/ch14stack)。）
 
 
 <div class="quote">
