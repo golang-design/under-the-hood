@@ -15,9 +15,35 @@ mutex 的核心是一个状态字 `state` 加一个信号量。`state` 用位域
 （`mutexLocked`）、是否已有被唤醒的等待者（`mutexWoken`）、是否处于饥饿模式
 （`mutexStarving`），以及等待者的数量（高位，`mutexWaiterShift`）。
 
+```go
+type Mutex struct {
+    state int32  // 位域：bit0=已上锁, bit1=有被唤醒者, bit2=饥饿模式, 其余高位=等待者数
+    sema  uint32 // 用于阻塞/唤醒等待者的信号量
+}
+
+const (
+    mutexLocked      = 1 << 0
+    mutexWoken       = 1 << 1
+    mutexStarving    = 1 << 2
+    mutexWaiterShift = 3
+)
+```
+
 无人竞争时，上锁只是一次原子比较交换（CAS）：把 `state` 从 0 改成已上锁，成功即返回，
-全程不进内核。这条快路径是 mutex 高频使用仍然轻快的关键，大多数加锁解锁都到此为止。
-只有 CAS 失败、说明锁被占着，才落入下面复杂的慢路径。
+全程不进内核。
+
+```go
+func (m *Mutex) Lock() {
+    // 快路径：未上锁时一次 CAS 拿下
+    if atomic.CompareAndSwapInt32(&m.state, 0, mutexLocked) {
+        return
+    }
+    m.lockSlow() // 失败说明有竞争，进入慢路径
+}
+```
+
+这条快路径是 mutex 高频使用仍然轻快的关键，大多数加锁解锁都到此为止。只有 CAS 失败、
+说明锁被占着，才落入下面复杂的慢路径 `lockSlow`。
 
 ## 11.2.2 慢路径：先自旋，再睡眠
 

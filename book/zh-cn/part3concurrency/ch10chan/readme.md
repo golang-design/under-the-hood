@@ -32,7 +32,22 @@ flowchart LR
 
 一个可选的环形缓冲区（容量为 0 的无缓冲 channel 没有它）、一队等待发送的 goroutine `sendq`、
 一队等待接收的 goroutine `recvq`，以及一把保护整体的锁。channel 的全部行为，都是围绕这四样
-东西的状态变化。
+东西的状态变化。把它裁剪成只剩设计相关字段，大致是这样：
+
+```go
+// hchan 的核心字段（裁剪后）
+type hchan struct {
+    qcount   uint           // 缓冲区中当前元素个数
+    dataqsiz uint           // 缓冲区容量 C（无缓冲则为 0）
+    buf      unsafe.Pointer // 指向容量为 C 的环形缓冲数组
+    sendx    uint           // 下一次发送写入缓冲的位置
+    recvx    uint           // 下一次接收读取缓冲的位置
+    recvq    waitq          // 等待接收的 goroutine 队列
+    sendq    waitq          // 等待发送的 goroutine 队列
+    closed   uint32         // 是否已关闭
+    lock     mutex          // 保护以上所有字段
+}
+```
 
 ## 10.2 发送与接收：那个优雅的直接传递
 
@@ -47,6 +62,30 @@ flowchart TD
     RECVQ -->|无| BUF{缓冲区尚有空位?}
     BUF -->|有| ENQ[把 v 放入环形缓冲]
     BUF -->|无| BLOCK[把发送者挂入 sendq 并阻塞]
+```
+
+写成伪代码，这套判定一目了然：
+
+```go
+// ch <- v 的核心逻辑（伪代码）
+func chansend(c *hchan, v) {
+    lock(&c.lock)
+    if c.closed {
+        unlock(&c.lock); panic("send on closed channel")
+    }
+    if recv := c.recvq.dequeue(); recv != nil {
+        // 有等待的接收者：把 v 直接拷给它并唤醒，绕过缓冲区
+        sendDirect(recv, v); unlock(&c.lock); return
+    }
+    if c.qcount < c.dataqsiz {
+        // 缓冲区有空位：放入环形缓冲
+        c.buf[c.sendx] = v
+        c.sendx = (c.sendx + 1) % c.dataqsiz
+        c.qcount++; unlock(&c.lock); return
+    }
+    // 否则：把自己挂入 sendq，让出 CPU，等待被接收者唤醒
+    c.sendq.enqueue(gp); unlock(&c.lock); gopark()
+}
 ```
 
 这里最值得玩味的是中间那条**直接传递**：如果此刻已经有接收者在 `recvq` 里等着，发送者不会
