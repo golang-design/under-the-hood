@@ -1,5 +1,5 @@
 ---
-weight: 5000
+weight: 9000
 title: "结束语：Go 去向何方？"
 ---
 
