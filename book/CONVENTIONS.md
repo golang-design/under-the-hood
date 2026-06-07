@@ -54,7 +54,9 @@
 
 ## 四、图：以 Mermaid 为主
 
-- 优先使用 **Mermaid**（站点已内置 `{{< mermaid >}}` shortcode，已升级至 v11）。
+- 优先使用 **Mermaid**。**统一使用 ```mermaid 围栏代码块**，不要使用 `{{< mermaid >}}`
+  shortcode。围栏代码块在 GitHub 上原生渲染，不会破坏直接阅读 `.md` 的体验；站点侧由
+  `layouts/_default/_markup/render-codeblock-mermaid.html` 渲染钩子负责渲染（mermaid v11）。
   流程图、状态机、时序图、类图、时间线均可。
 - 文字能讲清楚的，不要画图；图要承载文字不便表达的**结构、状态迁移、时序关系**。
 - 仅当 Mermaid 无法表达（如精确的内存布局、像素级示意）时，才使用静态图片，
