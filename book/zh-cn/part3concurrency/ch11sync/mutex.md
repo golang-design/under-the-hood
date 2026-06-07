@@ -3,258 +3,85 @@ weight: 3302
 title: "11.2 互斥锁"
 ---
 
-# 5.2 互斥锁
+# 11.2 互斥锁
 
+`sync.Mutex` 是最朴素的同步原语：同一时刻只让一个 goroutine 进入临界区。朴素的接口之下，
+它要在两个互相拉扯的目标之间反复权衡：**吞吐**（让锁尽快被某人拿走、别让 CPU 闲着）与
+**公平**（别让某个倒霉的等待者永远排不到队）。这一节就看 Go 的 mutex 如何在两者间走钢丝。
 
+## 11.2.1 快路径：无竞争时几乎零成本
 
-```go
-type Mutex struct {
-	state int32  // 表示 mutex 锁当前的状态
-	sema  uint32 // 信号量，用于唤醒 goroutine
-}
+mutex 的核心是一个状态字 `state` 加一个信号量。`state` 用位域同时编码了几样信息：是否已上锁
+（`mutexLocked`）、是否已有被唤醒的等待者（`mutexWoken`）、是否处于饥饿模式
+（`mutexStarving`），以及等待者的数量（高位，`mutexWaiterShift`）。
+
+无人竞争时，上锁只是一次原子比较交换（CAS）：把 `state` 从 0 改成已上锁，成功即返回，
+全程不进内核。这条快路径是 mutex 高频使用仍然轻快的关键，大多数加锁解锁都到此为止。
+只有 CAS 失败、说明锁被占着，才落入下面复杂的慢路径。
+
+## 11.2.2 慢路径：先自旋，再睡眠
+
+竞争发生时，goroutine 不会立刻去睡。它先**自旋**几轮：在锁很可能马上就被释放的情况下，
+空转一小会儿等它，比立刻陷入睡眠再被唤醒要划算（睡眠与唤醒都要与运行时打交道）。自旋有严格
+条件（多核、自旋次数有限、锁未处于饥饿模式等），不满足就放弃自旋，把自己挂到信号量上睡去，
+等待被解锁方唤醒。这是一处典型的「短等待自旋、长等待睡眠」的混合策略。
+
+## 11.2.3 公平：正常模式与饥饿模式
+
+mutex 最见功力的设计，是它的两种模式。
+
+```mermaid
+stateDiagram-v2
+    [*] --> 正常模式
+    正常模式 --> 正常模式: 新来者与被唤醒者竞争（barging，吞吐优先）
+    正常模式 --> 饥饿模式: 某等待者排队超过 1ms
+    饥饿模式 --> 饥饿模式: 锁直接 FIFO 移交给队首等待者
+    饥饿模式 --> 正常模式: 队列清空，或队首等待 < 1ms
 ```
 
-## 状态
+**正常模式**追求吞吐。等待者按 FIFO 排队，但一个刚被唤醒的等待者，并不能直接拿到锁，而要
+和当下正在运行、也想加锁的**新来者**竞争。新来者有天然优势（它正在 CPU 上跑，无需唤醒开销），
+于是常常「插队」抢到锁，这种 barging 减少了上下文切换、提升了吞吐。代价是：那个被唤醒却又
+没抢过新来者的等待者，可能一次次落空，陷入饥饿。
 
-```go
-const (
-	mutexLocked = 1 << iota // 互斥锁已锁住
-	mutexWoken
-	mutexStarving
-	mutexWaiterShift = iota
-	starvationThresholdNs = 1e6
-)
-```
+为兜住这种尾延迟，Go 1.9 引入了**饥饿模式**。当某个等待者排队超过 **1ms**（`starvationThresholdNs`）
+还没拿到锁，mutex 切换到饥饿模式：此后锁不再允许插队，而是在解锁时**直接 FIFO 移交**给队首
+等待者，新来者连尝试自旋的机会都没有，老老实实排到队尾。等到队列排空、或队首等待者的等待
+时间降回 1ms 以内，再切回正常模式。
 
-Mutex 可能处于两种不同的模式：正常模式和饥饿模式。
+这正解释了 [上一版读者提出的疑问](https://github.com/golang-design/under-the-hood/issues/80)：
+解锁时唤醒的确实是 FIFO 队首的等待者，但在正常模式下「唤醒」不等于「移交锁」，被唤醒者仍要
+与新来者竞争，只有饥饿模式才是真正的直接移交。两种模式合起来，让 mutex 在绝大多数时候享受
+barging 的高吞吐，又用 1ms 的阈值为最坏情况兜了底，是吞吐与公平之间一处精到的折中。
 
-在正常模式中，等待者按照 FIFO 的顺序排队获取锁，但是一个被唤醒的等待者有时候并不能获取 mutex，
-它还需要和新到来的 goroutine 们竞争 mutex 的使用权。
-新到来的 goroutine 存在一个优势，它们已经在 CPU 上运行且它们数量很多，
-因此一个被唤醒的等待者有很大的概率获取不到锁，在这种情况下它处在等待队列的前面。
-如果一个 goroutine 等待 mutex 释放的时间超过 1ms，它就会将 mutex 切换到饥饿模式
+## 11.2.4 读写锁与 TryLock
 
-在饥饿模式中，mutex 的所有权直接从解锁的 goroutine 递交到等待队列中排在最前方的 goroutine。
-新到达的 goroutine 们不要尝试去获取 mutex，即使它看起来是在解锁状态，也不要试图自旋，
-而是排到等待队列的尾部。
+`sync.RWMutex` 在互斥之上区分读者与写者：多个读者可同时持有，写者独占。它适合读多写少的
+场景，但要注意写者饥饿与读者优先的取舍（其 happens-before 保证见 [11.9](./mem.md)）。
+`TryLock`（及 `RWMutex.TryLock`/`TryRLock`，Go 1.18 加入）尝试加锁但绝不阻塞，拿不到就返回
+`false`。它的用途很窄，官方也提醒：绝大多数情况下你需要的是老老实实的 `Lock`，频繁用 `TryLock`
+往往是设计有问题的信号。
 
-如果一个等待者获得 mutex 的所有权，并且看到以下两种情况中的任一种：
+> 实现位置的小注：自 Go 1.24 起，`Mutex`、`RWMutex` 等的核心实现下沉到了 `internal/sync`，
+> 标准库的 `sync.Mutex` 是对它的一层包装。本节描述的状态字、两种模式等机制并未改变。
 
-1. 它是等待队列中的最后一个，
-2. 它等待的时间少于 1ms，它便将 mutex 切换回正常操作模式
+## 11.2.5 工程取舍
 
-正常模式下的性能会更好，因为一个 goroutine 能在即使有很多阻塞的等待者时多次连续的获得一个 mutex，饥饿模式的重要性则在于避免了病态情况下的尾部延迟。
+mutex 的设计处处是权衡：用状态字位域把多种信息压进一次原子操作，省下加锁开销；用自旋赌一把
+短等待，赌输了才睡；用 barging 换吞吐，又用 1ms 阈值的饥饿模式为公平兜底。它和
+[channel](../ch10chan)（[10.5](../ch10chan/#105-happens-before-与工程取舍)）代表了 Go 并发的
+两种风格：mutex 直白地表达「互斥」，channel 表达「通信」。该用哪个，取决于你要表达什么，
+而非哪个「更高级」。
 
-## 加锁
+## 延伸阅读的文献
 
-Lock 对申请锁的情况分为三种：
-
-1. 无冲突，通过 CAS 操作把当前状态设置为加锁状态
-2. 有冲突，开始自旋，并等待锁释放，如果其他 goroutine 在这段时间内释放该锁，直接获得该锁；如果没有释放则为下一种情况
-3. 有冲突，且已经过了自旋阶段，通过调用 semrelease 让 goroutine 进入等待状态
-
-```go
-func (m *Mutex) Lock() {
-	// 快速路径: 抓取并锁上未锁住状态的互斥锁
-	if atomic.CompareAndSwapInt32(&m.state, 0, mutexLocked) {
-		(...)
-		return
-	}
-	m.lockSlow()
-}
-func (m *Mutex) lockSlow() {
-	var waitStartTime int64
-	starving := false
-	awoke := false
-	iter := 0
-	old := m.state
-	for {
-		// Don't spin in starvation mode, ownership is handed off to waiters
-		// so we won't be able to acquire the mutex anyway.
-		if old&(mutexLocked|mutexStarving) == mutexLocked && runtime_canSpin(iter) {
-			// Active spinning makes sense.
-			// Try to set mutexWoken flag to inform Unlock
-			// to not wake other blocked goroutines.
-			if !awoke && old&mutexWoken == 0 && old>>mutexWaiterShift != 0 &&
-				atomic.CompareAndSwapInt32(&m.state, old, old|mutexWoken) {
-				awoke = true
-			}
-			runtime_doSpin()
-			iter++
-			old = m.state
-			continue
-		}
-		new := old
-		// Don't try to acquire starving mutex, new arriving goroutines must queue.
-		if old&mutexStarving == 0 {
-			new |= mutexLocked
-		}
-		if old&(mutexLocked|mutexStarving) != 0 {
-			new += 1 << mutexWaiterShift
-		}
-		// The current goroutine switches mutex to starvation mode.
-		// But if the mutex is currently unlocked, don't do the switch.
-		// Unlock expects that starving mutex has waiters, which will not
-		// be true in this case.
-		if starving && old&mutexLocked != 0 {
-			new |= mutexStarving
-		}
-		if awoke {
-			// The goroutine has been woken from sleep,
-			// so we need to reset the flag in either case.
-			if new&mutexWoken == 0 {
-				throw("sync: inconsistent mutex state")
-			}
-			new &^= mutexWoken
-		}
-		if atomic.CompareAndSwapInt32(&m.state, old, new) {
-			if old&(mutexLocked|mutexStarving) == 0 {
-				break // locked the mutex with CAS
-			}
-			// If we were already waiting before, queue at the front of the queue.
-			queueLifo := waitStartTime != 0
-			if waitStartTime == 0 {
-				waitStartTime = runtime_nanotime()
-			}
-			runtime_SemacquireMutex(&m.sema, queueLifo, 1)
-			starving = starving || runtime_nanotime()-waitStartTime > starvationThresholdNs
-			old = m.state
-			if old&mutexStarving != 0 {
-				(...)
-				delta := int32(mutexLocked - 1<<mutexWaiterShift)
-				if !starving || old>>mutexWaiterShift == 1 {
-					// Exit starvation mode.
-					// Critical to do it here and consider wait time.
-					// Starvation mode is so inefficient, that two goroutines
-					// can go lock-step infinitely once they switch mutex
-					// to starvation mode.
-					delta -= mutexStarving
-				}
-				atomic.AddInt32(&m.state, delta)
-				break
-			}
-			awoke = true
-			iter = 0
-		} else {
-			old = m.state
-		}
-	}
-	(...)
-}
-```
-
-## 解锁
-
-```go
-func (m *Mutex) Unlock() {
-	(...)
-
-	// Fast path: drop lock bit.
-	new := atomic.AddInt32(&m.state, -mutexLocked)
-	if new != 0 {
-		// Outlined slow path to allow inlining the fast path.
-		// To hide unlockSlow during tracing we skip one extra frame when tracing GoUnblock.
-		m.unlockSlow(new)
-	}
-}
-
-func (m *Mutex) unlockSlow(new int32) {
-	(...)
-	if new&mutexStarving == 0 {
-		old := new
-		for {
-			// If there are no waiters or a goroutine has already
-			// been woken or grabbed the lock, no need to wake anyone.
-			// In starvation mode ownership is directly handed off from unlocking
-			// goroutine to the next waiter. We are not part of this chain,
-			// since we did not observe mutexStarving when we unlocked the mutex above.
-			// So get off the way.
-			// 如果没有等待着，或者已经存在一个 goroutine 被唤醒或者得到锁，
-			// 或处于饥饿模式，无需唤醒任何等待状态的 goroutine
-			if old>>mutexWaiterShift == 0 || old&(mutexLocked|mutexWoken|mutexStarving) != 0 {
-				return
-			}
-			// Grab the right to wake someone.
-			new = (old - 1<<mutexWaiterShift) | mutexWoken
-			if atomic.CompareAndSwapInt32(&m.state, old, new) {
-				// 唤醒一个等待者（信号量等待队列为 FIFO，故为最久等待者），但 handoff=false
-				// 表示不直接把锁移交给它，被唤醒者仍需与新到来的 goroutine 竞争
-				runtime_Semrelease(&m.sema, false, 1)
-				return
-			}
-			old = m.state
-		}
-	} else {
-		// Starving mode: handoff mutex ownership to the next waiter.
-		// Note: mutexLocked is not set, the waiter will set it after wakeup.
-		// But mutex is still considered locked if mutexStarving is set,
-        // so new coming goroutines won't acquire it.
-        // 饥饿模式: 直接将 mutex 所有权交给等待队列最前端的 goroutine
-		runtime_Semrelease(&m.sema, true, 1)
-	}
-}
-```
-
-## 例：并发安全的单例模式
-
-利用原子操作和互斥锁我们可以轻松实现一个非常简单的并发安全单例模式，即 sync.Once。
-
-sync.Once 用来保证绝对一次执行的对象，例如可在单例的初始化中使用。
-它内部的结构也相对简单：
-
-```go
-// Once 对象可以保证一个动作的绝对一次执行。
-type Once struct {
-	// done 表明某个动作是否被执行
-	// 由于其使用频繁（热路径），故将其放在结构体的最上方
-	// 热路径在每个调用点进行内嵌
-	// 将 done 放在第一位，在某些架构下（amd64/x86）能获得更加紧凑的指令，
-	// 而在其他架构下能更少的指令（用于计算其偏移量）。
-	done uint32
-	m    Mutex
-}
-```
-
-<!-- https://go-review.googlesource.com/c/go/+/152697 -->
-注意，这个结构在 Go 1.13 中得到了重新调整，在其之前 `done` 字段在 `m` 之后。
-
-源码也非常简单：
-
-```go
-// Do 当且仅当第一次调用时，f 会被执行。换句话说，给定
-// 	var once Once
-// 如果 once.Do(f) 被多次调用则只有第一次会调用 f，即使每次提供的 f 不同。
-// 每次执行必须新建一个 Once 实例。
-//
-// Do 用于变量的一次初始化，由于 f 是无参数的，因此有必要使用函数字面量来捕获参数：
-// 	config.once.Do(func() { config.init(filename) })
-//
-// 因为该调用无返回值，因此如果 f 调用了 Do，则会导致死锁。
-//
-// 如果 f 发生 panic，则 Do 认为 f 已经返回；之后的调用也不会调用 f。
-//
-func (o *Once) Do(f func()) {
-	// 原子读取 Once 内部的 done 属性，是否为 0，是则进入慢速路径，否则直接调用
-	if atomic.LoadUint32(&o.done) == 0 {
-		o.doSlow(f)
-	}
-}
-
-func (o *Once) doSlow(f func()) {
-	// 注意，我们只使用原子读读取了 o.done 的值，这是最快速的路径执行原子操作，即 fast-path
-	// 但当我们需要确保在并发状态下，是不是有多个人读到 0，因此必须加锁，这个操作相对昂贵，即 slow-path
-	o.m.Lock()
-	defer o.m.Unlock()
-
-	// 正好我们有一个并发的 goroutine 读到了 0，那么立即执行 f 并在结束时候调用原子写，将 o.done 修改为 1
-	if o.done == 0 {
-		defer atomic.StoreUint32(&o.done, 1)
-		f()
-	}
-	// 当 o.done 为 0 的 goroutine 解锁后，其他人会继续加锁，这时会发现 o.done 已经为了 1 ，于是 f 已经不用在继续执行了
-}
-```
+1. Dmitry Vyukov 等. *sync: make Mutex more fair*（Go 1.9 饥饿模式）, 2016.
+   https://go-review.googlesource.com/c/go/+/34310 ；issue：https://github.com/golang/go/issues/13086
+2. golang/go#80（本书读者反馈，正常模式下唤醒与移交的区别）。
+3. The Go Authors. *The Go Memory Model：Locks.* https://go.dev/ref/mem
+4. Leslie Lamport. "A New Solution of Dijkstra's Concurrent Programming Problem."
+   *CACM*, 17(8), 1974.（互斥问题的经典源流）
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
