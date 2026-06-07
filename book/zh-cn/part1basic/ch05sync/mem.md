@@ -98,13 +98,16 @@ Goroutine，「可观测」需要一份跨 Goroutine 的规则重新界定，这
 线性一致性，又称强一致性或原子一致性。它要求每一次读都能读到该数据最近一次写入的值，
 并且所有线程的操作次序与全局时钟下的次序一致。
 
-```
-        x.store(1)      x.load()
-G1 ---------+----------------+------>
-
-
-G2 -------------------+------------->
-                x.store(2)
+```mermaid
+gantt
+    title 线性一致性：store(1) 先于 store(2) 先于 load，全局实时有序
+    dateFormat X
+    axisFormat %s
+    section G1
+    x.store(1)      :milestone, 1, 0
+    x.load() 读到 2 :milestone, 3, 0
+    section G2
+    x.store(2)      :milestone, 2, 0
 ```
 
 此时 `G1`、`G2` 对 `x` 的两次写都是原子的，`x.store(1)` 严格发生在 `x.store(2)` 之前，
@@ -113,24 +116,32 @@ G2 -------------------+------------->
 
 顺序一致性，同样要求每次读都能读到数据最近一次写入的值，但不要求与全局时钟的次序一致。
 
-```
-        x.store(1)  x.store(3)   x.load()
-G1 ---------+-----------+----------+----->
-
-
-G2 ---------------+---------------------->
-              x.store(2)
+```mermaid
+gantt
+    title 顺序一致性（其一）：load 读到最近写入 3
+    dateFormat X
+    axisFormat %s
+    section G1
+    x.store(1)      :milestone, 1, 0
+    x.store(3)      :milestone, 3, 0
+    x.load() 读到 3 :milestone, 5, 0
+    section G2
+    x.store(2)      :milestone, 2, 0
 ```
 
 或者
 
-```
-        x.store(1)  x.store(3)   x.load()
-G1 ---------+-----------+----------+----->
-
-
-G2 ------+------------------------------->
-      x.store(2)
+```mermaid
+gantt
+    title 顺序一致性（其二）：store(2) 排在 store(1) 之前亦可
+    dateFormat X
+    axisFormat %s
+    section G1
+    x.store(1)      :milestone, 2, 0
+    x.store(3)      :milestone, 3, 0
+    x.load() 读到 3 :milestone, 5, 0
+    section G2
+    x.store(2)      :milestone, 1, 0
 ```
 
 在顺序一致性之下，`x.load()` 须读到最近一次写入的值，而 `x.store(2)` 与 `x.store(1)`
@@ -138,35 +149,50 @@ G2 ------+------------------------------->
 
 因果一致性，要求进一步放低：只为有因果关系的操作保序，无因果关系的操作则不作要求。
 
-```
-      a = 1      b = 2
-G1 ----+-----------+---------------------------->
-
-
-G2 ------+--------------------+--------+-------->
-      x.store(3)         c = a + b    y.load()
+```mermaid
+gantt
+    title 因果一致性（其一）：c 依赖 a、b，故排在二者之后
+    dateFormat X
+    axisFormat %s
+    section G1
+    a = 1 :milestone, 1, 0
+    b = 2 :milestone, 2, 0
+    section G2
+    x.store(3) :milestone, 1, 0
+    c = a + b  :milestone, 3, 0
+    y.load()   :milestone, 4, 0
 ```
 
 或者
 
-```
-      a = 1      b = 2
-G1 ----+-----------+---------------------------->
-
-
-G2 ------+--------------------+--------+-------->
-      x.store(3)          y.load()   c = a + b
+```mermaid
+gantt
+    title 因果一致性（其二）：y.load() 与 c 无因果关系，可换序
+    dateFormat X
+    axisFormat %s
+    section G1
+    a = 1 :milestone, 1, 0
+    b = 2 :milestone, 2, 0
+    section G2
+    x.store(3) :milestone, 1, 0
+    y.load()   :milestone, 3, 0
+    c = a + b  :milestone, 4, 0
 ```
 
 亦或者
 
-```
-     b = 2       a = 1
-G1 ----+-----------+---------------------------->
-
-
-G2 ------+--------------------+--------+-------->
-      y.load()            c = a + b  x.store(3)
+```mermaid
+gantt
+    title 因果一致性（其三）：a、b 写序可换，只需 c 在二者之后
+    dateFormat X
+    axisFormat %s
+    section G1
+    b = 2 :milestone, 1, 0
+    a = 1 :milestone, 2, 0
+    section G2
+    y.load()   :milestone, 1, 0
+    c = a + b  :milestone, 4, 0
+    x.store(3) :milestone, 5, 0
 ```
 
 以上三种排布都满足因果一致，因为整个过程中只有 `c` 依赖 `a` 与 `b`，而 `x` 与 `y` 在此例中
@@ -175,13 +201,19 @@ G2 ------+--------------------+--------+-------->
 最终一致性，是其中最弱的要求，它只保障某个操作在未来某一时刻会被观察到，却不约束观察到的
 时间。这一条还可稍作加强，例如规定观察到的时间总是有界，不过那已离本节的话题较远。
 
-```
-    x.store(3)  x.store(4)
-T1 ----+-----------+-------------------------------------------->
-
-
-T2 ---------+------------+--------------------+--------+-------->
-         x.read()      x.read()           x.read()   x.read()
+```mermaid
+gantt
+    title 最终一致性：写入终将可见，但时机不定
+    dateFormat X
+    axisFormat %s
+    section T1
+    x.store(3) :milestone, 1, 0
+    x.store(4) :milestone, 2, 0
+    section T2
+    read 1 :milestone, 1, 0
+    read 2 :milestone, 3, 0
+    read 3 :milestone, 5, 0
+    read 4 :milestone, 6, 0
 ```
 
 设 `x` 的初始值为 0，则 T2 中四次 `x.read()` 的结果可能是下列各种，且不限于此：
