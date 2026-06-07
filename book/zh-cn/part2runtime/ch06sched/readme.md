@@ -6,7 +6,7 @@ bookCollapseSection: true
 
 # 第 6 章 并发调度
 
-- [6.1 随机调度的基本概念](./model.md)
+- [6.1 调度问题与 GMP 模型](./model.md)
 - [6.2 工作窃取式调度](./steal.md)
 - [6.3 MPG 模型与并发调度单元](./mpg.md)
 - [6.4 调度循环](./schedule.md)
@@ -39,10 +39,10 @@ Go 语言的调度器是笔者眼中整个运行时最迷人的组件了。
 对于 Go 自身而言，它的设计和实现直接牵动了整个 Go 运行时的其他组件，是与用户态代码直接打交道的部分；
 对于 Go 用户而言，调度器将极其复杂的运行时机制隐藏在了一个简单的关键字 `go` 之下。
 为了保证高性能，调度器必须有效的利用计算的并行性和局部性原理；为了保证用户态的简洁，
-调度器必须高效的对调度用户态不可见的网络轮训器、垃圾回收器进行调度；为了保证代码
-执行的正确性，还必须严格的的实现用户态代码的内存顺序等等。
+调度器必须高效的对调度用户态不可见的网络轮询器、垃圾回收器进行调度；为了保证代码
+执行的正确性，还必须严格的实现用户态代码的内存顺序等等。
 总而言之，调度器的设计直接决定了 Go 运行时源码的表现形式。
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
