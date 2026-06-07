@@ -3,482 +3,145 @@ weight: 2202
 title: "5.2 散列表"
 ---
 
-# 3.2 散列表
+# 5.2 散列表
 
+`map` 是 Go 里最常用的数据结构之一，一行 `m[k]` 背后，是一套要在**速度、内存、抗攻击、并发安全**
+之间反复权衡的散列表设计。Go 1.24（2025）还把内置 map 整个换成了基于 **Swiss table** 的实现,
+这是本章必须讲清的一处现代变革。我们先建立散列表的理论坐标，再看 Go 的经典设计与这次重写。
 
+## 5.2.1 散列表的两大家族
 
-map 由运行时实现，编译器辅助进行布局，其本质为散列表。我们可以通过图 1 展示的测试结果看出使用 map 的容量（无大量碰撞）。
+散列表把键经哈希函数映射到桶（bucket），碰撞（不同键落到同一桶）的处理分两大流派。
 
-<div class="img-center">
-<img src="../../../assets/map-write-performance.png"/>
-<strong>图1: cgo/Go/C/net 包 在网络 I/O 场景下的性能对比，图取自 <a src="https://github.com/changkun/cgo-benchmarks">github.com/changkun/cgo-benchmarks</a></strong>
-</div>
+**分离链接**（separate chaining）：每个桶挂一条容器（经典是链表），所有哈希到此的键都串在上面。
+插入、删除干净，负载因子 α 可以超过 1，碰撞下退化平缓（只是某条链变长）。代价是每次探查要追
+指针（缓存不友好）、每个节点有分配与指针开销。
 
-**图1: map[int64]int64 写入性能，其中 `key==value` 且 key 从 1 开始增长。从 218000000 个 key 后开始出现比较严重的碰撞。**
+**开放寻址**（open addressing）：所有键就住在桶数组里，碰撞时按确定的**探测序列**去找下一个空槽。
+好处是无每节点指针、存储紧凑、缓存局部性极好。代价是 α 必须严格小于 1（数组填满则找不存在的键
+时探测无法终止），且 α 趋近 1 时性能急剧恶化,在均匀哈希的理想模型下，线性探测一次未命中查找
+的期望探测数约为 $\tfrac12\big(1 + \tfrac{1}{(1-\alpha)^2}\big)$，$\alpha = 0.9$ 时已高达约 50。
+这正是开放寻址要在中等负载（Go 的 Swiss table 取 7/8）就扩容的原因。删除也更麻烦:不能简单清空
+一个槽（会截断别的键的探测链），需要**墓碑**（tombstone）标记。
 
-我们就 int64 这种情况来看看具体 Go map 的运行时机制：
+探测序列也有讲究：**线性探测**缓存友好但有"主聚集";**二次探测**（Go 用三角数形式，恰好不重不漏
+遍历 2 的幂大小的表）缓解主聚集;**双重哈希**用第二个哈希做步长，消除聚集但牺牲局部性。还有一种
+插入策略 **Robin Hood 哈希**（Celis 1986）：碰撞时让"离家更远"的键占据槽位，把探测长度的方差
+压低,劫富济贫，使近满的表查找时间也很稳定。
+
+## 5.2.2 哈希质量与 hashDoS
+
+散列表的最坏情况是所有键碰撞成 $O(n)$。若攻击者能**构造**碰撞的键，就能用很低的带宽把表打成
+链表,这就是 Crosby 与 Wallach 在 2003 年揭示的**算法复杂度拒绝服务攻击**（hashDoS），他们曾
+把 Perl、Squid、Bro 的散列表打退化。防御之道是**带种子的随机化哈希**：让哈希依赖一个攻击者
+不知道的每进程/每表随机种子，碰撞便无法预先构造。Go 正是如此,每个 map 自带一个随机 `seed`。
+业界常用的带密钥短输入哈希是 **SipHash**（Rust 标准库默认即用它）。
+
+## 5.2.3 Swiss table：现代开放寻址
+
+近十年开放寻址最重要的革新，来自 Google abseil 的 **Swiss table**。它把存储拆成槽数组加一个
+**独立的元数据/控制数组**（每槽一字节）：空槽、墓碑、或"已占用 + 该键哈希的 7 位"。查找时一条
+**SIMD** 指令把一个组（abseil 用 16 槽）的全部控制字节与目标哈希片段**并行比较**，一次顶十几步
+探测，且只在约 1/128 的控制字节匹配时才去做完整 key 比较。元数据密集、并行扫描，真正的 key 很少
+被触碰,这就是它又快又缓存友好的根源。
+
+```mermaid
+flowchart TD
+    H["hash(key) ⊕ seed"] --> SPLIT["拆成 H1（高 57 位）+ H2（低 7 位）"]
+    SPLIT --> G["H1 选定一个组（8 个槽）"]
+    G --> SIMD["对该组 8 个控制字节，一条指令并行比较 H2"]
+    SIMD --> M{有控制字节匹配 H2?}
+    M -->|有候选| CMP["对候选槽做完整 key 比较"]
+    M -->|无候选, 且组内有空槽| MISS[未找到]
+    CMP -->|相等| HIT[命中]
+    CMP -->|不等（H2 碰撞，约 1/128）| NEXT["按三角数探测下一组"]
+    NEXT --> SIMD
+```
+
+## 5.2.4 Go map 的经典设计（1.0–1.23）
+
+Go 早期的 map 是一种**桶内开放寻址、溢出处链接**的混合。每个桶（`bmap`）放最多 **8** 对键值，
+另存每个键哈希的**高 8 位**（`tophash`）用于完整比较前的快速排除;一个桶装不下时，**链一个溢出桶**。
+平均每桶超过 **6.5** 个键（负载因子）就扩容,扩容不是一次性的，而是在后续写入时**增量迁移**
+（evacuation），每次只搬几个旧桶，从而把单次操作的延迟抖动压住。
 
 ```go
-func write() {
-	var step int64 = 1000000
-	var t1 time.Time
-	m := map[int64]int64{}
-	for i := int64(0); ; i += step {
-		t1 = time.Now()
-		for j := int64(0); j < step; j++ {
-			m[i+j] = i + j
-		}
-		fmt.Printf("%d done, time: %v\n", i, time.Since(t1).Seconds())
-	}
+type hmap struct {       // 经典 map（裁剪）
+    count      int            // 元素个数，len() 返回它
+    B          uint8          // 桶数 = 2^B
+    buckets    unsafe.Pointer // 当前桶数组
+    oldbuckets unsafe.Pointer // 扩容时的旧桶数组（增量迁移中）
 }
 ```
 
-上面这段代码中涉及 map 的汇编结果为：
-
-```asm
-TEXT main.write(SB) /Users/changkun/dev/go-under-the-hood/demo/7-lang/map/main.go
-  (...)
-  main.go:10		0x109386a		0f118c2450010000		MOVUPS X1, 0x150(SP)			
-  main.go:11		0x1093872		0f57c9				XORPS X1, X1				
-  main.go:11		0x1093875		0f118c2498010000		MOVUPS X1, 0x198(SP)			
-  main.go:11		0x109387d		0f57c9				XORPS X1, X1				
-  main.go:11		0x1093880		0f118c24a8010000		MOVUPS X1, 0x1a8(SP)			
-  main.go:11		0x1093888		0f57c9				XORPS X1, X1				
-  main.go:11		0x109388b		0f118c24b8010000		MOVUPS X1, 0x1b8(SP)			
-  main.go:11		0x1093893		488d7c2478			LEAQ 0x78(SP), DI			
-  main.go:11		0x1093898		0f57c0				XORPS X0, X0				
-  main.go:11		0x109389b		488d7fd0			LEAQ -0x30(DI), DI			
-  main.go:11		0x109389f		48896c24f0			MOVQ BP, -0x10(SP)			
-  main.go:11		0x10938a4		488d6c24f0			LEAQ -0x10(SP), BP			
-  main.go:11		0x10938a9		e824dffbff			CALL 0x10517d2				
-  main.go:11		0x10938ae		488b6d00			MOVQ 0(BP), BP				
-  main.go:11		0x10938b2		488d842498010000		LEAQ 0x198(SP), AX			
-  main.go:11		0x10938ba		8400				TESTB AL, 0(AX)				
-  main.go:11		0x10938bc		488d442478			LEAQ 0x78(SP), AX			
-  main.go:11		0x10938c1		48898424a8010000		MOVQ AX, 0x1a8(SP)			
-  main.go:11		0x10938c9		488d842498010000		LEAQ 0x198(SP), AX			
-  main.go:11		0x10938d1		4889842420010000		MOVQ AX, 0x120(SP)			
-  main.go:11		0x10938d9		e8e2c3faff			CALL runtime.fastrand(SB)		
-  main.go:11		0x10938de		488b842420010000		MOVQ 0x120(SP), AX			
-  main.go:11		0x10938e6		8400				TESTB AL, 0(AX)				
-  main.go:11		0x10938e8		8b0c24				MOVL 0(SP), CX				
-  main.go:11		0x10938eb		89480c				MOVL CX, 0xc(AX)			
-  main.go:11		0x10938ee		488d842498010000		LEAQ 0x198(SP), AX			
-  main.go:11		0x10938f6		4889842408010000		MOVQ AX, 0x108(SP)			
-  main.go:12		0x10938fe		48c744245000000000		MOVQ $0x0, 0x50(SP)			
-  (...)
-  main.go:14		0x109394d		eb63				JMP 0x10939b2				
-  main.go:15		0x109394f		488b442450			MOVQ 0x50(SP), AX			
-  main.go:15		0x1093954		4803442448			ADDQ 0x48(SP), AX			
-  main.go:15		0x1093959		4889442470			MOVQ AX, 0x70(SP)			
-  main.go:15		0x109395e		488d05fb6d0100			LEAQ runtime.rodata+92544(SB), AX	
-  main.go:15		0x1093965		48890424			MOVQ AX, 0(SP)				
-  main.go:15		0x1093969		488b8c2408010000		MOVQ 0x108(SP), CX			
-  main.go:15		0x1093971		48894c2408			MOVQ CX, 0x8(SP)			
-  main.go:15		0x1093976		488b4c2450			MOVQ 0x50(SP), CX			
-  main.go:15		0x109397b		48034c2448			ADDQ 0x48(SP), CX			
-  main.go:15		0x1093980		48894c2410			MOVQ CX, 0x10(SP)			
-  main.go:15		0x1093985		e846b0f7ff			CALL runtime.mapassign_fast64(SB)	
-  main.go:15		0x109398a		488b442418			MOVQ 0x18(SP), AX			
-  main.go:15		0x109398f		4889842418010000		MOVQ AX, 0x118(SP)			
-  main.go:15		0x1093997		8400				TESTB AL, 0(AX)				
-  main.go:15		0x1093999		488b4c2470			MOVQ 0x70(SP), CX			
-  main.go:15		0x109399e		488908				MOVQ CX, 0(AX)				
-  main.go:15		0x10939a1		eb00				JMP 0x10939a3				
-  (...)
-```
-
-可以看到运行时通过 `runtime.mapassign_fast64` 来给一个 map 进行赋值。那么我们就来仔细看一看这个函数。
-
-TODO: `runtime.extendRandom`
-
-
-## 运行时算法初始化
-
-```go
-// src/runtime/proc.go
-func schedinit() {
-  (...)
-	cpuinit() // 必须在 alginit 之前运行
-	alginit() // maps 不能在此调用之前使用，从 CPU 指令集初始化散列算法
-	(...)
-}
-```
-
-运行时初始化过程中的，`alginit` 来根据 `cpuinit` 解析得到的 CPU 指令集的支持情况，
-进而初始化合适的 hash 算法，用于对 Go 的 `map` 结构进行支持。
-
-```go
-func alginit() {
-	// 如果需要的指令存在则安装 AES 散列算法
-	if (GOARCH == "386" || GOARCH == "amd64") &&
-		GOOS != "nacl" &&
-		cpu.X86.HasAES && // AESENC
-		cpu.X86.HasSSSE3 && // PSHUFB
-		cpu.X86.HasSSE41 { // PINSR{D,Q}
-		initAlgAES()
-		return
-	}
-	if GOARCH == "arm64" && cpu.ARM64.HasAES {
-		initAlgAES()
-		return
-	}
-	getRandomData((*[len(hashkey) * sys.PtrSize]byte)(unsafe.Pointer(&hashkey))[:])
-	hashkey[0] |= 1 // 确保这些数字为奇数
-	hashkey[1] |= 1
-	hashkey[2] |= 1
-	hashkey[3] |= 1
-}
-```
-
-可以看到，在指令集支持良好的情况下，amd64 平台会调用 `initAlgAES` 来使用 AES 散列算法。
-
-```go
-var useAeshash bool
-
-func initAlgAES() {
-	useAeshash = true
-	algarray[alg_MEM32].hash = aeshash32
-	algarray[alg_MEM64].hash = aeshash64
-	algarray[alg_STRING].hash = aeshashstr
-	// 使用随机数据初始化，从而使散列值的碰撞攻击变得困难。
-	getRandomData(aeskeysched[:])
-}
-
-// typeAlg 还用于 reflect/type.go，保持同步
-type typeAlg struct {
-	// 函数用于对此类型的对象求 hash，(指向对象的指针, 种子) --> hash
-	hash func(unsafe.Pointer, uintptr) uintptr
-	// 函数用于比较此类型的对象，(指向对象 A 的指针, 指向对象 B 的指针) --> ==?
-	equal func(unsafe.Pointer, unsafe.Pointer) bool
-}
-
-// 类型算法 - 编译器知晓
-const (
-	alg_NOEQ = iota
-	alg_MEM0
-	(...)
-)
-
-var algarray = [alg_max]typeAlg{
-	alg_NOEQ:     {nil, nil},
-	alg_MEM0:     {memhash0, memequal0},
-	(...)
-}
-```
-
-其中 `algarray` 是一个用于保存 hash 函数的数组。
-
-否则在 Linux 上，会根据程序引导一章中提到的辅助向量提供的随机数据来初始化 hashkey：
-
-```go
-func getRandomData(r []byte) {
-	if startupRandomData != nil {
-		n := copy(r, startupRandomData)
-		extendRandom(r, n)
-		return
-	}
-	fd := open(&urandom_dev[0], 0 /* O_RDONLY */, 0)
-	n := read(fd, unsafe.Pointer(&r[0]), int32(len(r)))
-	closefd(fd)
-	extendRandom(r, int(n))
-}
-```
-
-或在 darwin 中，通过读取 `/dev/urandom\x00` 的内容来获取随机值：
-
-```go
-var urandom_dev = []byte("/dev/urandom\x00")
-
-//go:nosplit
-func getRandomData(r []byte) {
-	fd := open(&urandom_dev[0], 0 /* O_RDONLY */, 0)
-	n := read(fd, unsafe.Pointer(&r[0]), int32(len(r)))
-	closefd(fd)
-	extendRandom(r, int(n))
-}
-```
-
-这里我们粗略的看了一下运行时 map 类型使用的 hash 算法以及随机 key 的初始化，
-具体的 `runtime.extendRandom`，和下列函数：
-
-```go
-func aeshash32(p unsafe.Pointer, h uintptr) uintptr
-func aeshash64(p unsafe.Pointer, h uintptr) uintptr
-func aeshashstr(p unsafe.Pointer, h uintptr) uintptr
-```
-
-
-## CPU 相关信息的初始化
-
-初始化过程中，会根据当前运行程序的 CPU 初始化一些与 CPU 相关的值，
-获取 CPU 指令集相关支持，并支持对 CPU 指令集的调试，例如禁用部分指令集。
-
-> 位于 runtime/proc.go
-
-```go
-// cpuinit 会提取环境变量 GODEBUGCPU，如果 GOEXPERIMENT debugcpu 被设置，
-// 则还会调用 internal/cpu.initialize
-func cpuinit() {
-	const prefix = "GODEBUG="
-	var env string
-
-	cpu.DebugOptions = true
-
-	// 类似于 goenv_unix 但为 GODEBUG 直接提取了环境变量
-	// TODO(moehrmann): remove when general goenvs() can be called before cpuinit()
-	n := int32(0)
-	for argv_index(argv, argc+1+n) != nil {
-		n++
-	}
-
-	for i := int32(0); i < n; i++ {
-		p := argv_index(argv, argc+1+i)
-		s := *(*string)(unsafe.Pointer(&stringStruct{unsafe.Pointer(p), findnull(p)}))
-
-		if hasprefix(s, prefix) {
-			env = gostring(p)[len(prefix):]
-			break
-		}
-	}
-
-	cpu.Initialize(env)
-
-	// 支持 CPU 特性的变量由编译器生成的代码来阻止指令的执行，从而不能假设总是支持的
-	x86HasPOPCNT = cpu.X86.HasPOPCNT
-	x86HasSSE41 = cpu.X86.HasSSE41
-	arm64HasATOMICS = cpu.ARM64.HasATOMICS
-}
-```
-
-其中，`cpu.Initialize(env)` 会调用 `internal/cpu/cpu.go` 中的函数：
-
-```go
-// Initialize 检查处理器并设置上面的相关变量。
-// 该函数在程序初始化的早期由运行时包调用，在运行正常的 init 函数之前。
-// 如果 go 是使用 GODEBUG 编译的，则 env 在 Linux/Darwin 上由运行时设置
-func Initialize(env string) {
-	doinit()
-	processOptions(env)
-}
-```
-
-而 `doinit` 会根据 CPU 架构的不同，存在不同的实现，在 amd64 上：
-
-```go
-// options 包含可在 GODEBUG 中使用的 cpu 调试选项。
-// options 取决于架构，并由架构特定的 doinit 函数添加。
-// 不应将特定 GOARCH 必需的功能添加到选项中（例如 amd64 上的 SSE2）。
-var options []option
-
-// Option 名称应为小写。 例如 avx 而不是 AVX。
-type option struct {
-	Name      string
-	Feature   *bool
-	Specified bool // whether feature value was specified in GODEBUG
-	Enable    bool // whether feature should be enabled
-	Required  bool // whether feature is mandatory and can not be disabled
-}
-
-const (
-	// edx bits
-	cpuid_SSE2 = 1 << 26
-
-	// ecx bits
-	cpuid_SSE3      = 1 << 0
-	cpuid_PCLMULQDQ = 1 << 1
-	(...)
-
-	// ebx bits
-	cpuid_BMI1 = 1 << 3
-	(...)
-)
-
-func doinit() {
-	options = []option{
-		{Name: "adx", Feature: &X86.HasADX},
-		{Name: "aes", Feature: &X86.HasAES},
-		(...)
-
-		// 下面这些特性必须总是在 amd64 上启用
-		{Name: "sse2", Feature: &X86.HasSSE2, Required: GOARCH == "amd64"},
-	}
-
-	maxID, _, _, _ := cpuid(0, 0)
-
-	if maxID < 1 {
-		return
-	}
-
-	_, _, ecx1, edx1 := cpuid(1, 0)
-	X86.HasSSE2 = isSet(edx1, cpuid_SSE2)
-
-	X86.HasSSE3 = isSet(ecx1, cpuid_SSE3)
-	(...)
-
-	osSupportsAVX := false
-	// 对于 XGETBV，OSXSAVE 位是必需且足够的。
-	if X86.HasOSXSAVE {
-		eax, _ := xgetbv()
-		// 检查 XMM 和 YMM 寄存器是否支持。
-		osSupportsAVX = isSet(eax, 1<<1) && isSet(eax, 1<<2)
-	}
-
-	X86.HasAVX = isSet(ecx1, cpuid_AVX) && osSupportsAVX
-
-	if maxID < 7 {
-		return
-	}
-
-	_, ebx7, _, _ := cpuid(7, 0)
-	X86.HasBMI1 = isSet(ebx7, cpuid_BMI1)
-	X86.HasAVX2 = isSet(ebx7, cpuid_AVX2) && osSupportsAVX
-	(...)
-}
-
-func isSet(hwc uint32, value uint32) bool {
-	return hwc&value != 0
-}
-```
-
-其中 `X86` 变量为 `x86` 类型：
-
-```go
-var X86 x86
-
-// CacheLinePad 用于填补结构体进而避免 false sharing
-type CacheLinePad struct{ _ [CacheLinePadSize]byte }
-
-// CacheLineSize 是 CPU 的假设的缓存行大小
-// 当前没有对实际的缓存行大小在运行时检测，因此我们使用针对每个 GOARCH 的 CacheLinePadSize 进行估计
-var CacheLineSize uintptr = CacheLinePadSize
-
-// x86 中的布尔值包含相应命名的 cpuid 功能位。
-// 仅当操作系统支持 XMM 和 YMM 寄存器时，才设置 HasAVX 和 HasAVX2
-type x86 struct {
-	_            CacheLinePad
-	HasAES       bool
-	(...)
-	HasSSE42     bool
-	_            CacheLinePad
-}
-```
-
-而 `cpu.cpuid` 和 `cpu.xgetbv` 的实现则由汇编完成：
-
-```go
-func cpuid(eaxArg, ecxArg uint32) (eax, ebx, ecx, edx uint32)
-
-func xgetbv() (eax, edx uint32)
-```
-
-本质上就是去调用 CPUID 和 XGETBV 这两个指令：
-
-```c
-// internal/cpu/cpu_x86.s
-// func cpuid(eaxArg, ecxArg uint32) (eax, ebx, ecx, edx uint32)
-TEXT ·cpuid(SB), NOSPLIT, $0-24
-	MOVL eaxArg+0(FP), AX
-	MOVL ecxArg+4(FP), CX
-	CPUID
-	MOVL AX, eax+8(FP)
-	MOVL BX, ebx+12(FP)
-	MOVL CX, ecx+16(FP)
-	MOVL DX, edx+20(FP)
-	RET
-
-// func xgetbv() (eax, edx uint32)
-TEXT ·xgetbv(SB),NOSPLIT,$0-8
-#ifdef GOOS_nacl
-	// nacl 不支持 XGETBV.
-	MOVL $0, eax+0(FP)
-	MOVL $0, edx+4(FP)
-#else
-	MOVL $0, CX
-	XGETBV
-	MOVL AX, eax+0(FP)
-	MOVL DX, edx+4(FP)
-#endif
-	RET
-```
-
-`cpu.doinit` 结束后，会处理解析而来的 option，从而达到禁用某些 CPU 指令集的目的：
-
-```go
-// processOptions 根据解析的 env 字符串来禁用 CPU 功能值。
-// env 字符串应该是 cpu.feature1=value1,cpu.feature2=value2... 格式
-// 其中功能名称是存储在其中的体系结构特定列表之一 cpu 包选项变量，且这些值要么是 'on' 要么是 'off'。
-// 如果 env 包含 cpu.all=off 则所有功能通过 options 变量引用被禁用。其他功能名称和值将导致警告消息。
-func processOptions(env string) {
-field:
-	for env != "" {
-		field := ""
-		i := indexByte(env, ',')
-		if i < 0 {
-			field, env = env, ""
-		} else {
-			field, env = env[:i], env[i+1:]
-		}
-		if len(field) < 4 || field[:4] != "cpu." {
-			continue
-		}
-		i = indexByte(field, '=')
-		if i < 0 {
-			print("GODEBUG: no value specified for \"", field, "\"\n")
-			continue
-		}
-		key, value := field[4:i], field[i+1:] // e.g. "SSE2", "on"
-
-		var enable bool
-		switch value {
-		case "on":
-			enable = true
-		case "off":
-			enable = false
-		default:
-			print("GODEBUG: value \"", value, "\" not supported for cpu option \"", key, "\"\n")
-			continue field
-		}
-
-		if key == "all" {
-			for i := range options {
-				options[i].Specified = true
-				options[i].Enable = enable || options[i].Required
-			}
-			continue field
-		}
-
-		for i := range options {
-			if options[i].Name == key {
-				options[i].Specified = true
-				options[i].Enable = enable
-				continue field
-			}
-		}
-
-		print("GODEBUG: unknown cpu feature \"", key, "\"\n")
-	}
-
-	for _, o := range options {
-		if !o.Specified {
-			continue
-		}
-
-		if o.Enable && !*o.Feature {
-			print("GODEBUG: can not enable \"", o.Name, "\", missing CPU support\n")
-			continue
-		}
-
-		if !o.Enable && o.Required {
-			print("GODEBUG: can not disable \"", o.Name, "\", required CPU feature\n")
-			continue
-		}
-
-		*o.Feature = o.Enable
-	}
-}
-```
+## 5.2.5 Go 1.24 的 Swiss table 重写
+
+Go 1.24 把内置 map 换成了基于 Swiss table 的实现（提案 #54766，落地于 `internal/runtime/maps`）。
+它沿用 abseil 的思路，又为 Go 的需求做了改造，关键点（均对照 go1.26 源码核实）：
+
+- **组为 8 槽**，控制字用一个 `uint64`,在 AMD64 上用 SIMD 内建函数并行匹配，其他平台用 SWAR
+  位技巧;源码注释明言"用 SIMD 可扩展到 16 槽"。
+- **负载因子 7/8**，与 abseil 相同（abseil 16 槽留 2 个空，Go 8 槽留 1 个空）。
+- **三角数二次探测**，因组数为 2 的幂而不重不漏。
+- **删除用墓碑**，插入优先复用墓碑，墓碑只在扩容时彻底清除。
+- **增量扩容靠可扩展哈希**（extendible hashing），这是 Go 相对 abseil 的主要添加：一个 map 持有
+  一个 `*table` 的**目录**，高位哈希选表;每张表是一个独立的 Swiss table，最多原地翻倍到 1024 槽，
+  之后**分裂**成两张表。于是任何一次扩容至多触碰约 1024 槽，像经典 evacuation 那样把延迟抖动
+  约束住,只是改成了按表分裂。
+- **小 map 优化**：只放过 ≤8 个元素的 map 直接指向单个组，没有目录、没有探测序列维护。
+
+关于性能，需要厘清一处常见说法。Go 1.24 发布说明给出的是**综合**数字："一组代表性基准的 CPU
+开销平均下降 2~3%"，且这是 Swiss map、小对象分配、新互斥锁三项**合在一起**的效果，并非 map
+单独的提速;"对大 map 尤其快"是设计预期与社区观察，而非发布说明背书的数字，引用时应据实标注。
+该实现可用 `GOEXPERIMENT=noswissmap` 在构建时关闭。
+
+## 5.2.6 两条语言规定的由来
+
+**为什么不能取 `&m[k]`。** 语言规范规定 map 元素**不可寻址**。工程上的理由与上面的实现一致：
+元素会在扩容时移动（经典 map 迁移桶、Swiss map 重排槽并分裂表），任何指向后备存储的地址都可能
+在后续插入后悬空。编译期禁止 `&m[k]`，就杜绝了悬垂指针（也是 `m[k].field = x` 对结构体值会报错
+的原因）。
+
+**为什么并发访问会崩。** map 不是并发安全的，运行时用一个写标志做**尽力而为**的竞态检测：
+源码里这个 `writing` 标志用**异或**翻转（`m.writing ^= 1`）而非置位/清零，注释解释这样能提高多个
+并发写者都侦测到竞争的概率;一旦发现不一致就 `fatal("concurrent map writes")` 直接终止进程
+（不可 `recover`）。注意这是尽力检测、非保证,要保证正确请用 `sync.Mutex` 或 `sync.Map`
+（[11.7](../../part3concurrency/ch11sync/map.md)）。
+
+## 5.2.7 跨语言对照
+
+| 语言 | 设计 | hashDoS 防御 | 顺序 |
+| --- | --- | --- | --- |
+| Go (1.24+) | Swiss table + 可扩展哈希目录 | 每 map 随机种子 | 随机化迭代 |
+| Rust `std::HashMap` | Swiss table（hashbrown） | 默认 SipHash-1-3 | 无序 |
+| C++ `absl::flat_hash_map` | Swiss table（16 槽 SSE2） | 每表种子 | 无序、无指针稳定性 |
+| C++ `std::unordered_map` | 分离链接（标准强制） | 无 | 无序 |
+| Java `HashMap` | 分离链接 + 长链转红黑树（Java 8） | 无（字符串哈希固定） | 无序 |
+| Python `dict` | 开放寻址 + 紧凑有序 | SipHash（PYTHONHASHSEED） | 插入序 |
+
+最值得记取的是 **C++ `std::unordered_map` 的教训**：标准要求元素的引用/指针稳定、并暴露桶接口，
+这实际上**锁死**了节点式分离链接的实现，从而把整个 Swiss table 家族挡在门外,这是 2003 年标准化
+抉择（当时开放寻址"尚不够成熟"）留下的、谁也绕不开的设计枷锁。Go、Rust、abseil、Python 都
+**主动放弃**了元素地址稳定（Go 用"不可寻址"在语言层强制），以此换取速度与紧凑。Java 8 的
+"长链转红黑树"则只是把碰撞的最坏情况从 $O(n)$ 降到 $O(\log n)$，是缓解而非杜绝。迭代顺序随机化
+（Go 自其经典设计起就有）则是一项有意的可移植性措施，防止程序依赖不该依赖的顺序。
+
+## 延伸阅读的文献
+
+1. Donald E. Knuth. *The Art of Computer Programming, Vol. 3: Sorting and Searching*,
+   §6.4 Hashing. 2nd ed., 1998.
+2. Pedro Celis. *Robin Hood Hashing.* PhD thesis, University of Waterloo, TR CS-86-14, 1986.
+3. Scott A. Crosby, Dan S. Wallach. "Denial of Service via Algorithmic Complexity Attacks."
+   *USENIX Security 2003.*
+   https://www.usenix.org/legacy/events/sec03/tech/full_papers/crosby/crosby.pdf
+4. Matt Kulukundis. "Designing a Fast, Efficient, Cache-friendly Hash Table, Step by Step."
+   *CppCon 2017.* https://www.youtube.com/watch?v=ncHmEUmJZf4 ；abseil Swiss Tables：
+   https://abseil.io/about/design/swisstables
+5. golang/go#54766. *runtime: use SwissTable*；Go 1.24 Release Notes.
+   https://github.com/golang/go/issues/54766 ，https://go.dev/doc/go1.24
+6. JEP 180《Handle Frequent HashMap Collisions with Balanced Trees》.
+   https://openjdk.org/jeps/180
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
