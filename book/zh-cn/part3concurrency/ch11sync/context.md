@@ -3,121 +3,77 @@ weight: 3308
 title: "11.8 上下文"
 ---
 
-# 5.8 上下文
+# 11.8 上下文
 
-从 Go 语言本身的设计来看，尽管我们能够轻松的创建一个 Goroutine，
-但对一个已经启动的 Goroutine 做取消操作却并不容易，例如：
+一个请求进来，往往会扇出成一棵 goroutine 调用树：处理函数调数据库、发 RPC、查缓存，每一步
+可能又起若干 goroutine。当请求被取消、超时，或上游放弃等待时，这一整棵树都该尽快停下来，
+别再白白占用资源。`context.Context` 就是在这棵树上**传播取消信号与截止时间**的标准方式。
+
+## 11.8.1 一棵可被取消的树
+
+context 通过包装层层派生：从根 `context.Background()` 出发，每次 `WithCancel`、`WithTimeout`、
+`WithValue` 都生出一个子 context，挂在父 context 之下，形成一棵树。
 
 ```go
-go func() {
-	// 如何从其他 Goroutine 通知并结束该 Goroutine 呢？
-	// ...
-}()
+ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+defer cancel() // 务必调用，否则与之关联的计时器与子节点会泄漏
+
+go worker(ctx) // 子 goroutine 携带 ctx 一起向下传
 ```
 
-通过 Channel 与 Select 这一过程间通信原语，我们可以使用空结构信号 `struct{}` 来通知一个正在执行的 Goroutine：
-
-```go
-cancel := make(chan struct{})
-
-go func() {
-	done := make(chan struct{}, 1)
-	go func() {
-		defer func() {
-			done <- struct{}{}
-		}()
-		do() // 执行需要执行的操作
-	}()
-	select {
-	case <-cancel:
-		// 如果提前被取消，则等待执行完毕
-		// 并撤销已经执行的操作
-		<-done
-		undo()
-	case <-done:
-		// 如果顺利结束，则结束执行
-		close(done)
-	}
-}
-
-// ... 出于某些原因希望执行取消操作
-cancel <- struct{}{}
+```mermaid
+flowchart TD
+    ROOT["context.Background()"] --> C1["WithCancel → ctx1"]
+    C1 --> C2["WithTimeout → ctx2"]
+    C1 --> C3["WithValue → ctx3"]
+    C2 --> C4["WithCancel → ctx4"]
+    CANCEL["cancel(ctx1) 或 ctx1 超时"] -.->|取消沿树向下传播| C1
+    C1 -.-> C2
+    C1 -.-> C3
+    C2 -.-> C4
 ```
 
-这样的要求很常见，例如某个 Web 请求被中断，服务端正在请求的资源需要做取消操作等等。那我们能否将这一同步模式进一步抽象为接口，作为一种基于通信的同步模式呢？上下文 Context 包就提供了这样一组在 Goroutine 间进行值传播的方法。
-
-## 上下文接口
+取消是**向下传播**的：取消任一节点，它的整棵子树都被取消。机制上，每个 context 暴露一个
+`Done()` channel，取消时这个 channel 被关闭，从而**广播**给所有在 `select` 里监听它的 goroutine
+（这正是 [11.4](./cond.md) 提到的「用关闭 channel 做广播」的典型应用）。下游代码的标准写法是：
 
 ```go
-type Context interface {
-	// 截止日期返回应取消代表该上下文完成的工作的时间。如果未设置截止日期，则截止日期返回ok == false。连续调用Deadline会返回相同的结果。
-	Deadline() (deadline time.Time, ok bool)
-
-	// Done 返回一个 channel，当代表该上下文完成的工作应被取消时，该通道将关闭。
-	// 如果此上下文永远无法取消，则可能会返回 nil。
-	// 连续调用 Done 将返回相同的值。在取消函数返回之后，完成 channel 的关闭可能会异步发生。
-	Done() <-chan struct{}
-
-	// 如果 Done 未被关闭，则 Err 返回 nil；
-	// 如果 Done 已被关闭，则 Err 返回一个非空错误。
-	Err() error
-
-	// Value 返回了与当前上下文使用 key 相关联的值；
-	// 没有关联的 key 时将返回 nil。
-	Value(key interface{}) interface{}
+select {
+case <-ctx.Done():
+    return ctx.Err()   // 被取消或超时
+case res := <-work:
+    return res
 }
 ```
 
-type Context interface {
-	Deadline() (deadline time.Time, ok bool)
-	Done() <-chan struct{}
-	Err() error
-	Value(key interface{}) interface{}
-}
-var Canceled = errors.New("context canceled")
-var DeadlineExceeded error = deadlineExceededError{}
-type CancelFunc func()
+超时与定时取消，本质上就是挂一个到期后自动调用 `cancel` 的计时器（[9.10](../ch09sched/timer.md)），
+因此 `WithTimeout` 在不再需要时必须 `cancel`，否则计时器与子节点不会被及时回收。Go 1.21 还
+新增了 `context.AfterFunc`，在 context 取消时自动跑一个回调，省去手写监听 `Done()` 的样板。
 
-func Background() Context
-func TODO() Context
-func WithCancel(parent Context) (ctx Context, cancel CancelFunc)
-func WithTimeout(parent Context, timeout time.Duration) (Context, CancelFunc)
-func WithDeadline(parent Context, d time.Time) (Context, CancelFunc)
-func WithValue(parent Context, key, val interface{}) Context
+## 11.8.2 值传递的争议
 
-## 上下文及其衍生品
+`WithValue` 允许把请求范围的数据（如 trace ID、鉴权信息）挂在 context 上随调用链传递。它方便，
+但也一直有争议：它实质上是一个类型不安全的隐式参数通道（键值都是 `any`），用多了会让数据流向
+变得隐晦、难以追踪。社区与官方的共识是：context 的值**只该装请求范围的元数据，不该装本应
+作为显式函数参数传入的业务数据**。这是一处「便利」与「清晰」之间的取舍，用错了会侵蚀代码的
+可读性。
 
-ctx := context.Background()
-ctx.WithTimeout(time.Second)
-ctx.WithDeadline(time.Now())
-ctx.WithValue(k, v)
-ctx.Cancel()
+## 11.8.3 设计取舍
 
-https://github.com/golang/go/issues/14660
-https://github.com/atdiar/goroutine/tree/master/execution
-https://groups.google.com/forum/#!searchin/golang-dev/context$20package|sort:date/golang-dev/JgnR5hrDCu0/pyqbkYfSCQAJ
-https://github.com/golang/go/issues/16209
-https://github.com/golang/go/issues/8082
-https://dave.cheney.net/2017/08/20/context-isnt-for-cancellation
-https://github.com/golang/go/issues/21355
-https://github.com/golang/go/issues/29011
-https://github.com/golang/go/issues/28342
-https://blog.labix.org/2011/10/09/death-of-goroutines-under-control
-https://godoc.org/gopkg.in/tomb.v2
-https://blog.golang.org/context
-https://zhuanlan.zhihu.com/p/26695984
-https://www.flysnow.org/2017/05/12/go-in-action-go-context.html
-https://juejin.im/post/5a6873fef265da3e317e55b6
-https://cloud.tencent.com/developer/section/1140703
-https://siadat.github.io/post/context
-https://rakyll.org/leakingctx/
-https://dreamerjonson.com/2019/05/09/golang-73-context/index.html
-https://brantou.github.io/2017/05/19/go-concurrency-patterns-context/
-http://p.agnihotry.com/post/understanding_the_context_package_in_golang/
-https://faiface.github.io/post/context-should-go-away-go2/
-https://juejin.im/post/5c1514c86fb9a049b82a5acb
-https://segmentfault.com/a/1190000017394302
-https://36kr.com/p/5073181
-https://zhuanlan.zhihu.com/p/60180409
+context 把「取消、超时、请求元数据」三件事统一进一个沿调用链显式传递的对象，代价是几乎每个
+涉及 I/O 或并发的函数都要多带一个 `ctx context.Context` 首参数。这种「显式但啰嗦」的设计，是
+Go 一贯偏好的：宁可让传播路径明明白白写在签名里，也不藏进某个隐式的线程本地存储。它与
+[9 调度器](../ch09sched) 把复杂性显式化、与 [11.9](./mem.md) 拒绝未定义行为，是同一种价值观
+的不同侧面。
 
-## 值链条
+## 延伸阅读的文献
+
+1. The Go Authors. *context 包文档.* https://pkg.go.dev/context
+2. Sameer Ajmani. *Go Concurrency Patterns: Context.* Go 博客, 2014.
+   https://go.dev/blog/context
+3. Go 1.21 Release Notes（context.AfterFunc / WithoutCancel / WithDeadlineCause）.
+   https://go.dev/doc/go1.21
+
+## 许可
+
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
