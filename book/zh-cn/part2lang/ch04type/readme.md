@@ -4,18 +4,16 @@ title: "第 4 章 类型系统"
 bookCollapseSection: true
 ---
 
-# 第 3 章 语言核心
+# 第 4 章 类型系统
 
-- [3.1 数组、切片与字符串](./slice.md)
-- [3.2 散列表](./map.md)
-- [3.3 函数调用](./func.md)
-- [3.4 延迟调用](./defer.md)
-- [3.5 恐慌与恢复](./panic.md)
-- [3.6 通信原语](./chan.md)
-- [3.7 接口](./interface.md)
-- [3.8 类型系统](./type.md)
-- [3.9 类型别名](./alias.md)
-- [3.10 进一步阅读的参考文献](./ref.md)
+- [4.1 运行时类型系统](./type.md)
+- [4.2 接口](./interface.md)
+- [4.3 类型别名](./alias.md)
+- [4.4 进一步阅读的参考文献](./ref.md)
+
+（数据结构、函数、通道等原属旧"语言核心"章，现已分别移至
+[第 5 章 数据结构](../ch05data)、[第 6 章 函数、延迟与恐慌](../ch06func)、
+[第 10 章 通道与 select](../../part3concurrency/ch10chan)。）
 
 <div class="quote">
 <i class="quote-mark fas fa-thumbtack"></i>
@@ -32,4 +30,4 @@ Simplicity is complicated.
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
