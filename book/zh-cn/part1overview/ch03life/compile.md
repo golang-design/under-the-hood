@@ -3,70 +3,62 @@ weight: 1302
 title: "3.2 Go 程序编译流程"
 ---
 
-# 2.2 Go 程序编译流程
+# 3.2 Go 程序编译流程
 
+`go` 命令（[3.1](./cmd.md)）为每个包调用编译器 `compile`，把 `.go` 源码变成目标文件。这一节
+鸟瞰这条编译流水线的几个阶段,目的是建立全局图景，编译器各阶段的内部细节（SSA、优化、逃逸
+分析等）留待 [15 编译器](../../part5toolchain/ch15compile)深入。
 
+## 3.2.1 一条经典的编译流水线
 
-## 2.2.1 第一阶段：词法和语法分析
+Go 编译器（`cmd/compile`）走的是一条相当经典的多阶段流水线，把高层源码逐步降低到机器码：
 
-- `cmd/compile/internal/syntax`（词法分析器，解析器，语法树）
-
-在编译的第一阶段，源代码被 token 化（词法分析），解析（语法分析），并为每个源构造语法树文件。每个语法树都是相应源文件的精确表示对应于源的各种元素的节点，如表达式，声明和陈述。语法树还包括位置信息用于错误报告和调试信息的创建。
-
-```
-main -> gc.Main -> amd64.Init -> amd64.LinkArch.Init
--> typecheck -> typecheck -> saveerrors -> typecheckslice
--> checkreturn -> checkMapKeys -> capturevars -> 
-typecheckinl -> inlcalls -> escapes -> 
-newNowritebarrierrecChecker -> transformclosure
-```
-
-## 2.2.2 第二阶段：语义分析
-
-- `cmd/compile/internal/gc`（类型检查，AST变换）
-
-对 AST 进行类型检查。第一步是名称解析和类型推断，它们确定哪个对象属于哪个标识符，以及每个表达式具有的类型。类型检查包括某些额外的检查，例如 “声明和未使用” 以及确定函数是否终止。
-
-在 AST 上也进行了某些转换。一些节点基于类型信息被细化，例如从算术加法节点类型分割的字符串添加。其他一些例子是死代码消除，函数调用内联和转义分析。
-
-语义分析的过程中包含几个重要的操作：逃逸分析、变量捕获、函数内联、闭包处理。
-
-## 2.2.3 第三阶段：SSA 生成
-
-- `cmd/compile/internal/gc` (转换为SSA)
-- `cmd/compile/internal/ssa` (SSA 传递与规则)
-
-在此阶段，AST将转换为静态单一分配（SSA）形式，这是一种具有特定属性的低级中间表示，可以更轻松地实现优化并最终从中生成机器代码。
-
-在此转换期间，将应用函数内在函数。 这些是特殊功能，编译器已经教导它们根据具体情况用大量优化的代码替换。
-
-在AST到SSA转换期间，某些节点也被降级为更简单的组件，因此编译器的其余部分可以使用它们。 例如，内置复制替换为内存移动，并且范围循环被重写为for循环。 其中一些目前发生在转换为SSA之前，由于历史原因，但长期计划是将所有这些都移到这里。
-
-然后，应用一系列与机器无关的传递和规则。 这些不涉及任何单个计算机体系结构，因此可以在所有 `GOARCH` 变体上运行。
-
-这些通用过程的一些示例包括消除死代码，删除不需要的零检查以及删除未使用的分支。通用重写规则主要涉及表达式，例如用常量值替换某些表达式，以及优化乘法和浮点运算。
-
-```
-initssaconfig -> peekitabs -> funccompile ->
-finit -> compileFunctions -> compileSSA -> buildssa -> genssa ->
--> typecheck -> checkMapKeys -> dumpdata -> dumpobj
+```mermaid
+flowchart LR
+    SRC[".go 源码"] --> LEX["词法 + 语法分析<br/>→ 抽象语法树 AST"]
+    LEX --> TC["类型检查<br/>types2，含泛型"]
+    TC --> IR["转为编译器中间表示 IR"]
+    IR --> SSA["生成 SSA 中间码<br/>大量与机器无关的优化"]
+    SSA --> MC["降低到目标架构<br/>寄存器分配、生成机器码"]
+    MC --> OBJ["目标文件 .o"]
 ```
 
-## 2.2.4 第四阶段：机器码生成
+- **词法与语法分析**：把源码切成 token、构造出抽象语法树（AST）。
+- **类型检查**：用 `types2`（[8.3](../../part2lang/ch08generics/checker.md)）核对类型、解析泛型、
+  做类型推断,这一步抓出绝大多数编译错误。
+- **中间表示与 SSA**：转成编译器内部 IR，再降到**静态单赋值**（SSA）形式,SSA 上做大量与
+  机器无关的优化（常量折叠、死代码消除、内联、逃逸分析等，见
+  [15 编译器](../../part5toolchain/ch15compile)）。
+- **代码生成**：把 SSA 降低到具体架构，做寄存器分配，吐出机器指令，写成目标文件。
 
-- `cmd/compile/internal/ssa` (底层SSA和架构特定的传递)
-- `cmd/internal/obj` (生成机器码)
+## 3.2.2 编译速度是一等约束
 
-编译器的机器相关阶段以“底层”传递开始，该传递将通用值重写为其机器特定的变体。例如，在 amd64 存储器操作数上是可能的，因此可以组合许多加载存储操作。
+这条流水线的设计处处透着 Go 对**编译速度**的执念（[1.1](../ch01intro/history.md)）。Go 的语法被
+刻意设计得**易于快速解析**（无需复杂的符号表回溯）;包的依赖是**显式且无环**的，编译器只需读
+依赖包的导出信息（一个紧凑的接口摘要）而非其全部源码,这避免了 C++ 头文件那种传递性重编译的
+噩梦。"未使用的导入/变量即报错"也并非洁癖，而是帮助编译器与人都快速看清依赖。这些设计合起来，
+让 Go 能以惊人的速度编译大型代码库,而这正是它当初要解决的痛点。
 
-请注意，较低的通道运行所有特定于机器的重写规则，因此它当前也应用了大量优化。
+## 3.2.3 与运行时的协同
 
-一旦SSA“降低”并且更加特定于目标体系结构，就会运行最终的代码优化过程。这包括另一个死代码消除传递，移动值更接近它们的使用，删除从未读取的局部变量，以及寄存器分配。
+编译器并非孤立工作，它与运行时（runtime）深度协同,这是理解全书的一把钥匙。编译器在每个函数
+序言插入**栈增长检查**（[2.2](../ch02asm/callconv.md)、[14 执行栈](../../part4memory/ch14stack)）;
+为每个类型生成**类型描述符**与 **GC 指针位图**（[4.1](../../part2lang/ch04type/type.md)、
+[13 垃圾回收](../../part4memory/ch13gc)）;在指针写入处插入**写屏障**
+（[13.x](../../part4memory/ch13gc)）;把 `go f()` 翻译成 `runtime.newproc`、`<-ch` 翻译成
+`runtime.chanrecv`。换言之，编译器生成的代码里，处处埋着对运行时的调用与配合。Go 的"魔法"
+（goroutine、GC、channel）正是**编译器与运行时合谋**的产物,本书反复在这两者的接缝处展开。
+理解了编译只是流水线的一站、且时刻在为运行时铺路，后面的章节就有了统一的视角。
 
-作为此步骤的一部分完成的其他重要工作包括堆栈框架布局，它将堆栈偏移分配给局部变量，以及指针活动分析，它计算每个 GC 安全点上的堆栈指针。
+## 延伸阅读的文献
 
-在SSA生成阶段结束时，Go 函数已转换为一系列 `obj.Prog` 指令。它们会被传递给装载器（`cmd/internal/obj`），将它们转换为机器代码并写出最终的目标文件。目标文件还将包含反射数据，导出数据和调试信息。
+1. The Go Authors. *Introduction to the Go compiler (cmd/compile/README).*
+   https://github.com/golang/go/blob/master/src/cmd/compile/README.md
+2. The Go Authors. *Go compiler SSA backend.* https://github.com/golang/go/tree/master/src/cmd/compile/internal/ssa
+3. 本书 [15 编译器](../../part5toolchain/ch15compile)（各阶段深入）、
+   [8.3 类型检查技术](../../part2lang/ch08generics/checker.md).
+4. Rob Pike. *Go at Google*（编译速度作为设计目标）. https://go.dev/talks/2012/splash.article
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

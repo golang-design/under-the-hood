@@ -4,12 +4,11 @@ title: "第 1 章 设计哲学与历史"
 bookCollapseSection: true
 ---
 
-# 第 1 章 Go 语言的前世今生
+# 第 1 章 设计哲学与历史
 
 - [1.1 编程语言的发展](./history.md)
 - [1.2 Go 语言综述](./go.md)
-- [1.3 顺序过程通讯](./csp.md)
-- [1.4 Plan 9 汇编语言](./asm.md)
+- [1.3 顺序进程通讯](./csp.md)
 
 <div class="quote">
 <i class="quote-mark fas fa-thumbtack"></i>
@@ -26,4 +25,4 @@ The reason I was enthusiastic about Go is because, at the same time we were star
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
