@@ -3,12 +3,57 @@ weight: 5304
 title: "17.4 vgo 与 dep 之争"
 ---
 
-# 10.4 vgo 与 dep 之争
+# 17.4 vgo 与 dep 之争
 
+今天的 Go 模块（Go Modules）并非一开始就有，它诞生于一场颇具戏剧性、也颇有争议的社区事件,
+**vgo 与 dep 之争**。这段历史不只是八卦，它折射出开源项目治理、技术决策与社区情绪之间的真实
+张力，是理解 Go 模块"为何是今天这样"的最后一块拼图。
 
+## 17.4.1 dep：社区的官方实验
 
-- [Cox, 2018] Russ Cox. cmd/go: add package version support to Go toolchain. Mar 7, 2018. https://github.com/golang/go/issues/24301
+GOPATH 时代的依赖混乱（[17.1](./challenges.md)）催生了众多第三方工具。2016 年前后，Go 团队
+牵头、社区深度参与，启动了一个**官方实验性**依赖工具 **`dep`**。dep 采用的是当时**主流**的思路：
+用一个 lock 文件锁定版本、用**约束求解器**（SAT 风格）去寻找一组满足所有约束的版本,与
+其他语言的包管理器（Cargo、npm 等）一脉相承。社区为 dep 投入了大量心血，许多人理所当然地
+认为它就是 Go 依赖管理的未来,"官方实验"的定位也强化了这个预期。
+
+## 17.4.2 vgo：一个出人意料的提案
+
+2018 年，Russ Cox 突然发表了 **vgo**（versioned go）系列文章，提出一套**完全不同**的方案,
+也就是后来的 Go 模块：语义化导入版本（[17.2](./semantics.md)）、最小版本选择
+（[17.3](./minimum.md)）、不用 lock 文件、不用约束求解器。vgo 在几乎每个关键设计上都与 dep
+**背道而驰**：dep 用求解器找最新可行版本，vgo 用 MVS 取最小可行版本;dep 用 lock 文件，vgo
+靠 `go.mod` 的确定性;dep 没有把主版本写进路径，vgo 强制语义化导入版本。
+
+这引发了 Go 社区历史上最激烈的争议之一。许多投入了 dep 的贡献者感到**被忽视**,他们参与了
+那么久的"官方实验"，结果核心团队另起炉灶、推出一套理念迥异的方案。争论既有技术层面的
+（MVS 反直觉、语义化导入版本太严格），也有治理层面的（决策过程是否尊重社区投入）。情绪一度
+相当激烈。
+
+## 17.4.3 结局与启示
+
+最终，**vgo 的方案胜出**,它演化为 Go Modules，于 Go 1.11（2018）引入、Go 1.16 起成为默认，
+`dep` 则被弃置。回头看，vgo 的核心论点站住了脚：MVS 带来的**可重现、可信、简单**
+（[17.3](./minimum.md)），确实优于求解器方案的复杂与不可预测;语义化导入版本虽严格，却从根上
+化解了不兼容版本共存的难题。Go 模块如今运转良好，已是 Go 生态不可或缺的基石。
+
+但这段历史的启示，超出技术本身。它展示了开源治理的**真实张力**：一个由少数核心设计者主导、
+高度重视设计一致性的项目（Go），与一个期待被充分协商的社区之间，难免摩擦。它也提醒我们：
+**"主流做法"未必是最优解**,当几乎所有语言都用约束求解器时，Go 敢于用一套更简单的算法另辟
+蹊径，并最终被证明是对的。这需要技术上的洞见，也需要承受争议的定力。vgo 与 dep 之争，
+既是 Go 务实、敢于逆主流而行的设计哲学的又一例证，也是一面镜子,照见了技术决策从来不只是
+技术问题。至此，这本书从 Go 的设计哲学（[1](../../part1overview/ch01intro)）出发，走过语言、
+并发、内存、工具链，最终落在依赖管理这场关于"简单与可信"的抉择上,而"把复杂度安置到正确
+位置、让简单成为结果"这条主线，自始至终，未曾改变。
+
+## 延伸阅读的文献
+
+1. Russ Cox. *Go & Versioning（vgo 系列全文）.* https://research.swtch.com/vgo
+2. The Go Authors. *Using Go Modules（博客系列）.* https://go.dev/blog/using-go-modules
+3. Sam Boyer 等. *dep 项目与社区讨论存档.* https://github.com/golang/dep
+4. The Go Authors. *Go 1.11 / 1.16 Release Notes（模块引入与转默认）.*
+   https://go.dev/doc/go1.11 ，https://go.dev/doc/go1.16
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

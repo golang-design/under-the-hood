@@ -3,10 +3,51 @@ weight: 5301
 title: "17.1 依赖管理的难点"
 ---
 
-# 10.1 依赖管理的难点
+# 17.1 依赖管理的难点
 
+现代软件站在无数依赖之上。如何确定每个依赖用哪个版本、让构建**可重现**、又避免"依赖地狱",
+是每个语言生态都要面对的难题。Go 在这件事上走过一段弯路，最终给出了一个颇为独特的答案
+（[17.3](./minimum.md) 的 MVS）。这一节先讲清问题本身的难在哪。
 
+## 17.1.1 钻石依赖与版本冲突
+
+依赖管理的核心难题，集中体现在**钻石依赖**上：你的程序依赖 A 和 B，而 A 和 B 又都依赖 C,但
+A 要 C 的 v1.2、B 要 C 的 v1.5。最终只能选一个版本的 C 链进程序,选哪个？选错了，某一方可能
+行为异常。当依赖图有成百上千个节点、各有各的版本约束时，"找到一组让所有约束都满足的版本"
+就成了一个**约束求解**问题,许多语言（如用 SAT 求解器的包管理器）正是这样做的，而这可能很慢、
+结果也可能让人意外。
+
+## 17.1.2 可重现构建
+
+第二个难题是**可重现性**：今天在我机器上构建出的程序，和下个月在 CI 上、在你机器上构建出的，
+必须是**同一个**,依赖的版本不能因为"构建时碰巧拉到了某个最新版"而漂移。否则"在我这儿是好的"
+就成了噩梦,线上 bug 无法复现，因为大家的依赖版本悄悄不一样了。可重现构建要求依赖版本的选择是
+**确定的**、可记录、可锁定的。
+
+## 17.1.3 Go 的弯路：GOPATH 时代
+
+Go 早期（模块出现之前）的依赖管理相当原始,**GOPATH 模式**：所有代码放在一个全局
+`GOPATH/src` 目录下，导入路径就是目录路径。它的致命缺陷是**没有版本概念**：`go get` 总是拉
+依赖的**最新**主分支代码，不同时间拉到的可能不一样,既不可重现，也无法表达"我要 C 的 v1.2"。
+钻石依赖更是无解,GOPATH 里一个包只能有一份代码、一个版本。社区为填补这个空缺造了一堆第三方
+工具（godep、glide、dep 等，[17.4](./fight.md)），用各种办法（vendor 目录、lock 文件）打补丁，
+但始终没有官方的统一答案。
+
+这段弯路恰恰说明依赖管理之难,连以工程友好著称的 Go，都在这件事上摸索了多年才找到正解。
+2018 年起的 **Go 模块**（Go Modules）才终于给出官方方案：用 `go.mod` 声明依赖及版本、`go.sum`
+锁定校验、并用一套独特的版本选择算法（[17.3](./minimum.md)）求解。本章接下来就拆解这个方案的
+几块基石：语义化版本（[17.2](./semantics.md)）、最小版本选择（[17.3](./minimum.md)）、以及它
+诞生前那场决定 Go 走向的工具之争（[17.4](./fight.md)）。
+
+## 延伸阅读的文献
+
+1. Russ Cox. *Go & Versioning（"vgo" 系列文章，问题与方案的完整论述）.*
+   https://research.swtch.com/vgo
+2. The Go Authors. *Go Modules Reference.* https://go.dev/ref/mod
+3. Titus Winters, Tom Manshreck, Hyrum Wright. *Software Engineering at Google*
+   （大规模依赖管理的挑战）. 2020.
+4. 本书 [17.3 最小版本选择算法](./minimum.md)、[17.4 vgo 与 dep 之争](./fight.md).
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

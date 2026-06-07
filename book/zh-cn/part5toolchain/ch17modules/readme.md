@@ -4,12 +4,12 @@ title: "第 17 章 模块与依赖"
 bookCollapseSection: true
 ---
 
-# 第 10 章 依赖管理
+# 第 17 章 模块与依赖
 
-- [10.1 依赖管理的难点](./challenges.md)
-- [10.2 语义化版本管理](./semantics.md)
-- [10.3 最小版本选择算法](./minimum.md)
-- [10.4 vgo 与 dep 之争](./fight.md)
+- [17.1 依赖管理的难点](./challenges.md)
+- [17.2 语义化版本管理](./semantics.md)
+- [17.3 最小版本选择算法](./minimum.md)
+- [17.4 vgo 与 dep 之争](./fight.md)
 
 <div class="quote">
 <i class="quote-mark fas fa-thumbtack"></i>
@@ -26,4 +26,4 @@ Why not do what other languages do? Java has Maven, Node has NPM, Ruby has Bundl
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
