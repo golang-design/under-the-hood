@@ -18,7 +18,7 @@ title: "14.3 栈的增长"
 ## 14.3.1 函数序言：每次调用都先问一句
 
 每个 Goroutine 的 `g` 结构里有一个字段 `stackguard0`，它是「栈还能用到哪里」的警戒线
-（[2.2](../../part1basic/ch02life/init.md)）。正常情况下它等于 `stack.lo + stackGuard`，
+（[2.2](../../part1overview/ch02asm/callconv.md)）。正常情况下它等于 `stack.lo + stackGuard`，
 即栈底再抬高一个保护区的位置。函数序言要做的，就是拿当前的栈指针 SP 和这条警戒线比较：栈向
 低地址生长，一旦 SP 跌到 `stackguard0` 之下，就说明剩余空间不足以容纳即将压入的这一帧，必须
 先扩容。
@@ -223,7 +223,7 @@ Goroutine 可以成千上万」这一承诺背后的工程实现。下一节 [14
    https://github.com/golang/go/blob/master/src/internal/abi/stack.go （三档检查的阈值常量）
 5. Brad Fitzpatrick et al. *Contiguous stacks design document.*
    https://docs.google.com/document/d/1wAaf1rYoM4S4gtnPh0zOlGzWtrZFQ5suE8qr2sD8uWQ （连续栈替换分段栈的设计依据）
-6. 本书 [2.2 初始化概览](../../part1basic/ch02life/init.md)（stackguard0 的设立）、
+6. 本书 [2.2 调用规范](../../part1overview/ch02asm/callconv.md)（stackguard0 的设立）、
    [9.7 协作与抢占](../../part3concurrency/ch09sched/preemption.md)（stackPreempt 借道序言检查）、
    [14.4 栈的拷贝](./copy.md)（copystack 与指针修正）。
 
