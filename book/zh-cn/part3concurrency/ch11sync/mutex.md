@@ -177,7 +177,8 @@ func (m *Mutex) unlockSlow(new int32) {
 			// Grab the right to wake someone.
 			new = (old - 1<<mutexWaiterShift) | mutexWoken
 			if atomic.CompareAndSwapInt32(&m.state, old, new) {
-				// 唤醒一个阻塞的 goroutine，但不是唤醒第一个等待者
+				// 唤醒一个等待者（信号量等待队列为 FIFO，故为最久等待者），但 handoff=false
+				// 表示不直接把锁移交给它，被唤醒者仍需与新到来的 goroutine 竞争
 				runtime_Semrelease(&m.sema, false, 1)
 				return
 			}

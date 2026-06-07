@@ -256,9 +256,11 @@ for i := 0; i < int(size); i++ {
 	l := indexLocal(local, (pid+i+1)%int(size))
 ```
 
-我们来证明一下此处确实不会发生取到自身的情况，不妨设：`pid = (pid+i+1)%size` 则 `pid+i+1 = a*size+pid`。
-即：`a*size = i+1`，其中 a 为整数。由于 `i<size`，于是 `a*size = i+1 < size+1`，则：
-`(a-1)*size < 1` ==> `size < 1 / (a-1)`，由于 `size` 为非负整数，这是不可能的。
+这里的 `+1` 偏移，意在让窃取从「下一个」`poolLocal` 开始。需要纠正一个常见的误解：这段写法
+并不能保证永远取不到自身。设 $(pid+i+1) \bmod size = pid$，则 $i+1 \equiv 0 \pmod{size}$；
+由于 $0 \le i < size$，唯一的解是 $i = size-1$。也就是说，循环的前 $size-1$ 次都落在其他
+`poolLocal` 上，只有最后一次（$i = size-1$）才绕回自身。因此这段循环的真正效果是：
+先依次扫过所有其他 `poolLocal`，把自身留到最后。
 
 因此当取到其他 `poolLocal` 时，便能从 shared 中取对象了。
 
