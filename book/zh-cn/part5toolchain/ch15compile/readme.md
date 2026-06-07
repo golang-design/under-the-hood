@@ -4,18 +4,19 @@ title: "第 15 章 编译器流水线"
 bookCollapseSection: true
 ---
 
-# 第 13 章 编译技术
+# 第 15 章 编译器流水线
 
-- [13.1 词法与文法](./parse.md)
-- [13.2 中间表示](./ssa.md)
-- [13.3 优化器](./optimize.md)
-- [13.4 指针检查器](./unsafe.md)
-- [13.5 逃逸分析](./escape.md)
-- [13.6 自举](./bootstrap.md)
-- [13.7 链接器](./link.md)
-- [13.8 汇编器](./asm.md)
-- [13.9 调用规约](./callconv.md)
-- [13.10 cgo 与系统调用](./cgo.md)
+- [15.1 词法与文法](./parse.md)
+- [15.2 中间表示](./ssa.md)
+- [15.3 优化器](./optimize.md)
+- [15.4 指针检查器](./unsafe.md)
+- [15.5 逃逸分析](./escape.md)
+- [15.6 cgo](./cgo.md)
+- [15.7 过去、现在与未来](./future.md)
+
+（自举、链接器、汇编器、调用规约已分别移至
+[第 3 章 程序的生命周期](../../part1overview/ch03life)与
+[第 2 章 汇编与调用约定](../../part1overview/ch02asm)。）
 
 <div class="quote">
 <i class="quote-mark fas fa-thumbtack"></i>
@@ -35,4 +36,4 @@ software.
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

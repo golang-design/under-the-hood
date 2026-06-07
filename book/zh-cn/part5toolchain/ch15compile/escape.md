@@ -3,10 +3,59 @@ weight: 5105
 title: "15.5 逃逸分析"
 ---
 
-# 13.5 逃逸分析
+# 15.5 逃逸分析
 
+Go 程序员从不手动决定一个变量放栈还是放堆,这件事由编译器的**逃逸分析**（escape analysis）
+自动完成。它是 Go 性能的隐形功臣：把尽可能多的对象留在栈上，能大幅减轻垃圾回收
+（[13 GC](../../part4memory/ch13gc)）的负担。这一节讲清它怎么判断、为何重要。
 
+## 15.5.1 逃逸：决定栈还是堆
+
+核心问题：一个变量该分配在**栈**上（随函数返回自动消失，零 GC 成本），还是**堆**上（由 GC 管理）？
+判据是**生命周期**：若一个变量的引用在函数返回后仍可能被用到，它就不能放栈上（栈帧已销毁），
+必须**逃逸**到堆。逃逸分析就是静态地判断"这个变量的指针会不会跑出它所在函数的作用域"。
+
+典型的逃逸场景：把局部变量的地址 `return &x`、把指针存进一个生命周期更长的结构、把变量交给
+一个 `interface{}`（[4.2](../../part2lang/ch04type/interface.md)）参数（编译器常无法确定接口内的
+指针流向）、闭包捕获了会外传的变量（[6.1](../../part2lang/ch06func/func.md)）。反之，只在函数内
+使用、不外泄的局部变量，留在栈上。可以用 `go build -gcflags=-m` 让编译器打印它的逃逸判断。
+
+## 15.5.2 它怎么工作
+
+逃逸分析本质是一种**数据流分析**：编译器为函数构建一张"指针流向图",追踪每个指针值可能流到
+哪里（赋值给谁、作为参数传给谁、被谁返回）。若某个变量的地址沿着这张图最终流到了"会活过本
+函数"的地方（返回值、全局变量、逃逸的参数等），它就被判定逃逸。这个分析是**保守**的：当编译器
+**无法确定**一个指针会不会逃逸时，它选择"宁可逃逸"（放堆),因为放堆总是安全的（GC 兜底），
+而错误地放栈会导致悬垂指针。所以逃逸分析的精度直接影响性能,分析越精确，越多对象能安全地
+留在栈上。
+
+这也和连续栈（[14.4](../../part4memory/ch14stack)）形成呼应：栈会移动，所以**任何会被外部长期
+持有的地址都必须逃逸到堆**,栈上对象的地址不能被外部安全持有。逃逸分析与栈管理是同一个
+约束的两面。
+
+## 15.5.3 为何如此重要
+
+逃逸分析是 Go"既有 GC 的便利、又不至于被 GC 拖垮"的关键。它在编译期就**消化掉大量短命对象**,
+让它们根本不进堆、不劳 GC。这也是 [13.8](../../part4memory/ch13gc/generational.md) 说"逃逸分析
+削弱了分代假设收益"的原因,那批"年轻就死"的对象，很多已被逃逸分析留在栈上消化了。
+
+对程序员，逃逸分析意味着：**写出"不让指针逃逸"的代码，能显著降低 GC 压力**,这是 Go 性能调优
+的核心手艺之一。常见手段如避免不必要地返回指针、复用缓冲（[11.6](../../part3concurrency/ch11sync/pool.md)）、
+小心 `interface{}` 装箱。但也不必过度操心,逃逸分析多数时候做得很好，只在 profiler
+（[16 工具与可观测性](../ch16tools)）指出分配是瓶颈时，才值得拿 `-gcflags=-m` 去逐处优化。
+一个让程序员"几乎不用想栈还是堆、却又能在需要时介入"的编译器分析，正是 Go"默认省心、需要时
+可控"哲学的又一体现。
+
+## 延伸阅读的文献
+
+1. The Go Authors. *cmd/compile/internal/escape（逃逸分析实现）.*
+   https://github.com/golang/go/tree/master/src/cmd/compile/internal/escape
+2. The Go Authors. *Frequently Asked Questions：栈与堆 / 逃逸.*
+   https://go.dev/doc/faq#stack_or_heap
+3. 本书 [13 垃圾回收](../../part4memory/ch13gc)、
+   [14 执行栈管理](../../part4memory/ch14stack)、[15.3 优化器](./optimize.md).
+4. Bruno Cardoso Lopes 等关于指针逃逸/分配下沉的编译优化文献（背景）.
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
