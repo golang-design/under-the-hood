@@ -5,50 +5,117 @@ title: "1.2 Go 语言综述"
 
 # 1.2 Go 语言综述
 
-这一节为全书搭一个骨架：用一张鸟瞰图，把 Go 的几大支柱及其在本书中的位置串起来。后续每一章
-都是对这里某个支柱的深入,先有全局，再钻细节，读起来不至迷路。
+这一节为全书搭一个骨架。它不是语法手册,Go 的语法在任何入门书里都讲得清楚，重复它没有意义。
+我们要做的，是先建立一个**俯瞰全局的视角**：Go 由哪几层构成、它有哪些**与众不同**的设计决定、
+以及这些决定分别在本书的哪一章展开。读完这一节，再钻进后面任何一章，都不会迷路。
 
 ## 1.2.1 三层视角
 
-理解 Go 可以分三层。**语言层**：语法、类型系统、并发原语,你写的代码。**运行时层**：调度器、
-内存分配器、垃圾回收器,一个与你的程序一起编译进二进制、在背后默默支撑的"小操作系统"。
-**工具链层**：编译器、链接器、模块系统、可观测性工具,把源码变成可运行、可诊断的程序。本书
-正是按这三层（外加历史与基础）组织的。Go 的一个鲜明特点是：**运行时层极其厚重**,它把调度、
-GC、栈管理等本属操作系统范畴的复杂度，接管进了语言运行时，以换取 goroutine、自动内存管理这些
-上层的简洁。本书大半篇幅都在剖析这个"背后的运行时"。
+理解 Go，可以分三层来看，本书也大致按这三层加上历史铺陈来组织。
 
-## 1.2.2 几大支柱与本书地图
+**语言层**,你直接书写的东西：语法、类型系统、并发原语、错误处理。它刻意小而正交。
 
-- **并发**：goroutine（[9 调度器](../../part3concurrency/ch09sched)）、channel 与 CSP
-  （[10 通道](../../part3concurrency/ch10chan)、[1.3](./csp.md)）、共享内存同步与内存模型
-  （[11 同步](../../part3concurrency/ch11sync)）。这是 Go 最具辨识度的部分，本书着墨最多。
-- **类型系统**：结构化、隐式满足的接口（[4.2](../../part2lang/ch04type/interface.md)）、组合优于
-  继承、2022 年加入的泛型（[8 泛型](../../part2lang/ch08generics)）。
-- **内存管理**：基于 tcmalloc 思路的分配器（[12 内存分配器](../../part4memory/ch12alloc)）、
-  并发标记清除的垃圾回收（[13 垃圾回收](../../part4memory/ch13gc)）、可增长的连续栈
-  （[14 执行栈](../../part4memory/ch14stack)）。
-- **错误处理**：错误即值（[7 错误处理](../../part2lang/ch07errors)），而非异常。
-- **工具链**：以编译速度为先的编译器（[15 编译器](../../part5toolchain/ch15compile)）、丰富的
-  可观测性工具（[16 工具与可观测性](../../part5toolchain/ch16tools)）、解决"依赖地狱"的模块系统
-  （[17 模块](../../part5toolchain/ch17modules)）。
+**运行时层**,与你的程序一起被编译进同一个二进制、在背后默默支撑的「小操作系统」：goroutine
+调度器、内存分配器、垃圾回收器、栈管理。这是 Go 最厚重、也最值得剖析的部分。
 
-## 1.2.3 设计的内在一致性
+**工具链层**,把源码变成可运行、可诊断、可维护程序的机器：编译器、链接器、模块系统、测试与
+可观测性工具。
 
-把这些支柱放在一起看，会发现它们并非互不相干的特性堆砌，而服从同一组价值观:**简单优于复杂、
-显式优于隐式、组合优于继承、可读与可维护优于聪明、编译速度与工程规模优于语言的极致表达力。**
-正因如此，理解 Go 的任何一个局部，最好都回到这组价值观去对照,为什么调度器是协作式加信号
-抢占而非别的（[9.7](../../part3concurrency/ch09sched/preemption.md)）、为什么内存模型只给顺序
-一致原子（[11.9](../../part3concurrency/ch11sync/mem.md)）、为什么泛型等了十三年又做得如此
-克制（[8.1](../../part2lang/ch08generics/history.md)），答案最终都指回这里。本书的剖析，既是在
-讲"Go 怎么实现的"，也是在反复印证"Go 为何如此选择"。
+```
+你的 Go 源码
+    │  编译器 / 链接器（工具链层，第 3、15 章）
+    ▼
+单个自包含的二进制  ──  内含 runtime（运行时层，第 9–14 章）
+    │  运行时：调度 goroutine、分配内存、回收垃圾、管理栈
+    ▼
+在操作系统线程上并发执行（语言层语义，第 4–8、10、11 章）
+```
+
+Go 的一个鲜明特征，是它的**运行时层异常厚重**。它把调度、垃圾回收、栈管理这些本属操作系统
+范畴的复杂度，接管进了语言运行时,以换取上层的简洁：一个 `go` 关键字、自动内存管理、可在
+任意深度阻塞的 goroutine。本书大半篇幅，正是在剖析这个「藏在二进制里的微型操作系统」。
+
+## 1.2.2 几个与众不同的设计决定
+
+Go 的气质，集中体现在几个和主流语言不一样的决定上。下面各用一小段代码点出，并指向它在本书
+的归属。
+
+**并发是语言的一等公民（CSP）。** 启动一个并发执行只需 `go`，协调用 channel,不必碰线程库与锁。
+
+```go
+ch := make(chan int)
+go func() { ch <- compute() }() // 启动一个 goroutine，算完把结果送进 channel
+result := <-ch                  // 在此等待并接收，通信即同步
+```
+
+这背后是 CSP 思想（[1.3](./csp.md)）、廉价的有栈协程与 M:N 调度器
+（[9](../../part3concurrency/ch09sched)）、以及 channel 的实现（[10](../../part3concurrency/ch10chan)）。
+
+**接口是结构化、隐式满足的。** 一个类型只要拥有接口要求的方法，就**自动**满足它，无需 `implements`
+声明。
+
+```go
+type Reader interface { Read(p []byte) (int, error) }
+
+// 任何拥有 Read([]byte)(int,error) 方法的类型，自动就是 Reader，
+// 哪怕它的作者从没听说过 Reader。这让接口可以「事后」为别人的类型定义。
+```
+
+这是组合优于继承、结构化优于名义类型的体现（[4.2](../../part2lang/ch04type/interface.md)）。
+
+**错误是值，不是异常。** 错误经普通返回值显式传递、显式处理,没有 `try/catch` 的隐式跳转。
+
+```go
+f, err := os.Open(name)
+if err != nil {
+    return fmt.Errorf("open %s: %w", name, err) // 包装上下文，显式上抛
+}
+defer f.Close() // defer 把清理写在获取旁边
+```
+
+`error`、`%w` 包装、`defer` 分别见 [7](../../part2lang/ch07errors) 与
+[6.2](../../part2lang/ch06func/defer.md)。
+
+**显式优于隐式。** 没有运算符重载、没有隐式数值转换、未使用的导入与变量直接编译报错。看一行
+Go 代码，几乎总能猜出它在做什么,这份「无魔法」是刻意的设计纪律
+（[1.1](./history.md)）。
+
+## 1.2.3 本书地图
+
+把这些线索铺开，全书的结构就清楚了:
+
+- **第一部分 全景与历史**（本部分）：设计哲学与历史（[1](.)）、汇编与调用约定
+  （[2](../ch02asm)）、程序的生命周期（[3](../ch03life)，从 `go` 命令到 `main` 的生与死）。
+- **第二部分 语言特性**：类型系统与接口（[4](../../part2lang/ch04type)）、数据结构
+  （[5](../../part2lang/ch05data)，切片与 map）、函数/延迟/恐慌（[6](../../part2lang/ch06func)）、
+  错误处理（[7](../../part2lang/ch07errors)）、泛型（[8](../../part2lang/ch08generics)）。
+- **第三部分 并发**：调度器（[9](../../part3concurrency/ch09sched)）、通道与 select
+  （[10](../../part3concurrency/ch10chan)）、同步原语与内存模型（[11](../../part3concurrency/ch11sync)）。
+- **第四部分 内存**：内存分配器（[12](../../part4memory/ch12alloc)）、垃圾回收
+  （[13](../../part4memory/ch13gc)）、执行栈管理（[14](../../part4memory/ch14stack)）。
+- **第五部分 编译器与工具链**：编译器流水线（[15](../../part5toolchain/ch15compile)）、工具与
+  可观测性（[16](../../part5toolchain/ch16tools)）、模块与依赖（[17](../../part5toolchain/ch17modules)）。
+
+## 1.2.4 一以贯之的取向
+
+把这些支柱放在一起看，会发现它们并非互不相干的特性堆砌，而服从同一组价值观,这组价值观在
+[1.1](./history.md) 已经点明：**简单优于复杂、显式优于隐式、组合优于继承、可读可维护优于聪明、
+编译速度与工程规模优于语言的极致表达力。** 正因如此，理解 Go 的任何一个局部，最好都回到这组
+取向去对照。为什么调度器是协作加信号抢占（[9.7](../../part3concurrency/ch09sched/preemption.md)）、
+为什么内存模型只暴露顺序一致原子（[11.9](../../part3concurrency/ch11sync/mem.md)）、为什么泛型
+等了十三年又做得如此克制（[8.1](../../part2lang/ch08generics/history.md)）,答案最终都指回这里。
+
+本书的剖析，既是在讲「Go 是怎么实现的」，更是在反复印证「Go 为何如此选择」。带着这张地图与
+这组取向往下读，每一处实现细节，都会从孤立的知识点，变成同一种设计哲学的又一次具体展开。
 
 ## 延伸阅读的文献
 
 1. The Go Authors. *The Go Programming Language Specification.* https://go.dev/ref/spec
 2. Rob Pike. *Go at Google: Language Design in the Service of Software Engineering.* 2012.
    https://go.dev/talks/2012/splash.article
-3. Alan A. A. Donovan, Brian W. Kernighan. *The Go Programming Language.* 2015.
-4. The Go Authors. *Effective Go.* https://go.dev/doc/effective_go
+3. The Go Authors. *Effective Go.* https://go.dev/doc/effective_go
+4. Alan A. A. Donovan, Brian W. Kernighan. *The Go Programming Language.* 2015.
+5. Rob Pike. *Go Proverbs.* https://go-proverbs.github.io/
 
 ## 许可
 
