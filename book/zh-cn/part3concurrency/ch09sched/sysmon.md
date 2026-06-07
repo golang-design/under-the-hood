@@ -3,166 +3,51 @@ weight: 3108
 title: "9.8 系统监控"
 ---
 
-# 6.9 系统监控
+# 9.8 系统监控
 
-我们已经完整分析过调度器的调度执行了。
-当我们通过 `runtime.newproc` 创建好主 Goroutine 后，会将其加入到一个 P 的本地队列中。
-随着 `runtime.mstart` 启动调度器，主 Goroutine 便开始得以调度。
+协作式调度有一个内在的脆弱点：它依赖 goroutine 自觉让权。可万一某个环节不自觉，谁来兜底？
+答案是 `sysmon`，一个独立于普通调度之外的系统监控线程。它是整台调度机器的"守夜人"。
 
-```go
-// src/runtime/proc.go
+## 9.8.1 一个站在调度之外的观察者
 
-// 主 Goroutine
-func main() {
-	(...)
-	// 启动系统后台监控（定期垃圾回收、并发任务调度）
-	systemstack(func() {
-		newm(sysmon, nil)
-	})
-	(...)
-}
+`sysmon` 是一个特殊的 M：它**不绑定 P**，也不参与 [9.4](./schedule.md) 的调度循环，而是在自己的
+循环里独立运转。这一点至关重要，正因为它不依赖普通调度，当普通调度被某个赖着不走的 G 拖住时，
+它依然在外面照常巡查。它是那个"无论里面发生什么，都还醒着"的角色。
+
+为了既灵敏又不浪费 CPU，`sysmon` 的巡查节奏是自适应的：空闲时睡得久一些，最长约 10ms；
+一旦发现有事可做，就把睡眠间隔缩短，快速响应。
+
+## 9.8.2 它都看着什么
+
+```mermaid
+flowchart LR
+    SM["sysmon<br/>无 P 的监控线程<br/>自适应休眠 20µs~10ms"] --> R["retake：抢占运行过久的 G<br/>夺回陷入系统调用的 P"]
+    SM --> NP["netpoll：网络超过 10ms 未轮询则补轮询"]
+    SM --> GC["forcegc：距上次 GC 过久则触发"]
+    SM --> SV["scavenge：把闲置内存归还操作系统"]
+    SM --> DL["checkdead：死锁检测"]
 ```
 
-那么是时候看看主 Goroutine 中的系统监控 `newm(sysmon, nil)` 到底在干什么了。
+**retake 是它最核心的职责，分两种。** 其一，抢占运行过久的 G：`sysmon` 检查每个 P 上的 G 已经
+连续运行了多久，一旦超过约 10ms（`forcePreemptNS`），就调用 `preemptone` 把它标记为可抢占，
+这正是 [9.7](./preemption.md) 里那两条抢占路径的触发者，时间片的大致公平由此而来。其二，
+夺回陷入系统调用的 P：当某个 M 陷在系统调用里太久，它手里那个 P 就被白白占着，`sysmon` 会把
+这个 P 收回，转交给别的 M 去运行其他 G（[9.5 线程管理](./thread.md)）。
 
-## 6.9.1 监控循环
+**netpoll 兜底。** 正常情况下调度循环每轮都会顺手看一眼网络轮询器（[9.9](./poller.md)），
+但万一长时间没有轮询，`sysmon` 会在网络超过约 10ms 没被轮询时主动补一次，把就绪的网络
+goroutine 注入回运行队列，避免 I/O 事件被无限期耽搁。
 
-```go
-// 系统监控在一个独立的 m 上运行
-// 总是在没有 P 的情况下运行，因此不能出现写屏障
-//go:nowritebarrierrec
-func sysmon() {
-	lock(&sched.lock)
-	// 不计入死锁的系统 m 的数量
-	sched.nmsys++
-	// 死锁检查
-	checkdead()
-	unlock(&sched.lock)
+**还有几件后台杂务。** 距上次垃圾回收太久（约 2 分钟）则强制触发一轮（`forcegc`）；
+把长期闲置的内存归还操作系统（`scavenge`，见 [12 内存分配器](../../part4memory/ch12alloc)）；
+以及在所有 goroutine 都无法推进时报告死锁（`checkdead`，见 [16.1 运行时死锁检查](../../part5toolchain/ch16tools/deadlock.md)）。
 
-	idle := 0 // 没有 wokeup 的周期数
-	delay := uint32(0)
-	for {
-		if idle == 0 { // 每次启动先休眠 20us
-			delay = 20
-		} else if idle > 50 { // 1ms 后就翻倍休眠时间
-			delay *= 2
-		}
-		if delay > 10*1000 { // 增加到 10ms
-			delay = 10 * 1000
-		}
-		// 休眠
-		usleep(delay)
-		now := nanotime()
-		next := timeSleepUntil()
+## 9.8.3 设计上的意义
 
-		// 如果在 STW，则暂时休眠
-		if debug.schedtrace <= 0 && (sched.gcwaiting != 0 || atomic.Load(&sched.npidle) == uint32(gomaxprocs)) {
-			lock(&sched.lock)
-			if atomic.Load(&sched.gcwaiting) != 0 || atomic.Load(&sched.npidle) == uint32(gomaxprocs) {
-				if next > now {
-					atomic.Store(&sched.sysmonwait, 1)
-					unlock(&sched.lock)
-					// 确保 wake-up 周期足够小从而进行正确的采样
-					sleep := forcegcperiod / 2
-					if next-now < sleep {
-						sleep = next - now
-					}
-					shouldRelax := sleep >= osRelaxMinNS
-					if shouldRelax {
-						osRelax(true)
-					}
-					notetsleep(&sched.sysmonnote, sleep)
-					if shouldRelax {
-						osRelax(false)
-					}
-					now = nanotime()
-					next = timeSleepUntil()
-					lock(&sched.lock)
-					atomic.Store(&sched.sysmonwait, 0)
-					noteclear(&sched.sysmonnote)
-				}
-				idle = 0
-				delay = 20
-			}
-			unlock(&sched.lock)
-		}
-		// 需要时触发 libc interceptor
-		if *cgo_yield != nil {
-			asmcgocall(*cgo_yield, nil)
-		}
-		// 如果超过 10ms 没有 poll，则 poll 一下网络
-		lastpoll := int64(atomic.Load64(&sched.lastpoll))
-		if netpollinited() && lastpoll != 0 && lastpoll+10*1000*1000 < now {
-			atomic.Cas64(&sched.lastpoll, uint64(lastpoll), uint64(now))
-			list := netpoll(0) // 非阻塞，返回 Goroutine 列表
-			if !list.empty() {
-				// 需要在插入 g 列表前减少空闲锁住的 m 的数量（假装有一个正在运行）
-				// 否则会导致这些情况：
-				// injectglist 会绑定所有的 p，但是在它开始 M 运行 P 之前，另一个 M 从 syscall 返回，
-				// 完成运行它的 G ，注意这时候没有 work 要做，且没有其他正在运行 M 的死锁报告。
-				incidlelocked(-1)
-				injectglist(&list)
-				incidlelocked(1)
-			}
-		}
-		if next < now {
-			// There are timers that should have already run,
-			// perhaps because there is an unpreemptible P.
-			// Try to start an M to run them.
-			startm(nil, false)
-		}
-		// 抢夺在 syscall 中阻塞的 P、运行时间过长的 G
-		if retake(now) != 0 {
-			idle = 0
-		} else {
-			idle++
-		}
-		// 检查是否需要强制触发 GC
-		if t := (gcTrigger{kind: gcTriggerTime, now: now}); t.test() && atomic.Load(&forcegc.idle) != 0 {
-			lock(&forcegc.lock)
-			forcegc.idle = 0
-			var list gList
-			list.push(forcegc.g)
-			injectglist(&list)
-			unlock(&forcegc.lock)
-		}
-		(...)
-	}
-}
-```
-
-系统监控在运行时扮演的角色无需多言，
-因为使用的是运行时通知机制，在 Linux 上由 Futex 实现，不依赖调度器，
-因此它自身通过 `newm` 在一个 M 上独立运行，
-自身永远保持在一个循环内直到应用结束。休眠有好几种不同的休眠策略：
-
-1. 至少休眠 20us
-2. 如果抢占 P 和 G 失败次数超过五十、且没有触发 GC，则说明很闲，翻倍休眠
-3. 如果休眠翻倍时间超过 10ms，保持休眠 10ms 不变
-
-休眠结束后，先观察目前的系统状态，如果正在进行 GC，那么继续休眠。
-这时的休眠会被设置超时。
-
-如果没有超时被唤醒，则说明 GC 已经结束，一切都很好，继续做本职工作。
-如果超时，则无关 GC，必须开始进行本职善后：
-
-1. 如果 cgo 调用被 libc 拦截，继续触发起调用
-2. 如果已经有 10ms 没有 poll 网络数据，则 poll 一下网络数据
-3. 抢占在系统调用中阻塞的 P 已经运行时间过长的 G
-4. 检查是不是该触发 GC 了
-5. 如果距离上一次堆清理已经超过了两分半，则执行清理工作
-
-其中的 `note` 同步机制 `retake` 抢占已在[6.8 协作与抢占](./preemption.md) 和 [6.8 同步原语](./sync.md) 中详细讨论过了。
-
-## 6.9.2 小结
-
-总的来说系统监控的本职工作还是比较明确的，它在一个单独的 M 上执行，负责处理网络数据、抢占 P/G、触发 GC、清理堆 span。
-对于这些职责，我们需要确定一些细节工作：
-
-2. `gcTrigger` 如何触发 GC？在 [垃圾回收器：初始化](../ch08gc/init.md) 一节中详细讨论。
-3. `scavenge` 如何清理堆 span？
-4. `netpoll` 如何 poll 网络数据？
+把这些职责单独交给一个站在调度之外的线程，是一处典型的"安全网"设计。抢占、I/O 就绪、
+GC 节奏，这些都不能假设用户 goroutine 会配合，于是 `sysmon` 提供了一个不依赖配合的后备保障。
+协作式调度之所以能在 Go 里既简单又可靠，很大程度上正因为背后有这位守夜人盯着。
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
