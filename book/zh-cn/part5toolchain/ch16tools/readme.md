@@ -4,15 +4,15 @@ title: "第 16 章 工具与可观测性"
 bookCollapseSection: true
 ---
 
-# 第 9 章 代码分析
+# 第 16 章 工具与可观测性
 
-- [9.1 死锁检测](./deadlock.md)
-- [9.2 竞争检测](./race.md)
-- [9.3 性能追踪](./trace.md)
-- [9.4 代码测试](./testing.md)
-- [9.5 基准测试](./perf.md)
-- [9.6 运行时统计量](./metric.md)
-- [9.7 语言服务协议](./gopls.md)
+- [16.1 运行时死锁检查](./deadlock.md)
+- [16.2 竞争检查](./race.md)
+- [16.3 性能追踪](./trace.md)
+- [16.4 代码测试](./testing.md)
+- [16.5 基准测试与性能画像](./perf.md)
+- [16.6 运行时统计量](./metric.md)
+- [16.7 语言服务协议](./gopls.md)
 
 <div class="quote">
 <i class="quote-mark fas fa-thumbtack"></i>
@@ -29,4 +29,4 @@ Everyone knows that debugging is twice as hard as writing a program in the first
 
 ## 许可
 
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
+&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
