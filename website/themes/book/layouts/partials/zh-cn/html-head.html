@@ -1,5 +1,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- Apply dark mode before first paint to avoid a flash of the light theme. -->
+<script>
+(function(){try{var s=localStorage.getItem('dark-mode');var d=s===null?(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches):(s==='true');if(d){document.documentElement.classList.add('dark');}}catch(e){}})();
+</script>
 <meta name="description" content="{{ partial "zh-cn/title" . }}">
 {{- template "_internal/opengraph.html" . -}}
 

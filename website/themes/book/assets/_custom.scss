@@ -15,3 +15,91 @@
     font-weight: bolder;
     margin-bottom: 50px;
 }
+
+/* ---------------------------------------------------------------------------
+   Collapsible sidebar menu (interactive expand / collapse via a checkbox hack)
+   --------------------------------------------------------------------------- */
+.book-menu {
+    input.toggle { display: none; }
+
+    label.book-toggle-label {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        cursor: pointer;
+
+        a, span { flex: 1 1 auto; }
+    }
+    label.book-toggle-label::after {
+        content: "\25B8"; /* small right triangle */
+        flex: 0 0 auto;
+        margin-left: 0.5rem;
+        font-size: 0.75em;
+        opacity: 0.55;
+        transition: transform 0.15s ease;
+    }
+    input.toggle:checked + label.book-toggle-label::after {
+        transform: rotate(90deg);
+    }
+
+    /* a section's child list is the sibling that follows its toggle checkbox */
+    input.toggle ~ ul { display: none; }
+    input.toggle:checked ~ ul { display: block; }
+}
+
+/* ---------------------------------------------------------------------------
+   Dark mode (CSS based; replaces the dynamic DarkReader inversion)
+   Toggled by adding `.dark` to <html>; see static/dark.js.
+   --------------------------------------------------------------------------- */
+html.dark {
+    background: #1b1b1f;
+
+    body { background: #1b1b1f; color: #cacac2; }
+
+    a { color: #6ea8fe; }
+    a:visited { color: #8ab4f8; }
+
+    h1, h2, h3, h4, h5, h6 { color: #e8e8e3; }
+
+    .book-menu {
+        nav { color: #cacac2; }
+        a { color: inherit; }
+        a.active { color: #6ea8fe; }
+    }
+    .book-toc, aside, nav { color: #cacac2; }
+
+    code {
+        background: #2b2b30;
+        color: #e6e6e0;
+    }
+    pre, pre code {
+        background: #16161a;
+        color: #d6d6d0;
+    }
+
+    blockquote {
+        border-left-color: #4a4a52;
+        color: #aeaea6;
+    }
+
+    hr { border-color: #34343a; background: #34343a; }
+
+    table, th, td { border-color: #3a3a42; }
+    thead, tbody tr:nth-child(even) { background: #232329; }
+
+    .quote { color: #cacac2; }
+
+    ::-webkit-scrollbar-track { background: #2b2b30; }
+    ::-webkit-scrollbar-thumb { background: #555; }
+    ::-webkit-scrollbar-thumb:hover { background: #777; }
+
+    /* mermaid uses the light "neutral" theme; keep diagrams on a light card
+       so edge labels and arrows stay legible on the dark page. KaTeX inherits
+       currentColor and needs no special handling. */
+    pre.mermaid {
+        background: #f6f7f8;
+        border-radius: 6px;
+        padding: 0.75rem;
+        color: #1b1b1f;
+    }
+}
