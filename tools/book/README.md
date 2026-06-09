@@ -39,11 +39,24 @@ make CJK_MAIN="Noto Sans CJK SC" CJK_MONO="Noto Sans Mono CJK SC"
 
 产物写入 `dist/`，中间文件写入 `build/`，两者都不纳入版本控制（见 `.gitignore`）。
 
-## 持续集成
+## 持续集成与发布
 
-`.github/workflows/book.yml` 在 Ubuntu 上安装上述工具链（pandoc、texlive-xetex、
-`fonts-noto-cjk`、mermaid-cli），构建 PDF 与 EPUB，并作为构建产物（artifact）上传；
-打 tag 时还会把它们附加到 GitHub Release。
+两条流水线都在 Ubuntu 上安装上述工具链（pandoc、texlive-xetex、`fonts-noto-cjk`、
+mermaid-cli），并用 `CJK_MAIN`/`CJK_MONO=Noto Sans CJK SC` 构建：
+
+- **`.github/workflows/book.yml`**：每次改动 `book/` 或 `tools/book/` 时构建 PDF 与 EPUB，
+  作为构建产物（artifact）上传，用于日常校验。
+- **`.github/workflows/release.yml`**：推送 `v*` 版本标签时触发，构建后自动创建 GitHub
+  Release，并把带版本号的 PDF 与 EPUB 作为发布附件上传。
+
+发布一个版本：
+
+```bash
+git tag v1.26.0
+git push origin v1.26.0
+```
+
+随后在仓库的 Releases 页面即可下载自动编译好的 `under-the-hood-v1.26.0.pdf` 与 `.epub`。
 
 ## 已知限制
 

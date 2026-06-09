@@ -7,8 +7,6 @@ on:
       - 'book/**'
       - 'tools/book/**'
       - '.github/workflows/book.yml'
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 jobs:
@@ -51,11 +49,3 @@ jobs:
             tools/book/dist/under-the-hood.pdf
             tools/book/dist/under-the-hood.epub
           if-no-files-found: error
-
-      - name: Attach to release (on tag)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            tools/book/dist/under-the-hood.pdf
-            tools/book/dist/under-the-hood.epub

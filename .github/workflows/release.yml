@@ -1,0 +1,75 @@
+name: Release
+
+# Build the book and publish it to a GitHub Release whenever a version tag is
+# pushed (e.g. `git tag v1.26.0 && git push origin v1.26.0`). The PDF and EPUB
+# are attached as release assets. Can also be run manually against an existing
+# tag via the Actions tab.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build a release for, e.g. v1.26.0'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish PDF/EPUB
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve version
+        id: ver
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pandoc, xelatex and CJK fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pandoc \
+            texlive-xetex texlive-latex-extra texlive-lang-chinese \
+            texlive-fonts-recommended \
+            fonts-noto-cjk
+
+      - name: Build the book
+        working-directory: tools/book
+        run: |
+          make CJK_MAIN="Noto Sans CJK SC" CJK_MONO="Noto Sans Mono CJK SC"
+
+      - name: Name assets with the version
+        working-directory: tools/book/dist
+        run: |
+          v="${{ steps.ver.outputs.tag }}"
+          cp under-the-hood.pdf  "under-the-hood-${v}.pdf"
+          cp under-the-hood.epub "under-the-hood-${v}.epub"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            tools/book/dist/under-the-hood-${{ steps.ver.outputs.tag }}.pdf
+            tools/book/dist/under-the-hood-${{ steps.ver.outputs.tag }}.epub
