@@ -49,12 +49,13 @@ jobs:
             pandoc \
             texlive-xetex texlive-latex-recommended texlive-latex-extra \
             texlive-lang-chinese texlive-fonts-recommended lmodern \
-            fonts-noto-cjk
+            fonts-noto-cjk fonts-dejavu-core
 
       - name: Build the book
         working-directory: tools/book
         run: |
-          make CJK_MAIN="Noto Sans CJK SC" CJK_MONO="Noto Sans Mono CJK SC"
+          make CJK_MAIN="Noto Sans CJK SC" CJK_MONO="Noto Sans Mono CJK SC" \
+               LATIN="DejaVu Serif" MONO="DejaVu Sans Mono"
 
       - name: Name assets with the version
         working-directory: tools/book/dist
