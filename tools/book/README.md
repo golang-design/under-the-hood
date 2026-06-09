@@ -23,7 +23,8 @@ dist/under-the-hood.pdf, dist/under-the-hood.epub
 - **node / npx**（[`@mermaid-js/mermaid-cli`](https://github.com/mermaid-js/mermaid-cli)，按需自动拉取）
 - **pandoc** 3.x
 - **xelatex**（TeX Live / MacTeX，仅 PDF 需要；EPUB 只用 pandoc）
-- 一款中文字体。默认用 macOS 自带的 `Hiragino Sans GB`；其它平台用 `CJK_MAIN` / `CJK_MONO` 覆盖。
+- 一款中文字体（默认用 macOS 自带的 `Hiragino Sans GB`）以及一款西文/等宽字体；
+  其它平台用 `CJK_MAIN` / `LATIN` / `MONO` 覆盖。
 
 ## 使用
 
@@ -42,7 +43,7 @@ make CJK_MAIN="Noto Sans CJK SC" LATIN="DejaVu Serif" MONO="DejaVu Sans Mono"
 ## 持续集成与发布
 
 两条流水线都在 Ubuntu 上安装上述工具链（pandoc、texlive-xetex、`fonts-noto-cjk`、
-mermaid-cli），并用 `CJK_MAIN`/`CJK_MONO=Noto Sans CJK SC` 构建：
+`fonts-dejavu-core`、mermaid-cli），并用 `CJK_MAIN="Noto Sans CJK SC"` 加 DejaVu 西文字体构建：
 
 - **`.github/workflows/book.yml`**：每次改动 `book/` 或 `tools/book/` 时构建 PDF 与 EPUB，
   作为构建产物（artifact）上传，用于日常校验。
