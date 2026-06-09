@@ -1,0 +1,14 @@
+---
+title: "Go 语言原本"
+subtitle: "A Study of Go's Design & Implementation"
+author: "欧长坤 (Changkun Ou) and the golang.design Initiative Authors"
+date: "基于 Go 1.26"
+lang: zh-CN
+documentclass: report
+toc-title: "目录"
+geometry: "margin=2.4cm"
+fontsize: 11pt
+linkcolor: blue
+urlcolor: blue
+rights: "© 2018-2026 The golang.design Initiative Authors. CC-BY-NC-ND 4.0."
+...

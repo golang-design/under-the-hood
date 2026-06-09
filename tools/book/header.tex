@@ -1,0 +1,31 @@
+% LaTeX preamble for the PDF build (xelatex).
+% Font setup is done explicitly here so the same Makefile works regardless of
+% pandoc's CJK defaults. Override the fonts via the FONT_* Make variables.
+
+% --- CJK fonts (Simplified Chinese) ---
+% xeCJK + the main CJK font are loaded by pandoc from -V CJKmainfont; here we
+% only add a CJK-capable monospace font so Chinese comments inside code blocks
+% render, and allow line breaks between CJK and latin.
+\setCJKmonofont{Hiragino Sans GB}
+\xeCJKsetup{CJKecglue={}}
+% Arrows / geometric shapes / circled numbers (→ ← □ ① ...) are absent from the
+% Latin and mono fonts; route those ranges through the CJK font, which has them.
+% A handful of rarer math symbols (⇒ ∅ − ⨟ 𝓤) remain font-gaps and may not
+% render; they are cosmetic and confined to a few examples.
+\xeCJKDeclareCharClass{CJK}{"2190->"21FF, "25A0->"25FF, "2460->"24FF, "2200->"22FF}
+
+% --- wrap long lines in code blocks instead of overflowing the page ---
+\usepackage{fvextra}
+\DefineVerbatimEnvironment{Highlighting}{Verbatim}{%
+  breaklines,breakanywhere,breaksymbolleft={},fontsize=\small,%
+  commandchars=\\\{\}}
+
+% keep images within the text width
+\usepackage{graphicx}
+\makeatletter
+\def\maxwidth{\ifdim\Gin@nat@width>\linewidth\linewidth\else\Gin@nat@width\fi}
+\setkeys{Gin}{width=\maxwidth,keepaspectratio}
+\makeatother
+
+% a little more breathing room
+\usepackage{microtype}

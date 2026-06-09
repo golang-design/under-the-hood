@@ -1,0 +1,7 @@
+{
+  "theme": "neutral",
+  "themeVariables": {
+    "fontFamily": "Hiragino Sans GB, Noto Sans CJK SC, sans-serif"
+  },
+  "flowchart": { "htmlLabels": true, "useMaxWidth": true }
+}
