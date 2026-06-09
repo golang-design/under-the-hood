@@ -69,6 +69,7 @@ jobs:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: ${{ steps.ver.outputs.tag }}
           generate_release_notes: true
+          prerelease: ${{ contains(steps.ver.outputs.tag, '-') }}
           fail_on_unmatched_files: true
           files: |
             tools/book/dist/under-the-hood-${{ steps.ver.outputs.tag }}.pdf
