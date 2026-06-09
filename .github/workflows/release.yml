@@ -47,8 +47,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pandoc \
-            texlive-xetex texlive-latex-extra texlive-lang-chinese \
-            texlive-fonts-recommended \
+            texlive-xetex texlive-latex-recommended texlive-latex-extra \
+            texlive-lang-chinese texlive-fonts-recommended lmodern \
             fonts-noto-cjk
 
       - name: Build the book
