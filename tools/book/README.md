@@ -34,7 +34,7 @@ make epub
 make clean
 
 # 非 macOS（例如装了 fonts-noto-cjk 的 Linux）：
-make CJK_MAIN="Noto Sans CJK SC" CJK_MONO="Noto Sans Mono CJK SC"
+make CJK_MAIN="Noto Sans CJK SC" LATIN="DejaVu Serif" MONO="DejaVu Sans Mono"
 ```
 
 产物写入 `dist/`，中间文件写入 `build/`，两者都不纳入版本控制（见 `.gitignore`）。

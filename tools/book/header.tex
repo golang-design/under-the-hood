@@ -3,10 +3,10 @@
 % pandoc's CJK defaults. Override the fonts via the FONT_* Make variables.
 
 % --- CJK fonts (Simplified Chinese) ---
-% xeCJK + the main CJK font are loaded by pandoc from -V CJKmainfont; here we
-% only add a CJK-capable monospace font so Chinese comments inside code blocks
-% render, and allow line breaks between CJK and latin.
-\setCJKmonofont{Hiragino Sans GB}
+% xeCJK + the main CJK font are loaded by pandoc from -V CJKmainfont. We do not
+% set a separate CJK monospace font: Chinese inside code blocks then falls back
+% to the main CJK font, which keeps the build font-agnostic across platforms.
+% Allow line breaks between CJK and latin.
 \xeCJKsetup{CJKecglue={}}
 % Arrows / geometric shapes / circled numbers (→ ← □ ① ...) are absent from the
 % Latin and mono fonts; route those ranges through the CJK font, which has them.

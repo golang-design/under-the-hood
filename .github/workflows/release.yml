@@ -54,8 +54,7 @@ jobs:
       - name: Build the book
         working-directory: tools/book
         run: |
-          make CJK_MAIN="Noto Sans CJK SC" CJK_MONO="Noto Sans Mono CJK SC" \
-               LATIN="DejaVu Serif" MONO="DejaVu Sans Mono"
+          make CJK_MAIN="Noto Sans CJK SC" LATIN="DejaVu Serif" MONO="DejaVu Sans Mono"
 
       - name: Name assets with the version
         working-directory: tools/book/dist

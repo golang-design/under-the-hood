@@ -15,7 +15,7 @@
 #   make clean
 #
 # Fonts default to macOS "Hiragino Sans GB"; override for other platforms, e.g.
-#   make CJK_MAIN="Noto Sans CJK SC" CJK_MONO="Noto Sans Mono CJK SC"
+#   make CJK_MAIN="Noto Sans CJK SC"
 
 BOOK_SRC ?= ../../book/zh-cn
 BUILD    ?= build
@@ -23,7 +23,6 @@ DIST     ?= dist
 COVER    ?= ../../book/assets/cover-cn-v3.png
 
 CJK_MAIN ?= Hiragino Sans GB
-CJK_MONO ?= Hiragino Sans GB
 LATIN    ?= Helvetica Neue
 MONO     ?= Menlo
 
