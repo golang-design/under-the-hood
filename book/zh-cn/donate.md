@@ -33,26 +33,3 @@ bookHidden: true
 [![](https://img.shields.io/badge/捐赠-微信-68b600.svg?style=popout-square&logo=WeChat)](../assets/wechat.jpg)
 [![](https://img.shields.io/badge/捐赠-支付宝-00a2ef.svg?style=popout-square&logo=AliPay)](../assets/alipay.jpg)
 [![](https://img.shields.io/badge/捐赠-PayPal-104098.svg?style=popout-square&logo=PayPal)](https://www.paypal.me/changkunde/4.99eur)
-
-## 致谢
-
-每一位曾经资助本书的读者，都在用最直接的方式表达对这件事的认可。笔者在此一并致谢，并按时间记录如下。出于隐私考虑，姓名以匿名形式呈现。
-
-| 日期 | 资助人 | 金额 |
-|:--:|:--:|:--:|
-| 2020-09-29 | *庆 | ¥ 20 |
-| 2020-09-28 | *K | ¥ 4 |
-| 2020-09-18 | *波 | ¥ 88 |
-| 2020-09-13 | *宇 | ¥ 5 |
-| 2020-09-13 | *琦 | ¥ 100 |
-| 2020-09-03 | *n | ¥ 6 |
-| 2020-07-28 | *飞 | ¥ 168 |
-| 2020-03-23 | *联 | ¥ 50 |
-| 2020-03-21 | *Y | ¥ 10 |
-| 2020-03-13 | *杰 | ¥ 50 |
-| 2020-03-13 | *衷 | ¥ 5 |
-| 2020-03-11 | *衷 | ¥ 5 |
-| 2020-03-08 | *文 | ¥ 100 |
-| 2020-01-09 | *剑 | ¥ 66.6 |
-
-总计：¥ 677.6
