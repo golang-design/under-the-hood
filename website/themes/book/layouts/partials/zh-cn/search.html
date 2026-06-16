@@ -6,9 +6,16 @@
   <ul id="book-search-results"></ul>
 </div>
 <div class="book-switch">
-  <label class="switch">
-    <input id="dark-mode-checkbox" type="checkbox" onchange="darkmode()">
-    <span class="slider"></span>
-  </label>
+  <div id="theme-switch" class="theme-switch" role="radiogroup" aria-label="{{ i18n "Theme" | default "Theme" }}">
+    <button type="button" class="theme-option" data-theme="light" role="radio" aria-checked="false" aria-label="{{ i18n "ThemeLight" | default "Light" }}" title="{{ i18n "ThemeLight" | default "Light" }}" onclick="setTheme('light')">
+      <i class="fas fa-sun" aria-hidden="true"></i>
+    </button>
+    <button type="button" class="theme-option" data-theme="auto" role="radio" aria-checked="false" aria-label="{{ i18n "ThemeAuto" | default "Auto" }}" title="{{ i18n "ThemeAuto" | default "Auto" }}" onclick="setTheme('auto')">
+      <i class="fas fa-adjust" aria-hidden="true"></i>
+    </button>
+    <button type="button" class="theme-option" data-theme="dark" role="radio" aria-checked="false" aria-label="{{ i18n "ThemeDark" | default "Dark" }}" title="{{ i18n "ThemeDark" | default "Dark" }}" onclick="setTheme('dark')">
+      <i class="fas fa-moon" aria-hidden="true"></i>
+    </button>
+  </div>
 </div></div>
 {{ end }}

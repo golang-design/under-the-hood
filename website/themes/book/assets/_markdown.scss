@@ -125,3 +125,25 @@
     }
   }
 }
+
+// Class-based Chroma syntax highlighting (config: noClasses=false).
+// Default LIGHT palette, modelled on the previous inlined "vs" theme.
+// The dark override lives in _custom.scss under html.dark.
+.chroma {
+  background: $gray-100;
+  color: $gray-900;
+
+  // line-number gutter (LineTable / LineNumbers)
+  .lnt, .ln { color: $gray-500; }
+  .hl { background: rgba(#fd6, 0.25); display: block; }
+
+  .k, .kc, .kd, .kn, .kp, .kr, .kt { color: #00f; }            // keywords
+  .nb, .bp { color: #00f; }                                    // builtins
+  .nf, .nx { color: $gray-900; }                               // functions
+  .nc, .nn { color: #2b91af; }                                 // classes / namespaces
+  .s, .s1, .s2, .sb, .sc, .sd, .se, .sh, .si, .sx, .sr, .sa { color: #a31515; } // strings
+  .m, .mb, .mf, .mh, .mi, .mo, .il { color: #098658; }         // numbers
+  .c, .ch, .cm, .c1, .cs, .cp, .cpf { color: #008000; font-style: italic; } // comments
+  .o, .ow { color: $gray-900; }                                // operators
+  .err { color: #a31515; }
+}

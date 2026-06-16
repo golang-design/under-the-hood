@@ -20,6 +20,18 @@
    Collapsible sidebar menu (interactive expand / collapse via a checkbox hack)
    --------------------------------------------------------------------------- */
 .book-menu {
+    /* With every section expanded by default the menu can be taller than the
+       viewport: make the fixed nav a full-height, independently scrollable
+       pane so the whole tree is reachable. (The `fixed` mixin already sets
+       top/bottom + overflow-y; pin the height explicitly so it holds even if
+       the mixin changes.) */
+    nav {
+        height: 100vh;
+        max-height: 100vh;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+    }
+
     input.toggle { display: none; }
 
     label.book-toggle-label {
@@ -77,6 +89,28 @@ html.dark {
         color: #d6d6d0;
     }
 
+    /* Class-based Chroma highlighting (noClasses=false): give fenced code a
+       dark surface and a legible dark syntax palette so it no longer renders
+       with the light "vs" colors on a near-white background. */
+    .highlight, .chroma {
+        background: #16161a;
+        color: #d6d6d0;
+    }
+    .chroma {
+        .lnt, .ln { color: #6b6b73; }                                  // gutter
+        .hl { background: rgba(#6ea8fe, 0.15); }                        // highlighted line
+
+        .k, .kc, .kd, .kn, .kp, .kr, .kt { color: #6ea8fe; }           // keywords
+        .nb, .bp { color: #6ea8fe; }                                   // builtins
+        .nf, .nx { color: #dcdccc; }                                   // functions
+        .nc, .nn { color: #4ec9b0; }                                   // classes / namespaces
+        .s, .s1, .s2, .sb, .sc, .sd, .se, .sh, .si, .sx, .sr, .sa { color: #ce9178; } // strings
+        .m, .mb, .mf, .mh, .mi, .mo, .il { color: #b5cea8; }           // numbers
+        .c, .ch, .cm, .c1, .cs, .cp, .cpf { color: #6a9955; font-style: italic; } // comments
+        .o, .ow { color: #d6d6d0; }                                    // operators
+        .err { color: #f48771; }
+    }
+
     blockquote {
         border-left-color: #4a4a52;
         color: #aeaea6;
@@ -84,8 +118,43 @@ html.dark {
 
     hr { border-color: #34343a; background: #34343a; }
 
+    /* Search box must match the dark header rather than staying white. */
+    .book-search input {
+        background: #2b2b30;
+        color: #e6e6e0;
+        border: 1px solid #3a3a42;
+
+        &::placeholder { color: #8a8a82; }
+    }
+    .book-search { border-bottom-color: transparent; }
+    .book-search-spinner { border-top-color: #cacac2; }
+
+    /* Reference / data tables: dark surface with readable zebra striping.
+       The markdown rules apply `background:$gray-100` to even rows and a light
+       border; override both here. */
+    table { color: #cacac2; }
     table, th, td { border-color: #3a3a42; }
-    thead, tbody tr:nth-child(even) { background: #232329; }
+    thead { background: #232329; }
+    .markdown table tr:nth-child(2n),
+    tbody tr:nth-child(even) { background: #232329; }
+    tbody tr:nth-child(odd) { background: #1b1b1f; }
+    th, td { color: #cacac2; }
+
+    /* The .bib bibliography tables hard-code white even-rows in light mode;
+       neutralise that in dark mode. */
+    .bib tr:nth-child(even) { background-color: transparent !important; }
+
+    /* 3-state theme switch on the dark header. */
+    .theme-switch {
+        border-color: #3a3a42;
+
+        .theme-option {
+            color: #cacac2;
+            & + .theme-option { border-left-color: #3a3a42; }
+            &:hover { background: #2b2b30; }
+            &.active { background: #2196f3; color: #fff; }
+        }
+    }
 
     .quote { color: #cacac2; }
 

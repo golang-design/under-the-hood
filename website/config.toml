@@ -10,8 +10,13 @@ theme = "book"
     lineNoStart = 1
     lineNos = true
     lineNumbersInTable = true
-    noClasses = true
-    style = "vs"
+    # noClasses=false emits class-based token markup (.k/.s/.c/...) instead of
+    # inlining the "vs" light-theme colors as style="" attributes. Inlined
+    # colors cannot be overridden for dark mode without !important on every
+    # token; with classes we ship a light Chroma palette as default and a dark
+    # palette under html.dark (see assets/_custom.scss). `style` is intentionally
+    # omitted because it only matters when noClasses=true.
+    noClasses = false
     tabWidth = 4
 [markup.goldmark.renderer]
     unsafe= true

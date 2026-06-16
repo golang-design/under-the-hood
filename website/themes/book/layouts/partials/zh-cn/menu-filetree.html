@@ -27,8 +27,9 @@
     {{ $hasChildren := gt (len .Pages) 0 }}
     {{ if and $hasChildren .Params.bookCollapseSection }}
       {{ $id := md5 .RelPermalink }}
-      <input type="checkbox" id="section-{{ $id }}" class="toggle"
-        {{ if or (.IsAncestor $.CurrentPage) (eq . $.CurrentPage) }} checked {{ end }} />
+      {{/* Expand all sections by default (not just the current page's
+           ancestors); readers can still collapse any section manually. */}}
+      <input type="checkbox" id="section-{{ $id }}" class="toggle" checked />
       <label for="section-{{ $id }}" class="book-toggle-label">
         {{ if .Content }}
           {{ template "book-page-link" (dict "Page" . "CurrentPage" $.CurrentPage) }}
