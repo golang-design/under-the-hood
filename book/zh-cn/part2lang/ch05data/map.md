@@ -222,7 +222,28 @@ type table struct {
 
 目录允许多个下标指向同一张 table（当某表的 `localDepth` 小于 `globalDepth` 时），这样目录翻倍
 并不强制每张表都立即分裂,只有真正满了的表才分裂。这套结构以可扩展哈希的弹性，换来了开放定址法
-所缺的渐进扩容能力。
+所缺的渐进扩容能力。把这三层画出来，目录共享与分裂的关系便清晰了：
+
+```mermaid
+flowchart LR
+    H["hash(key)<br/>取高 globalDepth 位"] --> DIR
+    subgraph DIR["directory（*[1&lt;&lt;globalDepth]*table）"]
+      D0["[00]"]
+      D1["[01]"]
+      D2["[10]"]
+      D3["[11]"]
+    end
+    D0 --> TA["table A<br/>localDepth=1<br/>capacity=1024"]
+    D1 --> TA
+    D2 --> TB["table B<br/>localDepth=2"]
+    D3 --> TC["table C<br/>localDepth=2"]
+    TA --> GA["groups：一组组 8 槽 + 控制字"]
+    TB --> GB["groups"]
+    TC --> GC["groups"]
+```
+
+A 表的 `localDepth=1` 小于 `globalDepth=2`，于是目录前两项 `[00]`、`[01]` 共享它,只有当 A 真正
+填满需要分裂时，才会拆成两张并把 `localDepth` 提到 2。
 
 ### 探测序列：三角数与「恰好覆盖」
 
