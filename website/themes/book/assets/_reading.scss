@@ -520,6 +520,51 @@ html[data-toc="open"] .book-toc { display: block; }
   }
 
   hr { background: var(--border); }
+
+  // Chapter meta row (reading time + 字数), injected by reading.js after the
+  // chapter title.
+  .reading-meta {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    color: var(--fg-faint);
+    letter-spacing: 0;
+    padding-bottom: 22px;
+    margin: 0 0 1.6em;
+    border-bottom: 1px solid var(--border);
+
+    .rm-item { display: inline-flex; align-items: center; gap: 6px; }
+    svg { width: 13px; height: 13px; }
+  }
+}
+
+// --- Back-to-top FAB -----------------------------------------------------
+.reading-fab {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--fg-muted);
+  cursor: pointer;
+  z-index: 40;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.12);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(8px);
+  transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease, color 0.15s, border-color 0.15s;
+
+  &.is-visible { opacity: 1; visibility: visible; transform: none; }
+  &:hover { color: var(--accent); border-color: var(--accent); }
 }
 
 // --- Code blocks ---------------------------------------------------------

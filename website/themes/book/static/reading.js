@@ -169,10 +169,89 @@
     });
   }
 
+  // --- Reading progress bar ---------------------------------------------
+  function setupProgress() {
+    var bar = document.getElementById("reading-progress-bar");
+    if (!bar) return;
+    function update() {
+      var doc = document.documentElement;
+      var max = doc.scrollHeight - window.innerHeight;
+      var p = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
+      bar.style.width = p * 100 + "%";
+    }
+    onScroll(update);
+    update();
+  }
+
+  // --- Font scaling (A- / A+), persisted --------------------------------
+  function setupFontScale() {
+    var KEY = "reading.fontScale";
+    function clamp(v) { return Math.max(0.85, Math.min(1.32, v)); }
+    var scale = 1;
+    try {
+      var stored = parseFloat(localStorage.getItem(KEY));
+      if (!isNaN(stored)) scale = clamp(stored);
+    } catch (e) {}
+    function apply() { html.style.setProperty("--reading-scale", String(scale)); }
+    apply();
+    function bump(d) {
+      scale = clamp(Math.round((scale + d) * 100) / 100);
+      apply();
+      try { localStorage.setItem(KEY, String(scale)); } catch (e) {}
+    }
+    var dec = document.getElementById("font-smaller");
+    var inc = document.getElementById("font-bigger");
+    if (dec) dec.addEventListener("click", function () { bump(-0.08); });
+    if (inc) inc.addEventListener("click", function () { bump(0.08); });
+  }
+
+  // --- Chapter meta: reading time + 字数 --------------------------------
+  function setupMeta() {
+    if (!article) return;
+    var h1 = article.querySelector("h1");
+    if (!h1 || article.querySelector(".reading-meta")) return;
+    var text = article.innerText || "";
+    var chars = text.replace(/\s+/g, "").length;
+    if (!chars) return;
+    var mins = Math.max(1, Math.round(chars / 430));
+    var el = document.createElement("div");
+    el.className = "reading-meta";
+    el.innerHTML =
+      '<span class="rm-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>约 ' +
+      mins +
+      " 分钟</span>" +
+      '<span class="rm-item">' +
+      chars.toLocaleString() +
+      " 字</span>";
+    h1.parentNode.insertBefore(el, h1.nextSibling);
+  }
+
+  // --- Back-to-top FAB --------------------------------------------------
+  function setupFab() {
+    var fab = document.createElement("button");
+    fab.type = "button";
+    fab.className = "reading-fab";
+    fab.setAttribute("aria-label", "返回顶部");
+    fab.title = "返回顶部";
+    fab.innerHTML =
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
+    fab.addEventListener("click", function () {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+    document.body.appendChild(fab);
+    function update() { fab.classList.toggle("is-visible", window.scrollY > 80); }
+    onScroll(update);
+    update();
+  }
+
   function init() {
+    setupMeta(); // before code enhancement so copy labels aren't counted
     enhanceCodeBlocks();
     setupFolds();
     setupScrollSpy();
+    setupProgress();
+    setupFontScale();
+    setupFab();
   }
 
   if (document.readyState === "loading") {
