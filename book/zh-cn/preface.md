@@ -44,7 +44,3 @@ Go 语言从 2009 年诞生之初已有十余年的历史。
 即便如此，源码仍在持续演进，书中也难免存在疏漏或随版本而过时之处。如果读者在阅读过程中
 怀疑某段内容有误，欢迎在 [GitHub 仓库](https://github.com/golang-design/under-the-hood/issues)
 提出 Issue 或 Pull Request，我们会持续修订。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

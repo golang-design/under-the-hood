@@ -11,7 +11,3 @@ bookCollapseSection: true
 - [第 6 章 函数、延迟与恐慌](./ch06func)
 - [第 7 章 错误处理](./ch07errors)
 - [第 8 章 泛型](./ch08generics)
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
