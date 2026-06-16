@@ -164,3 +164,10 @@ Go 1.1 的发布说明里其实**并没有**正面描述这次调度器重写，
    https://go.dev/blog/container-aware-gomaxprocs
 8. Erik Stenman. *The BEAM Book（The Erlang Runtime System）.*
    https://github.com/happi/theBeamBook
+9. Russ Cox. *runtime: clean up scheduler*, 2008；*things are much better now*, 2009.
+   https://github.com/golang/go/commit/96824000ed89d13665f6f24ddc10b3bf812e7f47 、
+   https://github.com/golang/go/commit/fe1e49241c04c748d0e3f4762925241adcb8d7da
+   （全局锁单队列调度器的早期形态，本节所述演进的起点）
+10. Dmitry Vyukov. *runtime: improved scheduler*, 2013.
+    https://github.com/golang/go/commit/779c45a50700bda0f6ec98429720802e6c1624e8
+    （将 go11sched 设计落地为 GMP 实现的关键提交）

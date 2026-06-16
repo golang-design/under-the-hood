@@ -17,7 +17,6 @@ bookCollapseSection: true
 - [9.9 网络轮询器](./poller.md)
 - [9.10 计时器](./timer.md)
 - [9.11 NUMA 感知与调度器的未来](./numa.md)
-- [9.12 进一步阅读的参考文献](./ref.md)
 
 （执行栈管理原属本章，现已移至 [第 14 章 执行栈管理](../../part4memory/ch14stack)。）
 

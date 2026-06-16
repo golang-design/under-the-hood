@@ -313,8 +313,13 @@ activations）那类「内核与用户态协作通知阻塞」的机制与此正
    https://openjdk.org/jeps/312 （从全局 STW 到逐线程握手）
 8. *JEP 376: ZGC Concurrent Thread-Stack Processing.* OpenJDK, 2020.
    https://openjdk.org/jeps/376 （并发栈处理，趋近无 STW 的前沿）
-9. The Go Authors. *runtime/preempt.go、signal_unix.go、proc.go（retake/preemptone）.*
+9. Dmitry Vyukov. *Go Preemptive Scheduler Design Doc.* 2013.
+   https://docs.google.com/document/d/1ETuA2IOmnaQ4j81AtTGT40Y4_Jr6_IDASEKg0t0dBR8/edit
+   （抢占式调度的最早设计草案，先于异步抢占的协作式方案）
+10. David Chase. *cmd/compile: loop preemption with fault branch on amd64.* CL 43050, 2019.
+    https://golang.org/cl/43050 （回边抢占的故障分支实现，因性能损耗而未全面采用）
+11. The Go Authors. *runtime/preempt.go、signal_unix.go、proc.go（retake/preemptone）.*
    https://github.com/golang/go/tree/master/src/runtime
-10. 本书 [9.5 调度循环](./schedule.md)、[9.6 系统监控](./sysmon.md)、
+12. 本书 [9.5 调度循环](./schedule.md)、[9.6 系统监控](./sysmon.md)、
     [14 执行栈管理](../../part4memory/ch14stack/readme.md)、
     [13.4 扫描标记与标记辅助](../../part4memory/ch13gc/mark.md).

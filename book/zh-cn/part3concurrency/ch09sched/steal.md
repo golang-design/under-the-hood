@@ -169,3 +169,5 @@ Go 自己的工作窃取也在演进：Go 1.1 随 GMP 引入工作窃取（Vyuko
 10. Carl Lerche. *Making the Tokio scheduler 10x faster*, 2019.
     https://tokio.rs/blog/2019-10-scheduler （Tokio 借鉴 Go 的本地队列算法）
 11. Dmitry Vyukov. *Scalable Go Scheduler Design Doc*, 2012. https://go.dev/s/go11sched
+12. Chris Hines 等. *runtime: scheduler work stealing slow for high GOMAXPROCS*. Go issue
+    #28808, 2018. https://github.com/golang/go/issues/28808 （高并行度下窃取扫描的开销）

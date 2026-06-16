@@ -363,18 +363,20 @@ coalescing / slack）、高频 ticker 对唤醒路径的压力，都是这一领
    *IEEE/ACM Trans. Networking* 5(6), 1997. https://doi.org/10.1145/41457.37504
 2. Sokolov Yura. *time: make timers heap 4-ary*（Go 1.2）, 2013.
    https://golang.org/cl/13094043
-3. Aliaksandr Valialkin. *runtime: improve timers scalability on multi-CPU systems*
+3. Dmitry Vyukov. *runtime: make timers faster*. Go issue #6239, 2013.
+   https://golang.org/issue/6239 （单一全局计时器堆的扩展性瓶颈，后续每 P 化的动因）
+4. Aliaksandr Valialkin. *runtime: improve timers scalability on multi-CPU systems*
    （Go 1.10，64 桶）, 2017. https://go-review.googlesource.com/34784
-4. golang/go#27707. *time: excessive CPU usage when using Ticker and Sleep*（驱动 1.14
+5. golang/go#27707. *time: excessive CPU usage when using Ticker and Sleep*（驱动 1.14
    每 P 计时器）. https://github.com/golang/go/issues/27707
-5. Ian Lance Taylor. *runtime: add timers to P*（Go 1.14 每 P 计时器系列改动）, 2019.
+6. Ian Lance Taylor. *runtime: add timers to P*（Go 1.14 每 P 计时器系列改动）, 2019.
    https://go-review.googlesource.com/c/go/+/171828
-6. Go 1.23 Release Notes（计时器无缓冲 channel、可被立即 GC）. https://go.dev/doc/go1.23 ；
+7. Go 1.23 Release Notes（计时器无缓冲 channel、可被立即 GC）. https://go.dev/doc/go1.23 ；
    实现见 The Go Authors. *runtime/time.go*（`type timers`、`addHeap`、`check`、`take`）.
    https://github.com/golang/go/blob/master/src/runtime/time.go
-7. Thomas Gleixner. *timers: Switch to a non-cascading wheel*（Linux 4.8）, 2016.
+8. Thomas Gleixner. *timers: Switch to a non-cascading wheel*（Linux 4.8）, 2016.
    https://git.kernel.org/torvalds/c/500462a9de65 ；LWN: https://lwn.net/Articles/646950/
-8. The Linux Kernel. *hrtimers — high-resolution kernel timers.*
+9. The Linux Kernel. *hrtimers - high-resolution kernel timers.*
    https://www.kernel.org/doc/html/latest/timers/hrtimers.html
-9. Netty. *HashedWheelTimer*（基于 Varghese-Lauck）.
+10. Netty. *HashedWheelTimer*（基于 Varghese-Lauck）.
    https://netty.io/4.1/api/io/netty/util/HashedWheelTimer.html
