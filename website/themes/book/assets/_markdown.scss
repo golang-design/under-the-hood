@@ -1,30 +1,51 @@
 @import 'variables';
 
 .markdown {
-  line-height: 1.6em;
+  // Long-form Chinese reading column: constrain the prose to a comfortable
+  // measure and center it. Larger body type + generous line-height + paragraph
+  // spacing make it read like a book page rather than a wide web layout.
+  // (Scoped to .markdown so the sidebar/TOC/header chrome keep $font-size-base.)
+  max-width: 48rem;
+  margin-left: auto;
+  margin-right: auto;
+  font-size: 17.5px;
+  line-height: 1.8;
 
   // remove padding at the beginning of page
   > :first-child {
     margin-top: 0;
   }
 
+  // Comfortable paragraph rhythm.
+  p {
+    margin-top: 0;
+    margin-bottom: 1.1em;
+  }
+
+  // Clear heading rhythm: generous space above each heading creates visible
+  // sections; sizes step down so the hierarchy is obvious while reading.
   h1, h2, h3, h4, h5, h6 {
     font-weight: normal;
-    line-height: 1em;
-    margin-top: 1.5em;
-    margin-bottom: $padding-16;
+    line-height: 1.3;
+    margin-top: 1.8em;
+    margin-bottom: 0.8em;
   }
+
+  h1 { font-size: 1.9em; }
+  h2 { font-size: 1.55em; }
+  h3 { font-size: 1.25em; }
+  h4 { font-size: 1.05em; }
 
   h4, h5, h6 {
     font-weight: bolder;
   }
 
   h5 {
-    font-size: .875em;
+    font-size: .9em;
   }
 
   h6 {
-    font-size: .75em;
+    font-size: .8em;
   }
 
   b, optgroup, strong {
@@ -44,10 +65,12 @@
   }
 
   code {
-    padding: 0 $padding-4;
+    padding: 0.1em $padding-4;
     background: $gray-200;
     border-radius: $border-radius;
     font-size: .875em;
+    // Keep inline code from disrupting the CJK line rhythm.
+    word-break: break-word;
   }
 
   pre {
@@ -62,12 +85,46 @@
     }
   }
 
-  blockquote {
-    margin: $padding-16 0;
-    padding: $padding-8 $padding-16 $padding-8 ($padding-16 - $padding-4); //to keep total left space 16dp
-
-    border-left: $padding-4 solid $gray-200;
+  // Class-based Chroma blocks (div.highlight > div.chroma > table.lntable).
+  // The bordered box and the gray fill must be the SAME rectangle, so exactly
+  // ONE element -- the outer .highlight wrapper -- carries background + border
+  // + radius + padding + horizontal scroll. Every inner element is made
+  // transparent and box-free so it cannot paint a second visible rectangle.
+  .highlight {
+    background: $gray-100;
+    border: $padding-1 solid $gray-200;
     border-radius: $border-radius;
+    padding: $padding-16;
+    overflow-x: auto;
+
+    .chroma,
+    table.lntable,
+    td.lntd,
+    pre,
+    code {
+      background: none;
+      border: 0;
+      border-radius: 0;
+      padding: 0; // strip the global `.markdown td`/`pre` padding so the box has no inner ring
+    }
+
+    // The wrapper owns the box; the inner <pre> must not scroll independently.
+    // The precise gutter gap between line numbers and code is set by the
+    // `.highlight table tr` rule below.
+    pre {
+      overflow-x: visible;
+    }
+  }
+
+  blockquote {
+    margin: $padding-16 * 1.5 0;
+    padding: $padding-8 $padding-16;
+
+    // Calm, booklike quote: a soft accent rule and a faint tinted panel.
+    border-left: $padding-4 solid $gray-300;
+    border-radius: $border-radius;
+    background: rgba($gray-500, 0.08);
+    color: $gray-700;
 
     :first-child { margin-top: 0; }
     :last-child { margin-bottom: 0; }
@@ -99,6 +156,18 @@
 
   ul, ol {
     padding-left: $padding-16 * 2;
+    margin-top: 0;
+    margin-bottom: 1.1em;
+
+    li {
+      margin-bottom: 0.35em;
+    }
+
+    // Nested lists stay tight against their parent item.
+    ul, ol {
+      margin-top: 0.35em;
+      margin-bottom: 0.35em;
+    }
   }
 
   dl {
@@ -112,16 +181,18 @@
     }
   }
 
-  // Special case for highlighted code with line numbers
+  // Special case for highlighted code with line numbers: the gutter cell gets a
+  // right pad ($padding-16) so the numbers and the code column do not touch;
+  // the code cell takes the remaining width. All box styling lives on
+  // .highlight (see above), so these cells stay transparent and box-free.
   .highlight table tr {
-    td:nth-child(1) pre {
-      overflow-x: hidden;
-      margin: 0;
-      padding-right: 0;
+    td:nth-child(1) {
+      padding-right: $padding-16;
+      pre { overflow-x: hidden; margin: 0; padding: 0; }
     }
-    td:nth-child(2) pre {
-      margin: 0;
-      padding-left: 0;
+    td:nth-child(2) {
+      width: 100%;
+      pre { margin: 0; padding: 0; }
     }
   }
 }

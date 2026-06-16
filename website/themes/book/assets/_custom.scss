@@ -91,12 +91,30 @@ html.dark {
 
     /* Class-based Chroma highlighting (noClasses=false): give fenced code a
        dark surface and a legible dark syntax palette so it no longer renders
-       with the light "vs" colors on a near-white background. */
-    .highlight, .chroma {
+       with the light "vs" colors on a near-white background.
+
+       The bordered box and the dark fill must be the SAME rectangle, so only
+       the outer .highlight wrapper carries the surface + border + radius; every
+       inner element stays transparent and box-free (mirrors _markdown.scss). */
+    .highlight {
         background: #16161a;
         color: #d6d6d0;
+        border: 1px solid #2a2a30;
+        border-radius: $border-radius;
+
+        .chroma,
+        table.lntable,
+        td.lntd,
+        pre,
+        code {
+            background: none;
+            border: 0;
+            border-radius: 0;
+        }
     }
     .chroma {
+        color: #d6d6d0;
+
         .lnt, .ln { color: #6b6b73; }                                  // gutter
         .hl { background: rgba(#6ea8fe, 0.15); }                        // highlighted line
 
@@ -113,6 +131,7 @@ html.dark {
 
     blockquote {
         border-left-color: #4a4a52;
+        background: rgba(255, 255, 255, 0.04);
         color: #aeaea6;
     }
 
@@ -179,9 +198,18 @@ html.dark {
 
     .quote { color: #cacac2; }
 
-    ::-webkit-scrollbar-track { background: #2b2b30; }
-    ::-webkit-scrollbar-thumb { background: #555; }
-    ::-webkit-scrollbar-thumb:hover { background: #777; }
+    /* Thin, subtle scrollbars in dark mode (see _main.scss for light). */
+    .book-menu nav,
+    .markdown pre,
+    .markdown .highlight,
+    .markdown .chroma,
+    .markdown table {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+    }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.30); }
 
     /* mermaid uses the light "neutral" theme; keep diagrams on a light card
        so edge labels and arrows stay legible on the dark page. KaTeX inherits
@@ -191,5 +219,29 @@ html.dark {
         border-radius: 6px;
         padding: 0.75rem;
         color: #1b1b1f;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+   Mermaid diagrams (theme-agnostic). The SVG renders at its large native size
+   and would otherwise overflow the reading column. Scale it down to fit and
+   cap the height so big flowcharts stay legible. The light card (background)
+   is kept in both themes (dark override above; light default here).
+   --------------------------------------------------------------------------- */
+pre.mermaid {
+    display: block;
+    margin: $padding-16 auto;
+    padding: 0.75rem;
+    background: #f6f7f8;
+    border-radius: 6px;
+    text-align: center;       /* center the inline SVG */
+    overflow-x: auto;
+
+    svg {
+        display: inline-block;
+        max-width: 100%;
+        max-height: 70vh;
+        width: auto;
+        height: auto;
     }
 }

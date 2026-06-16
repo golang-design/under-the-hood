@@ -138,26 +138,39 @@ ul.pagination {
   }
 }
 
-// Better scroll bar
+// Thin, subtle scrollbars across the reading surfaces (sidebar nav, code
+// blocks, tables). Keeps the page calm rather than showing thick OS bars.
 
-// width
+// Firefox
+.book-menu nav,
+.markdown pre,
+.markdown .highlight,
+.markdown .chroma,
+.markdown table {
+  scrollbar-width: thin;
+  scrollbar-color: rgba($gray-600, 0.5) transparent;
+}
+
+// WebKit / Blink
 ::-webkit-scrollbar {
-  width: 10px;
+  width: 7px;
+  height: 7px;
 }
 
 // track
 ::-webkit-scrollbar-track {
-  background: #f1f1f1; 
+  background: transparent;
 }
- 
+
 // handle
 ::-webkit-scrollbar-thumb {
-  background: #888; 
+  background: rgba($gray-600, 0.5);
+  border-radius: 4px;
 }
 
 // handle on hover
 ::-webkit-scrollbar-thumb:hover {
-  background: #555; 
+  background: rgba($gray-700, 0.6);
 }
 
 // ---
@@ -191,17 +204,24 @@ ul.pagination {
   margin-bottom: $padding-16;
   display: none;
 }
+// Header controls live inside the $menu-width sidebar. Stack them vertically so
+// the search box gets its own full-width row and the theme + language switches
+// sit on a row below, free to wrap, with NO horizontal overflow.
 .magic {
   display: flex;
+  flex-direction: column;
 }
 .book-switch {
-  flex: 1;
-  right: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: $padding-8;
+  margin-bottom: $padding-16;
 }
 .book-search {
-  flex: 0 0 70%;
+  width: 100%;
   position: relative;
-  margin: $padding-16 0;
+  margin: $padding-16 0 $padding-8;
   border-bottom: 1px solid transparent;
 
   &::after {
@@ -394,7 +414,7 @@ aside nav,
 .theme-switch {
   display: inline-flex;
   align-items: center;
-  margin: 16px 0 16px 20px;
+  margin: 0;
   border: 1px solid $gray-300;
   border-radius: $padding-4;
   overflow: hidden;
@@ -438,7 +458,7 @@ aside nav,
   position: relative;
   display: inline-flex;
   align-items: center;
-  margin: 16px 0 16px 12px;
+  margin: 0;
 
   .book-langswitch-toggle {
     display: inline-flex;
@@ -527,10 +547,13 @@ aside nav,
 // self customized
 
 .quote {
-  border-radius: 3px;
-  padding: 15px;
-  // border-left-color: #666; // why not working?
-  background-color: rgba(#666, 0.1);
+  border-radius: $border-radius;
+  padding: $padding-16 $padding-16 * 1.25;
+  margin: $padding-16 * 1.5 0;
+  // A calm, booklike chapter-intro panel with a soft Go-blue accent rule.
+  border-left: $padding-4 solid rgba($color-link, 0.4);
+  background-color: rgba(#666, 0.08);
+  line-height: 1.8;
 }
 .quote-mark {
   float: right;

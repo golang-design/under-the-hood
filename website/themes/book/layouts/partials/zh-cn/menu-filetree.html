@@ -11,12 +11,12 @@
 {{/* If there is only one section to render then render its children, else render all sections */}}
 {{ if eq (len $sections) 1 }}
   {{ with index $sections 0 }}
-    {{ template "book-section-children" (dict "Section" . "CurrentPage" $) }}
+    {{ template "book-section-children" (dict "Section" . "CurrentPage" $ "Top" true) }}
   {{ end }}
 {{ else }}
   <ul>
   {{ range where $sections "Params.bookHidden" "!=" true }}
-    {{ template "book-section" (dict "Section" . "CurrentPage" $) }}
+    {{ template "book-section" (dict "Section" . "CurrentPage" $ "Top" true) }}
   {{ end }}
   </ul>
 {{ end }}
@@ -27,9 +27,11 @@
     {{ $hasChildren := gt (len .Pages) 0 }}
     {{ if and $hasChildren .Params.bookCollapseSection }}
       {{ $id := md5 .RelPermalink }}
-      {{/* Expand all sections by default (not just the current page's
-           ancestors); readers can still collapse any section manually. */}}
-      <input type="checkbox" id="section-{{ $id }}" class="toggle" checked />
+      {{/* Expand top-level PARTS by default so every chapter is visible, but
+           keep each chapter's sub-sections collapsed unless it is the current
+           page's ancestor (or current). `Top` is true only for the root call.
+           Readers can still expand/collapse anything manually. */}}
+      <input type="checkbox" id="section-{{ $id }}" class="toggle" {{ if or $.Top (.IsAncestor $.CurrentPage) (eq . $.CurrentPage) }}checked{{ end }} />
       <label for="section-{{ $id }}" class="book-toggle-label">
         {{ if .Content }}
           {{ template "book-page-link" (dict "Page" . "CurrentPage" $.CurrentPage) }}
@@ -37,14 +39,14 @@
           <span>{{ partial "zh-cn/title" . }}</span>
         {{ end }}
       </label>
-      {{ template "book-section-children" (dict "Section" . "CurrentPage" $.CurrentPage) }}
+      {{ template "book-section-children" (dict "Section" . "CurrentPage" $.CurrentPage "Top" false) }}
     {{ else }}
       {{ if .Content }}
         {{ template "book-page-link" (dict "Page" . "CurrentPage" $.CurrentPage) }}
       {{ else }}
         <span>{{ partial "zh-cn/title" . }}</span>
       {{ end }}
-      {{ template "book-section-children" (dict "Section" . "CurrentPage" $.CurrentPage) }}
+      {{ template "book-section-children" (dict "Section" . "CurrentPage" $.CurrentPage "Top" false) }}
     {{ end }}
   </li>
 {{ end }}
@@ -55,7 +57,7 @@
   <ul>
     {{ range where .Pages "Params.bookhidden" "!=" "true" }}
       {{ if eq .Kind "section" }}
-        {{ template "book-section" (dict "Section" . "CurrentPage" $.CurrentPage) }}
+        {{ template "book-section" (dict "Section" . "CurrentPage" $.CurrentPage "Top" $.Top) }}
       {{ else if and (eq .Kind "page") .Content }}
         <li>
         {{- template "book-page-link" (dict "Page" . "CurrentPage" $.CurrentPage) -}}
