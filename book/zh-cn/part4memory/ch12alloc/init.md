@@ -146,7 +146,28 @@ type heapArena struct {
 `(p / pageSize) % pagesPerArena` 取得页号，查 `spans` 即得 `*mspan`。拿到 span 之后，
 「`p` 是不是指针」「`p` 是否存活」就能从 span 的元数据（[12.2](./component.md) 的 `gcmarkBits`，
 以及小对象的堆位图）继续问下去。这条「地址 -> arena -> span -> 对象元数据」的链，是垃圾
-回收能够在 $O(1)$ 内对一个指针做扫描决策的根本（[13](../ch13gc)）。
+回收能够在 $O(1)$ 内对一个指针做扫描决策的根本（[13](../ch13gc)）。把这条反查链画成一张
+索引图，它的两段拆分一目了然：高位选 arena，低位选页。
+
+```mermaid
+flowchart LR
+    P["堆地址 p"] -->|"arenaIndex(p)"| IDX["arena 编号"]
+    P -->|"(p/pageSize) % pagesPerArena"| PG["页号"]
+    subgraph T["arenas 二级索引（按需分配 L2）"]
+      direction TB
+      L1["L1 维<br/>非 Windows 退化为单项"] --> L2["L2 子表"]
+    end
+    subgraph HA["heapArena 元数据（堆外）"]
+      direction TB
+      SPANS["spans[pagesPerArena]<br/>页号 -> *mspan"]
+      MARKS["pageInUse / pageMarks"]
+    end
+    IDX --> L1
+    L2 --> SPANS
+    PG --> SPANS
+    SPANS --> S["*mspan"]
+    S --> META["对象元数据<br/>gcmarkBits、堆位图<br/>是不是指针、是否存活"]
+```
 
 > 关于指针位图的存放，Go 1.22 起做过一次重要演进。早先每个 arena 配一张覆盖整片 arena 的
 > 指针位图；如今多数小对象的指针/标量信息改为**随对象内联或置于 span 头部**
