@@ -432,6 +432,98 @@ aside nav,
   }
 }
 
+// Header language switcher: a small globe button that reveals a dropdown of
+// available (and planned) languages. Styled to sit next to .theme-switch.
+.book-langswitch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin: 16px 0 16px 12px;
+
+  .book-langswitch-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 10px;
+    border: 1px solid $gray-300;
+    border-radius: $padding-4;
+    background: transparent;
+    color: $body-font-color;
+    font-size: $font-size-14;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+
+    &:hover {
+      background: $gray-100;
+    }
+
+    &:focus-visible {
+      outline: 2px solid #2196f3;
+      outline-offset: -2px;
+    }
+  }
+
+  .book-langswitch-current {
+    white-space: nowrap;
+  }
+
+  .book-langswitch-list {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 30;
+    min-width: 140px;
+    margin: 4px 0 0;
+    padding: $padding-4 0;
+    list-style: none;
+    background: $body-background;
+    border: 1px solid $gray-300;
+    border-radius: $padding-4;
+    box-shadow: 0 2px $padding-8 rgba(0, 0, 0, 0.12);
+  }
+
+  // Reveal on hover and on keyboard focus within the control.
+  &:hover .book-langswitch-list,
+  &:focus-within .book-langswitch-list {
+    display: block;
+  }
+
+  .book-langswitch-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: $padding-8 $padding-16;
+    white-space: nowrap;
+    color: inherit;
+    text-decoration: none;
+
+    &:hover {
+      background: $gray-100;
+    }
+
+    &.active {
+      font-weight: 600;
+    }
+
+    &.disabled {
+      color: $gray-500;
+      cursor: default;
+
+      &:hover {
+        background: transparent;
+      }
+    }
+  }
+
+  .book-langswitch-soon {
+    font-size: $font-size-12;
+    opacity: 0.7;
+  }
+}
+
 // self customized
 
 .quote {

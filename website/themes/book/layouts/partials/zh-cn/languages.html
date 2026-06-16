@@ -1,30 +1,74 @@
-<!-- Merge home and current page translations -->
-{{ $langs := dict }}
-{{ range .Site.Home.AllTranslations }}
-  {{ $langs = merge $langs (dict .Language.Lang .) }}
+{{/*
+  Header language switcher.
+
+  Design goals:
+    * Works TODAY with a single language (zh-cn). The trigger shows the current
+      language and the dropdown lists whatever languages exist.
+    * Requires NO further template edits when English/German content is added:
+      real translations come from Hugo's site languages / page translations, so
+      they light up automatically. Until a planned language has content it is
+      shown as a disabled "coming soon" entry purely for discoverability.
+
+  How the entries are decided:
+    1. $real   - every language Hugo actually knows about. We union the site's
+                 configured languages (.Site.Languages, so the home page always
+                 has an entry) with the current page's translations (.Translations
+                 + .AllTranslations) so per-page links are correct when present.
+    2. $planned - the roadmap languages (en, de). Any planned language that is
+                 already "real" is dropped so we never show a duplicate or a
+                 dead link once it ships.
+*/}}
+
+{{/* --- collect real languages, keyed by lang code, value is best link target --- */}}
+{{ $real := dict }}
+{{ range .Site.Languages }}
+  {{ $real = merge $real (dict .Lang (dict "name" .LanguageName "lang" .Lang "url" "" )) }}
+{{ end }}
+{{ range .AllTranslations }}
+  {{ $real = merge $real (dict .Language.Lang (dict "name" .Language.LanguageName "lang" .Language.Lang "url" .Permalink )) }}
 {{ end }}
 {{ range .Translations }}
-  {{ $langs = merge $langs (dict .Language.Lang .) }}
+  {{ $real = merge $real (dict .Language.Lang (dict "name" .Language.LanguageName "lang" .Language.Lang "url" .Permalink )) }}
 {{ end }}
 
-<div class="book-languages">
+{{/* --- planned roadmap languages; pruned of anything already real --- */}}
+{{ $planned := slice (dict "lang" "en" "name" "English") (dict "lang" "de" "name" "Deutsch") }}
 
-  <ul>
-    <li class="flex">
-      <img src="{{ "svg/translate.svg" | relURL }}" alt="Languages" />
-      {{ $.Site.Language.LanguageName }}
-    </li> 
-  </ul>
+{{ $curLang := .Site.Language.Lang }}
+{{ $curName := .Site.Language.LanguageName }}
 
-  <ul class="book-languages-list">
-    {{ range sort $langs }}
-    <li class="{{ if (eq $.Site.Language .Language ) }}active{{ end }}">
-      <a href="{{ .Permalink }}" class="flex">
-        <img src="{{ "svg/translate.svg" | relURL }}" alt="Languages" />
-        {{ .Language.LanguageName }}
-      </a>
+<div class="book-langswitch" aria-label="{{ i18n "Language" | default "Language" }}">
+  <button type="button" class="book-langswitch-toggle" aria-haspopup="true" aria-expanded="false" aria-label="{{ i18n "Language" | default "Language" }}" title="{{ i18n "Language" | default "Language" }}">
+    <i class="fas fa-globe" aria-hidden="true"></i>
+    <span class="book-langswitch-current">{{ $curName }}</span>
+  </button>
+
+  <ul class="book-langswitch-list" role="menu">
+    {{/* real languages first, sorted by code for a stable order */}}
+    {{ range $code, $l := $real }}
+    <li role="none">
+      {{ if eq $code $curLang }}
+      <span class="book-langswitch-item active" role="menuitem" aria-current="true">{{ $l.name }}</span>
+      {{ else if $l.url }}
+      <a class="book-langswitch-item" role="menuitem" href="{{ $l.url }}">{{ $l.name }}</a>
+      {{ else }}
+      {{/* Known language but no translation link for this page: send the
+           reader to that language's home page instead of a dead URL. */}}
+      <a class="book-langswitch-item" role="menuitem" href="{{ (site.GetPage "/").RelPermalink }}">{{ $l.name }}</a>
+      {{ end }}
     </li>
     {{ end }}
-  </ul>
 
+    {{/* planned languages that do not yet exist: shown disabled */}}
+    {{ range $planned }}
+    {{ if not (isset $real .lang) }}
+    <li role="none">
+      <span class="book-langswitch-item disabled" role="menuitem" aria-disabled="true" title="{{ i18n "ComingSoon" | default "Coming soon" }}">
+        {{ .name }}
+        <small class="book-langswitch-soon">{{ i18n "ComingSoon" | default "Coming soon" }}</small>
+      </span>
+    </li>
+    {{ end }}
+    {{ end }}
+  </ul>
 </div>

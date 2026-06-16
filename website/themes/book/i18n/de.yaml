@@ -1,0 +1,37 @@
+# German (Deutsch) translation stub.
+#
+# PLANNED locale. German content does not exist yet; this file only seeds the
+# UI strings so that enabling [languages.de] in config.toml later renders the
+# chrome (search box, theme switch, language switch) in German out of the box.
+# Translate the book content separately under content/de/.
+- id: Search
+  translation: Suche
+
+# Header theme switcher (light / auto / dark segmented control).
+- id: Theme
+  translation: Thema
+
+- id: ThemeLight
+  translation: Hell
+
+- id: ThemeAuto
+  translation: System
+
+- id: ThemeDark
+  translation: Dunkel
+
+# Header language switcher.
+- id: Language
+  translation: Sprache
+
+- id: ComingSoon
+  translation: Demnächst
+
+- id: Edit this page
+  translation: Diese Seite bearbeiten
+
+- id: Last modified by
+  translation: Zuletzt geändert von
+
+- id: bookSearchConfig
+  translation: '{ cache: true }'

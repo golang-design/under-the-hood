@@ -1,8 +1,8 @@
 
 <div class="book-footer justify-between">
-  {{ if hugo.IsMultilingual }}
-  {{ partial "zh-cn/languages" . }}
-  {{ end }}
+  {{/* The language switcher now lives in the header (see partial
+       "zh-cn/languages" rendered from zh-cn/search), so it is no longer
+       duplicated here. */}}
 
   {{ if and .GitInfo .Site.Params.BookRepo }}
   {{ with .GitInfo }}

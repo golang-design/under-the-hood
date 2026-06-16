@@ -1,6 +1,26 @@
 - id: Search
   translation: Search
 
+# Header theme switcher (light / auto / dark segmented control).
+- id: Theme
+  translation: Theme
+
+- id: ThemeLight
+  translation: Light
+
+- id: ThemeAuto
+  translation: Auto
+
+- id: ThemeDark
+  translation: Dark
+
+# Header language switcher.
+- id: Language
+  translation: Language
+
+- id: ComingSoon
+  translation: Coming soon
+
 - id: Edit this page
   translation: Edit this page
 

@@ -3,6 +3,62 @@ languageCode = "zh-cn"
 title = "Go 语言原本"
 theme = "book"
 
+# Multilingual scaffolding.
+# Chinese (zh-cn) is the default and currently the only language with content.
+# English (en) and German (de) are PLANNED: their [languages.*] blocks are
+# commented out below.
+#
+# NOTE ON LAYOUT: the existing site keeps ALL content under content/ and uses a
+# /zh-cn/ path segment plus a `type: zh-cn` front-matter field that selects the
+# layouts/zh-cn/* templates. That URL prefix is part of the content tree, not a
+# Hugo language prefix, so the default language deliberately uses
+# contentDir = "content" and defaultContentLanguageInSubdir = false to keep
+# every existing URL byte-for-byte unchanged.
+#
+# To enable a PLANNED language LATER:
+#   1. Add its content (e.g. content/en/** with `type: en`, and an English
+#      home page, mirroring how content/zh-cn/** is generated).
+#   2. Uncomment the matching [languages.en] / [languages.de] block below and
+#      point contentDir at where that language's tree lives.
+#   3. (Optional) add the locale's i18n file under themes/book/i18n/ and the
+#      layouts/<lang>/* templates (or reuse layouts/zh-cn/* by keeping the
+#      `type` field).
+#
+#   IMPORTANT: zh-cn currently uses contentDir = "content" (the whole tree). If
+#   you put another language UNDER that same tree (e.g. content/en), give zh-cn
+#   its own non-overlapping root at the same time (move it to contentDir =
+#   "content/zh-cn") so the per-language content roots do not nest inside each
+#   other, which Hugo forbids. Alternatively keep each language in a fully
+#   separate top-level dir. Adjust the generator (make-cn.go) accordingly.
+# The language-switch menu in the header reads Hugo's translations table, so a
+# newly enabled language lights up automatically with no template changes.
+defaultContentLanguage = "zh-cn"
+# Keep the default language at the site root (no /<lang>/ prefix injected by
+# Hugo) so existing links and the generated content/zh-cn/ tree keep resolving
+# unchanged.
+defaultContentLanguageInSubdir = false
+
+[languages]
+  [languages.zh-cn]
+    languageName = "中文"
+    languageCode = "zh-cn"
+    contentDir = "content"
+    weight = 1
+
+  # --- PLANNED: uncomment when English content exists ---
+  # [languages.en]
+  #   languageName = "English"
+  #   languageCode = "en"
+  #   contentDir = "content/en"
+  #   weight = 2
+
+  # --- PLANNED: uncomment when German content exists ---
+  # [languages.de]
+  #   languageName = "Deutsch"
+  #   languageCode = "de"
+  #   contentDir = "content/de"
+  #   weight = 3
+
 [markup.highlight]
     codeFences = true
     guessSyntax = false
