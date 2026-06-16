@@ -204,7 +204,3 @@ VS Code、Vim、Emacs 还是别的编辑器，得到的都是由同一个 gopls 
 6. 本书 [15.1 词法与文法](../ch15compile/parse.md)、
    [8.3 类型检查技术](../../part2lang/ch08generics/checker.md)、
    [17 模块](../ch17modules)、[3.1 命令源码分析](../../part1overview/ch03life/cmd.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

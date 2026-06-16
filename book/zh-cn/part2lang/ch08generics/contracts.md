@@ -244,7 +244,3 @@ flowchart LR
 6. The Go Authors. *Why Generics?* Go 博客, 2019. https://go.dev/blog/why-generics
 7. Bjarne Stroustrup. *Concepts: The Future of Generic Programming.* 2017.
    （C++ Concepts 的兴废，与 Go 合约同构的另一段约束机制简化史）
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

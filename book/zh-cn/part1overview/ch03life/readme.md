@@ -12,7 +12,3 @@ bookCollapseSection: true
 - [3.4 模块链接](./link.md)
 - [3.5 Go 程序启动引导](./boot.md)
 - [3.6 主 Goroutine 的生与死](./main.md)
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

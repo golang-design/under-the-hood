@@ -215,7 +215,3 @@ C++、Java、Python 走的路：错误沿调用栈隐式上抛，正常路径写
    https://pkg.go.dev/errors
 7. The Go Authors. *Working with Errors in Go 1.13（%w 包装与错误链）.* The Go Blog, 2019.
    https://go.dev/blog/go1.13-errors
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

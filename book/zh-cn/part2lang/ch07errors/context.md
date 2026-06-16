@@ -242,7 +242,3 @@ func handle(path string) {
    https://staticcheck.dev/docs/checks#ST1005 （错误字符串大小写与标点的检查）
 8. 本书 [7.1 问题的演化](./value.md)、[7.2 错误值检查](./inspect.md)、
    [16 工具与可观测性](../../part5toolchain/ch16tools).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

@@ -30,7 +30,3 @@ bookCollapseSection: true
 但又进一步要求程序员将得到的错误立即进行处理。
 这一设计决定一方面给了程序员以极大的自由，但另一方面又在不断的困扰着程序员们，
 使他们在拿到一个错误时，变得不知所措。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

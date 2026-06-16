@@ -338,7 +338,3 @@ POSIX 的 `SA_RESTART` 标志能让一部分被中断的系统调用自动重启
    https://docs.oracle.com/en/java/javase/21/docs/specs/man/java.html
 7. 本书 [9.3 调度器组件](./mpg.md)、[9.7 协作与抢占](./preemption.md)、
    [14.6 栈管理](../../part4memory/ch14stack).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

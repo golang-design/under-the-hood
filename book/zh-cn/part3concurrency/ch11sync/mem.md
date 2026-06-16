@@ -625,7 +625,3 @@ print(data)</pre>
     （iRC11；上承 Turon 等人 GPS, *OOPSLA 2014*）
 20. Go proposal #50590（*Go Memory Model clarifications*）；
     proposal #50860（*typed atomic types in sync/atomic*）。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

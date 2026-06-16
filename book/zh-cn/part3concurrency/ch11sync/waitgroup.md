@@ -273,7 +273,3 @@ loop variable），这个捕获 bug 就此消失。于是 `wg.Go(func() { proces
 6. The Go Authors. *Package errgroup.*
    https://pkg.go.dev/golang.org/x/sync/errgroup ；源码 `golang.org/x/sync/errgroup`。
 7. 本书 [11.3 原子操作](./atomic.md)、[11.8 上下文](./context.md)、[11.9 内存一致模型](./mem.md)。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

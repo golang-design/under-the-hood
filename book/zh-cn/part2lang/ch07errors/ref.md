@@ -82,7 +82,3 @@ title: "7.6 进一步阅读的参考文献"
 <!-- https://groups.google.com/d/msg/golang-nuts/_sE6BxUDVBw/TFzmZzrhCQAJ
 http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p0709r3.pdf
 https://stackoverflow.com/questions/46586/goto-still-considered-harmful -->
-
-## 许可
-
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

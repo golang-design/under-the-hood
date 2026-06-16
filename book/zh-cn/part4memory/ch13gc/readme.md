@@ -35,7 +35,3 @@ to track eye movement when subject looks away do a GC.
 </div>
 
 垃圾回收是一个相当困难且复杂的系统工程。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

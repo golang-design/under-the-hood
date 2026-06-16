@@ -270,7 +270,3 @@ func sysUnusedOS(v unsafe.Pointer, n uintptr) {
    https://github.com/golang/go/blob/master/src/runtime/mbitmap.go
 6. 本书 [3.5 调度器初始化](../../part1overview/ch03life/boot.md)、[12.2 组件](./component.md)、
    [12.7 页分配器](./pagealloc.md)、[13 垃圾回收](../ch13gc).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

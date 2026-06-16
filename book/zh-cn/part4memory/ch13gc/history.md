@@ -183,7 +183,3 @@ Green Tea 与分配器是一对**共生**的演进。批量扫描之所以划算
    https://github.com/golang/go/issues/73581 （Green Tea 的设计动机与基准）
 7. The Go Authors. *runtime/mgcmark_greenteagc.go.*
    https://github.com/golang/go/blob/master/src/runtime/mgcmark_greenteagc.go （`GOEXPERIMENT=greenteagc` 的实现）
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

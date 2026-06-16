@@ -177,7 +177,3 @@ requiredMinor := minor - 2 - minor%2
    https://go.dev/issue/44505 ，https://go.dev/issue/54265
 7. Ken Thompson. *Reflections on Trusting Trust.* Communications of the ACM, 1984.
    https://dl.acm.org/doi/10.1145/358198.358210
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

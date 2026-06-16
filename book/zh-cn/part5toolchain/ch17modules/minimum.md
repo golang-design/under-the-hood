@@ -223,7 +223,3 @@ MVS 是观察 Go 设计哲学的绝佳样本：面对一个别人用复杂手段
    https://medium.com/@nex3/pubgrub-2fb6470504f （求解器路线的代表，对照 MVS 的另一条道路）
 6. 本书 [17.1 依赖管理的难点](./challenges.md)、[17.2 语义化版本管理](./semantics.md)、
    [17.4 vgo 与 dep 之争](./fight.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

@@ -214,7 +214,3 @@ sequenceDiagram
 6. The Go Authors. *Go Modules Reference（cmd/go 模块机制的权威说明）.* https://go.dev/ref/mod
 7. 本书 [17.2 语义化版本管理](./semantics.md)、[17.3 最小版本选择算法](./minimum.md)，
    与 [1 引言](../../part1overview/ch01intro) 的设计哲学。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

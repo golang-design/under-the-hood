@@ -243,7 +243,3 @@ Rust 没有垃圾回收，因而没有「算术期间对象被移动」这一类
 7. JEP 454: *Foreign Function & Memory API（Java 22 定稿，`MemorySegment` 作为 `sun.misc.Unsafe` 的受控替代）.*
    https://openjdk.org/jeps/454 ；C# `fixed` 语句与对象钉扎，https://learn.microsoft.com/dotnet/csharp/language-reference/statements/fixed
 8. 本书 [5.1 数组、切片与字符串](../../part2lang/ch05data/slice.md)、[12.2 组件](../../part4memory/ch12alloc/component.md)、[14.4 栈管理](../../part4memory/ch14stack)、[15.6 cgo](./cgo.md)、[16.2 竞态检测](../ch16tools/race.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

@@ -226,7 +226,3 @@ Goroutine 可以成千上万」这一承诺背后的工程实现。下一节 [14
 6. 本书 [2.2 调用规范](../../part1overview/ch02asm/callconv.md)（stackguard0 的设立）、
    [9.7 协作与抢占](../../part3concurrency/ch09sched/preemption.md)（stackPreempt 借道序言检查）、
    [14.4 栈的拷贝](./copy.md)（copystack 与指针修正）。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

@@ -22,7 +22,3 @@ bookCollapseSection: true
 </div>
 
 泛型编程的基本想法围绕如何对具体、高效的算法进行抽象，并在结合考虑不同数据表示的过程中形成多种多样且通用的泛型算法。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

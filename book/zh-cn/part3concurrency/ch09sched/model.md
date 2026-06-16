@@ -164,7 +164,3 @@ Go 1.1 的发布说明里其实**并没有**正面描述这次调度器重写，
    https://go.dev/blog/container-aware-gomaxprocs
 8. Erik Stenman. *The BEAM Book（The Erlang Runtime System）.*
    https://github.com/happi/theBeamBook
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

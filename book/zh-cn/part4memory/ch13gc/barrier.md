@@ -244,7 +244,3 @@ Dijkstra 插入屏障，为保强不变性不得不把栈留到标记终止时 S
    （混合屏障实现、批量缓存与 `writeBarrier.enabled` / `gcphase` 门控）
 7. 本书 [13.1 垃圾回收的基本想法](./basic.md)、[13.6 标记终止阶段](./termination.md)、
    [11.9 内存一致模型](../../part3concurrency/ch11sync/mem.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

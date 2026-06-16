@@ -228,7 +228,3 @@ Go 用一点吞吐与内存，换来了亚毫秒级的可预测停顿。
    https://github.com/golang/go/blob/master/src/runtime/mgc.go
 7. 本书 [12.1 内存分配设计原则](../ch12alloc/basic.md)、
    [12.2 分配器组件](../ch12alloc/component.md)、[13.2 写屏障技术](./barrier.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

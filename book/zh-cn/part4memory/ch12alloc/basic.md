@@ -231,7 +231,3 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 7. 本书 [12.2 组件](./component.md)、[12.5 小对象分配](./smallalloc.md)、
    [12.6 微对象分配](./tinyalloc.md)、[12.4 大对象分配](./largealloc.md).
 8. 本书 [13 垃圾回收](../ch13gc),分配器与 GC 共生关系的展开。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

@@ -43,7 +43,3 @@ Go 语言的调度器是笔者眼中整个运行时最迷人的组件了。
 调度器必须高效的对调度用户态不可见的网络轮询器、垃圾回收器进行调度；为了保证代码
 执行的正确性，还必须严格的实现用户态代码的内存顺序等等。
 总而言之，调度器的设计直接决定了 Go 运行时源码的表现形式。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

@@ -212,7 +212,3 @@ flowchart LR
 6. 本书 [13.3 触发频率及其调步算法](../ch13gc/pacing.md)、[12.7 页分配器与内存限制](./pagealloc.md)、
    [12.3 初始化与 arena](./init.md).
 7. 本书 [第 16 章 工具与可观测性](../../part5toolchain/ch16tools/readme.md)（pprof、metric 的实操）.
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

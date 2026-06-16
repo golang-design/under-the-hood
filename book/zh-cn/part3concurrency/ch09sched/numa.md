@@ -198,7 +198,3 @@ NUMA 感知会不会回归核心？没有定论。倾向于它回归的理由是
    https://man7.org/linux/man-pages/man8/numactl.8.html （进程外做 NUMA 绑定的工具与系统调用）
 7. 本书 [9.2 工作窃取式调度](./steal.md)、[9.3 MPG 模型](./mpg.md)、
    [12.2 分配器组件](../../part4memory/ch12alloc/component.md)、[13 垃圾回收（ROC 取舍）](../../part4memory/ch13gc).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

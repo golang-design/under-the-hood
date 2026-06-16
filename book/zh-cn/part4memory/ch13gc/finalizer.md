@@ -228,7 +228,3 @@ cleanup := runtime.AddCleanup(p, func(fd int) {
    https://github.com/golang/go/issues/67535 （AddCleanup 设计动机与对 SetFinalizer 缺陷的讨论）
 7. 本书 [6.2 defer](../../part2lang/ch06func/defer.md)、
    [12.2 分配器组件](../ch12alloc/component.md)、[13.5 清扫](./sweep.md)。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

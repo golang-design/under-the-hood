@@ -259,7 +259,3 @@ Grafana 展示」几乎是默认装配。Go 在其中的位置很清楚：提供
 7. 本书 [12.8 内存统计](../../part4memory/ch12alloc/mstats.md)、
    [13.4 GC 步调](../../part4memory/ch13gc/pacing.md)、[16.3 性能追踪](./trace.md)、
    [16.5 基准测试与画像](./perf.md)、[7.3 错误格式与上下文](../../part2lang/ch07errors/context.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

@@ -210,7 +210,3 @@ C++ 让你在捕获列表里显式选值捕获 `[=]` 还是引用捕获 `[&]`，
    https://github.com/golang/go/blob/master/src/runtime/runtime2.go
 7. 本书 [4.2 接口](../ch04type/interface.md)、[5.1 切片](../ch05data/slice.md)、
    [14 执行栈管理](../../part4memory/ch14stack)、[15.5 逃逸分析](../../part5toolchain/ch15compile/escape.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

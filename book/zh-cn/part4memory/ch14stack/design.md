@@ -199,7 +199,3 @@ flowchart LR
    [9.7 协作与抢占](../../part3concurrency/ch09sched/preemption.md)、
    [2.2 调用规范](../../part1overview/ch02asm/callconv.md).
 7. 本章 [14.5 栈的伸缩](./grow.md)（栈拷贝、指针修正与 `gobuf` 更新的细节）.
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

@@ -116,8 +116,3 @@ title: "13.13 进一步阅读的参考文献"
 </tr>
 
 </table>
-
-
-## 许可
-
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

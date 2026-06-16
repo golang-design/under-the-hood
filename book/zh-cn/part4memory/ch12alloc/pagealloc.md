@@ -224,7 +224,3 @@ OOM Killer 杀掉。归还策略从「固定比例渐进归还」一路演进到
    https://go.dev/doc/gc-guide
 7. 本书 [12.2 组件](./component.md)、[9.8 系统监控](../../part3concurrency/ch09sched/sysmon.md)、
    [13 垃圾回收](../ch13gc).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

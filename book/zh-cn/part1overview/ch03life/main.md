@@ -257,7 +257,3 @@ func main() {
 5. The Go Authors. *Command compile.* https://go.dev/cmd/compile/
 6. 本书 [3.5 运行时的初始化](./init.md)、[9.8 系统监控](../../part3concurrency/ch09sched/sysmon.md)、
    [11 同步模式](../../part3concurrency/ch11sync)。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

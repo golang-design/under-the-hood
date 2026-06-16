@@ -23,7 +23,3 @@ Why not do what other languages do? Java has Maven, Node has NPM, Ruby has Bundl
 -- Russ Cox
 </div>
 </div>
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

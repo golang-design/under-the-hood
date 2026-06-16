@@ -194,7 +194,3 @@ func (HPoint) Draw()      { /* ... */ }  // 非法：接收者别名不得指向
 6. The Go Authors. *src/go/types/alias.go*（`Alias` 类型节点、`tparams`/`targs` 与 `Unalias`）.
    https://github.com/golang/go/blob/master/src/go/types/alias.go
 7. 本书 [4.1 运行时类型系统](./type.md)、[8 泛型](../ch08generics/readme.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

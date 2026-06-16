@@ -257,7 +257,3 @@ flowchart LR
 7. 本书 [10.1 发送](./send.md)、[10.2 接收](./recv.md)、[10.3 select](./select.md)、
    [11.8 上下文](../../part3concurrency/ch11sync/context.md)、
    [11.9 内存一致模型](../../part3concurrency/ch11sync/mem.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

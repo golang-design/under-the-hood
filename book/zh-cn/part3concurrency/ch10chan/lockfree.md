@@ -212,7 +212,3 @@ channel 的内存模型承诺与它的实现形态，是同一个取舍的两面
    https://doi.org/10.1145/359576.359585
 7. 本书 [10.3 发送与直接交付](./send.md)、[10.5 select 与公平](./select.md)、
    [11.9 内存一致模型](../ch11sync/mem.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

@@ -256,7 +256,3 @@ go mod        # 模块维护（tidy / download / verify ...）
 6. The Bazel Authors. *Bazel: Remote Caching.*
    https://bazel.build/remote/caching （内容寻址 action cache 的工业级形态）。
 7. 本书 [3.2 编译](./compile.md)、[3.4 链接](./link.md)、[第 17 章 模块](../../part5toolchain/ch17modules/readme.md)。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

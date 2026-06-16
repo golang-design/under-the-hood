@@ -186,7 +186,3 @@ Green Tea 也不是没有代价。多备一套 scans 位、维护 span 工作队
    `runtime/mgcmark_greenteagc.go`.
 7. 本书 [12.1 设计原则](./basic.md)、[12.2 组件](./component.md)、
    [12.7 页分配器与归还](./pagealloc.md)、[13 垃圾回收](../ch13gc).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

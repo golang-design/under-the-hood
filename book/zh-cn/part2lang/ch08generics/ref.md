@@ -73,7 +73,3 @@ title: "8.5 进一步阅读的参考文献"
 http://www.stroustrup.com/WG21.html
 What Happened to C++20 Contracts? https://www.reddit.com/r/cpp/comments/cmk7ek/what_happened_to_c20_contracts/
 Simple Contracts for C++, http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2015/n4415.pdf -->
-
-## 许可
-
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

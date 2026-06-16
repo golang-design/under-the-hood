@@ -30,7 +30,3 @@ bookCollapseSection: true
 同步原语（Primitive）的选择上与大多数语言不同，基于 Channel 和 Select 消息通信式同步是该语言
 本身真正意义上的同步原语。进而「传统意义」上的原子、互斥、条件变量、线程本地资源等
 概念在 Go 语言中蜕变为用户态的同步模式（Pattern），形成了语言独有的特色。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

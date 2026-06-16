@@ -355,7 +355,3 @@ func (m *Map) PutSlot(...) unsafe.Pointer {
 - [golang/go#54766: "runtime: use Swiss Tables for maps."](https://github.com/golang/go/issues/54766) Go 采用 Swiss Table 的提案与讨论；落地见 [Go 1.24 Release Notes](https://go.dev/doc/go1.24)。
 - [internal/runtime/maps 顶层注释：可扩展哈希、目录与分裂的权威说明。Go source tree, 2024.](https://github.com/golang/go/blob/master/src/internal/runtime/maps/map.go) 新实现的设计文档即写在源码注释里。
 - [JEP 180: Handle Frequent HashMap Collisions with Balanced Trees. OpenJDK, 2014.](https://openjdk.org/jeps/180) Java `HashMap` 的链表树化方案，对照另一条最坏情况防御路线。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

@@ -216,7 +216,3 @@ flowchart TD
    https://doi.org/10.1145/360336.360345 （延迟引用计数：计数式向追踪式靠拢的经典混合）
 7. 本书 [13.1 垃圾回收的基本想法](./basic.md)、[13.2 写屏障技术](./barrier.md)、
    [13.8 分代假设与代际回收](./generational.md)、[13.9 请求假设与事务制导回收](./roc.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

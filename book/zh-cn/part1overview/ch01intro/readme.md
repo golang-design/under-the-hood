@@ -22,7 +22,3 @@ The reason I was enthusiastic about Go is because, at the same time we were star
 -- Ken Thompson
 </div>
 </div>
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

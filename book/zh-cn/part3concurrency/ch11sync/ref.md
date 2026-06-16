@@ -31,7 +31,3 @@ Sameer Ajmani. 29 July 2014. “Go Concurrency Patterns: Context” https://blog
 - [Clements, 2019a] Austin Clements. sync: use lock-free structure for Pool stealing. Mar 1, 2019. https://github.com/golang/go/commit/d5fd2dd6a17a816b7dfd99d4df70a85f1bf0de31
 - [Clements, 2019b] Austin Clements. sync: smooth out Pool behavior over GC with a victim cache. Mar 2, 2019. https://github.com/golang/go/commit/2dcbf8b3691e72d1b04e9376488cef3b6f93b286)
 https://faiface.github.io/post/context-should-go-away-go2/
-
-## 许可
-
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

@@ -202,7 +202,3 @@ require (
 5. The Go Authors. *golang.org/x/exp/cmd/gorelease、golang.org/x/exp/apidiff*
    （辅助检查导出 API 兼容性、为 semver 自律提供工具支撑）。
 6. 本书 [17.1 依赖管理的难点](./challenges.md)、[17.3 最小版本选择算法](./minimum.md)。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

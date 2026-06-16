@@ -275,7 +275,3 @@ func stackpoolalloc(order uint8) gclinkptr {
    [11.6 缓存池 sync.Pool](../../part3concurrency/ch11sync/pool.md).
 7. 本书 [14.1 连续栈的设计](./design.md)、[14.3 栈的增长](./grow.md)、
    [14.4 栈的拷贝与指针调整](./copy.md)、[14.5 栈的收缩与演进](./shrink.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

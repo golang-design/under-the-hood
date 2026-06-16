@@ -265,7 +265,3 @@ sysmon 与这些内核看门狗有一个关键分野：内核的 lockup 与 hung
    https://github.com/openjdk/jdk/tree/master/src/hotspot/share/runtime
 7. 本书 [9.7 协作与抢占](./preemption.md)、[9.5 线程管理](./thread.md)、
    [9.9 网络轮询器](./poller.md)、[16.1 运行时死锁检查](../../part5toolchain/ch16tools/deadlock.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

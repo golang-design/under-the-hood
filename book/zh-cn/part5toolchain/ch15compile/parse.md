@@ -212,7 +212,3 @@ Go 把「文法的简单」放在很高的优先级，回报是多方面的。**
 6. 本书 [3.2 编译流程](../../part1overview/ch03life/compile.md)、
    [8.3 类型检查技术](../../part2lang/ch08generics/checker.md)、
    [16.7 gopls](../ch16tools/gopls.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

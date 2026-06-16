@@ -116,7 +116,3 @@ Ian Lance Taylor. Apr 3, 2019. “runtime: change netpoll to take an amount of t
 Ian Lance Taylor. Apr 6, 2019. “runtime: add netpollBreak” https://github.com/golang/go/commit/50f4896b72d16b6538178c8ca851b20655075b7f
 
 Dmitry Vyukov. Oct 31, 2018. “runtime: don't recreate netpoll timers if they don't change” https://github.com/golang/go/commit/86d375498fa377c7d81c5b93750e8dce2389500e -->
-
-## 许可
-
-&copy; 2018-2020 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

@@ -181,7 +181,3 @@ flowchart TD
    （微对象路径所寄生其上的两端）.
 6. 本书 [12.2 组件](./component.md)（mcache、span、尺寸类）、
    [13 垃圾回收](../ch13gc)（块的整体存活、扫描与清扫）.
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

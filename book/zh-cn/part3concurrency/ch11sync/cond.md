@@ -303,7 +303,3 @@ close(done)
    https://go.dev/ref/mem （Cond 的 synchronized-before 保证）
 7. 本书 [11.2 互斥锁](./mutex.md)、[11.9 内存一致模型](./mem.md)、
    [12.2 组件](../../part4memory/ch12alloc/component.md)。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

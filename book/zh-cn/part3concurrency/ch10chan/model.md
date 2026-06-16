@@ -237,7 +237,3 @@ for in1 != nil || in2 != nil {
    21(8), 1978. https://doi.org/10.1145/359576.359585
 6. 本书 [1.3 顺序进程通讯](../../part1overview/ch01intro/csp.md)、
    [10.6 内存模型与无锁演进](./lockfree.md)、[11.9 内存一致模型](../ch11sync/mem.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

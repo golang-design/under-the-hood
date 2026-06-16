@@ -334,7 +334,3 @@ flowchart TD
 8. 本书 [5.2 散列表](../../part2lang/ch05data/map.md)、[11.2 互斥锁](./mutex.md)、
    [12.2 分配器组件](../../part4memory/ch12alloc/component.md)（mcentral 的「为并发而重构数据
    结构」是同一类演进）。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

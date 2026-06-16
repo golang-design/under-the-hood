@@ -234,7 +234,3 @@ recover 的正当场景,**在一个清晰的边界上，把「一次操作的崩
 6. The Rust Project. *Error Handling: `Result` vs `panic!`.*
    https://doc.rust-lang.org/book/ch09-00-error-handling.html （错误即值与不可恢复错误的同构取舍）
 7. 本书 [6.2 延迟调用](./defer.md)、[第 7 章 错误处理](./../ch07errors/readme.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

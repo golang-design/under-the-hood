@@ -224,7 +224,3 @@ default:
    https://google.github.io/tcmalloc/design.html（尺寸类如何把碎片限制在可控范围）.
 7. 本书 [12.1 设计原则](../ch12alloc/basic.md)、[12.2 组件](../ch12alloc/component.md)、
    [13.1 基本思想](./basic.md)、[13.4 标记](./mark.md)、[13.11 过去现在未来](./history.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

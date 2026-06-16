@@ -293,7 +293,3 @@ func newInt() *int {
 6. 本书 [15.5 逃逸分析](../../part5toolchain/ch15compile/escape.md)：栈可移动性如何约束分配决策。
 7. 本书 [10.3 收发与直接传递](../../part3concurrency/ch10chan/sendrecv.md)：sudog 与通道收发槽，
    解释 `adjustsudogs` 为何存在。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

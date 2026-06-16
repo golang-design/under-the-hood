@@ -295,7 +295,3 @@ flowchart TD
 7. 本书 [第 12 章 内存分配器](../../part4memory/ch12alloc/)、
    [第 13 章 垃圾回收器](../../part4memory/ch13gc/)（`mallocinit`、`gcinit` 所建起的结构）、
    [3.6 主 Goroutine 的生与死](./main.md)。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

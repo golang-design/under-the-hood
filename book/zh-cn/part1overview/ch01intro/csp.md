@@ -258,7 +258,3 @@ Go 没有把 CSP 当教条，每一处改动都体现它的工程口味：
 7. Rob Pike. *Concurrency Is Not Parallelism.* 2012. https://go.dev/blog/waza-talk
 8. The Go Authors. *Share Memory By Communicating.* https://go.dev/blog/codelab-share ；
    本书 [10 通道与 select](../../part3concurrency/ch10chan/readme.md)（hchan/select 的实现）。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

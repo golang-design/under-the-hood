@@ -211,7 +211,3 @@ func passthrough(p *int) *int { return p }
 5. 本书 [14.4 连续栈](../../part4memory/ch14stack)（栈会移动，故外部持有的地址必须逃逸）.
 6. 本书 [15.3 优化器](./optimize.md)（逃逸分析在编译流水线中的位置）、
    [16.5 性能剖析](../ch16tools)（先测后调）.
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

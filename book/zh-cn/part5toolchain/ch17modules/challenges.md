@@ -199,9 +199,3 @@ Go 模块也不例外，它的取舍，正是后续几节要逐一审视的。
    （`dep` 作者对版本求解与 SAT 复杂度的系统梳理）
 6. 本书 [17.2 语义化版本控制](./semantics.md)、[17.3 最小版本选择算法](./minimum.md)、
    [17.4 vgo 与 dep 之争](./fight.md)。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
-</content>
-</invoke>

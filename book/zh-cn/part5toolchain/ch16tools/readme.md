@@ -26,7 +26,3 @@ Everyone knows that debugging is twice as hard as writing a program in the first
 -- Brian Kernighan
 </div>
 </div>
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

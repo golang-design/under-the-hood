@@ -318,7 +318,3 @@ activations）那类「内核与用户态协作通知阻塞」的机制与此正
 10. 本书 [9.5 调度循环](./schedule.md)、[9.6 系统监控](./sysmon.md)、
     [14 执行栈管理](../../part4memory/ch14stack/readme.md)、
     [13.4 扫描标记与标记辅助](../../part4memory/ch13gc/mark.md).
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

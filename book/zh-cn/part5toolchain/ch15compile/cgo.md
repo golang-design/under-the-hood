@@ -229,7 +229,3 @@ cgo 与逃逸分析（[15.5](./escape.md)）、指针检查器（[15.4](./unsafe
 6. 本书 [2.2 调用规范](../../part1overview/ch02asm/callconv.md)、
    [9.5 线程管理](../../part3concurrency/ch09sched/thread.md)、
    [15.4 指针检查器](./unsafe.md)、[15.5 逃逸分析](./escape.md)。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

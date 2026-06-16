@@ -181,7 +181,3 @@ go build ./cmd/myapp
 7. 本书 [8 泛型](../../part2lang/ch08generics)（[8.3](../../part2lang/ch08generics/checker.md)
    types2、[8.4](../../part2lang/ch08generics/future.md) 字典间接），
    [3.3 自举](../../part1overview/ch03life/bootstrap.md)。
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

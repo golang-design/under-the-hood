@@ -209,7 +209,3 @@ Stenciling》。
 - [Marti2022] Vicent Marti. _Generics can make your Go code slower_. PlanetScale, 2022. https://planetscale.com/blog/generics-can-make-your-go-code-slower
 - [Issue49085] The Go Authors. _proposal: spec: allow type parameters in methods (parameterized methods)_. https://github.com/golang/go/issues/49085
 - [Stroustrup 1994] Bjarne Stroustrup. _The Design and Evolution of C++_. Addison-Wesley, 1994. Chapter 15: Templates.
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

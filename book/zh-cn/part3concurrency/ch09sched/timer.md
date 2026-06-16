@@ -378,7 +378,3 @@ coalescing / slack）、高频 ticker 对唤醒路径的压力，都是这一领
    https://www.kernel.org/doc/html/latest/timers/hrtimers.html
 9. Netty. *HashedWheelTimer*（基于 Varghese-Lauck）.
    https://netty.io/4.1/api/io/netty/util/HashedWheelTimer.html
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

@@ -138,7 +138,3 @@ Pike 把这种取向凝成一句话，「**少，但指数级地多**」（Less 
    （Newsqueak/Alef/Limbo 到 Go 的 CSP 一脉）
 6. Brian W. Kernighan. *Unix: A History and a Memoir.* 2019 （Go 设计者的 Unix / Plan 9 渊源）.
 7. Alan A. A. Donovan, Brian W. Kernighan. *The Go Programming Language.* 2015.
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).

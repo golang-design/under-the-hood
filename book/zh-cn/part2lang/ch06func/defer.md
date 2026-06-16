@@ -301,7 +301,3 @@ Go 选了另一条路：`defer` 不与类型绑定、不需要额外的块缩进
    https://github.com/golang/go/commit/4a903e0b32be5a590880ceb7379e68790602c29d ；
    [Thompson, 2009] Ken Thompson. *defer.* Jan 2009.
    https://github.com/golang/go/commit/1e1cc4eb570aa6fec645ff4faf13431847b99db8
-
-## 许可
-
-&copy; 2018-2026 The [golang.design](https://golang.design) Initiative Authors. Licensed under [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/).
