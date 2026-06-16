@@ -10,7 +10,6 @@ bookCollapseSection: true
 - [8.2 基于合约的泛型](./contracts.md)
 - [8.3 类型检查技术](./checker.md)
 - [8.4 泛型的未来](./future.md)
-- [8.5 进一步阅读的参考文献](./ref.md)
 
 <div class="quote">
 <i class="quote-mark fas fa-thumbtack"></i>
