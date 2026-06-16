@@ -9,7 +9,6 @@ bookCollapseSection: true
 - [4.1 运行时类型系统](./type.md)
 - [4.2 接口](./interface.md)
 - [4.3 类型别名](./alias.md)
-- [4.4 进一步阅读的参考文献](./ref.md)
 
 （数据结构、函数、通道等原属旧"语言核心"章，现已分别移至
 [第 5 章 数据结构](../ch05data)、[第 6 章 函数、延迟与恐慌](../ch06func)、
