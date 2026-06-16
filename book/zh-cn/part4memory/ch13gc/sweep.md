@@ -211,6 +211,9 @@ default:
 1. The Go Authors. *runtime/mgcsweep.go（`mspan.sweep` 的 `gcmarkBits`→`allocBits` 翻转、
    `sweepone`、`bgsweep`、`deductSweepCredit` 比例清扫）.*
    https://github.com/golang/go/blob/master/src/runtime/mgcsweep.go
+   位图分配与免清扫的原始设计见 Austin Clements. *Proposal: Dense mark bits and sweep-free
+   allocation.* Go issue #12800, 2015（go1.6 以直接位图分配取代空闲链表）.
+   https://github.com/golang/go/issues/12800
 2. The Go Authors. *runtime/mcentral.go（按 `sweepgen` 分桶的 `[2]spanSet` 与按需清扫）.*
    https://github.com/golang/go/blob/master/src/runtime/mcentral.go
 3. Rick Hudson. *Getting to Go: The Journey of Go's Garbage Collector.* ISMM 2018 Keynote.

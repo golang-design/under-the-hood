@@ -18,7 +18,6 @@ bookCollapseSection: true
 - [13.10 终结器](./finalizer.md)
 - [13.11 过去、现在与未来](./history.md)
 - [13.12 垃圾回收统一理论](./unifiedgc.md)
-- [13.13 进一步阅读的参考文献](./ref.md)
 
 <div class="quote">
 <i class="quote-mark fas fa-thumbtack"></i>

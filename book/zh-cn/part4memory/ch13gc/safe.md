@@ -193,6 +193,27 @@ func scanframeworker(frame *stkframe, state *stackScanState, gcw *gcWork) {
 保持精确」之间取的平衡（参见 issue [#24543](https://github.com/golang/go/issues/24543) 对保守扫描
 内层帧的设计讨论）。
 
+把整条扫栈路径连起来看，从抢占停下到逐帧选路如下图。注意 `asyncPreempt` 桩帧会把
+`state.conservative` 置位并向**父帧**传递，于是被信号真正中断的那一帧也落入保守扫，这一点在
+代码里是隐式的：
+
+```mermaid
+flowchart TD
+    SUS["suspendG：请目标 goroutine 离开 CPU<br/>停到安全点（复用 9.7 抢占机制）"] --> CHK{"scanstack：状态可扫？<br/>_Grunning 直接 throw"}
+    CHK -->|可扫| FR["unwinder 逐帧展开<br/>对每一帧 scanframeworker"]
+    FR --> Q{"本帧是 asyncPreempt / debugCall<br/>或 state.conservative 已置位？"}
+    Q -->|否| PREC["精确路径：getStackMap 查栈图<br/>按位图 scanblock 扫 locals 与 args"]
+    Q -->|是| CONS["保守路径：scanConservative 扫整帧<br/>含出参区，像指针的字一律保留"]
+    CONS --> PROP["若为 asyncPreempt / debugCall<br/>置 state.conservative=true<br/>使紧邻父帧也保守扫"]
+    PREC --> NEXT["下一帧"]
+    PROP --> NEXT
+    NEXT --> FR
+    classDef prec fill:#fff,stroke:#333,color:#000
+    classDef cons fill:#bbb,stroke:#333,color:#000
+    class PREC prec
+    class CONS,PROP cons
+```
+
 ## 13.7.5 精确 GC 的取舍与谱系
 
 至此可以回答一个根本问题:Go 为什么要让编译器和运行时一起维护这套栈图与安全点基础设施？因为
