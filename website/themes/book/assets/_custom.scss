@@ -80,54 +80,11 @@ html.dark {
     }
     .book-toc, aside, nav { color: #cacac2; }
 
-    code {
-        background: #2b2b30;
-        color: #e6e6e0;
-    }
-    pre, pre code {
-        background: #16161a;
-        color: #d6d6d0;
-    }
-
-    /* Class-based Chroma highlighting (noClasses=false): give fenced code a
-       dark surface and a legible dark syntax palette so it no longer renders
-       with the light "vs" colors on a near-white background.
-
-       The bordered box and the dark fill must be the SAME rectangle, so only
-       the outer .highlight wrapper carries the surface + border + radius; every
-       inner element stays transparent and box-free (mirrors _markdown.scss). */
-    .highlight {
-        background: #16161a;
-        color: #d6d6d0;
-        border: 1px solid #2a2a30;
-        border-radius: $border-radius;
-
-        .chroma,
-        table.lntable,
-        td.lntd,
-        pre,
-        code {
-            background: none;
-            border: 0;
-            border-radius: 0;
-        }
-    }
-    .chroma {
-        color: #d6d6d0;
-
-        .lnt, .ln { color: #6b6b73; }                                  // gutter
-        .hl { background: rgba(#6ea8fe, 0.15); }                        // highlighted line
-
-        .k, .kc, .kd, .kn, .kp, .kr, .kt { color: #6ea8fe; }           // keywords
-        .nb, .bp { color: #6ea8fe; }                                   // builtins
-        .nf, .nx { color: #dcdccc; }                                   // functions
-        .nc, .nn { color: #4ec9b0; }                                   // classes / namespaces
-        .s, .s1, .s2, .sb, .sc, .sd, .se, .sh, .si, .sx, .sr, .sa { color: #ce9178; } // strings
-        .m, .mb, .mf, .mh, .mi, .mo, .il { color: #b5cea8; }           // numbers
-        .c, .ch, .cm, .c1, .cs, .cp, .cpf { color: #6a9955; font-style: italic; } // comments
-        .o, .ow { color: #d6d6d0; }                                    // operators
-        .err { color: #f48771; }
-    }
+    /* Code colours (surface + warm Go syntax palette) are now token-driven in
+       _reading.scss and apply to BOTH themes via CSS custom properties that
+       swap under html.dark, so the cool-grey dark code rules that used to live
+       here are intentionally gone. Do not reintroduce hard-coded code colours
+       here or they will fight the token palette in dark mode. */
 
     blockquote {
         border-left-color: #4a4a52;

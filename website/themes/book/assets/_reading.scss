@@ -169,3 +169,103 @@ html.dark body {
   hr { background: var(--border); }
 }
 
+// --- Code blocks ---------------------------------------------------------
+// The reading.js wraps each `div.highlight` in `.reading-code` and prepends a
+// header bar (language label + copy button). The wrapper owns the card box;
+// the inner .highlight is flattened. When JS is unavailable, .highlight itself
+// keeps the card look as a fallback.
+.markdown {
+  pre, code, .chroma {
+    font-family: var(--font-mono);
+  }
+
+  .reading-code {
+    margin: 26px 0;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--code-bg);
+
+    .highlight {
+      margin: 0;
+      border: 0;
+      border-radius: 0;
+      padding: 14px 16px;
+      background: transparent;
+    }
+  }
+
+  .reading-codebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 14px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+
+    .reading-codelang {
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      letter-spacing: 0.02em;
+      color: var(--fg-faint);
+    }
+  }
+
+  .reading-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--fg-muted);
+    font-family: var(--font-sans);
+    font-size: 11.5px;
+    line-height: 1;
+    padding: 4px 9px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+
+    svg { width: 12px; height: 12px; }
+    &:hover { color: var(--accent); border-color: var(--accent); }
+    &.is-copied { color: var(--accent); border-color: var(--accent); }
+  }
+
+  // Fallback card for unwrapped blocks (JS off).
+  .highlight {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+
+  // Code surface + sizing.
+  pre {
+    background: var(--code-bg);
+    font-size: 13.5px;
+    line-height: 1.75;
+    color: var(--fg);
+  }
+  .chroma {
+    background: transparent;
+    color: var(--fg);
+    font-size: 13.5px;
+    line-height: 1.75;
+
+    // line-number gutter (kept, restyled faint — config emits lineNos)
+    .lnt, .ln { color: var(--fg-faint); }
+    .hl { background: var(--accent-soft); display: block; }
+
+    .k, .kc, .kd, .kn, .kp, .kr, .kt { color: var(--kw); }    // keywords
+    .nb, .bp { color: var(--kw); }                            // builtins
+    .nf, .nx { color: var(--fn); }                            // functions
+    .nc, .nn { color: var(--typ); }                           // types / namespaces
+    .kt { color: var(--typ); }                                // builtin types
+    .s, .s1, .s2, .sb, .sc, .sd, .se, .sh, .si, .sx, .sr, .sa { color: var(--str); } // strings
+    .m, .mb, .mf, .mh, .mi, .mo, .il { color: var(--num); }   // numbers
+    .c, .ch, .cm, .c1, .cs, .cp, .cpf { color: var(--com); font-style: italic; } // comments
+    .o, .ow, .p { color: var(--op); }                         // operators / punctuation
+    .err { color: var(--kw); }
+  }
+}
+
