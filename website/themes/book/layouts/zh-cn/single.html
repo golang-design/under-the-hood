@@ -1,6 +1,15 @@
 {{ define "main" }}
 <article class="markdown">
+  {{- if and .Parent .Parent.Title (findRE "第\\s*[0-9]+\\s*章" .Parent.Title) -}}
+  <div class="reading-eyebrow">{{ replaceRE "^(第\\s*[0-9]+\\s*章)\\s+(.+)$" "$1 · $2" .Parent.Title }}</div>
+  {{- end -}}
   {{- .Content -}}
+  {{- if or .Params.prevSec .Params.nextSec -}}
+  <nav class="reading-pagenav">
+    {{- with .Params.prevSec }}<a class="pagenav-card" href="{{ . }}"><span class="pagenav-eyebrow">← 上一节</span><span class="pagenav-title">{{ $.Params.prevSecTitle }}</span></a>{{ end -}}
+    {{- with .Params.nextSec }}<a class="pagenav-card" href="{{ . }}"><span class="pagenav-eyebrow">下一节 →</span><span class="pagenav-title">{{ $.Params.nextSecTitle }}</span></a>{{ end -}}
+  </nav>
+  {{- end -}}
 </article>
 {{ end }}
 

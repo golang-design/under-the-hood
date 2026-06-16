@@ -173,11 +173,15 @@
   function setupProgress() {
     var bar = document.getElementById("reading-progress-bar");
     if (!bar) return;
+    var tocFill = document.getElementById("toc-progress-fill");
+    var tocPct = document.getElementById("toc-progress-pct");
     function update() {
       var doc = document.documentElement;
       var max = doc.scrollHeight - window.innerHeight;
       var p = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
       bar.style.width = p * 100 + "%";
+      if (tocFill) tocFill.style.width = p * 100 + "%";
+      if (tocPct) tocPct.textContent = Math.round(p * 100) + "%";
     }
     onScroll(update);
     update();
@@ -210,6 +214,12 @@
     if (!article) return;
     var h1 = article.querySelector("h1");
     if (!h1 || article.querySelector(".reading-meta")) return;
+    var m = h1.textContent.match(/^(\d+(?:\.\d+)*)\s+([\s\S]+)$/);
+    if (m) {
+      h1.innerHTML = '<span class="h1-num"></span><span class="h1-text"></span>';
+      h1.querySelector(".h1-num").textContent = m[1];
+      h1.querySelector(".h1-text").textContent = m[2];
+    }
     var text = article.innerText || "";
     var chars = text.replace(/\s+/g, "").length;
     if (!chars) return;
@@ -222,7 +232,8 @@
       " 分钟</span>" +
       '<span class="rm-item">' +
       chars.toLocaleString() +
-      " 字</span>";
+      " 字</span>" +
+      '<span class="rm-item">基于 go1.26</span>';
     h1.parentNode.insertBefore(el, h1.nextSibling);
   }
 

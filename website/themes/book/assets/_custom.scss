@@ -11,9 +11,18 @@
 .img-center strong {
     display: block;
 }
-.guide-links {
-    font-weight: bolder;
-    margin-bottom: 50px;
+
+/* Footer copyright inset: .book-page padding is zeroed in _reading.scss
+   (contract H), so the in-flow copyright block would otherwise hug the flush
+   sheet borders. Mirror the .markdown horizontal padding so the footer text
+   aligns with the reading column. */
+#footer {
+    padding: 24px clamp(22px, 6vw, 72px) 48px;
+    max-width: var(--reading-measure);
+    margin: 0 auto;
+    color: var(--fg-faint);
+    font-family: var(--font-sans);
+    font-size: 12.5px;
 }
 
 /* ---------------------------------------------------------------------------

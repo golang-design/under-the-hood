@@ -26,7 +26,7 @@
   --accent-soft: rgba(0, 125, 156, 0.11);
 
   // Frosted floating TOC panel
-  --toc-bg: rgba(247, 244, 238, 0.78);
+  --toc-bg: rgba(247, 244, 238, 0.72);
   --shadow-panel: 0 16px 48px rgba(35, 32, 25, 0.12);
 
   // Code
@@ -66,7 +66,7 @@ html.dark {
   --accent: #29bee6;
   --accent-soft: rgba(41, 190, 230, 0.16);
 
-  --toc-bg: rgba(27, 25, 20, 0.78);
+  --toc-bg: rgba(27, 25, 20, 0.72);
   --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.4);
 
   // Code
@@ -143,6 +143,7 @@ body { padding-top: $topbar-h; }
   gap: 9px;
   text-decoration: none;
   white-space: nowrap;
+  min-width: 0;
 
   .wm-title {
     font-family: var(--font-serif);
@@ -205,7 +206,6 @@ body { padding-top: $topbar-h; }
   &.is-active {
     background: var(--accent);
     color: #fff;
-    border-color: var(--accent);
   }
 }
 
@@ -307,7 +307,7 @@ body { padding-top: $topbar-h; }
   font-family: var(--font-sans);
   font-size: 13px;
 
-  nav { padding: 22px 16px 40px; }
+  nav { padding: 26px 18px 40px; }
 
   // Compact list rhythm — links carry their own padding.
   ul { margin: 0; padding: 0; }
@@ -336,7 +336,7 @@ body { padding-top: $topbar-h; }
   }
 
   // Nested chapter links sit slightly indented.
-  nav > ul > li > ul > li > a { padding-left: 18px; }
+  nav > ul > li > ul > li > a { padding-left: 22px; }
 
   // Top-level part labels read as quiet section eyebrows.
   nav > ul > li > a,
@@ -347,16 +347,31 @@ body { padding-top: $topbar-h; }
   .book-section-flat > label {
     font-size: 10.5px;
     font-weight: 600;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.13em;
     color: var(--fg-faint);
-    padding: 16px 10px 6px;
+    padding: 14px 10px 6px;
   }
   .book-toggle-label::after { opacity: 0.45; }
 
   // Search box on the warm surface.
+  .book-search-field {
+    position: relative;
+    margin: 0 0 18px;
+
+    .search-icon {
+      position: absolute;
+      left: 11px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 14px;
+      height: 14px;
+      pointer-events: none;
+    }
+  }
+  .book-search { margin: 0; }
   .book-search input {
     height: 34px;
-    padding: 0 12px;
+    padding: 0 12px 0 32px;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--surface);
@@ -409,12 +424,12 @@ html[data-toc="open"] .book-toc { display: block; }
 
 .book-toc {
   position: fixed;
-  top: 76px;
+  top: 78px;
   right: 22px;
-  width: 240px;
+  width: 238px;
   max-height: calc(100vh - 100px);
   overflow-y: auto;
-  padding: 18px 18px 18px 16px;
+  padding: 20px 20px 20px 18px;
   background: var(--toc-bg);
   backdrop-filter: saturate(180%) blur(16px);
   -webkit-backdrop-filter: saturate(180%) blur(16px);
@@ -430,10 +445,10 @@ html[data-toc="open"] .book-toc { display: block; }
   .reading-toc-head {
     font-size: 11px;
     font-weight: 600;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--fg-faint);
-    margin-bottom: 14px;
+    margin-bottom: 16px;
   }
 
   ul { margin: 0; padding: 0; list-style: none; }
@@ -445,6 +460,7 @@ html[data-toc="open"] .book-toc { display: block; }
     text-decoration: none;
     line-height: 1.5;
     padding: 7px 0 7px 14px;
+    margin-left: -1px;
     border-left: 2px solid transparent;
     transition: color 0.12s, border-color 0.12s;
 
@@ -455,6 +471,46 @@ html[data-toc="open"] .book-toc { display: block; }
       font-weight: 600;
     }
   }
+
+  // Mini reading-progress meter pinned under the TOC (filled by reading.js).
+  .toc-progress {
+    margin-top: 24px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .toc-progress-track {
+    flex: 1;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--border-strong);
+    overflow: hidden;
+  }
+  #toc-progress-fill {
+    height: 100%;
+    width: 0;
+    background: var(--accent);
+    transition: width 0.12s linear;
+  }
+  #toc-progress-pct {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-faint);
+  }
+}
+
+// --- Reading sheet -------------------------------------------------------
+// The flush paper sheet that holds the reading column. Imported last, so this
+// overrides _main.scss's margin:10px and the wide-viewport padding bump.
+.book-page {
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  min-height: calc(100vh - #{$topbar-h});
+  margin: 0;
+  padding: 0;
 }
 
 // --- Reading column typography ------------------------------------------
@@ -462,6 +518,8 @@ html[data-toc="open"] .book-toc { display: block; }
 // booklike paragraph rhythm. Scoped to .markdown so chrome keeps its sans UI.
 .markdown {
   max-width: var(--reading-measure);
+  margin: 0 auto;
+  padding: 60px clamp(22px, 6vw, 72px) 160px;
   font-family: var(--font-serif);
   font-size: calc(var(--reading-size) * var(--reading-scale));
   line-height: 1.95;
@@ -474,6 +532,17 @@ html[data-toc="open"] .book-toc { display: block; }
     margin-bottom: 1.2em;
   }
 
+  // Chapter eyebrow (SSR), rendered before the H1 on chapter pages.
+  .reading-eyebrow {
+    font-family: var(--font-sans);
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 18px;
+  }
+
   // Headings in the serif face. The chapter numerals carried inline in the
   // markdown (e.g. "4.2 接口") keep the accent through links/markers elsewhere.
   h1, h2, h3, h4, h5, h6 {
@@ -484,15 +553,27 @@ html[data-toc="open"] .book-toc { display: block; }
   }
 
   h1 {
-    font-weight: 700;
-    font-size: 2.2em;
+    font-weight: 600;
+    font-size: 42px;
     line-height: 1.18;
-    margin-bottom: 0.6em;
+    margin: 0 0 18px;
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+
+    .h1-num {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-weight: 400;
+      font-size: 40px;
+      color: var(--accent);
+    }
   }
   h2 {
     font-weight: 600;
-    font-size: 1.5em;
-    margin-top: 1.9em;
+    font-size: 27px;
+    line-height: 1.35;
+    margin: 54px 0 18px;
     scroll-margin-top: 78px; // clear the fixed top header on anchor jumps
   }
   h3 { font-weight: 600; font-size: 1.22em; scroll-margin-top: 78px; }
@@ -515,7 +596,7 @@ html[data-toc="open"] .book-toc { display: block; }
     color: var(--accent);
     padding: 1px 6px;
     border-radius: 4px;
-    word-break: break-word;
+    white-space: nowrap;
   }
   pre code,
   .highlight code {
@@ -548,11 +629,52 @@ html[data-toc="open"] .book-toc { display: block; }
     color: var(--fg-faint);
     letter-spacing: 0;
     padding-bottom: 22px;
-    margin: 0 0 1.6em;
+    margin: 0 0 8px;
     border-bottom: 1px solid var(--border);
 
     .rm-item { display: inline-flex; align-items: center; gap: 6px; }
     svg { width: 13px; height: 13px; }
+  }
+
+  // Lead paragraph: the first <p> right after the injected meta row.
+  .reading-meta + p {
+    font-size: calc(var(--reading-size) * var(--reading-scale) + 2px);
+    color: var(--fg-muted);
+    line-height: 1.9;
+  }
+
+  // Prev/next chapter navigation, rendered after the content.
+  .reading-pagenav {
+    display: flex;
+    gap: 14px;
+    margin-top: 54px;
+    padding-top: 28px;
+    border-top: 1px solid var(--border);
+
+    .pagenav-card {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      text-decoration: none;
+      padding: 16px 18px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg);
+    }
+    .pagenav-eyebrow {
+      font-family: var(--font-sans);
+      font-size: 11.5px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--fg-faint);
+    }
+    .pagenav-title {
+      font-family: var(--font-serif);
+      font-size: 16px;
+      color: var(--fg);
+      font-weight: 500;
+    }
   }
 }
 
@@ -593,7 +715,7 @@ html[data-toc="open"] .book-toc { display: block; }
   }
 
   .reading-code {
-    margin: 26px 0;
+    margin: 24px 0;
     border: 1px solid var(--border);
     border-radius: 10px;
     overflow: hidden;
@@ -603,9 +725,12 @@ html[data-toc="open"] .book-toc { display: block; }
       margin: 0;
       border: 0;
       border-radius: 0;
-      padding: 14px 16px;
+      padding: 16px 18px;
       background: transparent;
     }
+
+    // Hide the line-number gutter column (copy still works via reading.js).
+    .lntable td.lntd:first-child { display: none; }
   }
 
   .reading-codebar {
@@ -635,7 +760,7 @@ html[data-toc="open"] .book-toc { display: block; }
     font-family: var(--font-sans);
     font-size: 11.5px;
     line-height: 1;
-    padding: 4px 9px;
+    padding: 3px 9px;
     border-radius: 6px;
     cursor: pointer;
     transition: color 0.15s, border-color 0.15s;
