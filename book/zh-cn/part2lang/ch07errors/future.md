@@ -215,3 +215,7 @@ C++、Java、Python 走的路：错误沿调用栈隐式上抛，正常路径写
    https://pkg.go.dev/errors
 7. The Go Authors. *Working with Errors in Go 1.13（%w 包装与错误链）.* The Go Blog, 2019.
    https://go.dev/blog/go1.13-errors
+8. Russ Cox. *Experiment, Simplify, Ship.* The Go Blog, 2019.
+   https://go.dev/blog/experiment （「先库后语言、先实验再固化」的演进哲学，正是本节主线的注脚）
+9. Jonathan Amsterdam. *proposal: Go 2 error values（#29934）.* 2019.
+   https://github.com/golang/go/issues/29934 （错误值演进的总提案，串起被否决与被采纳的诸多方案）

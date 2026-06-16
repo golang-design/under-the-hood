@@ -231,7 +231,10 @@ func handle(path string) {
 2. Russ Cox 等. *Working with Errors in Go 1.13.* Go 博客, 2019.
    https://go.dev/blog/go1.13-errors （`%w`、`Is`/`As`/`Unwrap` 的设计与取舍）
 3. Dave Cheney. *github.com/pkg/errors*（`Wrap`/`WithStack`、`%+v` 带栈打印）.
-   https://github.com/pkg/errors
+   https://github.com/pkg/errors ；
+   *Stack traces and the errors package.* 2016.
+   https://dave.cheney.net/2016/06/12/stack-traces-and-the-errors-package
+   （`pkg/errors` 栈轨迹设计的作者自述）
 4. The Go Authors. *golang.org/x/xerrors*（Go 1.13 错误特性的试验田）.
    https://pkg.go.dev/golang.org/x/xerrors
 5. The Go Authors. *Package log/slog*（Go 1.21 结构化日志）.
