@@ -15,7 +15,6 @@ bookCollapseSection: true
 - [11.7 并发安全散列表](./map.md)
 - [11.8 上下文](./context.md)
 - [11.9 内存一致模型](./mem.md)
-- [11.10 进一步阅读的参考文献](./ref.md)
 
 <div class="quote">
 <i class="quote-mark fas fa-thumbtack"></i>
