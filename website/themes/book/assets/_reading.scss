@@ -1,0 +1,84 @@
+// ===========================================================================
+// Reading redesign — "ink on paper"
+//
+// A calm, academic reading surface for 《Go 语言原本》, layered on top of the
+// existing Hugo "book" theme. The whole palette is expressed as CSS custom
+// properties so light and warm-dark share one set of rules and only the token
+// values swap. Built from the claude.ai/design handoff (Go-blue accent, warm
+// paper, serif Chinese body); see the design bundle for the source mock.
+//
+// This file is imported LAST (see book.scss) so its token-driven rules win over
+// the theme's hard-coded greys, including the cool-dark rules in _custom.scss.
+// ===========================================================================
+
+:root {
+  // Surfaces & ink (warm light)
+  --bg: #ece8df;            // page / chrome backdrop (warm paper)
+  --surface: #f7f4ee;       // reading sheet, panels, controls
+  --fg: #232019;            // ink
+  --fg-muted: #6a6256;      // secondary text
+  --fg-faint: #9b9385;      // captions, metadata, placeholders
+  --border: rgba(35, 32, 25, 0.10);
+  --border-strong: rgba(35, 32, 25, 0.18);
+
+  // Accent — Go's Gopher Blue, deepened for the warm paper
+  --accent: #007d9c;
+  --accent-soft: rgba(0, 125, 156, 0.11);
+
+  // Code
+  --code-bg: #eae7df;
+  --kw: #9a4a2e;   // keywords
+  --typ: #2f6f72;  // types
+  --com: #9b9385;  // comments
+  --str: #5a7d3a;  // strings
+  --fn: #7a5cab;   // functions
+  --num: #a06a2c;  // numbers
+  --op: #6a6256;   // operators
+
+  // Type families
+  --font-serif: 'Noto Serif SC', Georgia, 'Songti SC', serif;
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --font-display: 'Instrument Serif', Georgia, serif;
+}
+
+html.dark {
+  // Surfaces & ink (warm dark)
+  --bg: #14130e;
+  --surface: #1b1914;
+  --fg: #e6e0d2;
+  --fg-muted: #a7a08f;
+  --fg-faint: #736d5e;
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  // Accent — brighter cyan in the dark
+  --accent: #29bee6;
+  --accent-soft: rgba(41, 190, 230, 0.16);
+
+  // Code
+  --code-bg: #211e18;
+  --kw: #e0936b;
+  --typ: #74b8b2;
+  --com: #736d5e;
+  --str: #a9c47e;
+  --fn: #bb9fe2;
+  --num: #d8b46a;
+  --op: #a7a08f;
+}
+
+// --- Base surface --------------------------------------------------------
+// Swap the whole page onto warm paper + serif ink. Token-driven so dark mode
+// follows automatically.
+html { background: var(--bg); }
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-serif);
+}
+
+html.dark body {
+  background: var(--bg);
+  color: var(--fg);
+}

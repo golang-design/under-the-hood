@@ -11,15 +11,18 @@
 <!-- Base background painted from the same synchronous decision, so the very
      first frame (before book.scss loads) is already dark and there is no
      white flash on navigation. -->
-<style>html{background:#fff}html.dark{background:#1b1b1f}html.dark body{background:#1b1b1f;color:#cacac2}</style>
+<style>html{background:#ece8df}html body{background:#ece8df;color:#232019}html.dark{background:#14130e}html.dark body{background:#14130e;color:#e6e0d2}</style>
 <meta name="description" content="{{ partial "zh-cn/title" . }}">
 {{- template "_internal/opengraph.html" . -}}
 
 <title>{{ partial "zh-cn/title" . }} | {{ .Site.Title -}}</title>
 <link rel="icon" href="{{ "favicon.png" | relURL }}" type="image/x-icon">
 
-<!-- fonts -->
-<link href="https://fonts.googleapis.com/css?family=Noto+Sans+SC|Source+Code+Pro&display=swap" rel="stylesheet">
+<!-- fonts: serif Chinese reading body (Noto Serif SC), Inter for UI chrome,
+     JetBrains Mono for code, Instrument Serif for italic display accents. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&family=Noto+Serif+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.13.0/css/all.css" integrity="sha384-Bfad6CLCknfcloXFOyFnlgtENryhrpZCe29RTifKEixXQZ38WheV+i/6YWSzkz3V" crossorigin="anonymous">
 
 

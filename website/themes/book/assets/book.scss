@@ -12,3 +12,7 @@
 
 // Custom defined styles
 @import "custom";
+
+// Reading redesign — ink-on-paper design system (imported last so its
+// token-driven rules win over the theme's hard-coded palette).
+@import "reading";
