@@ -1,15 +1,16 @@
 ---
 weight: 2201
-title: "5.1 数组、切片与字符串"
+title: "5.1 数组与切片"
 ---
 
-# 5.1 数组、切片与字符串
+# 5.1 数组与切片
 
-数组、切片、字符串是 Go 里最基础的三种序列类型。它们看起来相似，内存模型却各不相同，理解这点
-能一举解释 append 的种种「惊喜」、切片别名的陷阱、以及字符串为何不可变。三者共享一个主题：
-一个小小的**头部**描述一段连续的后备内存。差异全在头部里装了什么、谁拥有那段内存、以及它可不
-可写。本节先把三种布局摆清楚，再从「动态数组」这一经典抽象出发，看 Go 的 `append` 如何在摊还
-意义下做到 $O(1)$，最后落到别名、字符串转换与跨语言对照这些日常会撞上的角落。
+数组与切片是 Go 里最基础的两种序列类型。它们看起来相似，内存模型却各不相同，理解这点
+能一举解释 append 的种种「惊喜」与切片别名的陷阱。两者共享一个主题：一个小小的**头部**
+描述一段连续的后备内存。差异全在头部里装了什么、谁拥有那段内存。本节先把布局摆清楚，再从
+「动态数组」这一经典抽象出发，看 Go 的 `append` 如何在摊还意义下做到 $O(1)$，最后落到别名
+与跨语言对照这些日常会撞上的角落。字符串虽与切片同源，但它不可变、自成一类，留到
+[5.2](./string.md) 专门讨论。
 
 ## 5.1.1 三种内存布局
 
@@ -43,7 +44,8 @@ type stringStruct struct {
 
 少掉的那个 `cap` 不是疏忽，而是设计：字符串**不可变**，长度一经确定不再增长，自然无需容量。
 不可变换来三件好事：多个字符串可安全共享同一段底层字节，子串 `s[i:j]` 无需拷贝，字符串可直接
-做 map 键而不必防御性复制。代价是任何「修改」都得生成新串。
+做 map 键而不必防御性复制。代价是任何「修改」都得生成新串。字符串的转换与零拷贝细节，见
+[5.2](./string.md)。
 
 把三者并排画出来，差异一目了然：
 
@@ -89,7 +91,7 @@ $$
 关键在于因子必须是**乘性**的。若改成「每次只多预留固定的 $c$ 个槽」，第 $k$ 次扩容要搬约 $kc$
 个元素，总成本 $\sum kc = \Theta(n^2)$，平摊后每次退化成 $O(n)$。一个常数因子，区分了线性与
 平方。乘性增长换来的均摊常数，代价是平均约 $g/2$ 倍的空间浪费（翻倍时最坏闲置接近一半），这正是
-增长因子那场永恒的空间与时间之争（[5.1.6](#516-跨语言对照) 会看到各家给出的不同答案）。
+增长因子那场永恒的空间与时间之争（[5.1.5](#515-跨语言对照) 会看到各家给出的不同答案）。
 
 ## 5.1.3 append 的增长策略
 
@@ -190,45 +192,7 @@ func Delete[S ~[]E, E any](s S, i, j int) S {
 手写 `s = append(s[:i], s[i+1:]...)` 删元素，少了这一句 `clear`，被「删掉」的指针仍留在底层
 数组的尾部、仍被 GC 视为存活，又是一处隐蔽的泄漏。能用 `slices` 就别手写。
 
-## 5.1.5 字符串与 []byte
-
-字符串不可变带来一个直接代价：`string` 与 `[]byte` 互转默认要**拷贝一份字节**。原因正是不可变,
-`[]byte` 可写，若让它直接指向某个字符串的底层字节，改 `[]byte` 就等于改了那个「不可变」的字符串，
-破坏了一切共享假设。所以运行时老老实实 `memmove` 一份：
-
-```go
-// runtime: []byte → string（string.go，节选）
-func slicebytetostring(buf *tmpBuf, ptr *byte, n int) string {
-    // ...
-    p := mallocgc(uintptr(n), nil, false) // 分配新内存
-    memmove(p, unsafe.Pointer(ptr), uintptr(n)) // 拷贝字节
-    return unsafe.String((*byte)(p), n)
-}
-```
-
-这份拷贝在热路径上可能可观。好在编译器认得几类「转换后字节立刻被读、不可能被改」的模式，把拷贝
-省掉。最常见的两个是用 `[]byte` 临时当 map 键查询，与对 `[]byte(s)` 直接 range：
-
-```go
-var m map[string]int
-_ = m[string(b)]      // 编译器：临时 string 仅用于查 map，无需拷贝（走 slicebytetostringtmp）
-for i, c := range []byte(s) { // 编译器：仅遍历，不持久化，无需真正建切片
-    _, _ = i, c
-}
-```
-
-要在自己代码里手动零拷贝转换，Go 1.20 给了正式工具：`unsafe.String(*byte, len)` 把一段字节当
-字符串看，`unsafe.StringData(string) *byte` 取字符串底层指针，`unsafe.Slice` / `unsafe.SliceData`
-是切片侧的对应物。它们取代了过去靠 `reflect.StringHeader` / `reflect.SliceHeader` 手工拼头部
-的脆弱写法（那种写法在有 GC 移动与字段对齐变化时并不可靠）。代价是你要自己担保**转换之后那段
-字节不再被修改**，否则就把不可变契约捅破了：
-
-```go
-// 零拷贝、且你能保证 b 此后只读时，才可这样转
-s := unsafe.String(unsafe.SliceData(b), len(b))
-```
-
-## 5.1.6 跨语言对照
+## 5.1.5 跨语言对照
 
 动态数组是普适抽象，C++ 的 `std::vector`、Rust 的 `Vec<T>`、Python 的 `list`、Java 的
 `ArrayList`，本质都是摊还 $O(1)$ 的成倍增长数组。差异集中在两点：**增长因子**与**视图**。
@@ -254,14 +218,11 @@ s := unsafe.String(unsafe.SliceData(b), len(b))
    成倍扩张（table doubling），本节摊还界的来源。
 2. The Go Authors. *runtime/slice.go：`growslice` / `nextslicecap`*（go1.26 增长策略）.
    https://github.com/golang/go/blob/master/src/runtime/slice.go
-3. The Go Authors. *runtime/string.go：`slicebytetostring` / `stringStruct`*（字符串布局与转换）.
-   https://github.com/golang/go/blob/master/src/runtime/string.go
-4. Andrew Gerrand. *Go Slices: usage and internals.* The Go Blog, 2011.
+3. Andrew Gerrand. *Go Slices: usage and internals.* The Go Blog, 2011.
    https://go.dev/blog/slices-intro
-5. Rob Pike. *Arrays, slices (and strings): The mechanics of 'append'.* The Go Blog, 2013.
+4. Rob Pike. *Arrays, slices (and strings): The mechanics of 'append'.* The Go Blog, 2013.
    https://go.dev/blog/slices
-6. The Go Authors. *Go 1.20 Release Notes*（`unsafe.String` / `unsafe.StringData` /
-   `unsafe.SliceData`）. https://go.dev/doc/go1.20 ；*`slices` 包文档*（Go 1.21，`Clone` /
-   `Delete` / `Insert` / `Grow`）. https://pkg.go.dev/slices
-7. The Go Authors. *Go specification: Slice expressions*（含完整切片表达式 `a[lo:hi:max]`）.
+5. The Go Authors. *`slices` 包文档*（Go 1.21，`Clone` / `Delete` / `Insert` / `Grow`）.
+   https://pkg.go.dev/slices
+6. The Go Authors. *Go specification: Slice expressions*（含完整切片表达式 `a[lo:hi:max]`）.
    https://go.dev/ref/spec#Slice_expressions
