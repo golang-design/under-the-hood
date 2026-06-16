@@ -242,7 +242,23 @@ func copystack(gp *g, newsize uintptr) {
 ```
 
 顺序是有讲究的。`adjustctxt`、`adjustdefers`、`adjustpanics` 必须排在逐帧遍历之前，因为
-`unwinder` 回溯新栈时会用到 `g.sched` 与 defer 链里的指针，它们得先正确才能驱动遍历。
+`unwinder` 回溯新栈时会用到 `g.sched` 与 defer 链里的指针，它们得先正确才能驱动遍历。把整条
+拷贝链路上「搬什么、调什么、按什么次序调」并到一处看，就是下面这张图：
+
+```mermaid
+flowchart TD
+    ALLOC["stackalloc(newsize)：分配新栈\ndelta = new.hi - old.hi"] --> CHANS{"activeStackChans ?\n栈是否已在通道上裸露"}
+    CHANS -->|否| SUDOG["adjustsudogs：调整等待队列的 sudog.elem"]
+    CHANS -->|是| SYNC["findsghi + syncadjustsudogs\n锁住通道、对收发槽用 CAS 平移"]
+    SUDOG --> MM["memmove：搬运字节到新栈"]
+    SYNC --> MM
+    MM --> EXTRA["调整栈帧之外的指针（须先于逐帧遍历）\nadjustctxt（g.sched）→ adjustdefers → adjustpanics"]
+    EXTRA --> SWAP["gp.stack = new；更新 sched.sp、stktopsp"]
+    SWAP --> FRAMES["unwinder 逐帧回溯，对每帧 adjustframe\n按栈映射调整 locals / args / 栈对象"]
+    FRAMES --> FREE["stackfree(old)：释放旧栈"]
+```
+
+
 
 ## 14.4.5 拷贝的约束反过来塑造了语言
 
