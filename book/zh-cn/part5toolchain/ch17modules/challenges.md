@@ -172,6 +172,30 @@ $GOPATH/src/
   确定，于是 17.1.2 的可重现**不再依赖 lock 文件**：同样的 `go.mod` 在任何时间、任何机器上，
   都解出同一组版本。
 
+这四块基石如何各自对应到前两节那两条难点，可以一图收束：
+
+```mermaid
+flowchart TD
+    GOMOD["go.mod<br/>显式写下 require 约束"]
+    SEMVER["语义化版本 + 导入版本<br/>v2 进路径"]
+    MVS["最小版本选择 MVS<br/>取最高下界的图遍历"]
+    GOSUM["go.sum<br/>内容加密校验和"]
+
+    SELECT["版本怎么选<br/>钻石依赖 / 约束求解（17.1.1）"]
+    REPRO["选定后怎么不漂移<br/>可重现构建（17.1.2）"]
+
+    GOMOD -->|"承载可表达的约束"| SELECT
+    SEMVER -->|"不兼容主版本可共存，<br/>消解二选一"| SELECT
+    MVS -->|"确定性遍历，无需 lock 文件"| REPRO
+    GOMOD -->|"版本约束写定不漂移"| REPRO
+    GOSUM -->|"校验下载字节不被掉包"| REPRO
+
+    classDef pillar fill:#dff0d8,stroke:#3c763d,stroke-width:2px;
+    classDef problem fill:#fcf8e3,stroke:#8a6d3b,stroke-width:2px;
+    class GOMOD,SEMVER,MVS,GOSUM pillar;
+    class SELECT,REPRO problem;
+```
+
 把这四块拼起来，依赖管理那两条主线就都有了着落:版本怎么选，交给 MVS 的确定性遍历；选定后
 怎么不漂移，交给写定的 `go.mod` 加校验的 `go.sum`。本章接下来便沿这条线铺开：先是语义化版本
 （[17.2](./semantics.md)）立下版本号的契约，再是最小版本选择（[17.3](./minimum.md)）给出求解的
