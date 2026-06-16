@@ -25,6 +25,10 @@
   --accent: #007d9c;
   --accent-soft: rgba(0, 125, 156, 0.11);
 
+  // Frosted floating TOC panel
+  --toc-bg: rgba(247, 244, 238, 0.78);
+  --shadow-panel: 0 16px 48px rgba(35, 32, 25, 0.12);
+
   // Code
   --code-bg: #eae7df;
   --kw: #9a4a2e;   // keywords
@@ -61,6 +65,9 @@ html.dark {
   // Accent — brighter cyan in the dark
   --accent: #29bee6;
   --accent-soft: rgba(41, 190, 230, 0.16);
+
+  --toc-bg: rgba(27, 25, 20, 0.78);
+  --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.4);
 
   // Code
   --code-bg: #211e18;
@@ -279,7 +286,161 @@ body { padding-top: $topbar-h; }
   height: calc(100vh - #{$topbar-h});
   max-height: calc(100vh - #{$topbar-h});
 }
-.book-toc nav { top: $topbar-h; }
+// --- Left sidebar (chapter nav) -----------------------------------------
+.book-menu {
+  background: var(--bg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+
+  nav { padding: 22px 16px 40px; }
+
+  // Compact list rhythm — links carry their own padding.
+  ul { margin: 0; padding: 0; }
+  ul ul { padding-left: 0; }
+  li { margin: 0; }
+
+  a {
+    display: block;
+    color: var(--fg-muted);
+    padding: 6px 10px;
+    border-radius: 6px;
+    text-decoration: none;
+    transition: color 0.12s, background 0.12s;
+
+    &:hover {
+      opacity: 1;
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
+  }
+  a.active {
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    &:hover { background: var(--accent); color: #fff; }
+  }
+
+  // Nested chapter links sit slightly indented.
+  nav > ul > li > ul > li > a { padding-left: 18px; }
+
+  // Top-level part labels read as quiet section eyebrows.
+  nav > ul > li > a,
+  nav > ul > li > label,
+  nav > ul > li > span,
+  .book-section-flat > a,
+  .book-section-flat > span,
+  .book-section-flat > label {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--fg-faint);
+    padding: 16px 10px 6px;
+  }
+  .book-toggle-label::after { opacity: 0.45; }
+
+  // Search box on the warm surface.
+  .book-search input {
+    height: 34px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    &::placeholder { color: var(--fg-faint); }
+  }
+}
+
+// Desktop fold: hide the sidebar; the reading column reclaims the width.
+html[data-sidebar="closed"] .book-menu { display: none; }
+
+// Small screens: the sidebar is an on-demand slide-in overlay.
+@media screen and (max-width: $sm-breakpoint) {
+  .book-menu {
+    position: fixed;
+    top: $topbar-h;
+    left: 0;
+    bottom: 0;
+    z-index: 45;
+    width: $menu-width;
+    max-width: 86vw;
+    margin-left: 0;
+    overflow-y: auto;
+    background: var(--bg);
+    border-right: 1px solid var(--border);
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+
+    nav {
+      position: static;
+      width: 100%;
+      height: auto;
+      max-height: none;
+    }
+  }
+  html[data-sidebar="open"] .book-menu {
+    transform: translateX(0);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+  }
+}
+
+// --- Floating, frosted section TOC (folded by default) ------------------
+// The TOC is an on-demand overlay popped from the top bar's right button. The
+// `.book-toc` aside itself is the frosted floating panel (out of layout flow),
+// so the reading column keeps the full width whether it is open or not.
+.book-toc { display: none; }
+html[data-toc="open"] .book-toc { display: block; }
+
+.book-toc {
+  position: fixed;
+  top: 76px;
+  right: 22px;
+  width: 240px;
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
+  padding: 18px 18px 18px 16px;
+  background: var(--toc-bg);
+  backdrop-filter: saturate(180%) blur(16px);
+  -webkit-backdrop-filter: saturate(180%) blur(16px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-panel);
+  z-index: 30;
+  font-family: var(--font-sans);
+  font-size: 13px;
+
+  nav { width: auto; }
+
+  .reading-toc-head {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-faint);
+    margin-bottom: 14px;
+  }
+
+  ul { margin: 0; padding: 0; list-style: none; }
+  li { margin: 0; }
+
+  a {
+    display: block;
+    color: var(--fg-muted);
+    text-decoration: none;
+    line-height: 1.5;
+    padding: 7px 0 7px 14px;
+    border-left: 2px solid transparent;
+    transition: color 0.12s, border-color 0.12s;
+
+    &:hover { opacity: 1; color: var(--accent); }
+    &.toc-active {
+      color: var(--accent);
+      border-left-color: var(--accent);
+      font-weight: 600;
+    }
+  }
+}
 
 // --- Reading column typography ------------------------------------------
 // Long-form serif Chinese reading: a comfortable measure, generous leading,
