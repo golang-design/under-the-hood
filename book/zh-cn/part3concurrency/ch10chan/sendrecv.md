@@ -20,6 +20,10 @@ title: "10.3 收发与直接传递"
 
 ## 10.3.1 chansend 的三岔决策
 
+先用一张可交互图建立直觉：有缓冲 channel 是一条定长队列，发送把值放进缓冲、接收从缓冲取走；缓冲满则发送方阻塞，缓冲空则接收方阻塞。可调 `cap`，或手动收发。
+
+<div class="viz" data-viz="channel"></div>
+
 编译器把 `ch <- v` 译成 `chansend1`，后者转调更通用的 `chansend`。`chansend` 的第三个参数
 `block` 区分阻塞收发与 `select` 里的非阻塞分支（[10.5](./select.md)）。剥去竞态检测、`synctest`
 气泡与统计代码，它的主干是一道清晰的三岔决策：
