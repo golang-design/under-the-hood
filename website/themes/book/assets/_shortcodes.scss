@@ -13,13 +13,13 @@
   margin-top: $padding-16;
   margin-bottom: $padding-16;
 
-  border: $padding-1 solid $gray-200;
+  border: $padding-1 solid var(--border, #{$gray-200});
   border-radius: $border-radius;
 
   overflow: hidden;
 
   .book-expand-head {
-    background: $gray-100;
+    background: var(--code-bg, #{$gray-100});
     padding: $padding-8 $padding-16;
     cursor: pointer;
   }
@@ -39,7 +39,7 @@
   margin-top: $padding-16;
   margin-bottom: $padding-16;
 
-  border: $padding-1 solid $gray-200;
+  border: $padding-1 solid var(--border, #{$gray-200});
   border-radius: $border-radius;
 
   overflow: hidden;
@@ -57,13 +57,13 @@
   .book-tabs-content {
     order: 999; //Move content blocks to the end
     width: 100%;
-    border-top: $padding-1 solid $gray-100;
+    border-top: $padding-1 solid var(--border, #{$gray-100});
     padding: $padding-16;
     display: none;
   }
 
   input[type="radio"]:checked + label {
-    border-bottom: $padding-1 solid $color-link;
+    border-bottom: $padding-1 solid var(--accent, #{$color-link});
   }
   input[type="radio"]:checked + label + .book-tabs-content {
     display: block;
@@ -86,9 +86,9 @@
 // {{< button >}}
 a.book-btn {
   display: inline-block;
-  color: $color-link !important;
+  color: var(--accent, #{$color-link}) !important;
   text-decoration: none !important;
-  border: $padding-1 solid $color-link;
+  border: $padding-1 solid var(--accent, #{$color-link});
   border-radius: $border-radius;
   padding: $padding-4 $padding-16;
   margin-top: $padding-8;

@@ -641,7 +641,7 @@ aside nav,
   }
 }
 html.dark .viz {
-  .viz-wrap { background: #1f1f25; border-color: #2a2a30; }
-  .viz-btn { background: #2b2b30; border-color: #3a3a42; color: #e6e6e0;
-    &:hover { background: #34343c; } }
+  .viz-wrap { background: var(--code-bg); border-color: var(--border); }
+  .viz-btn { background: var(--surface); border-color: var(--border); color: var(--fg);
+    &:hover { background: var(--accent-soft); } }
 }
