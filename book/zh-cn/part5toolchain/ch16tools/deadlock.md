@@ -156,6 +156,25 @@ func main() {
 锁与资源永久泄漏。这正是「程序没崩、但某些请求挂起」一类故障难查的根本原因：内置检测器帮不
 上忙，它的设计就决定了它看不见。
 
+把这一幕画成**等待图**（wait-for graph）就一目了然。`worker1` 与 `worker2` 之间存在一个
+「持有-等待」的环，这正是死锁；而 `main` 始终在某个 M 上运行，于是 `checkdead` 数出的
+`run > 0`，看不到旁边那个环：
+
+```mermaid
+flowchart LR
+  subgraph DEAD["死锁的环：checkdead 看不见"]
+    W1["worker1<br/>持有 muA"]
+    W2["worker2<br/>持有 muB"]
+    W1 -- "等待 muB" --> W2
+    W2 -- "等待 muA" --> W1
+  end
+  M["main：for 循环始终可运行<br/>有 M 在跑 → run > 0"]
+  M -. "checkdead 只数运行中的 M，提前返回" .-> DEAD
+```
+
+环里没有一个节点能继续往前，二者互相等待对方释放锁;环外的 `main` 却让 `run > 0` 永远成立。
+检测器只数运行中的 M、不看这条「谁等谁」的边，于是它对环视而不见。
+
 还有一类常被误解的「假死锁」:**所有** goroutine 都阻塞，但其中有 goroutine 在等网络 I/O。这种
 程序同样不会被报死锁，机制就在调度器的 `findRunnable` 里:当没有可运行的工作、但存在网络等待
 者时，调度器会留一个 M 执行**阻塞式 `netpoll`** 等待事件就绪，而不让它作为空闲 M 停park。于是
