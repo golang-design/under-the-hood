@@ -40,6 +40,12 @@
   --font-sans: 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
   --font-display: 'Instrument Serif', Georgia, serif;
+
+  // Reading column. --reading-scale is nudged by the A−/A＋ controls (see
+  // reading.js); the base measure follows the design mock.
+  --reading-size: 18.5px;
+  --reading-scale: 1;
+  --reading-measure: 760px;
 }
 
 html.dark {
@@ -82,3 +88,84 @@ html.dark body {
   background: var(--bg);
   color: var(--fg);
 }
+
+// --- Reading column typography ------------------------------------------
+// Long-form serif Chinese reading: a comfortable measure, generous leading,
+// booklike paragraph rhythm. Scoped to .markdown so chrome keeps its sans UI.
+.markdown {
+  max-width: var(--reading-measure);
+  font-family: var(--font-serif);
+  font-size: calc(var(--reading-size) * var(--reading-scale));
+  line-height: 1.95;
+  color: var(--fg);
+  letter-spacing: 0.01em;
+  text-wrap: pretty;
+
+  p {
+    margin-top: 0;
+    margin-bottom: 1.2em;
+  }
+
+  // Headings in the serif face. The chapter numerals carried inline in the
+  // markdown (e.g. "4.2 接口") keep the accent through links/markers elsewhere.
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-serif);
+    color: var(--fg);
+    letter-spacing: -0.01em;
+    line-height: 1.3;
+  }
+
+  h1 {
+    font-weight: 700;
+    font-size: 2.2em;
+    line-height: 1.18;
+    margin-bottom: 0.6em;
+  }
+  h2 {
+    font-weight: 600;
+    font-size: 1.5em;
+    margin-top: 1.9em;
+    scroll-margin-top: 78px; // clear the fixed top header on anchor jumps
+  }
+  h3 { font-weight: 600; font-size: 1.22em; scroll-margin-top: 78px; }
+  h4 { font-weight: 600; font-size: 1.05em; scroll-margin-top: 78px; }
+
+  strong, b { font-weight: 600; color: var(--fg); }
+
+  a {
+    color: var(--accent);
+    &:visited { color: var(--accent); }
+    &:hover { text-decoration: underline; }
+  }
+
+  // Inline code as a soft accent chip. Block code (pre / chroma) keeps its own
+  // surface + syntax colors — neutralize the chip there.
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.84em;
+    background: var(--accent-soft);
+    color: var(--accent);
+    padding: 1px 6px;
+    border-radius: 4px;
+    word-break: break-word;
+  }
+  pre code,
+  .highlight code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    border-radius: 0;
+  }
+
+  // Calm, booklike quote: a soft Go-blue rule and a faint tinted panel.
+  blockquote {
+    border-left: 4px solid var(--accent);
+    background: var(--accent-soft);
+    color: var(--fg-muted);
+    border-radius: 6px;
+    line-height: 1.85;
+  }
+
+  hr { background: var(--border); }
+}
+
