@@ -280,6 +280,21 @@ body { padding-top: $topbar-h; }
 // The old mobile header is replaced by the top bar.
 .book-header { display: none !important; }
 
+// Narrow screens: the top bar has no room for everything, so keep only what
+// reaches the two panels and reads the title — fold-sidebar, the wordmark, the
+// theme switch, and fold-TOC. Drop the breadcrumb, the "under the hood" tag,
+// the font controls, and the language switcher.
+@media screen and (max-width: 640px) {
+  .reading-topbar { gap: 10px; padding: 0 14px; }
+  .reading-crumb,
+  .reading-divider,
+  .reading-wordmark .wm-sub,
+  .reading-fontctl,
+  .reading-topbar .book-langswitch {
+    display: none;
+  }
+}
+
 // Offset the fixed sidebar / TOC below the top bar.
 .book-menu nav {
   top: $topbar-h;
