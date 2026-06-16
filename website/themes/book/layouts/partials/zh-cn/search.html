@@ -1,22 +1,10 @@
+{{/* The theme switch and language switcher moved to the top bar (see
+     partial "zh-cn/topbar"); the sidebar now carries only the search box. */}}
 {{ if default true .Site.Params.BookSearch }}
 <div class="magic">
 <div class="book-search">
   <input type="text" id="book-search-input" placeholder="{{ i18n "Search" }}" aria-label="{{ i18n "Search" }}" maxlength="64" />
   <div class="book-search-spinner spinner hidden"></div>
   <ul id="book-search-results"></ul>
-</div>
-<div class="book-switch">
-  <div id="theme-switch" class="theme-switch" role="radiogroup" aria-label="{{ i18n "Theme" | default "Theme" }}">
-    <button type="button" class="theme-option" data-theme="light" role="radio" aria-checked="false" aria-label="{{ i18n "ThemeLight" | default "Light" }}" title="{{ i18n "ThemeLight" | default "Light" }}" onclick="setTheme('light')">
-      <i class="fas fa-sun" aria-hidden="true"></i>
-    </button>
-    <button type="button" class="theme-option" data-theme="auto" role="radio" aria-checked="false" aria-label="{{ i18n "ThemeAuto" | default "Auto" }}" title="{{ i18n "ThemeAuto" | default "Auto" }}" onclick="setTheme('auto')">
-      <i class="fas fa-adjust" aria-hidden="true"></i>
-    </button>
-    <button type="button" class="theme-option" data-theme="dark" role="radio" aria-checked="false" aria-label="{{ i18n "ThemeDark" | default "Dark" }}" title="{{ i18n "ThemeDark" | default "Dark" }}" onclick="setTheme('dark')">
-      <i class="fas fa-moon" aria-hidden="true"></i>
-    </button>
-  </div>
-  {{ partial "zh-cn/languages" . }}
 </div></div>
 {{ end }}

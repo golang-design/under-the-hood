@@ -89,6 +89,198 @@ html.dark body {
   color: var(--fg);
 }
 
+// --- Top bar -------------------------------------------------------------
+// A fixed full-width header. The fixed sidebar / TOC and the page flow are
+// offset by its height so nothing hides under it.
+$topbar-h: 58px;
+
+body { padding-top: $topbar-h; }
+
+.reading-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 60;
+  pointer-events: none;
+
+  span {
+    display: block;
+    height: 100%;
+    width: 0;
+    background: var(--accent);
+    transition: width 0.12s linear;
+  }
+}
+
+.reading-topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: $topbar-h;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 22px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-sans);
+}
+
+.reading-wordmark {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  text-decoration: none;
+  white-space: nowrap;
+
+  .wm-title {
+    font-family: var(--font-serif);
+    font-weight: 600;
+    font-size: 17px;
+    color: var(--fg);
+    letter-spacing: 0.01em;
+  }
+  .wm-sub {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: 15px;
+    color: var(--fg-faint);
+  }
+}
+
+.reading-divider {
+  width: 1px;
+  height: 22px;
+  background: var(--border);
+  flex: 0 0 auto;
+}
+
+.reading-crumb {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+
+  a {
+    color: inherit;
+    text-decoration: none;
+    &:hover { color: var(--fg-muted); }
+  }
+  .crumb-current { color: var(--fg-muted); }
+  .crumb-sep { opacity: 0.5; }
+}
+
+.reading-spacer { flex: 1 1 auto; }
+
+.reading-iconbtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg-muted);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+
+  &:hover { color: var(--accent); }
+  &.is-active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+}
+
+.reading-fontctl {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+
+  button {
+    width: 30px;
+    height: 30px;
+    border: 0;
+    background: transparent;
+    color: var(--fg-muted);
+    font-family: var(--font-serif);
+    cursor: pointer;
+    &:hover { color: var(--accent); }
+    &#font-smaller { font-size: 13px; }
+    &#font-bigger { font-size: 18px; }
+  }
+  .fontctl-div {
+    width: 1px;
+    height: 16px;
+    background: var(--border);
+  }
+}
+
+// Theme switch + language switch, retuned to the warm token palette for the
+// header (they moved here from the sidebar).
+.reading-topbar {
+  .theme-switch {
+    height: 34px;
+    border-color: var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+
+    .theme-option {
+      width: 30px;
+      height: 32px;
+      color: var(--fg-muted);
+      & + .theme-option { border-left-color: var(--border); }
+      &:hover { background: var(--accent-soft); color: var(--accent); }
+      &.active { background: var(--accent); color: #fff; }
+      &:focus-visible { outline-color: var(--accent); }
+    }
+  }
+
+  .book-langswitch {
+    .book-langswitch-toggle {
+      height: 34px;
+      border-color: var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--fg-muted);
+      &:hover { background: var(--accent-soft); color: var(--accent); }
+    }
+    .book-langswitch-list {
+      background: var(--surface);
+      border-color: var(--border);
+    }
+    .book-langswitch-item {
+      color: var(--fg-muted);
+      &:hover { background: var(--accent-soft); }
+    }
+  }
+}
+
+// The old mobile header is replaced by the top bar.
+.book-header { display: none !important; }
+
+// Offset the fixed sidebar / TOC below the top bar.
+.book-menu nav {
+  top: $topbar-h;
+  height: calc(100vh - #{$topbar-h});
+  max-height: calc(100vh - #{$topbar-h});
+}
+.book-toc nav { top: $topbar-h; }
+
 // --- Reading column typography ------------------------------------------
 // Long-form serif Chinese reading: a comfortable measure, generous leading,
 // booklike paragraph rhythm. Scoped to .markdown so chrome keeps its sans UI.

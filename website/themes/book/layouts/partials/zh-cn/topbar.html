@@ -1,0 +1,61 @@
+{{/*
+  Reading top bar (ink-on-paper redesign).
+
+  A fixed full-width header carrying: a reading-progress rule, the
+  fold-sidebar control, the wordmark, a breadcrumb, the A-/A+ font-scale
+  controls, the 3-state theme switch (reused from the old sidebar so dark.js
+  keeps working), the language switcher, and the fold-TOC control.
+*/}}
+<div class="reading-progress" aria-hidden="true"><span id="reading-progress-bar"></span></div>
+
+<header class="reading-topbar">
+  <button type="button" class="reading-iconbtn" id="fold-sidebar" title="折叠侧栏" aria-label="折叠侧栏">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
+  </button>
+
+  <a class="reading-wordmark" href="{{ .Site.BaseURL }}">
+    <span class="wm-title">Go 语言原本</span>
+    <span class="wm-sub">under the hood</span>
+  </a>
+
+  {{ if not .IsHome }}
+  <span class="reading-divider"></span>
+  <nav class="reading-crumb" aria-label="breadcrumb">
+    {{ range $a := .Ancestors.Reverse }}
+      {{/* Skip the home page and the zh-cn language root (its parent is home). */}}
+      {{ if and (not $a.IsHome) (not $a.Parent.IsHome) }}
+        <a href="{{ $a.RelPermalink }}">{{ partial "zh-cn/title" $a }}</a>
+        <span class="crumb-sep">/</span>
+      {{ end }}
+    {{ end }}
+    <span class="crumb-current">{{ partial "zh-cn/title" . }}</span>
+  </nav>
+  {{ end }}
+
+  <div class="reading-spacer"></div>
+
+  <div class="reading-fontctl" role="group" aria-label="字号">
+    <button type="button" id="font-smaller" title="减小字号" aria-label="减小字号">A</button>
+    <span class="fontctl-div"></span>
+    <button type="button" id="font-bigger" title="增大字号" aria-label="增大字号">A</button>
+  </div>
+
+  {{ if default true .Site.Params.BookSearch }}
+  <div id="theme-switch" class="theme-switch" role="radiogroup" aria-label="{{ i18n "Theme" | default "Theme" }}">
+    <button type="button" class="theme-option" data-theme="light" role="radio" aria-checked="false" aria-label="{{ i18n "ThemeLight" | default "Light" }}" title="{{ i18n "ThemeLight" | default "Light" }}" onclick="setTheme('light')">
+      <i class="fas fa-sun" aria-hidden="true"></i>
+    </button>
+    <button type="button" class="theme-option" data-theme="auto" role="radio" aria-checked="false" aria-label="{{ i18n "ThemeAuto" | default "Auto" }}" title="{{ i18n "ThemeAuto" | default "Auto" }}" onclick="setTheme('auto')">
+      <i class="fas fa-adjust" aria-hidden="true"></i>
+    </button>
+    <button type="button" class="theme-option" data-theme="dark" role="radio" aria-checked="false" aria-label="{{ i18n "ThemeDark" | default "Dark" }}" title="{{ i18n "ThemeDark" | default "Dark" }}" onclick="setTheme('dark')">
+      <i class="fas fa-moon" aria-hidden="true"></i>
+    </button>
+  </div>
+  {{ partial "zh-cn/languages" . }}
+  {{ end }}
+
+  <button type="button" class="reading-iconbtn" id="fold-toc" title="本节目录" aria-label="本节目录">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
+  </button>
+</header>
