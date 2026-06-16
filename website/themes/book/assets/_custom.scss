@@ -64,21 +64,24 @@
    Toggled by adding `.dark` to <html>; see static/dark.js.
    --------------------------------------------------------------------------- */
 html.dark {
-    background: #1b1b1f;
+    /* Warm-dark palette is token-driven (see _reading.scss); these rules just
+       point the theme's older hard-coded greys at the same tokens so dark mode
+       stays uniformly warm. */
+    background: var(--bg);
 
-    body { background: #1b1b1f; color: #cacac2; }
+    body { background: var(--bg); color: var(--fg); }
 
-    a { color: #6ea8fe; }
-    a:visited { color: #8ab4f8; }
+    a { color: var(--accent); }
+    a:visited { color: var(--accent); }
 
-    h1, h2, h3, h4, h5, h6 { color: #e8e8e3; }
+    h1, h2, h3, h4, h5, h6 { color: var(--fg); }
 
     .book-menu {
-        nav { color: #cacac2; }
+        nav { color: var(--fg-muted); }
         a { color: inherit; }
-        a.active { color: #6ea8fe; }
+        a.active { color: #fff; }
     }
-    .book-toc, aside, nav { color: #cacac2; }
+    .book-toc, aside, nav { color: var(--fg-muted); }
 
     /* Code colours (surface + warm Go syntax palette) are now token-driven in
        _reading.scss and apply to BOTH themes via CSS custom properties that
@@ -87,34 +90,34 @@ html.dark {
        here or they will fight the token palette in dark mode. */
 
     blockquote {
-        border-left-color: #4a4a52;
-        background: rgba(255, 255, 255, 0.04);
-        color: #aeaea6;
+        border-left-color: var(--accent);
+        background: var(--accent-soft);
+        color: var(--fg-muted);
     }
 
-    hr { border-color: #34343a; background: #34343a; }
+    hr { border-color: var(--border); background: var(--border); }
 
     /* Search box must match the dark header rather than staying white. */
     .book-search input {
-        background: #2b2b30;
-        color: #e6e6e0;
-        border: 1px solid #3a3a42;
+        background: var(--surface);
+        color: var(--fg);
+        border: 1px solid var(--border);
 
-        &::placeholder { color: #8a8a82; }
+        &::placeholder { color: var(--fg-faint); }
     }
     .book-search { border-bottom-color: transparent; }
-    .book-search-spinner { border-top-color: #cacac2; }
+    .book-search-spinner { border-top-color: var(--fg-muted); }
 
     /* Reference / data tables: dark surface with readable zebra striping.
        The markdown rules apply `background:$gray-100` to even rows and a light
        border; override both here. */
-    table { color: #cacac2; }
-    table, th, td { border-color: #3a3a42; }
-    thead { background: #232329; }
+    table { color: var(--fg); }
+    table, th, td { border-color: var(--border); }
+    thead { background: var(--bg); }
     .markdown table tr:nth-child(2n),
-    tbody tr:nth-child(even) { background: #232329; }
-    tbody tr:nth-child(odd) { background: #1b1b1f; }
-    th, td { color: #cacac2; }
+    tbody tr:nth-child(even) { background: var(--bg); }
+    tbody tr:nth-child(odd) { background: transparent; }
+    th, td { color: var(--fg); }
 
     /* The .bib bibliography tables hard-code white even-rows in light mode;
        neutralise that in dark mode. */
@@ -122,38 +125,38 @@ html.dark {
 
     /* 3-state theme switch on the dark header. */
     .theme-switch {
-        border-color: #3a3a42;
+        border-color: var(--border);
 
         .theme-option {
-            color: #cacac2;
-            & + .theme-option { border-left-color: #3a3a42; }
-            &:hover { background: #2b2b30; }
-            &.active { background: #2196f3; color: #fff; }
+            color: var(--fg-muted);
+            & + .theme-option { border-left-color: var(--border); }
+            &:hover { background: var(--accent-soft); }
+            &.active { background: var(--accent); color: #fff; }
         }
     }
 
     /* Language switcher on the dark header. */
     .book-langswitch {
         .book-langswitch-toggle {
-            color: #cacac2;
-            border-color: #3a3a42;
-            &:hover { background: #2b2b30; }
+            color: var(--fg-muted);
+            border-color: var(--border);
+            &:hover { background: var(--accent-soft); }
         }
 
         .book-langswitch-list {
-            background: #1b1b1f;
-            border-color: #3a3a42;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+            background: var(--surface);
+            border-color: var(--border);
+            box-shadow: var(--shadow-panel);
         }
 
         .book-langswitch-item {
-            color: #cacac2;
-            &:hover { background: #2b2b30; }
-            &.disabled { color: #6a6a72; &:hover { background: transparent; } }
+            color: var(--fg-muted);
+            &:hover { background: var(--accent-soft); }
+            &.disabled { color: var(--fg-faint); &:hover { background: transparent; } }
         }
     }
 
-    .quote { color: #cacac2; }
+    .quote { color: var(--fg-muted); }
 
     /* Thin, subtle scrollbars in dark mode (see _main.scss for light). */
     .book-menu nav,
