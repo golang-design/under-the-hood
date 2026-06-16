@@ -11,7 +11,7 @@ title: "3.5 Go 程序启动引导"
 可执行文件时，跑起来的是运行时（runtime）：它要在主线程上铺好执行栈、绑定线程本地存储、
 量出 CPU 核心数与内存物理页大小，把内存分配器、垃圾回收器、调度器逐一唤醒，最后才创建那个
 承载 `main` 的 goroutine，交由调度循环去运行。换言之，一个 Go 二进制文件里随身带着一个
-微型操作系统（[1.2](../../ch01intro/go.md)），它先于用户代码自行启动。本节顺着这条引导链走一遍，
+微型操作系统（[1.2](../ch01intro/go.md)），它先于用户代码自行启动。本节顺着这条引导链走一遍，
 从操作系统的入口符号，到第一个 goroutine 被调度，看清楚「在 `main` 之前」究竟发生了什么。
 
 引导链的脉络可以先记住三段：汇编入口在主线程上手工搭出 `g0` 与 `m0`（[3.5.1](#351-汇编入口g0m0-与-tls)），
@@ -289,7 +289,7 @@ flowchart TD
 5. Michael Matz, Jan Hubička, Andreas Jaeger, Mark Mitchell. *System V Application Binary
    Interface: AMD64 Architecture Processor Supplement.* 2014.
    https://www.uclibc.org/docs/psABI-x86_64.pdf （ELF 进程栈与辅助向量 auxv 的布局）
-6. 本书 [1.2 Go 语言综述](../../ch01intro/go.md)（二进制内含微型操作系统的视角）、
+6. 本书 [1.2 Go 语言综述](../ch01intro/go.md)（二进制内含微型操作系统的视角）、
    [9.1 调度问题与 GMP 模型](../../part3concurrency/ch09sched/model.md)（P 列表与调度循环）、
    [9.6 信号处理机制](../../part3concurrency/ch09sched/signal.md)。
 7. 本书 [第 12 章 内存分配器](../../part4memory/ch12alloc/)、

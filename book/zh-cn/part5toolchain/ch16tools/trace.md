@@ -23,7 +23,7 @@ title: "16.3 性能追踪"
 **运行时与调度器层面的状态转移**。`runtime/trace.go` 的设计注释把这份事件清单列得很清楚：
 
 - **goroutine 生命周期**：创建（go 语句）、开始运行、阻塞、被唤醒、退出;
-- **阻塞的原因**：在 channel 收发、在 `sync.Mutex`、在网络 I/O（netpoller，[9.7](../../part3concurrency/ch09sched/poll.md)）、在 `select` 上各是不同的事件类型;
+- **阻塞的原因**：在 channel 收发、在 `sync.Mutex`、在网络 I/O（netpoller，[9.9 网络轮询器](../../part3concurrency/ch09sched/poller.md)）、在 `select` 上各是不同的事件类型;
 - **每个 P 的调度活动**：P 何时启动、停止、被抢占;
 - **GC 相关事件**：标记开始、标记结束、各 STW（stop-the-world）停顿、堆大小的变化（[13.3](../../part4memory/ch13gc/pacing.md)）;
 - **系统调用**：进入、返回、以及因系统调用阻塞而交还 P 的时刻。

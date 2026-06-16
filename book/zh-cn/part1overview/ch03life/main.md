@@ -5,7 +5,7 @@ title: "3.6 主 Goroutine 的生与死"
 
 # 3.6 主 Goroutine 的生与死
 
-[3.5](./init.md) 里 `schedinit` 把运行时的家底备齐之后并不直接调用 `runtime.main`，而是把它
+[3.5](./boot.md) 里 `schedinit` 把运行时的家底备齐之后并不直接调用 `runtime.main`，而是把它
 的入口地址压栈、交给 `newproc` 造出第一个 Goroutine，再由 `mstart` 启动调度循环、把这个
 Goroutine 挑出来执行。调度的细节留到 [9 调度器](../../part3concurrency/ch09sched) 详谈，本节
 只把镜头对准一个时刻：**第一个 Goroutine 已经在跑，它正要执行 `runtime.main`**。
@@ -232,7 +232,7 @@ func main() {
 ```
 
 这条不对称还与另一处设计相互印证：Go 不提供「从外部杀死某个 Goroutine」的 API（见
-[11.8](../../part3concurrency/ch11sync/goexit.md)）。一个 Goroutine 何时结束，只能由它自己
+[11 同步原语与模式](../../part3concurrency/ch11sync)）。一个 Goroutine 何时结束，只能由它自己
 决定（正常返回或 `runtime.Goexit`），唯一的例外就是主 Goroutine 退出时对全体的「连坐」终止。
 换言之，进程级的退出是 Go 里唯一一种「外部强制结束 Goroutine」的途径，它粗暴而彻底，正因
 如此，把何时退出的决定权交给主 Goroutine、并要求开发者显式同步，是这套模型的取舍所在：换来
@@ -255,5 +255,5 @@ func main() {
 4. Russ Cox. *`main_init_done` can be implemented more efficiently.* Go issue #15943.
    https://github.com/golang/go/issues/15943
 5. The Go Authors. *Command compile.* https://go.dev/cmd/compile/
-6. 本书 [3.5 运行时的初始化](./init.md)、[9.8 系统监控](../../part3concurrency/ch09sched/sysmon.md)、
+6. 本书 [3.5 Go 程序启动引导](./boot.md)、[9.8 系统监控](../../part3concurrency/ch09sched/sysmon.md)、
    [11 同步模式](../../part3concurrency/ch11sync)。

@@ -5,7 +5,7 @@ title: "10.6 内存模型与无锁演进"
 
 # 10.6 内存模型与无锁演进
 
-前几节把 channel 拆到了零件：[10.3](./send.md) 的直接交付（direct handoff）让收发两端
+前几节把 channel 拆到了零件：[10.3](./sendrecv.md) 的直接交付（direct handoff）让收发两端
 绕过环形缓冲直接传值，[10.5](./select.md) 的 `select` 在多个就绪分支间做随机选择。这些机制
 解释了 channel「怎么跑」。本节回答两个更上层的问题：channel 给并发程序提供了**什么可见性
 承诺**，以及一个常被追问的工程疑案，channel 为什么至今仍是「一把锁加一个队列」，而不是
@@ -65,7 +65,7 @@ flowchart LR
 第 3 条规则容易被忽略，却是无缓冲 channel 语义的精髓。注意它把方向**倒**了过来：对带缓冲
 channel，是发送先于接收的完成；对无缓冲 channel，**接收**先于发送的**完成**。
 
-这条倒置直接对应 [10.3](./send.md) 讲的直接交付。无缓冲 channel 没有缓冲槽，发送方必须等到
+这条倒置直接对应 [10.3](./sendrecv.md) 讲的直接交付。无缓冲 channel 没有缓冲槽，发送方必须等到
 一个接收方就绪、把值直接交到它手上，发送操作才算完成。因此「发送返回」这一事件，恰恰证明
 「已经有人收到了」。无缓冲发送由此具备了**回执**（acknowledgement）的语义：
 
@@ -161,7 +161,7 @@ MPMC 队列。互斥锁的代价是争用，换来的是这些不变量的实现
 **阻塞队列的 FIFO。** 提案 **golang/go#11506「runtime: make sure blocked channels run
 operations in FIFO order」**（Russ Cox 提出，Go 1.6 早期修复）指出一个隐患：当多个 goroutine
 阻塞在某 channel 上、该 channel 变为可用时，恰好「路过」的运行中 goroutine 有可能抢在已阻塞者
-之前完成操作，使阻塞者承受任意延迟。修复的机制正是 [10.3](./send.md) 的直接交付：channel
+之前完成操作，使阻塞者承受任意延迟。修复的机制正是 [10.3](./sendrecv.md) 的直接交付：channel
 变为可用时，唤醒动作直接把值交给 `recvq` 队头的那个等待者，而 `recvq` 是按到达顺序入队的
 先进先出队列（`enqueue` 入队尾、`dequeue` 出队头）。先到先服务由此成为保证，而非概率。
 
@@ -210,5 +210,5 @@ channel 的内存模型承诺与它的实现形态，是同一个取舍的两面
    https://github.com/golang/go/tree/master/src/runtime
 6. C. A. R. Hoare. "Communicating Sequential Processes." *Communications of the ACM*, 21(8), 1978.
    https://doi.org/10.1145/359576.359585
-7. 本书 [10.3 发送与直接交付](./send.md)、[10.5 select 与公平](./select.md)、
+7. 本书 [10.3 收发与直接传递](./sendrecv.md)、[10.5 select 与公平](./select.md)、
    [11.9 内存一致模型](../ch11sync/mem.md).
