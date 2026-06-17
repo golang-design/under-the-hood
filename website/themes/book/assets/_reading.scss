@@ -553,9 +553,12 @@ html[data-toc="open"] .book-toc { display: block; }
 // Long-form serif Chinese reading: a comfortable measure, generous leading,
 // booklike paragraph rhythm. Scoped to .markdown so chrome keeps its sans UI.
 .markdown {
-  max-width: var(--reading-measure);
+  // Fill the reading sheet edge-to-edge (per author preference). Horizontal
+  // padding is viewport-relative so the column breathes on wide screens
+  // without re-introducing a narrow centered measure.
+  max-width: none;
   margin: 0 auto;
-  padding: 60px clamp(22px, 6vw, 72px) 160px;
+  padding: 60px clamp(24px, 8vw, 160px) 160px;
   font-family: var(--font-serif);
   font-size: calc(var(--reading-size) * var(--reading-scale));
   line-height: 1.95;
