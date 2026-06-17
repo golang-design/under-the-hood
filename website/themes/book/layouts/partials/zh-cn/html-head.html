@@ -12,8 +12,7 @@
      first frame (before book.scss loads) is already dark and there is no
      white flash on navigation. -->
 <style>html{background:#ece8df}html body{background:#ece8df;color:#232019}html.dark{background:#14130e}html.dark body{background:#14130e;color:#e6e0d2}</style>
-<meta name="description" content="{{ partial "zh-cn/title" . }}">
-{{- template "_internal/opengraph.html" . -}}
+{{- partial "zh-cn/social-meta.html" . -}}
 
 <title>{{ partial "zh-cn/title" . }} | {{ .Site.Title -}}</title>
 <link rel="icon" href="{{ "favicon.png" | relURL }}" type="image/x-icon">

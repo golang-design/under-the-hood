@@ -59,6 +59,17 @@ defaultContentLanguageInSubdir = false
   #   contentDir = "content/de"
   #   weight = 3
 
+[params]
+  # Default share/SEO description used when a page has no front-matter
+  # `description` and no body summary (home, section indexes). Per-page text
+  # still wins. Consumed by partials/zh-cn/social-meta.html.
+  description = "《Go 语言原本》是一份基于 Go 1.26 的源码研究，深入剖析调度器、内存分配、垃圾回收、编译器与运行时的设计与演化。"
+  # 1200x630 card served at the site root; see tools/og/og-cover.svg.
+  shareImage = "og-cover.png"
+  # Twitter/X @handle for card attribution. Left empty on purpose: a wrong
+  # handle is worse than none. Set e.g. "@changkun" to enable twitter:site.
+  twitter = ""
+
 [markup.highlight]
     codeFences = true
     guessSyntax = false

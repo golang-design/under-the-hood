@@ -1,0 +1,71 @@
+{{- /*
+  Social share metadata for Slack / Twitter(X) / WeChat / Substack / Facebook /
+  LinkedIn unfurls. Replaces Hugo's _internal/opengraph.html + twitter_cards.html
+  so we control image dimensions, og:locale, article tags and canonical in one
+  place. Every URL is emitted absolute + https via absURL (baseURL is https).
+
+  Per-page overrides (front matter):
+    description: "..."      -> og/twitter description
+    image: "path-or-url"    -> share image for this page (else the site card)
+*/ -}}
+{{- $title := partial "zh-cn/title" . -}}
+{{- $desc := "" -}}
+{{- with .Description -}}
+  {{- $desc = . -}}
+{{- else -}}
+  {{- if and .IsPage .Summary -}}
+    {{- $desc = .Summary | plainify | htmlUnescape | chomp -}}
+  {{- else -}}
+    {{- $desc = .Site.Params.description -}}
+  {{- end -}}
+{{- end -}}
+{{- $desc = ($desc | plainify | chomp) -}}
+{{- if gt (len $desc) 200 -}}{{- $desc = printf "%.200s…" $desc -}}{{- end -}}
+
+{{- /* og:locale from the page language; map Hugo lang -> OG locale. */ -}}
+{{- $locales := dict "zh-cn" "zh_CN" "zh" "zh_CN" "en" "en_US" "de" "de_DE" -}}
+{{- $locale := index $locales (lower .Site.Language.Lang) | default "zh_CN" -}}
+
+{{- /* Share image: per-page override, else site card. Always absolute https. */ -}}
+{{- $img := .Site.Params.shareImage | default "og-cover.png" -}}
+{{- with .Params.image -}}{{- $img = . -}}{{- end -}}
+{{- $imgURL := $img -}}
+{{- if not (or (hasPrefix $img "http://") (hasPrefix $img "https://")) -}}
+  {{- $imgURL = $img | absURL -}}
+{{- end -}}
+
+<meta name="description" content="{{ $desc }}">
+<link rel="canonical" href="{{ .Permalink }}">
+<meta property="og:site_name" content="{{ .Site.Title }}">
+<meta property="og:title" content="{{ $title }}">
+<meta property="og:description" content="{{ $desc }}">
+<meta property="og:type" content="{{ if .IsPage }}article{{ else }}website{{ end }}">
+<meta property="og:url" content="{{ .Permalink }}">
+<meta property="og:locale" content="{{ $locale }}">
+<meta property="og:image" content="{{ $imgURL }}">
+<meta property="og:image:secure_url" content="{{ $imgURL }}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:alt" content="{{ $title }} · {{ .Site.Title }}">
+{{- if .IsPage }}
+{{- with .PublishDate }}{{ if not .IsZero }}
+<meta property="article:published_time" content="{{ .Format "2006-01-02T15:04:05Z07:00" }}">
+{{- end }}{{ end }}
+{{- with .Lastmod }}{{ if not .IsZero }}
+<meta property="article:modified_time" content="{{ .Format "2006-01-02T15:04:05Z07:00" }}">
+{{- end }}{{ end }}
+{{- end }}
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{{ $title }}">
+<meta name="twitter:description" content="{{ $desc }}">
+<meta name="twitter:image" content="{{ $imgURL }}">
+<meta name="twitter:image:alt" content="{{ $title }} · {{ .Site.Title }}">
+{{- with .Site.Params.twitter }}
+<meta name="twitter:site" content="{{ . }}">
+<meta name="twitter:creator" content="{{ . }}">
+{{- end }}
+
+<!-- WeChat / generic scrapers prefer an explicit image_src link too. -->
+<link rel="image_src" href="{{ $imgURL }}">
