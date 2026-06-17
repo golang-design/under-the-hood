@@ -281,4 +281,5 @@ TSWLatexianTemp*
 # Hugo website
 website/resources
 website/content
+website/content-en
 website/public

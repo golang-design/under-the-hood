@@ -6,4 +6,4 @@ s: all
 	hugo server -D
 
 clean:
-	rm -rf content resources public
+	rm -rf content content-en resources public

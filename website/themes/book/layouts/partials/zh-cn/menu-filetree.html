@@ -1,24 +1,23 @@
 {{ $bookSection := default "zh-cn" .Site.Params.BookSection  }}
 {{ if eq $bookSection "*" }}
-  {{ .Scratch.Set "BookSections" .Site.Sections }}
+  {{/* Render the whole language home: its child sections (the parts) and its
+       loose top-level pages (preface, how-to-read, ...). Used by languages
+       whose content sits flat at the content root, e.g. en. */}}
+  {{ template "book-section-children" (dict "Section" .Site.Home "CurrentPage" $ "Top" true) }}
 {{ else }}
-  {{ $bookSections := where .Site.Sections "Section" $bookSection }}
-  {{ .Scratch.Set "BookSections" $bookSections }}
-{{ end }}
-
-
-{{ $sections := .Scratch.Get "BookSections" }}
-{{/* If there is only one section to render then render its children, else render all sections */}}
-{{ if eq (len $sections) 1 }}
-  {{ with index $sections 0 }}
-    {{ template "book-section-children" (dict "Section" . "CurrentPage" $ "Top" true) }}
+  {{ $sections := where .Site.Sections "Section" $bookSection }}
+  {{/* If there is only one section to render then render its children, else render all sections */}}
+  {{ if eq (len $sections) 1 }}
+    {{ with index $sections 0 }}
+      {{ template "book-section-children" (dict "Section" . "CurrentPage" $ "Top" true) }}
+    {{ end }}
+  {{ else }}
+    <ul>
+    {{ range where $sections "Params.bookHidden" "!=" true }}
+      {{ template "book-section" (dict "Section" . "CurrentPage" $ "Top" true) }}
+    {{ end }}
+    </ul>
   {{ end }}
-{{ else }}
-  <ul>
-  {{ range where $sections "Params.bookHidden" "!=" true }}
-    {{ template "book-section" (dict "Section" . "CurrentPage" $ "Top" true) }}
-  {{ end }}
-  </ul>
 {{ end }}
 
 {{ define "book-section" }}

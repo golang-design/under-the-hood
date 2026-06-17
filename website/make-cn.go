@@ -17,13 +17,52 @@ import (
 )
 
 const (
-	srcDoc    = "../book/zh-cn/"
 	srcAssets = "../book/assets/"
-	srcREADME = "../README.md"
-	dstDoc    = "content/zh-cn/"
 	dstAssets = "content/assets/"
-	dstREADME = "content/_index.md"
 )
+
+// Per-language settings. The doc pipeline runs once per language; these vars
+// are reassigned for each pass (see main). zh-cn is the default language and
+// lives at the site root with a literal /zh-cn/ path segment; en is a sibling
+// subtree served at /en/. Keeping en as a literal subtree (not a Hugo language)
+// preserves every existing /zh-cn/ URL untouched.
+var (
+	srcDoc       = "../book/zh-cn/"
+	dstDoc       = "content/zh-cn/"
+	srcREADME    = "../README.md"
+	dstREADME    = "content/_index.md"
+	readmeURL    = "zh-cn/preface/"        // where the "read online" link should point
+	readmeBookTo = "./"                    // what the cover's "book/" prefix becomes
+	cascadeType  = ""                      // when set, the home injects a cascade type
+	urlPrefix    = "/under-the-hood/zh-cn" // navigation/hierarchy URL prefix for this language
+)
+
+type language struct {
+	srcDoc, dstDoc, srcREADME, dstREADME string
+	readmeURL, readmeBookTo, cascadeType string
+	urlPrefix                            string
+}
+
+// zh-cn is the default Hugo language: it lives under content/ with a literal
+// /zh-cn/ path segment and its home at the site root, so every existing URL is
+// untouched. en is a second Hugo language with its own non-nested contentDir
+// (content-en); Hugo serves it under /en/ and scopes the menu, table of
+// contents, and language switcher to it automatically. en pages cascade
+// type=zh-cn so they reuse the existing layouts/zh-cn templates.
+var languages = []language{
+	{
+		srcDoc: "../book/zh-cn/", dstDoc: "content/zh-cn/",
+		srcREADME: "../README.md", dstREADME: "content/_index.md",
+		readmeURL: "zh-cn/preface/", readmeBookTo: "./", cascadeType: "",
+		urlPrefix: "/under-the-hood/zh-cn",
+	},
+	{
+		srcDoc: "../book/en-us/", dstDoc: "content-en/",
+		srcREADME: "../README.en-us.md", dstREADME: "content-en/_index.md",
+		readmeURL: "en/preface/", readmeBookTo: "../", cascadeType: "zh-cn",
+		urlPrefix: "/under-the-hood/en",
+	},
+}
 
 type section struct {
 	weight int
@@ -146,10 +185,11 @@ func walkAssets(path string, info os.FileInfo, err error) error {
 }
 
 func handleREADME() {
-	head := `---
-type: zh-cn
----
-`
+	head := "---\ntype: zh-cn\n"
+	if cascadeType != "" {
+		head += "cascade:\n  type: " + cascadeType + "\n"
+	}
+	head += "---\n"
 	data, err := ioutil.ReadFile(srcREADME)
 	if err != nil {
 		panic(fmt.Errorf("handleREADME: cannot read: %v", err))
@@ -158,11 +198,12 @@ type: zh-cn
 	data = append([]byte(head), data...)
 
 	// HACKs
-	data = bytes.Replace(data, []byte("https://golang.design/under-the-hood/"), []byte("https://golang.design/under-the-hood/zh-cn/preface/"), -1)
-	data = bytes.Replace(data, []byte("https://golang.design/under-the-hood/zh-cn/preface/assets/wechat.jpg"), []byte("https://golang.design/under-the-hood/assets/wechat.jpg"), -1)
-	data = bytes.Replace(data, []byte("https://golang.design/under-the-hood/zh-cn/preface/assets/alipay.jpg"), []byte("https://golang.design/under-the-hood/assets/alipay.jpg"), -1)
+	base := "https://golang.design/under-the-hood/"
+	data = bytes.Replace(data, []byte(base), []byte(base+readmeURL), -1)
+	data = bytes.Replace(data, []byte(base+readmeURL+"assets/wechat.jpg"), []byte(base+"assets/wechat.jpg"), -1)
+	data = bytes.Replace(data, []byte(base+readmeURL+"assets/alipay.jpg"), []byte(base+"assets/alipay.jpg"), -1)
 
-	data = bytes.Replace(data, []byte("book/"), []byte("./"), 2)
+	data = bytes.Replace(data, []byte("book/"), []byte(readmeBookTo), 2)
 	data = bytes.Replace(data, []byte("./CONTRIBUTING.md"), []byte("https://github.com/golang-design/under-the-hood/blob/master/CONTRIBUTING.md"), -1)
 
 	fmt.Printf("handleREADME: writing %v\n", dstREADME)
@@ -213,7 +254,7 @@ func walkDocsForHierarchy(path string, info os.FileInfo, err error) error {
 		panic(fmt.Errorf("walkDocsForHierarchy: expect numbers for weight: %v", err))
 	}
 	title := doc[:endIdx-1]
-	url := strings.Replace(path, "content", "/under-the-hood", -1)
+	url := urlPrefix + "/" + strings.TrimPrefix(path, dstDoc)
 	url = strings.Replace(url, ".md", "", -1)
 	url = strings.Replace(url, "_index", "", -1)
 	hierarchy = append(hierarchy, section{
@@ -257,6 +298,15 @@ func walkDocsForNavigation(path string, info os.FileInfo, err error) error {
 			break
 		}
 	}
+	// Pair this page with its sibling in the other language so the language
+	// switcher links page-to-page. The key is the language-independent path
+	// (e.g. "part3concurrency/ch09sched/steal"), identical across zh-cn and en.
+	key := strings.TrimPrefix(path, dstDoc)
+	key = strings.TrimSuffix(key, ".md")
+	key = strings.TrimSuffix(key, "_index")
+	key = strings.Trim(key, "/")
+	meta += fmt.Sprintf("translationKey: \"%s\"\n", key)
+
 	dataWithNavi := make([]byte, 4)
 	copy(dataWithNavi, data[:4])
 	dataWithNavi = append(dataWithNavi, []byte(meta)...)
@@ -269,31 +319,40 @@ func walkDocsForNavigation(path string, info os.FileInfo, err error) error {
 }
 
 func main() {
-	dirs := [...]string{
-		dstDoc,
-		dstAssets,
+	// Shared assets directory.
+	if err := os.MkdirAll(dstAssets, os.ModePerm); err != nil {
+		panic(fmt.Errorf("make: failed to create folders: %v", err))
 	}
-	// 1. create all directory
-	for _, d := range dirs {
-		err := os.MkdirAll(d, os.ModePerm)
-		if err != nil {
+
+	// Run the doc pipeline once per language. The package-level vars that the
+	// walk callbacks read (srcDoc, dstDoc, readmeURL, ...) are reassigned for
+	// each pass, and the hierarchy is rebuilt from scratch so navigation links
+	// stay within one language.
+	for _, l := range languages {
+		srcDoc, dstDoc = l.srcDoc, l.dstDoc
+		srcREADME, dstREADME = l.srcREADME, l.dstREADME
+		readmeURL, readmeBookTo, cascadeType = l.readmeURL, l.readmeBookTo, l.cascadeType
+		urlPrefix = l.urlPrefix
+		hierarchy = bookHierarchy{}
+
+		// 1. create the language's content directory
+		if err := os.MkdirAll(dstDoc, os.ModePerm); err != nil {
 			panic(fmt.Errorf("make: failed to create folders: %v", err))
 		}
+
+		// 2. walk all docs, then build hierarchy and navigation
+		filepath.Walk(srcDoc, walkDocs)
+		filepath.Walk(dstDoc, walkDocsForHierarchy)
+		sort.Sort(hierarchy)
+		for _, h := range hierarchy {
+			println("weight: ", h.weight, " title: ", h.title, " url: ", h.url)
+		}
+		filepath.Walk(dstDoc, walkDocsForNavigation)
+
+		// 3. handle the language's README home page
+		handleREADME()
 	}
 
-	// 2. walk all files
-	filepath.Walk(srcDoc, walkDocs)
-
-	filepath.Walk(dstDoc, walkDocsForHierarchy)
-	sort.Sort(hierarchy)
-	for _, h := range hierarchy {
-		println("weight: ", h.weight, " title: ", h.title, " url: ", h.url)
-	}
-	filepath.Walk(dstDoc, walkDocsForNavigation)
-
-	// 3. walk all assets
+	// 4. walk all assets once (shared across languages)
 	filepath.Walk(srcAssets, walkAssets)
-
-	// 4. handle README.md
-	handleREADME()
 }
