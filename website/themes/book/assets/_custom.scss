@@ -180,37 +180,9 @@ html.dark {
     ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); border-radius: 4px; }
     ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.30); }
 
-    /* mermaid uses the light "neutral" theme; keep diagrams on a light card
-       so edge labels and arrows stay legible on the dark page. KaTeX inherits
-       currentColor and needs no special handling. */
-    pre.mermaid {
-        background: #f6f7f8;
-        border-radius: 6px;
-        padding: 0.75rem;
-        color: #1b1b1f;
-    }
+    /* Mermaid diagrams are themed from the book tokens in mermaid-init.js, so
+       they follow dark mode natively; the card styling lives in _reading.scss
+       (token-driven, imported last). KaTeX inherits currentColor. */
 }
 
-/* ---------------------------------------------------------------------------
-   Mermaid diagrams (theme-agnostic). The SVG renders at its large native size
-   and would otherwise overflow the reading column. Scale it down to fit and
-   cap the height so big flowcharts stay legible. The light card (background)
-   is kept in both themes (dark override above; light default here).
-   --------------------------------------------------------------------------- */
-pre.mermaid {
-    display: block;
-    margin: $padding-16 auto;
-    padding: 0.75rem;
-    background: #f6f7f8;
-    border-radius: 6px;
-    text-align: center;       /* center the inline SVG */
-    overflow-x: auto;
-
-    svg {
-        display: inline-block;
-        max-width: 100%;
-        max-height: 70vh;
-        width: auto;
-        height: auto;
-    }
-}
+/* Mermaid card styling moved to _reading.scss (token-driven, imported last). */

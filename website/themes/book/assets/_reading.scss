@@ -855,3 +855,32 @@ html[data-toc="open"] .book-toc { display: block; }
   }
 }
 
+
+// --- Mermaid diagrams ----------------------------------------------------
+// Diagram colors are themed from the book tokens in mermaid-init.js (it reads
+// these CSS vars and re-renders on dark-mode toggle), so the card here only
+// needs to match the reading surface. No height cap: diagrams render at a
+// legible size and the card scrolls horizontally if a wide one overflows.
+.markdown pre.mermaid {
+  display: block;
+  margin: 28px auto;
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--fg);
+  text-align: center;        // center the inline SVG
+  overflow-x: auto;
+  font-size: inherit;        // not the code-block mono sizing
+
+  svg {
+    display: inline-block;
+    max-width: 100%;
+    height: auto;
+  }
+
+  // Hide the raw mermaid source until mermaid swaps in the SVG (avoids a flash
+  // of definition text). The rendered SVG sets its own colors, so this only
+  // affects the pre-render text.
+  &:not([data-processed]) { color: transparent; }
+}
