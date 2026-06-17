@@ -334,6 +334,23 @@ body { padding-top: $topbar-h; }
   .reading-topbar .theme-switch { flex: 0 0 auto; }
 }
 
+// Floated images (e.g. the README home cover: <img align="right" height="450">)
+// don't fit beside text on a narrow screen — the title and reading-meta get
+// squeezed into a 1-character column and collide with the image. Below tablet
+// width, stack any floated/aligned image full-width instead of floating it.
+@media screen and (max-width: 820px) {
+  .markdown img[align],
+  .markdown img[style*="float"],
+  .markdown img[hspace] {
+    float: none !important;
+    display: block;
+    height: auto !important;
+    width: auto;
+    max-width: 100%;
+    margin: 18px auto;
+  }
+}
+
 // Offset the fixed sidebar / TOC below the top bar.
 .book-menu nav {
   top: $topbar-h;
