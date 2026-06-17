@@ -49,7 +49,7 @@ RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11
 把这套递归判定画成一张决策图，每个参数（或返回值）独立走一遍：
 
 ```mermaid
-flowchart TB
+flowchart LR
     start["待分配的值 V，底层类型 T"] --> zero{"T 是零尺寸？"}
     zero -- 是 --> stack["整体落到栈帧序列 S"]
     zero -- 否 --> arr{"T 含长度大于 1 的数组？"}
