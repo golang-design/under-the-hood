@@ -1,0 +1,20 @@
+{{- /*
+  Render passthrough LaTeX (the $…$ / $$…$$ / \(…\) / \[…\] spans configured in
+  config.toml) to KaTeX HTML at BUILD time via transform.ToMath.
+
+  This replaces the previous client-side renderMathInElement(document.body)
+  pass, which walked the whole live DOM and could hang / crash the renderer on
+  some pages (e.g. ch03life/link, ch12alloc/mstats). Build-time rendering emits
+  static KaTeX markup, so there is no per-page client scan, no FOUC, and code
+  spans are never mis-parsed as math.
+*/ -}}
+{{- $display := eq .Type "block" -}}
+{{- $opts := dict "throwOnError" false "displayMode" $display "output" "htmlAndMathml" -}}
+{{- with try (transform.ToMath .Inner $opts) -}}
+  {{- with .Err -}}
+    {{- warnf "KaTeX render error in %q: %s" $.Page.File.Path . -}}
+    {{- $.Inner -}}
+  {{- else -}}
+    {{- .Value -}}
+  {{- end -}}
+{{- end -}}

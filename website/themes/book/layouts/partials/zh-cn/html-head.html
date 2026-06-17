@@ -31,16 +31,11 @@
 {{- $styles := resources.Get "book.scss" | resources.ExecuteAsTemplate "book.scss" . | css.Sass | resources.Minify | resources.Fingerprint }}
 <link rel="stylesheet" href="{{ $styles.RelPermalink }}" integrity="{{ $styles.Data.Integrity }}">
 
-<!-- KaTeX (vendored) renders LaTeX math passed through by goldmark. -->
+<!-- KaTeX math is rendered at build time (see layouts/_default/_markup/
+     render-passthrough.html). Only the stylesheet is needed client-side; the
+     previous client-side auto-render pass was removed because walking the whole
+     live DOM could hang the renderer on some math-heavy pages. -->
 <link rel="stylesheet" href="{{ "katex/katex.min.css" | relURL }}">
-<script defer src="{{ "katex/katex.min.js" | relURL }}"></script>
-<script defer src="{{ "katex/auto-render.min.js" | relURL }}"
-  onload="renderMathInElement(document.body, {delimiters: [
-    {left: '$$', right: '$$', display: true},
-    {left: '\\[', right: '\\]', display: true},
-    {left: '$', right: '$', display: false},
-    {left: '\\(', right: '\\)', display: false}
-  ], throwOnError: false});"></script>
 
 {{ if default true .Site.Params.BookSearch }}
 {{- .Scratch.Set "bookSearchConfig" (i18n "bookSearchConfig") -}} <!-- Remove after https://github.com/gohugoio/hugo/issues/6331 -->
