@@ -293,6 +293,45 @@ body { padding-top: $topbar-h; }
   .reading-topbar .book-langswitch {
     display: none;
   }
+
+  // Reading column: reclaim width — small fixed gutters instead of the 8vw
+  // desktop padding, so body text fills the phone screen.
+  .markdown {
+    padding: 30px 16px 100px;
+    line-height: 1.85;
+  }
+  // Footer aligns with the reduced gutters (was 6vw, capped to reading-measure).
+  #footer {
+    padding-left: 16px;
+    padding-right: 16px;
+    max-width: none;
+  }
+
+  // Long inline code / identifiers must wrap rather than force a wider page.
+  .markdown code { white-space: normal; overflow-wrap: anywhere; }
+  // Wide blocks scroll within themselves instead of widening the page.
+  .markdown table { display: block; width: 100%; overflow-x: auto; }
+  .markdown pre { overflow-x: auto; }
+  // Smaller display headings so long numbered titles don't overflow.
+  .markdown h1 { font-size: 30px; gap: 10px; }
+  .markdown h1 .h1-num { font-size: 28px; }
+  .markdown h2 { font-size: 22px; }
+
+  // Safety net: never let a stray wide child produce a horizontal scroll on a
+  // phone (the fixed top bar assumes a viewport-width page).
+  html, body { overflow-x: hidden; max-width: 100%; }
+
+  // Top bar must never overflow on a narrow phone: the wordmark shrinks and
+  // truncates while the controls stay fixed-size, so nothing spills off-screen
+  // (which is what made content appear to collide with the fixed header).
+  .reading-wordmark { min-width: 0; flex: 0 1 auto; overflow: hidden; }
+  .reading-wordmark .wm-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .reading-iconbtn,
+  .reading-topbar .theme-switch { flex: 0 0 auto; }
 }
 
 // Offset the fixed sidebar / TOC below the top bar.
