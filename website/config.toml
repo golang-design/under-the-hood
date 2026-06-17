@@ -69,6 +69,10 @@ defaultContentLanguageInSubdir = false
   # Twitter/X @handle for card attribution. Left empty on purpose: a wrong
   # handle is worse than none. Set e.g. "@changkun" to enable twitter:site.
   twitter = ""
+  # Browser-language auto-routing default (partials/zh-cn/lang-redirect.html):
+  # non-Chinese browsers land on this language, WeChat/zh browsers on Chinese.
+  # Inert until a second language home exists.
+  autoLangDefault = "en"
 
 [markup.highlight]
     codeFences = true

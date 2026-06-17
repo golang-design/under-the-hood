@@ -50,11 +50,13 @@
       {{ if eq $code $curLang }}
       <span class="book-langswitch-item active" role="menuitem" aria-current="true">{{ $l.name }}</span>
       {{ else if $l.url }}
-      <a class="book-langswitch-item" role="menuitem" href="{{ $l.url }}">{{ $l.name }}</a>
+      {{/* ?lang persists the explicit choice (see partial lang-redirect) so
+           auto-detection never overrides a manual pick. */}}
+      <a class="book-langswitch-item" role="menuitem" href="{{ $l.url }}?lang={{ $code }}">{{ $l.name }}</a>
       {{ else }}
       {{/* Known language but no translation link for this page: send the
            reader to that language's home page instead of a dead URL. */}}
-      <a class="book-langswitch-item" role="menuitem" href="{{ (site.GetPage "/").RelPermalink }}">{{ $l.name }}</a>
+      <a class="book-langswitch-item" role="menuitem" href="{{ (site.GetPage "/").RelPermalink }}?lang={{ $code }}">{{ $l.name }}</a>
       {{ end }}
     </li>
     {{ end }}

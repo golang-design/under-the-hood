@@ -1,0 +1,49 @@
+{{- /*
+  Forward-looking browser-language auto-routing.
+
+  Behaviour once more than one language has content:
+    * WeChat in-app browser (UA contains MicroMessenger) -> Chinese.
+    * Browser language starting with "zh"                 -> Chinese.
+    * Everything else                                     -> default (English).
+    * An explicit choice via the language switcher (?lang=) is remembered in
+      localStorage and always wins over auto-detection.
+
+  It only ever redirects between LANGUAGE HOME roots, never deep article URLs,
+  so a shared/deep link is never bounced. The `homes` map is built from Hugo's
+  home-page translations, so it lists ONLY languages that actually have a home
+  page rendered. Today that is just zh-cn, which means this script is INERT
+  (there is nowhere else to send anyone) and activates automatically the moment
+  an English/German home ships. Runs synchronously, first thing in <head>, so a
+  redirect happens before any paint.
+*/ -}}
+{{- $homes := dict -}}
+{{- with .Site.Home -}}
+  {{- $homes = merge $homes (dict .Language.Lang .RelPermalink) -}}
+  {{- range .AllTranslations -}}
+    {{- $homes = merge $homes (dict .Language.Lang .RelPermalink) -}}
+  {{- end -}}
+{{- end -}}
+{{- $default := .Site.Params.autoLangDefault | default "en" -}}
+<script>
+(function(){try{
+  var homes={{ $homes | jsonify | safeJS }};
+  var cur={{ .Site.Language.Lang | jsonify | safeJS }};
+  var def={{ $default | jsonify | safeJS }};
+  var q=(location.search.match(/[?&]lang=([\w-]+)/)||[])[1];
+  if(q){try{localStorage.setItem('langPref',q);}catch(e){}}
+  var pref=null;try{pref=localStorage.getItem('langPref');}catch(e){}
+  // act only on a language home root, normalising the trailing slash
+  var path=location.pathname.replace(/\/+$/,'')+'/';
+  var onHome=false;
+  for(var k in homes){if(homes[k].replace(/\/+$/,'')+'/' === path){onHome=true;break;}}
+  if(!onHome)return;
+  var want=pref;
+  if(!want){
+    var ua=navigator.userAgent||'';
+    var bl=(navigator.language||navigator.userLanguage||'').toLowerCase();
+    want=(/MicroMessenger/i.test(ua)||bl.indexOf('zh')===0)?'zh-cn':def;
+  }
+  var target=homes[want];
+  if(target && want!==cur){location.replace(target);}
+}catch(e){}})();
+</script>
