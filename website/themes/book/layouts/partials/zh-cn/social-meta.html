@@ -9,6 +9,9 @@
     image: "path-or-url"    -> share image for this page (else the site card)
 */ -}}
 {{- $title := partial "zh-cn/title" . -}}
+{{- /* The home unfurl should carry the book's name, not the title partial's
+       generic author fallback. */ -}}
+{{- if .IsHome -}}{{- $title = .Site.Title -}}{{- end -}}
 {{- $desc := "" -}}
 {{- with .Description -}}
   {{- $desc = . -}}
