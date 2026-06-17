@@ -335,22 +335,47 @@ body { padding-top: $topbar-h; }
     &:hover { background: var(--accent); color: #fff; }
   }
 
-  // Nested chapter links sit slightly indented.
-  nav > ul > li > ul > li > a { padding-left: 22px; }
+  // --- Nav hierarchy ------------------------------------------------------
+  // The book nav nests three content levels — PART (top-level toggle label),
+  // CHAPTER (second-level toggle label), SECTION (leaf link) — plus the bare
+  // top-level links (引言 / 结束语) and the house links injected before the
+  // tree. Establish a size/weight/indent gradient so a part always outranks a
+  // chapter. The clickable <a> lives inside the toggle <label>, so style the
+  // <a> (the label is just a flex wrapper carrying the ▸ arrow).
 
-  // Top-level part labels read as quiet section eyebrows.
-  nav > ul > li > a,
-  nav > ul > li > label,
-  nav > ul > li > span,
-  .book-section-flat > a,
-  .book-section-flat > span,
-  .book-section-flat > label {
-    font-size: 10.5px;
-    font-weight: 600;
-    letter-spacing: 0.13em;
+  // House links (Go 语言原本 / 作者主页 / GitHub) — quiet chrome above the tree.
+  nav > ul:first-of-type > li > a {
+    font-size: 12px;
     color: var(--fg-faint);
-    padding: 14px 10px 6px;
   }
+
+  // PART — the most prominent row in the tree.
+  nav > ul > li > label { margin-top: 14px; }
+  nav > ul > li > label > a,
+  .book-section-flat > label > a,
+  .book-section-flat > a {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--fg);
+    letter-spacing: 0.01em;
+  }
+
+  // CHAPTER — second level, indented and clearly below a part.
+  nav > ul > li > ul > li > label > a {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg-muted);
+    padding-left: 18px;
+  }
+
+  // SECTION — third level, the quietest, indented furthest.
+  nav > ul > li > ul > li > ul > li > a {
+    font-size: 12.5px;
+    font-weight: 400;
+    color: var(--fg-muted);
+    padding-left: 30px;
+  }
+
   .book-toggle-label::after { opacity: 0.45; }
 
   // Search box on the warm surface.
