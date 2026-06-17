@@ -823,17 +823,20 @@ html[data-toc="open"] .book-toc { display: block; }
   }
 
   // Code surface + sizing.
+  // Block code tracks the reading size (so it never reads tiny next to the
+  // 18.5px serif body, and follows the A−/A＋ controls). Monospace renders
+  // visually larger per em, so 0.9× keeps it balanced rather than oversized.
   pre {
     background: var(--code-bg);
-    font-size: 13.5px;
-    line-height: 1.75;
+    font-size: calc(var(--reading-size) * var(--reading-scale) * 0.9);
+    line-height: 1.7;
     color: var(--fg);
   }
   .chroma {
     background: transparent;
     color: var(--fg);
-    font-size: 13.5px;
-    line-height: 1.75;
+    font-size: calc(var(--reading-size) * var(--reading-scale) * 0.9);
+    line-height: 1.7;
 
     // line-number gutter (kept, restyled faint — config emits lineNos)
     .lnt, .ln { color: var(--fg-faint); }
