@@ -440,7 +440,18 @@ html[data-toc="open"] .book-toc { display: block; }
   font-family: var(--font-sans);
   font-size: 13px;
 
-  nav { width: auto; }
+  // The theme's `@include fixed` pins `nav#TableOfContents` to position:fixed;
+  // because `.book-toc`'s backdrop-filter makes it the containing block, the
+  // list pins to the panel's top:0 and overlays the head + progress meter.
+  // Pull it back into normal flow so head / list / progress stack vertically.
+  nav {
+    position: static;
+    top: auto;
+    bottom: auto;
+    width: auto;
+    padding: 0;
+    overflow: visible;
+  }
 
   .reading-toc-head {
     font-size: 11px;
