@@ -45,6 +45,14 @@
   --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
   --font-display: 'Instrument Serif', Georgia, serif;
 
+  // English prose is Latin, so lead the serif stack with Georgia. Otherwise the
+  // CJK font ('Noto Serif SC', first for Chinese) renders ASCII quotes ("/')
+  // and punctuation as full-width glyphs that take far too much space. CJK
+  // characters still fall through to Noto Serif SC via per-glyph fallback.
+  &:lang(en) {
+    --font-serif: Georgia, 'Noto Serif SC', 'Songti SC', serif;
+  }
+
   // Reading column. --reading-scale is nudged by the A−/A＋ controls (see
   // reading.js); the base measure follows the design mock.
   --reading-size: 18.5px;
