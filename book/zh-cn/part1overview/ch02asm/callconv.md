@@ -5,7 +5,7 @@ title: "2.3 调用约定与寄存器 ABI"
 
 # 2.3 调用约定与寄存器 ABI
 
-> 本节内容对标 Go 1.26。文中的寄存器名、栈帧布局与序言代码以 amd64 为例，
+> 文中的寄存器名、栈帧布局与序言代码以 amd64 为例，
 > 其余体系结构（arm64、riscv64 等）结构相同而寄存器名不同，可对照
 > `src/cmd/compile/abi-internal.md` 的「Architecture specifics」一节。
 

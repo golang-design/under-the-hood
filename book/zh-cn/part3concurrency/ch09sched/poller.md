@@ -5,7 +5,7 @@ title: "9.9 网络轮询器"
 
 # 9.9 网络轮询器
 
-> 本节内容对标 Go 1.26，源码事实核对自 `src/runtime/netpoll.go` 及各平台实现
+> 源码事实核对自 `src/runtime/netpoll.go` 及各平台实现
 > （`netpoll_epoll.go`、`netpoll_kqueue.go` 等）与 `src/internal/poll/fd_unix.go`。
 
 Go 的网络代码看起来是阻塞式的：`conn.Read` 会「卡」在那里等数据。可如果它真卡住了所在的
