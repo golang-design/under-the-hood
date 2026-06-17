@@ -27,5 +27,27 @@
 - id: Last modified by
   translation: Last modified by
 
+# Reading chrome (top bar, table of contents, page navigation, footer).
+- id: Wordmark
+  translation: Go
+- id: PrevSection
+  translation: Previous
+- id: NextSection
+  translation: Next
+- id: TocHead
+  translation: On this page
+- id: CollapseSidebar
+  translation: Collapse sidebar
+- id: FontSize
+  translation: Font size
+- id: FontSmaller
+  translation: Decrease font size
+- id: FontBigger
+  translation: Increase font size
+- id: SearchPlaceholder
+  translation: Search the book…
+- id: AuthorHome
+  translation: Author
+
 - id: bookSearchConfig
   translation: '{ cache: true }'

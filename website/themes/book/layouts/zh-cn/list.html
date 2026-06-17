@@ -3,8 +3,8 @@
   {{- .Content -}}
   {{- if or .Params.prevSec .Params.nextSec -}}
   <nav class="reading-pagenav">
-    {{- with .Params.prevSec }}<a class="pagenav-card" href="{{ . }}"><span class="pagenav-eyebrow">← 上一节</span><span class="pagenav-title">{{ $.Params.prevSecTitle }}</span></a>{{ end -}}
-    {{- with .Params.nextSec }}<a class="pagenav-card" href="{{ . }}"><span class="pagenav-eyebrow">下一节 →</span><span class="pagenav-title">{{ $.Params.nextSecTitle }}</span></a>{{ end -}}
+    {{- with .Params.prevSec }}<a class="pagenav-card" href="{{ . }}"><span class="pagenav-eyebrow">← {{ i18n "PrevSection" }}</span><span class="pagenav-title">{{ $.Params.prevSecTitle }}</span></a>{{ end -}}
+    {{- with .Params.nextSec }}<a class="pagenav-card" href="{{ . }}"><span class="pagenav-eyebrow">{{ i18n "NextSection" }} →</span><span class="pagenav-title">{{ $.Params.nextSecTitle }}</span></a>{{ end -}}
   </nav>
   {{- end -}}
 </article>

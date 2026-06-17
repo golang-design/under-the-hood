@@ -27,6 +27,28 @@
 - id: Last modified by
   translation: Last modified by
 
+# Reading chrome (top bar, table of contents, page navigation, footer).
+- id: Wordmark
+  translation: Go 语言原本
+- id: PrevSection
+  translation: 上一节
+- id: NextSection
+  translation: 下一节
+- id: TocHead
+  translation: 本节目录
+- id: CollapseSidebar
+  translation: 折叠侧栏
+- id: FontSize
+  translation: 字号
+- id: FontSmaller
+  translation: 减小字号
+- id: FontBigger
+  translation: 增大字号
+- id: SearchPlaceholder
+  translation: 搜索全书…
+- id: AuthorHome
+  translation: 作者主页
+
 - id: bookSearchConfig
   translation: |
     {

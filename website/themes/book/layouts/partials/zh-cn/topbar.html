@@ -9,12 +9,12 @@
 <div class="reading-progress" aria-hidden="true"><span id="reading-progress-bar"></span></div>
 
 <header class="reading-topbar">
-  <button type="button" class="reading-iconbtn" id="fold-sidebar" title="折叠侧栏" aria-label="折叠侧栏">
+  <button type="button" class="reading-iconbtn" id="fold-sidebar" title="{{ i18n "CollapseSidebar" }}" aria-label="{{ i18n "CollapseSidebar" }}">
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
   </button>
 
-  <a class="reading-wordmark" href="{{ .Site.BaseURL }}">
-    <span class="wm-title">Go 语言原本</span>
+  <a class="reading-wordmark" href="{{ .Site.Home.RelPermalink }}">
+    <span class="wm-title">{{ i18n "Wordmark" }}</span>
     <span class="wm-sub">under the hood</span>
   </a>
 
@@ -22,8 +22,10 @@
   <span class="reading-divider"></span>
   <nav class="reading-crumb" aria-label="breadcrumb">
     {{ range $a := .Ancestors.Reverse }}
-      {{/* Skip the home page and the zh-cn language root (its parent is home). */}}
-      {{ if and (not $a.IsHome) (not $a.Parent.IsHome) }}
+      {{/* Skip the home page. For zh-cn also skip the literal /zh-cn/ language
+           root section (its parent is home); en has no such wrapper, so its
+           top-level parts (also children of home) must be kept. */}}
+      {{ if and (not $a.IsHome) (not (and (eq $.Site.Language.Lang "zh-cn") $a.Parent.IsHome)) }}
         <a href="{{ $a.RelPermalink }}">{{ partial "zh-cn/title" $a }}</a>
         <span class="crumb-sep">/</span>
       {{ end }}
@@ -34,10 +36,10 @@
 
   <div class="reading-spacer"></div>
 
-  <div class="reading-fontctl" role="group" aria-label="字号">
-    <button type="button" id="font-smaller" title="减小字号" aria-label="减小字号">A</button>
+  <div class="reading-fontctl" role="group" aria-label="{{ i18n "FontSize" }}">
+    <button type="button" id="font-smaller" title="{{ i18n "FontSmaller" }}" aria-label="{{ i18n "FontSmaller" }}">A</button>
     <span class="fontctl-div"></span>
-    <button type="button" id="font-bigger" title="增大字号" aria-label="增大字号">A</button>
+    <button type="button" id="font-bigger" title="{{ i18n "FontBigger" }}" aria-label="{{ i18n "FontBigger" }}">A</button>
   </div>
 
   {{ if default true .Site.Params.BookSearch }}
@@ -55,7 +57,7 @@
   {{ partial "zh-cn/languages" . }}
   {{ end }}
 
-  <button type="button" class="reading-iconbtn" id="fold-toc" title="本节目录" aria-label="本节目录">
+  <button type="button" class="reading-iconbtn" id="fold-toc" title="{{ i18n "TocHead" }}" aria-label="{{ i18n "TocHead" }}">
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
   </button>
 </header>
