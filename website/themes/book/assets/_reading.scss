@@ -599,11 +599,16 @@ html[data-toc="open"] .book-toc { display: block; }
     white-space: nowrap;
   }
   pre code,
-  .highlight code {
+  .highlight code,
+  .chroma code {
     background: transparent;
     color: inherit;
     padding: 0;
     border-radius: 0;
+    // The inline-code chip above sets `white-space: nowrap`, which inherits
+    // into block code and collapses every newline onto one line. Restore the
+    // preformatted whitespace so multi-line code blocks lay out correctly.
+    white-space: pre;
   }
 
   // Calm, booklike quote: a soft Go-blue rule and a faint tinted panel.
@@ -727,6 +732,7 @@ html[data-toc="open"] .book-toc { display: block; }
       border-radius: 0;
       padding: 16px 18px;
       background: transparent;
+      overflow-x: auto; // long lines scroll within the rounded card
     }
 
     // Hide the line-number gutter column (copy still works via reading.js).
