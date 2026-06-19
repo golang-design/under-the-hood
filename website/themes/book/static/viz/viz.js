@@ -152,7 +152,7 @@
     function headPos(p) { var g = pGeo(p); return { x: g.x + 30, y: g.y + 70 }; }
 
     function newG(px, py) {
-      return { id: nextId++, t: 0.9 + Math.random() * 1.0, px: px, py: py, tx: px, ty: py, born: 0, from: null };
+      return { id: nextId++, t: 1.6 + Math.random() * 1.4, px: px, py: py, tx: px, ty: py, born: 0, from: null };
     }
 
     var Ps = [];
@@ -164,8 +164,17 @@
     for (var a = 0; a < 5; a++) { var lp0 = localPos(0, a); Ps[0].q.push(newG(lp0.x, lp0.y)); }
     for (var b = 0; b < 4; b++) { var gp0 = grqPos(b); grq.push(newG(gp0.x, gp0.y)); }
 
-    var spawnTimer = 1.0, grqTimer = 2.5, hot = 0, hotTimer = 0, speed = 1;
+    var spawnTimer = 1.0, grqTimer = 2.5, spawnP = 0, speed = 1;
 
+    // Total live goroutines (queued anywhere + running). We cap creation against
+    // this so the closed system settles at a readable load — deep local queues
+    // and an ebbing global queue — instead of every queue saturating to full.
+    var GCAP = 18;
+    function totalG() {
+      var t = grq.length;
+      for (var p = 0; p < NP; p++) { t += Ps[p].q.length; if (Ps[p].run) t++; }
+      return t;
+    }
     // local queue full -> half of it spills onto the global queue (runqputslow).
     // The Gs keep their pixel position, so they visibly drift up into the GRQ.
     function spillToGlobal(p) {
@@ -176,9 +185,11 @@
     function schedule(p) {
       var P = Ps[p];
       P.tick++;
-      // Every so often a P services the global queue first even with local work
-      // ready — Go does this every 61st schedule tick so the GRQ can't starve.
-      if (P.tick % 7 === 0 && grq.length) { startRun(p, grq.shift()); return; }
+      // Service the global queue first when it is backing up (>= 6 waiting), or
+      // every 7th schedule tick regardless — Go does the periodic check every
+      // 61st tick so the GRQ can't starve. This also keeps the GRQ a bounded,
+      // ebbing backstop instead of an ever-growing overflow sink.
+      if (grq.length && (grq.length >= 6 || P.tick % 7 === 0)) { startRun(p, grq.shift()); return; }
       if (P.q.length) { startRun(p, P.q.shift()); return; }
       if (grq.length) { startRun(p, grq.shift()); return; }
       // Local AND global queues empty: steal half of the busiest other P's queue.
@@ -217,21 +228,26 @@
 
     function step(dt) {
       dt *= speed;
-      // The "hot" P rotates so the imbalance — and thus the stealing — doesn't
-      // always sit on the same column.
-      hotTimer -= dt;
-      if (hotTimer <= 0) { hotTimer = 4 + Math.random() * 3; hot = (hot + 1) % NP; }
-      // A `go`-heavy section enqueues a whole *burst* of goroutines onto the
-      // running P's local run queue at once — that backlog is what makes the
-      // queue visibly fill, and what the idle Ps then steal half of. A full
-      // local queue spills its front half to the global queue first.
+      // A running goroutine spawns children onto *its own* P's local run queue
+      // (`go func()` enqueues on the current P). We model that as a burst landing
+      // on one P at a time, and rotate which P so every column cycles through a
+      // deep backlog rather than one column hogging all the work. Advancing the
+      // target by 1..NP means it usually moves on but sometimes lands twice in a
+      // row — that transient imbalance is what the idle Ps then steal to even out.
+      // A full local queue spills its front half to the global queue first.
       spawnTimer -= dt;
       if (spawnTimer <= 0) {
-        spawnTimer = 1.8 + Math.random() * 1.0;
-        var burst = 3 + Math.floor(Math.random() * 3); // 3..5 goroutines
-        for (var bi = 0; bi < burst; bi++) {
-          if (Ps[hot].q.length >= QCAP) { spillToGlobal(hot); if (Ps[hot].q.length >= QCAP) break; }
-          var h = headPos(hot); Ps[hot].q.push(newG(h.x, h.y));
+        spawnTimer = 2.3 + Math.random() * 0.8;
+        // Most bursts land on the emptiest P (work spreads, queues stay deep but
+        // below cap so they don't keep spilling into the GRQ); now and then a
+        // burst lands on a random P, and that transient imbalance is what the
+        // idle Ps steal back to even out.
+        if (Math.random() < 0.3) { spawnP = Math.floor(Math.random() * NP); }
+        else { spawnP = 0; for (var pp = 1; pp < NP; pp++) if (Ps[pp].q.length < Ps[spawnP].q.length) spawnP = pp; }
+        var burst = 4 + Math.floor(Math.random() * 3); // 4..6 goroutines
+        for (var bi = 0; bi < burst && totalG() < GCAP; bi++) {
+          if (Ps[spawnP].q.length >= QCAP) { spillToGlobal(spawnP); if (Ps[spawnP].q.length >= QCAP) break; }
+          var h = headPos(spawnP); Ps[spawnP].q.push(newG(h.x, h.y));
         }
       }
       // The runtime also drops freshly-ready goroutines straight onto the global
@@ -239,9 +255,8 @@
       // GRQ stays a live backstop that idle Ps fall back on, not a dead box.
       grqTimer -= dt;
       if (grqTimer <= 0) {
-        grqTimer = 1.6 + Math.random() * 1.2;
-        var inj = 1 + Math.floor(Math.random() * 2); // 1..2
-        for (var z = 0; z < inj && grq.length < GRQ_MAX; z++) grq.push(newG(40, GRQ_Y));
+        grqTimer = 3.0 + Math.random() * 2.0;
+        if (totalG() < GCAP) grq.push(newG(40, GRQ_Y));
       }
       for (var p = 0; p < NP; p++) {
         var P = Ps[p];
@@ -319,9 +334,9 @@
     var pb = button(s.bar, "暂停", function () { pb.textContent = d.toggle() ? "暂停" : "继续"; });
     button(s.bar, "单步", function () { d.set(false); pb.textContent = "继续"; step(0.25); });
     button(s.bar, "go func()", function () {
-      // enqueue onto the hot P's local run queue (a full queue spills to the GRQ)
-      if (Ps[hot].q.length >= QCAP) spillToGlobal(hot);
-      var h = headPos(hot); Ps[hot].q.push(newG(h.x, h.y));
+      // enqueue onto the most recently fed P's local run queue (overflow -> GRQ)
+      if (Ps[spawnP].q.length >= QCAP) spillToGlobal(spawnP);
+      var h = headPos(spawnP); Ps[spawnP].q.push(newG(h.x, h.y));
     });
     slider(s.bar, "速度", 1, 30, 10, function (v) { speed = v / 10; });
   }

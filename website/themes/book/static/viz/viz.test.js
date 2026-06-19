@@ -115,7 +115,8 @@ function runSim(seed, frames) {
   vm.runInContext(code, sandbox); // mounts the widget, queues the first frame
 
   const r = { totalFrames: 0, grqPopulatedFrames: 0, maxGrqDots: 0, sumGrq: 0,
-              maxLocalDepth: 0, sumLocalTotal: 0, localFillFrames: 0, stealFrames: 0, offGridSamples: 0 };
+              maxLocalDepth: 0, sumLocalTotal: 0, localFillFrames: 0, multiColFrames: 0,
+              stealFrames: 0, offGridSamples: 0 };
   for (let f = 1; f <= frames; f++) {
     const due = rafQueue; rafQueue = [];
     frameArcs = []; frameTexts = [];
@@ -127,15 +128,17 @@ function runSim(seed, frames) {
     r.maxGrqDots = Math.max(r.maxGrqDots, grqDots.length);
     r.sumGrq += grqDots.length;
     if (frameArcs.some((a) => isG(a) && !onGrid(a.x))) r.offGridSamples++;
-    let frameMaxDepth = 0;
+    let frameMaxDepth = 0, colsWithBacklog = 0;
     for (let p = 0; p < NP; p++) {
       const [lo, hi] = localXRange(p);
       const depth = frameArcs.filter((a) => isG(a) && Math.abs(a.y - LOCAL_Y) < 6 && a.x >= lo && a.x <= hi).length;
       frameMaxDepth = Math.max(frameMaxDepth, depth);
+      if (depth >= 2) colsWithBacklog++;
       r.sumLocalTotal += depth;
     }
     r.maxLocalDepth = Math.max(r.maxLocalDepth, frameMaxDepth);
-    if (frameMaxDepth >= 3) r.localFillFrames++; // a queue is visibly full this frame
+    if (frameMaxDepth >= 3) r.localFillFrames++;        // a queue is visibly full this frame
+    if (colsWithBacklog >= 2) r.multiColFrames++;       // backlog spread across >1 column, not one hot P
     if (frameTexts.some((t) => t.t.indexOf("窃取") >= 0)) r.stealFrames++;
   }
   return r;
@@ -154,6 +157,8 @@ const agg = {
   maxLocal: Math.max(...runs.map((r) => r.maxLocalDepth)),
   localFillPctMin: Math.min(...runs.map((r) => r.localFillFrames / r.totalFrames)),
   localFillPctMean: avg(runs.map((r) => r.localFillFrames / r.totalFrames)),
+  multiColPctMin: Math.min(...runs.map((r) => r.multiColFrames / r.totalFrames)),
+  multiColPctMean: avg(runs.map((r) => r.multiColFrames / r.totalFrames)),
   offGridMean: avg(runs.map((r) => r.offGridSamples / r.totalFrames)),
   stealMin: Math.min(...runs.map((r) => r.stealFrames)),
   avgGrq: avg(runs.map((r) => r.sumGrq / r.totalFrames)),
@@ -167,12 +172,16 @@ const failures = [];
 //    real fraction of frames on every seed — not just a one-off transient from
 //    the initial seed pile. This is the "only one goroutine at a time" guard.
 if (agg.localFillPctMin < 0.25) failures.push(`a local run queue should repeatedly fill with multiple goroutines; the thinnest seed showed a full (>=3) queue in only ${(agg.localFillPctMin * 100).toFixed(1)}% of frames`);
-// 2. stealing is visible in every seed.
+// 2. backlog is SPREAD: >= 2 columns hold a backlog much of the time, so the
+//    work doesn't all pile on one hot P while the others sit empty.
+if (agg.multiColPctMin < 0.6) failures.push(`backlog should spread across columns; the thinnest seed had >=2 columns busy in only ${(agg.multiColPctMin * 100).toFixed(1)}% of frames (one-hot-P regression)`);
+// 3. stealing is visible in every seed.
 if (agg.stealMin < 10) failures.push(`work stealing should be visible; the quietest seed showed the "窃取!" flash in only ${agg.stealMin} frames`);
-// 3. GRQ is a live backstop: often populated on average, never a dead box.
+// 4. GRQ is a live BOUNDED backstop: often populated, but never jammed full.
 if (agg.grqPctMean < 0.5) failures.push(`global queue should be visibly used; averaged only ${(agg.grqPctMean * 100).toFixed(1)}% of frames across seeds`);
 if (agg.grqPctMin < 0.3) failures.push(`global queue went near-dead on a seed; populated in only ${(agg.grqPctMin * 100).toFixed(1)}% of its frames`);
 if (agg.maxGrq < 3) failures.push(`global queue never held more than ${agg.maxGrq} goroutine(s); expected it to fill as a real backstop`);
+if (agg.avgGrq > 9) failures.push(`global queue is saturating (avg ${agg.avgGrq.toFixed(1)} of ${14} slots); it should ebb as a bounded backstop, not jam full`);
 // 4. animation: goroutines render off-grid (mid-flight), not snapped to slots.
 if (agg.offGridMean < 0.5) failures.push(`goroutines should animate between slots; off-grid dots averaged only ${(agg.offGridMean * 100).toFixed(1)}% of frames`);
 if (agg.frames < 1000) failures.push(`too few frames pumped (${agg.frames}); the rAF loop may have stalled`);
@@ -184,6 +193,7 @@ if (failures.length) {
 }
 console.log(`PASS — GMP scheduler viz (${SEEDS.length} seeds, ${FRAMES} frames each)`);
 console.log(`  local queue fills:   full (>=3) queue in ${(agg.localFillPctMean * 100).toFixed(1)}% of frames (min seed ${(agg.localFillPctMin * 100).toFixed(1)}%), peak ${agg.maxLocal}`);
+console.log(`  backlog spread:      >=2 columns busy in ${(agg.multiColPctMean * 100).toFixed(1)}% of frames (min seed ${(agg.multiColPctMin * 100).toFixed(1)}%)`);
 console.log(`  work stealing:       "窃取!" flash >= ${agg.stealMin} frames on every seed`);
 console.log(`  global queue:        used in ${(agg.grqPctMean * 100).toFixed(1)}% of frames (min seed ${(agg.grqPctMin * 100).toFixed(1)}%), avg ${agg.avgGrq.toFixed(2)} Gs, peak ${agg.maxGrq}`);
 console.log(`  animation:           off-grid dots in ${(agg.offGridMean * 100).toFixed(1)}% of frames`);
