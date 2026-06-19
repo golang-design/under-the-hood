@@ -201,7 +201,7 @@ default:
 编程语言、要与 C 互操作」的位置上，指针稳定是几乎不能让的约束，于是非移动几乎是被需求逼出的
 选择，而非性能上的疏忽。两条路没有高下，只是把复杂度安放在了不同的地方。
 
-碎片这件事并未就此盖棺。go1.25/1.26 起试验中的 **Green Tea GC**（[13.11](./history.md)）正是朝
+碎片这件事并未就此盖棺。go1.25 引入、go1.26 默认开启的 **Green Tea GC**（[13.11](./greentea.md)）正是朝
 「以 span／页为粒度组织扫描与回收、改善内存局部性」的方向探索,它不是要引入对象移动，而是重新
 安排扫描与回收的粒度，让缓存与 TLB 行为更友好。清扫与回收的设计仍在演进，本节描述的是 go1.26
 的稳定形态，而非终点。
@@ -226,4 +226,4 @@ default:
 6. Sanjay Ghemawat, Paul Menage. *TCMalloc: Thread-Caching Malloc.*
    https://google.github.io/tcmalloc/design.html（尺寸类如何把碎片限制在可控范围）.
 7. 本书 [12.1 设计原则](../ch12alloc/basic.md)、[12.2 组件](../ch12alloc/component.md)、
-   [13.1 基本思想](./basic.md)、[13.4 标记](./mark.md)、[13.11 过去现在未来](./history.md).
+   [13.1 基本思想](./basic.md)、[13.4 标记](./mark.md)、[13.12 过去现在未来](./history.md).

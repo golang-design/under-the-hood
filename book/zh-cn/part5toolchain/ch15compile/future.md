@@ -146,7 +146,7 @@ go build ./cmd/myapp
 之日、却会持续推进的战线（[8.4](../../part2lang/ch08generics/future.md)）。
 
 **与新 GC 协同的代码生成。** 代码生成从不孤立。新一代 GC（Green Tea，
-[13.11](../../part4memory/ch13gc/history.md)）改变了扫描与写屏障的形态，编译器插入屏障、安排
+[13.11](../../part4memory/ch13gc/greentea.md)）改变了扫描与写屏障的形态，编译器插入屏障、安排
 指针存活信息(liveness)的方式也要随之演化,两者协同进化，才能把 GC 的吞吐改进真正落到生成
 代码上。
 

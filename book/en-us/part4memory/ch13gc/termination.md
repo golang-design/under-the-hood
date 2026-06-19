@@ -135,7 +135,7 @@ The first STW (`stwGCSweepTerm`, [13.4](./mark.md)) **sets up the defenses** at 
 
 Behind this is a clear engineering trade-off. The goal the Go team chose is not literal zero pause, but **pressing the amount of work in each STW down to a constant level independent of heap and stack size**. In "Getting to Go" Hudson set the goal at STW no more than about $500\,\mu s$, and in practice it is often far below this. The cost is that the cycle still has two unavoidable synchronization points; the benefit is that the pause time no longer worsens as the program's heap and stack grow, which for latency-sensitive services is far more valuable than "fewer but uncontrollable" pauses. Performance gains never come for free, what is paid here is two constant-order STWs and the extra overhead of the hybrid write barrier, in exchange for predictable latency decoupled from scale.
 
-Continuing to shrink or even eliminate these two STWs is the same direction at the frontier of garbage collection. HotSpot's ZGC (JEP 376) has already achieved **concurrent stack processing**, moving root scanning out of STW as well ([9.7](../../part3concurrency/ch09sched/preemption.md)); Go's evolution pushes in the same direction, and the hybrid write barrier's elimination of stack rescanning is only one step, the later ideas of further concurrentizing root scanning and phase switching can be found in [13.11](./history.md)'s account of past, present, and future. The two short STWs are not the endpoint, but the steady state under the current engineering trade-off.
+Continuing to shrink or even eliminate these two STWs is the same direction at the frontier of garbage collection. HotSpot's ZGC (JEP 376) has already achieved **concurrent stack processing**, moving root scanning out of STW as well ([9.7](../../part3concurrency/ch09sched/preemption.md)); Go's evolution pushes in the same direction, and the hybrid write barrier's elimination of stack rescanning is only one step, the later ideas of further concurrentizing root scanning and phase switching can be found in [13.12](./history.md)'s account of past, present, and future. The two short STWs are not the endpoint, but the steady state under the current engineering trade-off.
 
 ## Further Reading
 
@@ -158,4 +158,4 @@ Continuing to shrink or even eliminate these two STWs is the same direction at t
    https://github.com/golang/go/issues/27993 (the situation where residual work after entering mark termination requires restarting marking)
 7. This book's [13.2 Write Barrier Techniques](./barrier.md), [13.3 The Pace of GC](./pacing.md),
    [13.4 Scan Marking and Mark Assist](./mark.md), [13.5 Sweeping and Bitmaps](./sweep.md),
-   [13.11 Past, Present, and Future](./history.md).
+   [13.12 Past, Present, and Future](./history.md).

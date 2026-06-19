@@ -129,12 +129,11 @@ flowchart LR
     L0 -.->|"steal when global is empty"| L1
 ```
 
-By go1.25/1.26, marking grew one more layer of "scan-by-span" optimization (Green Tea GC, an experimental feature on by
-default): besides the per-object gray queue, `gcWork` also maintains a pending **span queue** (`spanq`), which groups
+Marking also grew one more layer of "scan-by-span" optimization (Green Tea GC, introduced in go1.25 and on by default since go1.26): besides the per-object gray queue, `gcWork` also maintains a pending **span queue** (`spanq`), which groups
 multiple objects to scan within the same span into one batch scan, improving memory-access locality in scenarios dense
 with small objects. Structurally it is an extension of the queue machinery above; the semantics of gray objects do not
 change. This section narrates the classic "per-object gray queue," which is enough to understand the skeleton of marking;
-span scanning is a performance evolution on top of it.
+batch scanning by span, as a separate layer of performance evolution, is given its own treatment in [13.11 Green Tea](./greentea.md) of this chapter.
 
 ## 13.4.3 Scanning One Object: How Do We Know Where the Pointers Are
 
@@ -261,8 +260,8 @@ dead object slots to the allocator.
   high-concurrency data structures.
 - **Evolution of precise-scan metadata**: from the early per-arena whole-heap pointer bitmap, to go1.22 collecting the
   pointer layout into the span's tail and the object's first-word "allocation header," with the aim of improving
-  memory-access locality and shrinking metadata footprint; go1.25/1.26's Green Tea GC adds one more layer of batch
-  scanning by span, further optimizing scenarios dense with small objects.
+  memory-access locality and shrinking metadata footprint; the Green Tea GC ([13.11](./greentea.md)), introduced in go1.25 and on by default since go1.26, adds one more layer
+  of batch scanning by span, further optimizing scenarios dense with small objects.
 
 Placed in the lineage, "concurrent tricolor marking + write barrier + mark assist" is not Go's invention: concurrent
 marking traces back to the foundational work of Dijkstra and others in 1978, and low-latency concurrent collectors beyond

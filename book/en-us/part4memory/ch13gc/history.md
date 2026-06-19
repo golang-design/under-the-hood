@@ -1,9 +1,9 @@
 ---
-weight: 4211
-title: "13.11 Past, Present, and Future"
+weight: 4212
+title: "13.12 Past, Present, and Future"
 ---
 
-# 13.11 Past, Present, and Future
+# 13.12 Past, Present, and Future
 
 Having read the previous ten sections, the reader now holds the present state of each part of Go's garbage collector: tri-color marking ([13.1](./basic.md)),
 the hybrid write barrier ([13.2](./barrier.md)), the pacer ([13.3](./pacing.md)), and sweeping and reclamation ([13.5](./sweep.md)).
@@ -13,7 +13,7 @@ The evolution of the collector reads like a curve that converges steadily in one
 orders of magnitude, and along the way one constant theme runs through it all: every change serves the goal of completing collection without disturbing user code.
 Once that theme is understood, the many schemes below, both those adopted and those abandoned, can all be measured against the same ruler.
 
-## 13.11.1 Schemes That Were Adopted: From Hundreds of Milliseconds to Sub-Millisecond
+## 13.12.1 Schemes That Were Adopted: From Hundreds of Milliseconds to Sub-Millisecond
 
 ### Go 1.0 to 1.4: Naive Stop-the-World Mark-Sweep
 
@@ -75,13 +75,14 @@ timeline
     Go 1.6-1.7 (2016) : Mark termination and stack shrinking polish : One to two ms
     Go 1.8 (2017) : Hybrid write barrier, eliminates stack re-scan : Sub-millisecond
     Go 1.18-1.19 (2022) : Pacer redesign, GOMEMLIMIT : Sub-millisecond, more controllable rhythm
-    Go 1.25-1.26 : Green Tea GC (experimental) : Mark throughput scales with cores and heap
+    Go 1.25 (2025) : Green Tea GC (experimental, opt-in) : Locality-aware marking
+    Go 1.26 (2026) : Green Tea GC on by default : Mark throughput scales with cores and heap
 ```
 
 The design stance behind this curve can be condensed into one sentence: performance gains never come for free. Go traded the small throughput overhead brought by the write barrier
 for predictable pauses; with the knob exposed by `GOMEMLIMIT`, it handed the trade-off among the three back to the person who understands the business needs best.
 
-## 13.11.2 Schemes That Were Abandoned: Two Roads That Did Not Go Through
+## 13.12.2 Schemes That Were Abandoned: Two Roads That Did Not Go Through
 
 Not every attempt made it into a release. Two schemes that were seriously explored and ultimately abandoned confirm, from the opposite side, the theme drawn above.
 
@@ -98,74 +99,27 @@ on the stack, which cuts down the benefit the generational assumption could sque
 The lesson these two abandonments left is concrete: in Go, any scheme that hopes to speed up collection by "exploiting some structural regularity of objects" must first
 clear the gate of "write barrier overhead." This sets up the protagonist of the next section.
 
-## 13.11.3 Present and Future: Green Tea GC
+## 13.12.3 Present and Future: Green Tea GC
 
-Starting with Go 1.25, the runtime brings a new marking algorithm, codenamed **Green Tea**, offered as an experimental feature; building with
-`GOEXPERIMENT=greenteagc` turns it on, and the implementation is concentrated in `runtime/mgcmark_greenteagc.go`. What it targets is
-another dimension that none of the previous versions addressed head-on: the **cache locality** of the marking phase.
+After sub-millisecond, the pause was no longer the main battlefield, and the remaining cost shifted to whether that 25% of background CPU spent in the marking phase
+was being spent well. The new marking algorithm **Green Tea**, brought by Go 1.25, targets exactly the dimension none of the previous versions addressed head-on:
+the **cache locality** of the marking phase. It was offered in 1.25 as an experimental feature behind `GOEXPERIMENT=greenteagc` (opt-in), and from 1.26 it is
+**on by default** (turn it off with `GOEXPERIMENT=nogreenteagc`).
 
-### The Problem: Chasing Pointers All Over Memory
+Its core idea can be stated in one sentence: **defer the scan, gather objects by span, and scan them together**, turning the classic tri-color marker's
+"chasing pointers all over memory" random access back into sequential access within a single span, so the cache and prefetch work again.
 
-Traditional tri-color marking is an object-by-object graph traversal: take an object off the gray set, scan every pointer inside it, color the white
-objects it points to gray and enqueue them, and so on. The trouble is that an object's physical location on the heap has nothing to do with its reference relationships, so the marker's memory
-accesses are nearly random: after scanning this object, the next object to visit may be on another span several megabytes away, and the corresponding
-metadata may be somewhere else again. On multi-core, large-heap workloads, this "chasing pointers all over memory" access pattern drives the usefulness of the CPU cache and prefetch
-down to very little, and mark throughput struggles to scale linearly with core count.
+Placed back into the thread of this section, Green Tea shares one lineage with the abandoned ROC and generational collection of the previous subsection: all of them want to
+**exploit a structural regularity** of objects to speed up collection. The difference is only which regularity, and where the cost falls. ROC exploits request boundaries
+and generational collection exploits object age, both **temporal** structure, and both must keep a write barrier running for the long term to maintain the assumption, at the cost
+of cache misses (the "write barrier gate" summarized in [13.9](./roc.md)). Green Tea exploits **spatial** locality (objects on the same span are physically adjacent); it changes
+only the **order** in which the marker traverses, introduces no new barrier, and so cleanly sidesteps the very gate that tripped up the first two. This time, the same
+"exploit structure" intuition finally found the entry point that does not have to pay the barrier cost.
 
-### The Design: Batching Scans onto the Span
-
-Green Tea's core idea can be stated in one sentence: **defer the scan, gather objects by span, and scan them together**. It no longer scans an object the moment it is
-discovered; instead, when it discovers a pointer into some span, it first records a note on that span and enqueues the span as a whole; only when this span's
-turn actually comes does it scan, in one pass, all the pending objects that have accumulated on it. Objects on the same span are already adjacent in memory, so
-batch scanning turns random access back into sequential access, lets the cache and prefetch work again, and spreads the cost of accessing metadata across a batch of objects.
-
-To achieve batching without losing precision, Green Tea maintains **two bitmaps** on each span: one is the regular mark bits `marks`, set when a pointer is first
-discovered; the other, `scans`, records which objects have already been scanned. When a span's turn comes, it writes the union of the two bitmaps back into `scans`,
-and takes their difference (marked but not yet scanned) to decide which objects to scan this round. This way it both batches and guarantees no re-scanning and no missed scanning, with precision
-intact. These two bitmaps are inlined directly into the span itself (`spanInlineMarkBits`), so scanning need not look back at the `mspan`, saving one
-indirection.
-
-Enqueueing and dequeueing spans borrows a move the scheduler long ago proved out: **a stealable span queue per P**
-(`spanQueue`, P-local stealable). An idle marking worker will steal from another P's queue
-(the work stealing of [9.2](../../part3concurrency/ch09sched/steal.md) shows up here again). Unlike ordinary work buffers
-(workbuf), which use LIFO, the span queue deliberately uses **FIFO**: experience shows that first-in-first-out is better for accumulating enough objects on a span
-before scanning. The sketch below outlines its skeleton:
-
-```go
-// span inline mark bits: the marks and scans bitmaps (sketch, see mgcmark_greenteagc.go)
-type spanInlineMarkBits struct {
-    scans [63]uint8         // scanned bits: decide which objects on the span need no rescan this round
-    owned spanScanOwnership // who acquired the scan rights to this span (for concurrent claiming)
-    marks [63]uint8         // mark bits: set when a pointer is first discovered
-    class spanClass
-}
-
-// when discovering a pointer, do not scan immediately; defer to batch processing on its span (sketch)
-func tryDeferToSpanScan(p uintptr, gcw *gcWork) bool {
-    // set the mark bit on the span p belongs to; if this makes the span pending for the first time, claim it and enqueue
-    if /* successfully set mark and acquired span scan rights */ true {
-        gcw.spanq.put(/* span + objIndex */) // into the per-P FIFO span queue, stealable by other Ps
-    }
-    return true
-}
-```
-
-### Lineage: The Spirit of ROC and Generational Collection, but Dodging Their Cost
-
-Placing Green Tea back into the thread of the previous section, it shares one lineage with the abandoned ROC and generational collection: all of them want to **exploit a structural
-regularity** of objects to speed up collection. The difference is which regularity is exploited, and where the cost falls. ROC exploits request boundaries, generational collection exploits object
-age, and both must rely on a long-running write barrier to maintain the assumption, at the cost of cache misses; Green Tea exploits **spatial locality**
-(objects on the same span are physically adjacent), and it changes only the **order** in which the marker traverses, needing no new barrier, so it sidesteps the very gate
-that tripped up the first two. The same "exploit structure" intuition, this time, found the right entry point that does not have to pay the barrier cost.
-
-Green Tea and the allocator are a pair of **symbiotic** evolutions. Batch scanning is worthwhile precisely because the allocator groups like objects together by span and by size
-class ([12.2](../ch12alloc/component.md)); its design also echoes the allocator's continuing evolution
-([12.9](../ch12alloc/history.md)). The source comments point to a further direction: once scanning is organized by size class, there is an opportunity to
-use SIMD instructions to tear through heap memory in batches, pushing mark throughput up another step. These are still on the way.
-
-Whatever form Green Tea ultimately takes when it graduates, it still serves the theme that has run from Go 1.5 to today: let collection disturb
-user code as little as possible. In the early years this theme showed up as "shorten the pause"; today it shows up as "let mark throughput scale with core count and heap size, while not
-handing the latency back." The ruler has not changed; it has only measured a new dimension.
+Its two inlined bitmaps, the span ownership handshake, the per-P stealable FIFO span queue, and the two scan paths (dense SIMD and sparse per-object) are laid out in full in
+[13.11 Green Tea: Locality-Aware Marking](./greentea.md) of this chapter, and are not repeated here. The point is this: whatever form it ultimately takes, it still serves the theme
+that has run from Go 1.5 to today, letting collection disturb user code as little as possible. In the early years this theme showed up as "shorten the pause"; today it shows up as
+"let mark throughput scale with core count and heap size, while not handing the latency back." The ruler has not changed; it has only measured a new dimension.
 
 ## Further Reading
 

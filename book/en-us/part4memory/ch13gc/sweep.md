@@ -240,8 +240,8 @@ hardly give up pointer stability as a constraint, so non-moving is almost a choi
 rather than a performance oversight. The two paths have no rank order; they merely place the complexity in
 different places.
 
-The matter of fragmentation is not yet closed. The **Green Tea GC** ([13.11](./history.md)), experimental
-since go1.25/1.26, explores exactly the direction of "organizing scanning and reclamation at span/page
+The matter of fragmentation is not yet closed. The **Green Tea GC** ([13.11](./greentea.md)), introduced in go1.25
+and on by default since go1.26, explores exactly the direction of "organizing scanning and reclamation at span/page
 granularity to improve memory locality": it is not about introducing object movement, but about rearranging
 the granularity of scanning and reclamation so that cache and TLB behavior become friendlier. The design of
 sweeping and reclamation is still evolving; this section describes the stable form of go1.26, not the end of
@@ -269,4 +269,4 @@ the road.
    https://google.github.io/tcmalloc/design.html (how size classes confine fragmentation to a controllable
    range).
 7. This book: [12.1 Design Principles](../ch12alloc/basic.md), [12.2 Components](../ch12alloc/component.md),
-   [13.1 Basic Ideas](./basic.md), [13.4 Marking](./mark.md), [13.11 Past, Present, and Future](./history.md).
+   [13.1 Basic Ideas](./basic.md), [13.4 Marking](./mark.md), [13.12 Past, Present, and Future](./history.md).

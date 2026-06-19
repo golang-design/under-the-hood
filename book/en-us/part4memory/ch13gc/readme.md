@@ -16,8 +16,9 @@ bookCollapseSection: true
 - [13.8 The Generational Hypothesis and Generational Collection](./generational.md)
 - [13.9 The Request Hypothesis and Transaction-Oriented Collection](./roc.md)
 - [13.10 Finalizers](./finalizer.md)
-- [13.11 Past, Present, and Future](./history.md)
-- [13.12 A Unified Theory of Garbage Collection](./unifiedgc.md)
+- [13.11 Green Tea: Locality-Aware Marking](./greentea.md)
+- [13.12 Past, Present, and Future](./history.md)
+- [13.13 A Unified Theory of Garbage Collection](./unifiedgc.md)
 
 <div class="quote">
 <i class="quote-mark fas fa-thumbtack"></i>

@@ -1,15 +1,15 @@
 ---
-weight: 4212
-title: "13.12 A Unified Theory of Garbage Collection"
+weight: 4213
+title: "13.13 A Unified Theory of Garbage Collection"
 ---
 
-# 13.12 A Unified Theory of Garbage Collection
+# 13.13 A Unified Theory of Garbage Collection
 
 Having read through this chapter, we have seen Go's concurrent mark-and-sweep, its hybrid write barrier, and its pacer, and we have set them against other schools of thought such as the generational hypothesis and request-oriented collection. The algorithms come in many flavors, and by this point the reader may have a question building up: beyond the fact that they all "do garbage collection," is there a common thread that places them inside a single framework?
 
 There is. In their 2004 paper *A Unified Theory of Garbage Collection*, Bacon, Cheng, and Rajan give a surprising answer: the two camps that people habitually treat as opposites, **tracing** and **reference counting**, are mathematically two ways of writing the same thing, they are **dual** to each other; and every collector found in practice is some blend between these two ends. Closing the chapter with this theory lets us rise from "having memorized a handful of algorithms" to "seeing the structure of the algorithm space," which is exactly what a closing theoretical section should do.
 
-## 13.12.1 Two Camps and the Gap in Each
+## 13.13.1 Two Camps and the Gap in Each
 
 Let us first set out the two ends clearly.
 
@@ -19,7 +19,7 @@ Let us first set out the two ends clearly.
 
 Each camp has a gap, and the locations of the two gaps are exactly complementary. This "exact complementarity" is no coincidence; it is the projection, onto the engineering surface, of the duality relation in the next section.
 
-## 13.12.2 Tracing and Counting Are Dual
+## 13.13.2 Tracing and Counting Are Dual
 
 The heart of the unified theory is to characterize both algorithms with the same fixed point equation, where the two are merely two directions of solving for the same solution.
 
@@ -66,7 +66,7 @@ And the cyclic-reference gap finds its explanation here too. The fixed point tha
 
 This section is the densest theoretical point in the chapter. If the reader carries away only one sentence, let it be this: **tracing and counting are not two opposing camps, but two directions of solving the same reference counting equation.**
 
-## 13.12.3 Every Collector Is a Hybrid
+## 13.13.3 Every Collector Is a Hybrid
 
 The duality is not merely theoretically elegant; it gives us a map. Among the collectors found in practice, almost none is a pure version of either end. They all fall somewhere between the two, drawing on the techniques of both sides as needed. The paper makes this point thoroughly, and the following examples are all ones we have met in this chapter:
 
@@ -102,7 +102,7 @@ The two ends of the spectrum are the pure algorithms, and everything in the midd
 
 These four dimensions pull against one another, and no single point can dominate them all at once. The way to read this table is not "which is better," but "for a given goal, which end of the spectrum to lean toward": to scatter pauses as much as possible while tolerating steady-state overhead, lean toward the counting end; to push the mutator overhead as low as possible while tolerating batch pauses (then thinning them with concurrency), lean toward the tracing end. Go's choice is exactly what the next section will revisit.
 
-## 13.12.4 Revisiting Go Through the Unified Lens
+## 13.13.4 Revisiting Go Through the Unified Lens
 
 Looking at Go again with this map in hand, the first eleven sections of this chapter come together as a whole, rather than remaining a string of isolated mechanisms.
 
