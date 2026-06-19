@@ -38,8 +38,8 @@ If you are worried about the book's barrier to entry, or find chapters such as s
 
 ## About This Edition
 
-The content of this book has undergone a systematic rewrite and revision against **Go 1.26** as its baseline, covering five major parts: panorama and history, language features, concurrency,
-memory, and the compiler and toolchain. Each section tries, as far as possible, to return to the thread of "problem, design, evolution, trade-offs, implementation" as it
+The content of this book has undergone a systematic rewrite and revision against **Go 1.26** as its baseline, covering six major parts: panorama and history, language features, concurrency,
+memory, the compiler and toolchain, and heterogeneous compute and AI (the last part also touches on a few frontier features of Go 1.27). Each section tries, as far as possible, to return to the thread of "problem, design, evolution, trade-offs, implementation" as it
 unfolds, and is checked against the Go source code and first-hand design documents.
 
 Even so, the source code keeps evolving, and the book will inevitably contain omissions or material that has gone stale with newer versions. If, while reading, you

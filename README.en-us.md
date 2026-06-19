@@ -47,8 +47,8 @@ help you read the book.
 ## About This Edition
 
 The content of this book has been systematically rewritten and revised against **Go 1.26**, covering
-five parts: the panorama and history, language features, concurrency, memory, and the compiler and
-toolchain. Every section tries to return to the thread of "problem, design, evolution, trade-off,
+six parts: the panorama and history, language features, concurrency, memory, the compiler and
+toolchain, and heterogeneous compute and AI. Every section tries to return to the thread of "problem, design, evolution, trade-off,
 implementation," cross-checked against the Go source and primary design documents.
 
 Even so, the source keeps evolving, and the book is bound to contain omissions or material that

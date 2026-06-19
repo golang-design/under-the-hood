@@ -5,7 +5,7 @@ title: "Closing Words: Where Is Go Headed?"
 
 # Closing Words: Where Is Go Headed?
 
-Having read this far, the reader has walked with the book through Go's five major parts: its panorama and history, its language features, concurrency, memory, and the compiler and toolchain. As a conclusion, let us step back from the specific implementation details and talk about the legacy Go leaves behind, the challenges it currently faces, and where it might be headed.
+Having read this far, the reader has walked with the book through Go's six major parts: its panorama and history, its language features, concurrency, memory, the compiler and toolchain, and heterogeneous compute and AI. As a conclusion, let us step back from the specific implementation details and talk about the legacy Go leaves behind, the challenges it currently faces, and where it might be headed.
 
 ## What Go Leaves Behind
 
