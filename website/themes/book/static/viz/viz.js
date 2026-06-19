@@ -128,133 +128,194 @@
   // Widget 1: GMP scheduler — goroutines, per-P run queues, Ms, work stealing.
   // ===========================================================================
   function gmpScheduler(host) {
-    var s = scaffold(host, { title: "GMP 调度器：本地运行队列、M 绑定与工作窃取", width: 760, height: 380 });
+    var s = scaffold(host, { title: "GMP 调度器：本地运行队列、全局队列与工作窃取", width: 760, height: 400 });
     var ctx = s.ctx, W = s.W, H = s.H;
     var NP = 3;
+    var QCAP = 6;      // visual capacity of a local run queue
+    var GRQ_MAX = 14;  // how many global-queue slots we render
     var nextId = 1;
-    function newG() { return { id: nextId++, t: Math.random() * 0.5 + 0.5, anim: 0, from: null }; }
-    var Ps = [];
-    for (var i = 0; i < NP; i++) Ps.push({ q: [], run: null, runLeft: 0, x: 0, steal: 0 });
-    var grq = []; // global run queue
-    // seed: pile the initial work onto P0 so the others have to steal it.
-    for (var k = 0; k < 6; k++) Ps[0].q.push(newG());
 
-    var spawnTimer = 1.2, hot = 0, hotTimer = 0, speed = 1;
-
+    // ---- layout anchors. Every goroutine keeps a live pixel position and is
+    // lerped toward the slot it logically occupies, so the queues actually
+    // *flow*: a G slides into a queue, climbs onto its M, travels to another
+    // column when stolen, or drifts into the global queue when a local one
+    // overflows. Teleporting was the whole reason the old widget read as static.
+    var GRQ_Y = 56, GRQ_X0 = 150, GRQ_SLOT = 26;
     function pGeo(i) {
       var pw = 200, gap = 24, total = NP * pw + (NP - 1) * gap;
       var x0 = (W - total) / 2;
-      return { x: x0 + i * (pw + gap), y: 96, w: pw, h: 210 };
+      return { x: x0 + i * (pw + gap), y: 120, w: pw, h: 210 };
+    }
+    function grqPos(i) { return { x: GRQ_X0 + i * GRQ_SLOT, y: GRQ_Y }; }
+    function localPos(p, k) { var g = pGeo(p); return { x: g.x + 24 + k * 28, y: g.y + 132 }; }
+    function runPos(p) { var g = pGeo(p); return { x: g.x + g.w - 40, y: g.y + 24 }; }
+    function headPos(p) { var g = pGeo(p); return { x: g.x + 30, y: g.y + 70 }; }
+
+    function newG(px, py) {
+      return { id: nextId++, t: Math.random() * 0.5 + 0.5, px: px, py: py, tx: px, ty: py, born: 0, from: null };
+    }
+
+    var Ps = [];
+    for (var i = 0; i < NP; i++) Ps.push({ q: [], run: null, runLeft: 0, steal: 0, tick: 0 });
+    var grq = [];   // global run queue
+    var gone = [];  // finished Gs, fading out on their M
+    // Seed: pile the initial work onto P0 so the others must steal it, and put a
+    // few on the global queue so the GRQ is alive from the very first frame.
+    for (var a = 0; a < 5; a++) { var lp0 = localPos(0, a); Ps[0].q.push(newG(lp0.x, lp0.y)); }
+    for (var b = 0; b < 4; b++) { var gp0 = grqPos(b); grq.push(newG(gp0.x, gp0.y)); }
+
+    var spawnTimer = 1.0, grqTimer = 2.5, hot = 0, hotTimer = 0, speed = 1;
+
+    // local queue full -> half of it spills onto the global queue (runqputslow).
+    // The Gs keep their pixel position, so they visibly drift up into the GRQ.
+    function spillToGlobal(p) {
+      var P = Ps[p], n = Math.floor(P.q.length / 2);
+      for (var i = 0; i < n && grq.length < GRQ_MAX; i++) { var g = P.q.shift(); g.from = null; grq.push(g); }
+    }
+    function startRun(p, g) { Ps[p].run = g; Ps[p].runLeft = g.t; g.from = null; }
+    function schedule(p) {
+      var P = Ps[p];
+      P.tick++;
+      // Every so often a P services the global queue first even with local work
+      // ready — Go does this every 61st schedule tick so the GRQ can't starve.
+      if (P.tick % 7 === 0 && grq.length) { startRun(p, grq.shift()); return; }
+      if (P.q.length) { startRun(p, P.q.shift()); return; }
+      if (grq.length) { startRun(p, grq.shift()); return; }
+      // Local AND global queues empty: steal half of the busiest other P's queue.
+      // runqsteal grabs from the victim's head; the stolen Gs keep their pixel
+      // position at the victim, so they animate across to this column.
+      var victim = -1, vl = 1;
+      for (var q = 0; q < NP; q++) if (q !== p && Ps[q].q.length > vl) { vl = Ps[q].q.length; victim = q; }
+      if (victim >= 0) {
+        var n = Math.floor(Ps[victim].q.length / 2);
+        for (var m = 0; m < n; m++) { var st = Ps[victim].q.shift(); st.from = victim; P.q.push(st); }
+        if (n > 0) P.steal = 0.8;
+      }
+    }
+
+    // assign every G the target pixel position of the slot it now occupies.
+    function layout() {
+      for (var i = 0; i < grq.length; i++) { var q = grqPos(Math.min(i, GRQ_MAX - 1)); grq[i].tx = q.x; grq[i].ty = q.y; }
+      for (var p = 0; p < NP; p++) {
+        var P = Ps[p];
+        for (var k = 0; k < P.q.length; k++) { var lp = localPos(p, Math.min(k, QCAP - 1)); P.q[k].tx = lp.x; P.q[k].ty = lp.y; }
+        if (P.run) { var rp = runPos(p); P.run.tx = rp.x; P.run.ty = rp.y; }
+      }
+    }
+    function moveAll(dt) {
+      var f = Math.min(1, dt * 12);
+      function mv(g) {
+        g.px += (g.tx - g.px) * f; g.py += (g.ty - g.py) * f;
+        if (g.born < 1) g.born = Math.min(1, g.born + dt * 3);
+        if (g.from != null && Math.abs(g.tx - g.px) < 1.5 && Math.abs(g.ty - g.py) < 1.5) g.from = null;
+      }
+      grq.forEach(mv);
+      for (var p = 0; p < NP; p++) { Ps[p].q.forEach(mv); if (Ps[p].run) mv(Ps[p].run); }
+      for (var j = 0; j < gone.length; j++) gone[j].life -= dt * 2.2;
+      gone = gone.filter(function (l) { return l.life > 0; });
     }
 
     function step(dt) {
       dt *= speed;
-      // New goroutines pile onto one "hot" P — just as `go func()` enqueues onto
-      // the local run queue of the P that spawned it. That deliberate imbalance
-      // is exactly what makes work stealing observable: the idle Ps drain to
-      // empty and then have to pull work off the hot P. The hot P rotates now
-      // and then so the load doesn't always sit on the same column.
+      // The "hot" P rotates so the imbalance — and thus the stealing — doesn't
+      // always sit on the same column.
       hotTimer -= dt;
       if (hotTimer <= 0) { hotTimer = 4 + Math.random() * 3; hot = (hot + 1) % NP; }
+      // `go func()` enqueues onto the spawning P's local run queue; a full queue
+      // spills half to the global queue first.
       spawnTimer -= dt;
       if (spawnTimer <= 0) {
-        spawnTimer = 0.5 + Math.random() * 0.5;
-        var g = newG();
-        if (Ps[hot].q.length < 6) Ps[hot].q.push(g);
-        else grq.push(g); // local queue overflowed -> spills to the global queue
+        spawnTimer = 0.45 + Math.random() * 0.4;
+        if (Ps[hot].q.length >= QCAP) spillToGlobal(hot);
+        var h = headPos(hot); Ps[hot].q.push(newG(h.x, h.y));
       }
-      // each P runs its current G, then pulls the next
+      // The runtime also drops freshly-ready goroutines straight onto the global
+      // queue; trickle some in so the GRQ stays a live backstop, not a dead box.
+      grqTimer -= dt;
+      if (grqTimer <= 0) {
+        grqTimer = 2.2 + Math.random() * 1.6;
+        var inj = 1 + Math.floor(Math.random() * 2);
+        for (var z = 0; z < inj && grq.length < GRQ_MAX; z++) grq.push(newG(40, GRQ_Y));
+      }
       for (var p = 0; p < NP; p++) {
         var P = Ps[p];
         if (P.steal > 0) P.steal -= dt;
         if (P.run) {
-          P.run.anim = Math.min(1, P.run.anim + dt * 3);
           P.runLeft -= dt;
-          if (P.runLeft <= 0) P.run = null; // goroutine finished
+          if (P.runLeft <= 0) { gone.push({ px: P.run.px, py: P.run.py, life: 1 }); P.run = null; } // G finished
         } else {
-          if (P.q.length) { P.run = P.q.shift(); P.runLeft = P.run.t; P.run.anim = 0; P.run.from = null; }
-          else if (grq.length) { P.run = grq.shift(); P.runLeft = P.run.t; P.run.anim = 0; P.run.from = null; }
-          else {
-            // Local queue AND global queue are empty: steal half of the
-            // goroutines from the busiest other P. Go's runqsteal grabs from
-            // the victim's head (its oldest goroutines), so we shift() the
-            // front half over and flag them so the move flashes briefly.
-            var victim = -1, vl = 1;
-            for (var q = 0; q < NP; q++) if (q !== p && Ps[q].q.length > vl) { vl = Ps[q].q.length; victim = q; }
-            if (victim >= 0) {
-              var n = Math.floor(Ps[victim].q.length / 2);
-              for (var m = 0; m < n; m++) { var st = Ps[victim].q.shift(); st.from = victim; st.anim = 0; P.q.push(st); }
-              if (n > 0) P.steal = 0.7;
-            }
-          }
+          schedule(p);
         }
       }
+      layout();
+      moveAll(dt);
     }
 
-    function dot(x, y, r, fill, label) {
-      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill();
-      if (label) { ctx.fillStyle = "#fff"; ctx.font = "600 10px ui-sans-serif,system-ui,sans-serif";
-        ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(label, x, y + 0.5); }
+    function gdot(g, fill, r) {
+      r = r || 11;
+      ctx.globalAlpha = g.born < 1 ? g.born : 1;
+      ctx.beginPath(); ctx.arc(g.px, g.py, r, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill();
+      ctx.fillStyle = "#fff"; ctx.font = "600 10px ui-sans-serif,system-ui,sans-serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("G", g.px, g.py + 0.5);
+      ctx.globalAlpha = 1;
     }
 
     function draw() {
       var c = col();
       ctx.clearRect(0, 0, W, H);
       ctx.fillStyle = c.bg; rr(ctx, 0, 0, W, H, 10); ctx.fill();
-      ctx.font = "600 12px ui-sans-serif,system-ui,sans-serif"; ctx.textBaseline = "middle";
-      // global run queue
-      ctx.textAlign = "left"; ctx.fillStyle = c.muted;
-      ctx.fillText("全局运行队列 GRQ", 24, 36);
-      for (var i = 0; i < grq.length && i < 12; i++) dot(150 + i * 22, 36, 9, c.g, "G");
+      ctx.textBaseline = "middle";
+      // global run queue: label, slot rings, then the live Gs on top.
+      ctx.textAlign = "left"; ctx.fillStyle = c.muted; ctx.font = "600 12px ui-sans-serif,system-ui,sans-serif";
+      ctx.fillText("全局运行队列 GRQ", 24, GRQ_Y);
+      for (var i = 0; i < GRQ_MAX; i++) { var q = grqPos(i);
+        ctx.strokeStyle = c.stroke; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(q.x, q.y, 11, 0, Math.PI * 2); ctx.stroke(); }
+      grq.forEach(function (g) { gdot(g, g.from != null ? c.warn : c.g, 10); });
       // P/M columns
       for (var p = 0; p < NP; p++) {
-        var g = pGeo(p);
+        var g = pGeo(p), P = Ps[p];
         ctx.fillStyle = c.panel; ctx.strokeStyle = c.stroke; ctx.lineWidth = 1.4;
         rr(ctx, g.x, g.y, g.w, g.h, 10); ctx.fill(); ctx.stroke();
         ctx.fillStyle = c.text; ctx.textAlign = "left"; ctx.font = "700 13px ui-sans-serif,system-ui,sans-serif";
         ctx.fillText("P" + p, g.x + 14, g.y + 20);
-        // M (thread) running the current G
-        var mx = g.x + g.w - 40, my = g.y + 24;
-        ctx.strokeStyle = Ps[p].steal > 0 ? c.warn : c.stroke;
-        ctx.fillStyle = c.bg; ctx.beginPath(); ctx.arc(mx, my, 16, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        // M (thread) bound to this P
+        var m = runPos(p);
+        ctx.strokeStyle = P.steal > 0 ? c.warn : c.stroke; ctx.lineWidth = 1.4;
+        ctx.fillStyle = c.bg; ctx.beginPath(); ctx.arc(m.x, m.y, 16, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
         ctx.fillStyle = c.muted; ctx.font = "600 11px ui-sans-serif,system-ui,sans-serif"; ctx.textAlign = "center";
-        ctx.fillText("M", mx, my);
-        var P = Ps[p];
-        if (P.run) {
-          var ry = lerp(g.y + 70, my, P.run.anim);
-          var rx = lerp(g.x + 30, mx, P.run.anim);
-          dot(rx, ry, 11, c.run, "G");
-          ctx.fillStyle = c.muted; ctx.font = "11px ui-sans-serif,system-ui,sans-serif"; ctx.textAlign = "center";
-          if (P.run.anim > 0.8) ctx.fillText("运行中", mx, my + 30);
-        }
-        // local run queue (slots)
+        ctx.fillText("M", m.x, m.y);
+        // local run queue: label + empty slot rings
         ctx.textAlign = "left"; ctx.fillStyle = c.muted; ctx.font = "11px ui-sans-serif,system-ui,sans-serif";
         ctx.fillText("本地队列", g.x + 14, g.y + 104);
-        for (var k = 0; k < 6; k++) {
-          var sx = g.x + 24 + k * 28, sy = g.y + 132;
-          ctx.strokeStyle = c.stroke; ctx.fillStyle = "transparent";
-          ctx.beginPath(); ctx.arc(sx, sy, 11, 0, Math.PI * 2); ctx.stroke();
-          if (P.q[k]) {
-            var justStolen = P.q[k].from != null && (P.q[k].anim || 0) < 1;
-            dot(sx, sy, 10, justStolen ? c.warn : c.g, "G");
-            P.q[k].anim = Math.min(1, (P.q[k].anim || 0) + 0.012);
-          }
+        for (var k = 0; k < QCAP; k++) { var lp = localPos(p, k);
+          ctx.strokeStyle = c.stroke; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(lp.x, lp.y, 11, 0, Math.PI * 2); ctx.stroke(); }
+        // queued Gs at their live positions (stolen ones flash orange in transit)
+        P.q.forEach(function (gg) { gdot(gg, gg.from != null ? c.warn : c.g, 10); });
+        // the running G, climbing onto / sitting on the M
+        if (P.run) {
+          gdot(P.run, c.run);
+          if (P.run.born > 0.6) { ctx.fillStyle = c.muted; ctx.font = "11px ui-sans-serif,system-ui,sans-serif";
+            ctx.textAlign = "center"; ctx.fillText("运行中", m.x, m.y + 30); }
         }
         if (P.steal > 0) {
           ctx.fillStyle = c.warn; ctx.font = "600 11px ui-sans-serif,system-ui,sans-serif"; ctx.textAlign = "center";
           ctx.fillText("窃取!", g.x + g.w / 2, g.y + g.h - 14);
         }
       }
+      // finished Gs fading out where they last ran
+      gone.forEach(function (l) { ctx.globalAlpha = Math.max(0, l.life);
+        ctx.beginPath(); ctx.arc(l.px, l.py, 11 * l.life, 0, Math.PI * 2); ctx.fillStyle = c.run; ctx.fill(); ctx.globalAlpha = 1; });
       ctx.fillStyle = c.muted; ctx.font = "11px ui-sans-serif,system-ui,sans-serif"; ctx.textAlign = "center";
-      ctx.fillText("绿点 = 正在 M 上运行的 G，蓝点 = 待运行，橙色 = 刚被窃取", W / 2, H - 14);
+      ctx.fillText("绿点 = 正在 M 上运行的 G，蓝点 = 待运行，橙色 = 跨队列移动 / 刚被窃取", W / 2, H - 14);
     }
 
     var d = driver(s, step, draw);
     var pb = button(s.bar, "暂停", function () { pb.textContent = d.toggle() ? "暂停" : "继续"; });
     button(s.bar, "单步", function () { d.set(false); pb.textContent = "继续"; step(0.25); });
     button(s.bar, "go func()", function () {
-      // enqueue onto the hot P's local run queue (overflow spills to the GRQ)
-      if (Ps[hot].q.length < 6) Ps[hot].q.push(newG()); else grq.push(newG());
+      // enqueue onto the hot P's local run queue (a full queue spills to the GRQ)
+      if (Ps[hot].q.length >= QCAP) spillToGlobal(hot);
+      var h = headPos(hot); Ps[hot].q.push(newG(h.x, h.y));
     });
     slider(s.bar, "速度", 1, 30, 10, function (v) { speed = v / 10; });
   }
