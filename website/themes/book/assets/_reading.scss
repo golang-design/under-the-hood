@@ -290,16 +290,25 @@ body { padding-top: $topbar-h; }
 
 // Narrow screens: the top bar has no room for everything, so keep only what
 // reaches the two panels and reads the title — fold-sidebar, the wordmark, the
-// theme switch, and fold-TOC. Drop the breadcrumb, the "under the hood" tag,
-// the font controls, and the language switcher.
+// theme switch, the language switcher, and fold-TOC. Drop the breadcrumb, the
+// "under the hood" tag, and the font controls.
 @media screen and (max-width: 640px) {
   .reading-topbar { gap: 10px; padding: 0 14px; }
   .reading-crumb,
   .reading-divider,
   .reading-wordmark .wm-sub,
-  .reading-fontctl,
-  .reading-topbar .book-langswitch {
+  .reading-fontctl {
     display: none;
+  }
+
+  // The language switcher stays, but collapses to its globe icon so it fits
+  // beside the theme switch and TOC control. The current-language label and the
+  // toggle's horizontal padding are dropped; the dropdown still opens on tap
+  // (the toggle takes focus, revealing the list via :focus-within).
+  .reading-topbar .book-langswitch {
+    flex: 0 0 auto;
+    .book-langswitch-toggle { padding: 0 8px; gap: 0; }
+    .book-langswitch-current { display: none; }
   }
 
   // Reading column: reclaim width — small fixed gutters instead of the 8vw
