@@ -221,19 +221,40 @@
       h1.querySelector(".h1-text").textContent = m[2];
     }
     var text = article.innerText || "";
-    var chars = text.replace(/\s+/g, "").length;
-    if (!chars) return;
-    var mins = Math.max(1, Math.round(chars / 430));
+    var isEn = (html.lang || "").toLowerCase().indexOf("en") === 0;
+    // CJK reading is paced by characters (~430/min); Latin scripts by words
+    // (~220 wpm). Count and label each accordingly so the meta reads naturally
+    // in the page's language.
+    var count, mins, timeLabel, countLabel, basis;
+    if (isEn) {
+      var words = text.trim() ? text.trim().split(/\s+/).length : 0;
+      if (!words) return;
+      count = words;
+      mins = Math.max(1, Math.round(words / 220));
+      timeLabel = "about " + mins + (mins === 1 ? " min" : " mins") + " read";
+      countLabel = count.toLocaleString() + (count === 1 ? " word" : " words");
+      basis = "based on go1.26";
+    } else {
+      var chars = text.replace(/\s+/g, "").length;
+      if (!chars) return;
+      count = chars;
+      mins = Math.max(1, Math.round(chars / 430));
+      timeLabel = "约 " + mins + " 分钟";
+      countLabel = count.toLocaleString() + " 字";
+      basis = "基于 go1.26";
+    }
     var el = document.createElement("div");
     el.className = "reading-meta";
     el.innerHTML =
-      '<span class="rm-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>约 ' +
-      mins +
-      " 分钟</span>" +
+      '<span class="rm-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>' +
+      timeLabel +
+      "</span>" +
       '<span class="rm-item">' +
-      chars.toLocaleString() +
-      " 字</span>" +
-      '<span class="rm-item">基于 go1.26</span>';
+      countLabel +
+      "</span>" +
+      '<span class="rm-item">' +
+      basis +
+      "</span>";
     h1.parentNode.insertBefore(el, h1.nextSibling);
   }
 
