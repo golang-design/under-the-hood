@@ -152,7 +152,7 @@
     function headPos(p) { var g = pGeo(p); return { x: g.x + 30, y: g.y + 70 }; }
 
     function newG(px, py) {
-      return { id: nextId++, t: Math.random() * 0.5 + 0.5, px: px, py: py, tx: px, ty: py, born: 0, from: null };
+      return { id: nextId++, t: 0.9 + Math.random() * 1.0, px: px, py: py, tx: px, ty: py, born: 0, from: null };
     }
 
     var Ps = [];
@@ -221,20 +221,26 @@
       // always sit on the same column.
       hotTimer -= dt;
       if (hotTimer <= 0) { hotTimer = 4 + Math.random() * 3; hot = (hot + 1) % NP; }
-      // `go func()` enqueues onto the spawning P's local run queue; a full queue
-      // spills half to the global queue first.
+      // A `go`-heavy section enqueues a whole *burst* of goroutines onto the
+      // running P's local run queue at once — that backlog is what makes the
+      // queue visibly fill, and what the idle Ps then steal half of. A full
+      // local queue spills its front half to the global queue first.
       spawnTimer -= dt;
       if (spawnTimer <= 0) {
-        spawnTimer = 0.45 + Math.random() * 0.4;
-        if (Ps[hot].q.length >= QCAP) spillToGlobal(hot);
-        var h = headPos(hot); Ps[hot].q.push(newG(h.x, h.y));
+        spawnTimer = 1.8 + Math.random() * 1.0;
+        var burst = 3 + Math.floor(Math.random() * 3); // 3..5 goroutines
+        for (var bi = 0; bi < burst; bi++) {
+          if (Ps[hot].q.length >= QCAP) { spillToGlobal(hot); if (Ps[hot].q.length >= QCAP) break; }
+          var h = headPos(hot); Ps[hot].q.push(newG(h.x, h.y));
+        }
       }
       // The runtime also drops freshly-ready goroutines straight onto the global
-      // queue; trickle some in so the GRQ stays a live backstop, not a dead box.
+      // queue (e.g. a batch readied by the netpoller); trickle a couple in so the
+      // GRQ stays a live backstop that idle Ps fall back on, not a dead box.
       grqTimer -= dt;
       if (grqTimer <= 0) {
-        grqTimer = 2.2 + Math.random() * 1.6;
-        var inj = 1 + Math.floor(Math.random() * 2);
+        grqTimer = 1.6 + Math.random() * 1.2;
+        var inj = 1 + Math.floor(Math.random() * 2); // 1..2
         for (var z = 0; z < inj && grq.length < GRQ_MAX; z++) grq.push(newG(40, GRQ_Y));
       }
       for (var p = 0; p < NP; p++) {
