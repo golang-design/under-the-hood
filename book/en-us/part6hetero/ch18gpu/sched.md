@@ -25,8 +25,15 @@ First recall the picture from Chapter 9: the scheduler orchestrates concurrency 
 
 Section 15.6 already explained that `cgocall` calls `entersyscall` before crossing. The
 meaning of that step becomes crucial now: **in the scheduler's accounting, a cgo call and a
-system call are one and the same thing**. The M is marked "in a system call," and the P it
-holds enters the `_Psyscall` state. From this moment until the C call returns, there is an
+system call are one and the same thing**. The M is marked "in a system call," and the
+goroutine it carries enters the `_Gsyscall` state. One implementation detail worth noting
+here shifts with the version: earlier runtimes also gave the P a dedicated `_Psyscall` state
+to mean "this P is in a system call," but **as of Go 1.26 that P state is retired** (left in
+the source as `_Psyscall_unused`), and a P is now identified as in a system call by looking
+at its goroutine's state instead. This simplification is not incidental: it also trimmed the
+fixed cost of each cgo crossing by roughly thirty percent, one instance of that "first cost"
+of [18.1.2](./boundary.md) being thinned by the runtime itself. From this moment until the C
+call returns, there is an
 iron law:
 
 > The scheduler can neither see nor preempt a goroutine executing inside C code. The M
@@ -48,7 +55,7 @@ machinery applies as-is to a blocking cgo call.
 
 ```go
 // runtime/proc.go: the relevant branch of retake (a trimmed sketch)
-// for each P in _Psyscall:
+// for each P stuck in a system call (its goroutine in _Gsyscall):
 if syscallBlockedTooLong(pp) {        // longer than ~one sysmon tick (tens of microseconds)
     thread.takeP()                    // wrest the P from the blocked M
     handoffp(pp)                      // hand it to another M to keep running this P's other Gs
@@ -67,7 +74,7 @@ sequenceDiagram
     participant P as P (logical processor)
     participant SM as sysmon
     participant M2 as M2 (idle / newly created)
-    M1->>P: entersyscall: P enters _Psyscall
+    M1->>P: entersyscall: goroutine enters _Gsyscall
     Note over M1: stuck in cudaStreamSynchronize<br/>the whole thread is occupied
     SM->>P: inspection finds P lingering too long in syscall
     SM->>M2: handoffp: give the P to M2

@@ -160,37 +160,75 @@ All three dosages share one principle: **the number of boundary crossings is the
 the Go side can actually move**. How fast the kernel computes is the GPU's business; what
 the Go side can do is make every expensive crossing carry as much cargo as possible.
 
-## 18.1.4 Routing Around cgo: Trimming the First Cost Too
+## 18.1.4 Routing Around cgo: a Spectrum
 
 We said the first cost (the cgo crossing) "can in principle be routed around." That is not
-idle talk; the Go ecosystem does have two paths.
+idle talk. Set the various efforts to "route around cgo" side by side and you find they are
+in fact a **spectrum**: from "still crossing at function granularity, just crossing
+differently" all the way to "not crossing at all," each rung trimming a different cost at a
+different price. Before walking it, separate cgo's two costs: a **build-time** one (needs a C
+toolchain, kills static linking and cross-compilation, see
+[15.6.4](../../part5toolchain/ch15compile/cgo.md)), and a **runtime** one, the roughly
+tens-of-nanoseconds fixed cost of each crossing (the first cost of 18.1.2). The rungs below
+each target one or both.
 
-One is **`purego`** (maintained by the Ebitengine project). At runtime it loads a shared
-library with `dlopen`/`dlsym`, then uses a hand-written assembly trampoline to call the
-function address directly by the platform ABI, thereby **bypassing cgo's code generation
-entirely**. Its motive is first of all an engineering one: not depending on a C compiler,
-and so keeping the things 15.6 said cgo would forfeit, static builds, cross-compilation,
-fast builds. It is worth noting that `purego` still has to reuse the runtime's `cgocall` to
-do the stack switch and `entersyscall`; the comment at the top of `runtime/cgocall.go`
-names it specifically. That is, what it routes around is cgo's **build-time** cost, not the
-state transition of that one runtime-side crossing; the core of the first cost is still paid.
+**First, `purego`: trims only the build-time cost.** Maintained by the Ebitengine project.
+At runtime it loads a shared library with `dlopen`/`dlsym`, then uses a hand-written
+assembly trampoline to call the function address directly by the platform ABI, thereby
+**bypassing cgo's code generation entirely**. Its motive is first of all an engineering one:
+not depending on a C compiler, and so keeping the things 15.6 said cgo would forfeit, static
+builds, cross-compilation, fast builds. But see clearly that `purego` still has to reuse the
+runtime's `cgocall` to do the stack switch and `entersyscall`; the comment at the top of
+`runtime/cgocall.go` names it specifically. That is, what it routes around is cgo's
+**build-time** cost, not the state transition of that one runtime-side crossing; the core of
+the first cost is still paid.
 
-The other is more thorough but holds only in a specific case: when the "C library" is in
-fact a **remote service**, there is no need to link it into the same process at all. Put
-the GPU inference in a separate service process (often written in C++/Python, snug against
-CUDA), and have the Go side talk to it over gRPC or shared memory. Then the Go process has
-not a line of cgo in it, and the boundary turns from "in-process FFI" into "inter-process
-IPC." The price is an extra serialization and a cross-process copy; the gain is a perfectly
-clean Go side. This is exactly the deployment shape Chapter 20 will return to again and
-again: Go stands at the serving and orchestration layer, with the dirty work pressed
-tight against the device walled off in another process.
+**Second, WebAssembly and `wazero`: genuinely without cgo.** A more thorough path is to
+**compile the C library to WebAssembly** and run it in a **Wasm runtime written in pure
+Go**. `wazero` is exactly such a runtime: zero-dependency, not a line of cgo. Compile SQLite,
+some codec, even a CPU-side inference engine to `.wasm`, and the Go process runs it in a
+sandbox through wazero, never touching a C compiler, losing nothing of static builds and
+cross-compilation (`ncruces/go-sqlite3` runs SQLite inside pure Go exactly this way). What it
+routes around is not only the build-time cost; it drops cgo's runtime-side state transition
+too, in exchange for Wasm's own execution overhead (interpreted or JIT-compiled, usually
+slower than native) and the call boundary between host and sandbox. But for this chapter's
+GPU theme there is one hard limit to recognize: **a Wasm sandbox cannot reach the GPU
+driver**. It can move CPU-side C libraries (codecs, crypto, CPU inference) cleanly into pure
+Go, but it cannot issue commands to the graphics card for you; to drive a GPU you are still
+back on cgo, purego, or out-of-process.
 
-Either path says the same thing: the FFI boundary is not an iron law of all-or-nothing but
-a movable design choice. You may put it at the granularity of a **function call**
-(cgo/purego, the most intimate and fastest, but it pollutes the toolchain), or at the
-granularity of a **process** (IPC, the cleanest, but with a serialization cost). Where you
-put it depends on how frequent the calls are, how large the data is, and how much you care
-about that pure-Go toolchain.
+**Third, pure-Go reimplementation: no boundary at all.** The most thorough rung is to drop
+the C library entirely and reimplement it in pure Go. Then the FFI boundary simply does not
+exist, and the build-time and runtime costs go to zero together.
+[19.3](../ch19graphics/software.md)'s software rendering is a living example of this rung: it
+calls no graphics driver and computes every pixel in Go, in place. The Go ecosystem also has
+pure-Go tokenizers, and even pure-Go inference implementations for small models. The price is
+just as honest: you take on the engineering of the rewrite, and you lose the years of
+SIMD-and-hardware-hugging optimization behind the C library, so a pure-Go implementation
+often computes slower. It suits the cases where "the C library's value is not peak
+performance but functionality."
+
+**Fourth, out-of-process: move the boundary out of the process.** When the "C library" is in
+fact a **remote service**, there is no need to link it into the same process at all. Put the
+GPU inference in a separate service process (often written in C++/Python, snug against CUDA),
+and have the Go side talk to it over gRPC or shared memory. Then the Go process has not a
+line of cgo in it, and the boundary turns from "in-process FFI" into "inter-process IPC." The
+price is an extra serialization and a cross-process copy; the gain is a perfectly clean Go
+side. This is exactly the deployment shape Chapter 20 will return to again and again: Go
+stands at the serving and orchestration layer, with the dirty work pressed tight against the
+device walled off in another process.
+
+Connect the four rungs and the conclusion is clear: the FFI boundary is not an iron law of
+all-or-nothing but a spectrum you can slide along. From **cgo/purego** (function
+granularity, the most intimate and fastest, but with a crossing tax or a toolchain cost), to
+**Wasm/wazero** (run in a sandbox, routing around cgo but in exchange for Wasm overhead, and
+unable to reach the GPU), to **pure-Go reimplementation** (no boundary, zero crossing cost,
+but a rewrite and often slower), to **out-of-process IPC** (process granularity, the
+cleanest, but with a serialization cost). Which rung to pick depends on how frequent the
+calls are, how large the data is, whether you must touch the GPU at all, and how much you
+care about that pure-Go toolchain. And even if you do choose cgo in the end, there is no need
+for gloom: [18.2](./sched.md) will show that Go 1.26 itself has thinned that runtime-side
+crossing cost by roughly thirty percent.
 
 ## Summary
 
@@ -200,8 +238,9 @@ fine-grained commands, and every command is a boundary crossing. The remedy lies
 making a single crossing faster (its cost is structural), but in **reducing the number of
 crossings**: use asynchrony to overlap crossings with GPU computation, use batching and
 operator fusion to reduce commands at the source, use graph capture to compress a whole
-command sequence into one crossing. Failing all that, you can still move the whole boundary
-out of the process.
+command sequence into one crossing. Failing all that, you can still route around cgo itself
+along a spectrum: switch to purego, compile to Wasm and run it on wazero, reimplement in
+pure Go, or move the whole boundary out of the process.
 
 This section spoke only of "cross fast, cross seldom." But the bridge carries two more
 things not yet detailed: one, what happens to the P given up and the M pinned when some
@@ -230,7 +269,11 @@ should treat them, which is the business of [18.3](./memory.md).
    the file)
 5. Ebitengine. *purego.* https://github.com/ebitengine/purego
    (runtime FFI without cgo: `dlopen`/`dlsym` plus an assembly trampoline)
-6. This book: [15.6 cgo](../../part5toolchain/ch15compile/cgo.md),
+6. Tetrate. *wazero: the zero dependency WebAssembly runtime for Go.*
+   https://wazero.io/ , and *ncruces/go-sqlite3* (SQLite compiled to Wasm, run in pure Go)
+   https://github.com/ncruces/go-sqlite3
+   (a pure-Go, cgo-free Wasm runtime, the representative way to run C libraries without cgo)
+7. This book: [15.6 cgo](../../part5toolchain/ch15compile/cgo.md),
    [2.2 Calling Convention](../../part1overview/ch02asm/callconv.md),
    [18.2 The Scheduler and Blocking Foreign Calls](./sched.md),
    [18.3 The Divide Between Device Memory and the Garbage Collector](./memory.md).
