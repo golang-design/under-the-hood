@@ -205,8 +205,8 @@ Go 优化器最该记住的，其实是它**不做**的事。GCC、LLVM 能做�
    https://go.dev/blog/pgo
 3. The Go Authors. *cmd/compile/internal/inline（内联预算与 PGO 热点内联）.*
    https://github.com/golang/go/tree/master/src/cmd/compile/internal/inline
-4. David Chase. *Mid-stack inlining in the Go compiler.* Design document, 2017.
-   https://golang.org/s/go19inliningtext
+4. David Lazar, Austin Clements. *Mid-stack inlining in the Go compiler.* Design document, 2017.
+   https://go.dev/design/19348-midstack-inlining
 5. The Go Authors. *cmd/compile/internal/devirtualize（静态与 PGO 去虚化）.*
    https://github.com/golang/go/tree/master/src/cmd/compile/internal/devirtualize
 6. The Go Authors. *Go 1.21 Release Notes（PGO 转正、`default.pgo` 自动启用）.*
