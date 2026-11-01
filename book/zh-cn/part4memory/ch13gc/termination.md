@@ -5,214 +5,391 @@ title: "13.6 标记终止阶段"
 
 # 13.6 标记终止阶段
 
-并发标记（[13.4](./mark.md)）有一个不平凡的收尾问题：如何**判定标记已经完成**。在单线程的
-停顿式回收里，这个问题是平凡的，标记线程把灰色队列扫空，标记就结束了。可在并发世界里，
-「我的本地队列空了」从来不等于「全局没有灰色对象了」。当一个工作协程刚把自己的队列扫空，
-另一个 P 上的 mutator 可能正巧执行了一次指针写入，写屏障（[13.2](./barrier.md)）随之染灰了
-一个新对象，把它塞进了那个 P 的本地缓存。判定终止，本质上是要在一个没有全局锁、工作分散
-在各 P 本地缓存里的系统中，确认一个**全局性质**：灰色集合为空，且未来不会再产生灰色对象。
+并发标记（[13.4](./mark.md)）总要结束：灰色对象耗尽之后，回收关闭写屏障，转入清扫（[13.5](./sweep.md)）。
+这一转换包含两个问题。其一，如何断定标记确已完成：待扫描的工作分散在各个 P 的本地缓存中，赋值器还在运行，
+写屏障还可能产生新的灰色对象。其二，转换本身要在一次停止一切中完成，这次停顿做了什么，又为何能做得很短。
+本节依次讨论终止的判定、停顿中的收尾、停顿时间的演变，以及一轮回收中两次停顿各自的作用。
 
-本节回答三件事：终止检测算法如何在无全局协调的前提下断定标记完成（`gcMarkDone`）；为此
-仍需的那一次短暂 STW（`_GCmarktermination`）做了什么、为何能做到很短；以及为什么一个周期
-里始终保留着首尾两次短 STW，运行时为何选择把每次 STW 的**工作量**压到与堆栈规模无关，
-而不去追逐字面意义上的零停顿。
+## 13.6.1 判断标记完成的难点
 
-## 13.6.1 并发下「标记完成」为何难判定
+标记工作分布在几处：全局的满缓冲区列表 `work.full`、尚未领取的根标记任务、每个 P 的 `gcWork`
+本地缓存（[13.4](./mark.md)），以及每个 P 的写屏障缓冲（[13.2](./barrier.md)）。全局的部分对所有 P 可见，
+本地的部分只有所属的 P 自己看得到。
 
-把标记工作想象成一池灰色对象，分散存放在每个 P 的本地 `gcWork` 缓存与若干全局工作缓冲里。
-工作协程不断从池中取出灰色对象、扫描、把新发现的指针染灰投回池中，直到池空。难点在于
-「池空」这个判断本身是分布式的：没有哪个线程能在不停下整个世界的前提下，瞬间窥见所有 P
-的本地缓存都为空。
-
-更棘手的是写屏障的存在。只要 mutator 还在运行、写屏障还开着，一次 `*p = q` 的指针写入就
-可能凭空产生一个新的灰色对象。于是终止条件不是静态的「此刻池空」，而是动态的「池空，
-且没有任何在途的、尚未被观测到的工作能再次填满它」。运行时用两个计数刻画前半句：
+运行时用一对计数器记录有多少 goroutine 正在做标记工作。`work.nproc` 被设为一个极大的数，`work.nwait`
+初值与之相等；后台标记工作者或标记辅助开始工作时把 `nwait` 减一，结束时加一，二者相等即表示没有人在工作。
+结束工作时的检查如下 [[Go Authors, 2026a](#ref-go-authors-2026a)]：
 
 ```go
-// 标记是否已完成的快速判据（速写，runtime/mgc.go）
-func gcIsMarkDone() bool {
-    // nproc 个标记工作者全部处于等待态，且全局已无可取的标记工作
-    return work.nwait == work.nproc && !gcMarkWorkAvailable()
+func gcEndWork() (last bool) {
+	incnwait := atomic.Xadd(&work.nwait, +1)
+	if incnwait > work.nproc {
+		println("runtime: work.nwait=", incnwait, "work.nproc=", work.nproc)
+		throw("work.nwait > work.nproc")
+	}
+	return incnwait == work.nproc && !gcMarkWorkAvailable()
 }
 ```
 
-`gcIsMarkDone` 只是必要条件，不是充分条件。它看到的是「此刻」的快照，无法排除某个 P 的
-本地缓存里还压着尚未刷新到全局、因而对其他人不可见的工作。要把必要条件升级为充分条件，
-需要一道**全局屏障**，强制每个 P 把本地缓存抖落出来、让所有人看见，再复查。
+返回真的一方负责调用 `gcMarkDone`，尝试结束标记。Go 1.6 起，这类阶段转换不再交给一个专门的协调 goroutine，
+而由发现条件满足的 goroutine 直接执行，以免转换受调度延迟的拖累 [[Clements, 2015](#ref-clements-2015)]。
 
-## 13.6.2 分布式终止检测：`gcMarkDone` 与不规则屏障
+但「没有人在工作、全局没有工作」并不意味着标记已经完成。空闲的 P 可能还缓存着本地工作，只有让它们交出来，
+其他人才能看见。计数与全局队列也不是在同一时刻读取的：一个工作者刚把缓冲区交回全局列表、
+将计数加一并检查队列，另一个工作者可能恰在两次读取之间领走了这个缓冲区，并开始产生新的工作。Clements 与
+Hudson 在 2016 年的设计文档中记录了这种交错，它使回收可能在仍有标记工作时进入标记终止
+[[Clements and Hudson, 2016](#ref-clements-hudson-2016)]。
 
-历史上 Go 1.5 用 Mark1/Mark2 两个子阶段来逼近终止：Mark2 期间禁用所有 P 的本地标记缓存，
-强制「即时标黑」，以此减少过早进入标记终止的机会。代价是本地缓存（它们的存在本就是为了
-减少争用）被关掉，性能受损，而且因为只检测工作瓶颈，算法仍可能在周期早期误入 Mark2。
-Austin Clements 与 Rick Hudson 在 issue #11970 中用一个无竞争的分布式终止算法替换了 Mark2，
-这就是今天的 `gcMarkDone`。
+判定终止所依赖的前提是：标记工作不能凭空产生，一个 P 必须消耗一项标记任务才能产生新的任务，
+因此终止一旦成立便不会失效 [[Clements, 2018a](#ref-clements-2018a)]。写屏障缓冲是一个例外：
+它只记录指针写入，即使所指的对象早已是黑色，缓冲也会继续增长。13.6.2
+将说明运行时如何处理这个例外以及另一个后来发现的例外。
 
-它的核心是一道**不规则屏障**（ragged barrier）：`forEachP` 让每个 P 在各自的 GC 安全点上
-执行一段回调，而非把所有 P 同时停在一条线上。回调让每个 P 刷新写屏障缓冲、把本地工作
-缓存 `dispose` 到全局队列，并报告自己是否「刷出过新工作」。`forEachP` 在语义上充当一道
-全局内存屏障：当它返回时，每个 P 都已至少经过一次安全点，本地状态已对全局可见。
+## 13.6.2 分布式终止检测
+
+Go 1.5 把并发标记分为 mark 1 与 mark 2 两个子阶段：mark 1 耗尽全局工作时，冲刷并禁用所有 P 的本地缓存，
+进入 mark 2；mark 2 再次耗尽全局工作时，进入标记终止。禁用本地缓存使标记与写屏障都变慢，
+这一算法又只能检测到工作暂时的短缺，可能在一轮回收的早期就进入 mark 2，而且仍不能完全避免过早进入标记终止
+[[Clements, 2018a](#ref-clements-2018a)]。Go 1.12 以一个基于分布式终止检测思想的算法取代了 mark 2
+[[Clements, 2018b](#ref-clements-2018b)]，设计文档援引的是 Matocha 与 Camp 对这类算法的综述
+[[Matocha and Camp, 1998](#ref-matocha-camp-1998)]。
+
+每个 P 维护一个标志 `flushedWork`，只要把本地工作交到全局，就置位它。本地缓存再多工作也不置位，
+这个标志表示的是「可能与其他 P 共享过工作」。当某个 P 的本地与全局工作都已耗尽，它执行以下检测：
+
+1. 取得全局的检测锁，同一时刻只有一个 P 执行检测。
+2. 检查全局队列，不为空则放弃。
+3. 执行一道屏障，让每个 P 在到达安全点时冲刷写屏障缓冲（这可能把对象置灰、放入本地队列），
+   再冲刷本地工作（这可能置位 `flushedWork`），然后读取并清除自己的 `flushedWork`。
+4. 若有 P 的标志被置位，放弃并重新检测；否则进入标记终止。
+
+**不规则屏障**（ragged barrier）由 `forEachP` 实现，它不要求所有 P 同时停下，只要求每个 P
+各自在某个安全点执行一次给定的函数 [[Go Authors, 2026b](#ref-go-authors-2026b)]。
+专用工作者平时不响应抢占，但见到 `forEachP` 的请求也会退出标记循环（[13.4](./mark.md)），
+屏障因此能够到达每个 P：
 
 ```go
-// 分布式终止检测的骨架（速写，runtime/mgc.go）
-func gcMarkDone() {
-    semacquire(&work.markDoneSema) // 同一时刻只允许一个线程跑屏障
-top:
-    // 在事务锁下复查：必须确认全局队列已空，再做不规则屏障，
-    // 否则屏障之后仍可能有 P 取走全局工作
-    if !(gcphase == _GCmark && gcIsMarkDone()) {
-        semrelease(&work.markDoneSema)
-        return
-    }
-    semacquire(&worldsema)
-
-    // 不规则屏障：令每个 P 在安全点刷新本地缓存，并收集「是否刷出过新工作」
-    gcMarkDoneFlushed = 0
-    forEachP(waitReasonGCMarkTermination, func(pp *p) {
-        wbBufFlush1(pp)   // 刷写屏障缓冲，可能向 gcWork 添加工作
-        pp.gcw.dispose()  // 把本地工作缓存交回全局，可能置位 flushedWork
-        if pp.gcw.flushedWork {
-            atomic.Xadd(&gcMarkDoneFlushed, 1)
-            pp.gcw.flushedWork = false
-        }
-    })
-
-    if gcMarkDoneFlushed != 0 {
-        // 屏障期间又抖出了新的灰色对象，可能还有活儿。放回 worldsema，重来一轮
-        semrelease(&worldsema)
-        goto top
-    }
-    // 至此：无全局工作、无本地工作，且这一轮屏障没有任何 P 刷出新工作
-    // 因此灰色集合为空，且不会再有对象被染灰。可以进入标记终止
-    // ... 停止世界，调用 gcMarkTermination ...
-}
+// forEachP calls fn(p) for every P p when p reaches a GC safe point.
+// If a P is currently executing code, this will bring the P to a GC
+// safe point and execute fn on that P. If the P is not executing code
+// (it is idle or in a syscall), this will call fn(p) directly while
+// preventing the P from exiting its state. This does not ensure that
+// fn will run on every CPU executing Go code, but it acts as a global
+// memory barrier. GC uses this as a "ragged barrier."
 ```
 
-算法的正确性可以这样勾勒。**命题：若在持有 `markDoneSema` 的某一轮 `forEachP` 中所有 P
-都报告 `flushedWork == false`，则灰色集合为空且此后不会再被填充。** 论证分两步。其一，
-进入屏障前已在事务锁下确认全局队列为空（`gcIsMarkDone`），屏障又令每个 P 刷净本地缓存，
-故屏障结束时一切已知工作均已耗尽；若仍有工作被刷出，必有某 P 报告 `flushedWork`，与前提
-矛盾。其二，染灰只可能源于写屏障；本轮屏障已把每个 P 的写屏障缓冲刷净并使其可见，若此后
-再无新灰色，说明已抵达不动点。`goto top` 的重试正是为不动点而设：只要还有 P 抖出工作，
-就再扫一轮，直到某一轮彻底安静。这里没有用全局锁串行化所有工作者，故称「无竞争」。
+正在运行的 P 由抢占促使其到达安全点（[9.7](../../part3concurrency/ch09sched/preemption.md)）。
+`gcMarkDone` 中的对应代码如下 [[Go Authors, 2026a](#ref-go-authors-2026a)]：
+
+```go
+	// Flush all local buffers and collect flushedWork flags.
+	gcMarkDoneFlushed = 0
+	forEachP(waitReasonGCMarkTermination, func(pp *p) {
+		// Flush the write barrier buffer, since this may add
+		// work to the gcWork.
+		wbBufFlush1(pp)
+
+		// Flush the gcWork, since this may create global work
+		// and set the flushedWork flag.
+		//
+		// TODO(austin): Break up these workbufs to
+		// better distribute work.
+		pp.gcw.dispose()
+
+		// Collect the flushedWork flag.
+		if pp.gcw.flushedWork {
+			atomic.Xadd(&gcMarkDoneFlushed, 1)
+			pp.gcw.flushedWork = false
+		}
+	})
+
+	if gcMarkDoneFlushed != 0 {
+		// More grey objects were discovered since the
+		// previous termination check, so there may be more
+		// work to do. Keep going. It's possible the
+		// transition condition became true again during the
+		// ragged barrier, so re-check it.
+		semrelease(&worldsema)
+		goto top
+	}
+```
+
+全局队列必须在屏障之前检查：否则某个 P 通过屏障之后，仍可能从全局领到工作。13.6.1 所说的交错并未消失，
+但不再有害：被另一个工作者领走的工作留在它的本地缓存中，必然在屏障中被交出，从而使这一轮检测失败。
+设计文档指出，与许多同类算法不同，它检测的不是「上一道屏障以来没有人做过工作」，而是「没有人交流过工作，
+并且所有队列在某一时刻都是空的」。因此许多同类算法至少需要两轮才能判定终止，它一轮就够；堆较小时，各 P
+可能完全靠本地缓存完成工作，标记在第一轮屏障之后就能结束 [[Clements, 2018a](#ref-clements-2018a)]。若有 P
+交出过工作，检测便重来；这些交出的工作同时也在 P 之间重新分配了负载。
+
+Green Tea 的 span 队列（[13.11](./greentea.md)）可以被其他 P 窃取，看似违背了「P 看不到其他 P 的本地工作」
+这一前提。实际上，每个 P 只有自己的本地环是私有的；本地环溢出、转入可窃取链时会置位 `flushedWork`；
+冲刷本地缓存时，本地环同样转入链中，并在位图 `spanqMask` 中登记，而判断是否仍有全局工作时，
+位图中有登记即视为有 [[Go Authors, 2026c](#ref-go-authors-2026c)]。可窃取的链因此相当于全局队列的一部分，
+上述论证仍然成立。
+
+两个例外需要单独处理。写屏障缓冲在检测通过之后仍可能增长，但此时所有可达对象都已标记，
+缓冲中的指针必然指向黑色对象，标记终止时直接丢弃即可 [[Go Authors, 2026a](#ref-go-authors-2026a)]：
+
+```go
+		// The write barrier may have buffered pointers since
+		// the gcMarkDone barrier. However, since the barrier
+		// ensured all reachable objects were marked, all of
+		// these must be pointers to black objects. Hence we
+		// can just discard the write barrier buffer.
+```
+
+另一个例外是弱指针转换为强指针（[13.10](./finalizer.md)）。标记期间的转换要把结果置灰，
+因为它可能是指向该对象的唯一指针，而这个对象可能仍是白色；与写屏障不同，
+这一来源产生的工作不会随标记推进而自然消失。Go 1.24 起，`gcMarkDone` 在不规则屏障之前置位一个全局标志，
+此后的转换一律阻塞，直到标记终止时才被唤醒，这一修复也移植到了 Go 1.23.4
+[[Knyszek, 2024](#ref-knyszek-2024)]。
+
+下图概括了 `gcMarkDone` 的流程，其中停止一切之后的复查见 13.6.3：
 
 ```mermaid
 flowchart TD
-    A["工作者扫空本地队列<br/>gcEndWork 返回 last=true"] --> B["gcMarkDone：持 markDoneSema"]
-    B --> C{"gcIsMarkDone?<br/>nwait==nproc 且全局无工作"}
-    C -->|否| Z["放锁返回，继续并发标记"]
-    C -->|是| D["forEachP 不规则屏障<br/>各 P 刷缓冲、dispose 本地工作"]
-    D --> E{"本轮有 P 刷出新工作?<br/>gcMarkDoneFlushed != 0"}
+    A["某个工作者结束工作<br/>gcEndWork 返回真"] --> B["gcMarkDone：取得检测锁"]
+    B --> C{"无人工作且<br/>全局无工作？"}
+    C -->|否| Z["释放锁，继续并发标记"]
+    C -->|是| D["不规则屏障<br/>各 P 冲刷写屏障缓冲与本地工作"]
+    D --> E{"有 P 交出过工作？"}
     E -->|是| C
-    E -->|否| F["停止世界 stwGCMarkTerm<br/>进入标记终止"]
+    E -->|否| F["停止一切"]
+    F --> G{"复查：各 P 的写屏障缓冲<br/>冲刷后仍有工作？"}
+    G -->|是| H["重启世界"]
+    H --> C
+    G -->|否| I["gcMarkTermination"]
 ```
 
-进入 STW 后还有一道补漏。屏障到停世界之间的窗口里，GC 自身的写入（写屏障在此刻仍开着）
-可能又留下零星工作。`gcMarkDone` 因此在停世界后再逐个 `wbBufFlush1`，若发现某 P 的 `gcw`
-非空，就重启并发标记（这正是 issue #27993 记录的情形）。这类残留在工程上「不优雅」，
-但它说明：终止判定与写屏障关闭之间，必须有一个全局一致的瞬间来收口。
+## 13.6.3 停止一切之后
 
-## 13.6.3 第二次短 STW：`_GCmarktermination` 做了什么
-
-终止检测通过后，运行时进入本周期的第二次、也是最后一次短 STW，调用 `gcMarkTermination`。
-它在停世界状态下，按固定顺序完成几件无法在并发中安全完成的收尾：
+检测通过后，`gcMarkDone` 停止一切。按上述论证，此时不应再有标记工作，但实际运行中偶尔仍会发现残留，
+于是停顿之后先复查一次 [[Go Authors, 2026a](#ref-go-authors-2026a)]：
 
 ```go
-// 标记终止的收尾（速写，runtime/mgc.go）
-func gcMarkTermination(stw worldStop) {
-    setGCPhase(_GCmarktermination)   // 写屏障此刻仍开着
-    gcMark(startTime)                // 确认标记完成、处理 checkmark 等残留
-    setGCPhase(_GCoff)               // 标记结束，关闭写屏障
-    gcSweep(work.mode)               // 切换到清扫阶段，置所有 span 为「待清扫」
-    // ... 重启世界 ...
-    gcControllerCommit()             // 用本周期数据更新 pacer，为下一周期定阈值
-}
+	// There is sometimes work left over when we enter mark termination due
+	// to write barriers performed after the completion barrier above.
+	// Detect this and resume concurrent mark. This is obviously
+	// unfortunate.
+	//
+	// See issue #27993 for details.
 ```
 
-`setGCPhase` 是这里的关键开关，写屏障的开启与否由 `gcphase` 决定：
+这一问题以「P has cached GC work at end of mark termination」的报错形式出现
+[[ianlancetaylor, 2018](#ref-ianlancetaylor-2018)]。Clements 在 Go 1.12 发布前加入了这一复查，
+提交说明坦言仍不清楚残留从何而来，复查会使停顿增加少量与 `GOMAXPROCS` 成正比的时间，
+但修复了一个严重的正确性问题 [[Clements, 2019](#ref-clements-2019)]。复查发现残留时，运行时重启世界，
+回到检测的起点。Go 1.26 以实验形式提供的 goroutine 泄漏剖析也借用这一回路：标记到达不动点之后，
+阻塞在不可达的同步原语上的 goroutine 被判定为泄漏；若又发现了可能运行的 goroutine，就重启世界继续标记
+[[Go Authors, 2026a](#ref-go-authors-2026a)]。这一剖析的原理见发布说明
+[[Go Authors, 2026d](#ref-go-authors-2026d)]。
+
+复查通过后，运行时停止标记辅助与后台标记，唤醒挂起的标记辅助（它们在世界重启后运行），记录本轮的调步数据，
+然后调用 `gcMarkTermination`。下面是这段收尾的速写：
 
 ```go
-// 相位切换同时决定写屏障开关（速写，runtime/mgc.go）
+// 停止一切之后的主要步骤（速写，省略统计与跟踪，runtime/mgc.go）
+atomic.Store(&gcBlackenEnabled, 0) // 停止标记辅助与后台标记
+gcWakeAllAssists()                 // 挂起的辅助在世界重启后运行
+gcController.endCycle(now, int(gomaxprocs), work.userForced) // 记录调步数据（13.3）
+
+// gcMarkTermination：
+setGCPhase(_GCmarktermination) // 写屏障仍然开启
+gcMark(startTime)              // 核对没有剩余工作，丢弃写屏障缓冲
+setGCPhase(_GCoff)             // 关闭写屏障
+gcSweep(work.mode)             // 全局清扫代加 2，唤醒后台清扫者（13.5）
+gcControllerCommit()           // 为下一轮计算触发点与堆目标（13.3）
+mProf_NextCycle()              // 结束本轮堆剖析的周期
+startTheWorldWithSema(now, stw)
+
+// 世界重启之后：冲刷堆剖析、准备释放工作缓冲区、释放栈所在的 span，
+// 并用 forEachP 冲刷各 P 的本地缓存（13.5）
+```
+
+写屏障是否开启，由回收所处的阶段决定 [[Go Authors, 2026a](#ref-go-authors-2026a)]：
+
+```go
 func setGCPhase(x uint32) {
-    atomic.Store(&gcphase, x)
-    // 仅在并发标记与标记终止两个相位开启写屏障
-    writeBarrier.enabled = gcphase == _GCmark || gcphase == _GCmarktermination
+	atomic.Store(&gcphase, x)
+	writeBarrier.enabled = gcphase == _GCmark || gcphase == _GCmarktermination
 }
 ```
 
-把这几步连起来看，这次 STW 的职责是：**确认标记确已完成**（`gcMark` 在 `_GCmarktermination`
-下复核，写屏障仍开以兜住 GC 自身的指针写入）；随后**把相位翻到 `_GCoff` 并关闭写屏障**；
-**搭好并发清扫的舞台**（`gcSweep` 把所有 span 标记为待清扫，[13.5](./sweep.md) 的「免清扫」
-位图互换由此启动）；最后**结算 pacer 统计**（`gcControllerCommit` 用本周期实际标记量更新触发
-阈值，[13.3](./pacing.md)）。世界一旦重启，新分配的对象即为白色，清扫便在后台与用户代码
-并发推进。
+`gcMarkDone` 的注释强调，写屏障必须保持开启，直到全部标记完成，包括回收器自身的写入。
+2018 年的设计文档曾设想标记终止期间不再需要写屏障 [[Clements, 2018a](#ref-clements-2018a)]，
+现在的实现仍在进入 `_GCoff` 时才关闭它。`gcMark` 已不做任何标记，只核对各处没有剩余的工作，
+丢弃写屏障缓冲，并把调步器的存活堆重置为本轮标记的字节数。
 
-这次 STW 之所以短，根子在 [13.2](./barrier.md) 的混合写屏障。Go 1.8 之前用 Dijkstra
-插入屏障，并发标记结束时必须**重新扫描所有协程栈**,因为栈上的写入不经写屏障，可能漏掉
-存活对象，而栈的总规模随程序而涨，这次重扫的代价也随之膨胀，停顿时间与栈规模挂钩。
-混合写屏障（Yuasa 删除屏障加 Dijkstra 插入屏障）保证了「一旦栈被扫描染黑，便不必再扫」,
-标记终止时再无需重扫栈。于是这次 STW 退化为几件常数量级的收尾：翻相位、关屏障、置位
-span、结算统计。停顿时间因此与堆和栈的规模基本无关,这是把 STW 从 $O(\text{heap}+\text{stack})$
-压到近乎 $O(1)$ 的关键一跳。
+## 13.6.4 停顿时间的演变
 
-## 13.6.4 为何始终保留首尾两次短 STW
+标记终止的停顿曾经很长。Go 1.5 至 1.7 使用 Dijkstra 式的插入屏障，栈上的写入不经过写屏障，
+标记终止时必须重新扫描标记期间运行过的 goroutine 的栈。Go 1.7 只重新扫描「脏」栈，使这一步不再与
+goroutine 的总数成正比；提交说明给出的数据是：处理一个干净的栈约需 34 纳秒，goroutine 达到约 30 万个时，
+仅检查这些栈就会超出 10 毫秒的停顿目标 [[Clements, 2016a](#ref-clements-2016a)]。Go 1.8
+的混合写屏障（[13.2](./barrier.md)）使重新扫描不再必要。关闭重新扫描之后，在 `GOMAXPROCS` 为 12 的机器上，
+标记终止停顿的最坏情况在所有测试中都稳定低于 100 微秒，95 分位约为 50 微秒；
+这些数字不含停止一切本身所需的时间，后者通常再增加约 20 微秒，个别 goroutine 迟迟不到达安全点时可达约
+150 微秒 [[Clements, 2016b](#ref-clements-2016b)]。作为后备而保留的 `GODEBUG=gcrescanstacks=1` 在 Go 1.12
+中删除 [[Clements, 2018c](#ref-clements-2018c)]。Hudson 在 2018 年的主题演讲中回顾，Go 1.8
+去掉了周期末尾停止一切的栈扫描，停顿由此进入亚毫秒级；2018 年的目标定为每轮回收停止一切的时间不超过
+500 微秒 [[Hudson, 2018](#ref-hudson-2018)]。
 
-读者或许会问：既然标记和清扫都已并发，为何一个周期里还留着两次 STW？它们分处周期首尾：
+下面的程序分别让 1000、1 万与 10 万个 goroutine 递归若干层后阻塞，再强制回收。为了只观察 `runtime.GC`
+触发的回收，程序关闭了自动回收：
 
-```mermaid
-sequenceDiagram
-    participant W as 世界(mutators)
-    participant GC as 垃圾回收器
-    Note over W,GC: 周期开始
-    GC->>W: STW #1 (stwGCSweepTerm)
-    Note right of GC: 开启写屏障、扫描根、<br/>切到 _GCmark
-    GC->>W: 重启世界
-    Note over W,GC: 并发标记（写屏障开）
-    GC->>W: STW #2 (stwGCMarkTerm)
-    Note right of GC: 确认标记完成、关写屏障、<br/>切到 _GCoff、备好清扫
-    GC->>W: 重启世界
-    Note over W,GC: 并发清扫
+```go {run=true env="GODEBUG=gctrace=1"}
+package main
+
+import (
+	"fmt"
+	"os"
+	"runtime"
+	"runtime/debug"
+	"sync"
+)
+
+// park 递归 depth 层后阻塞，使每个 goroutine 都有一段需要扫描的栈。
+func park(depth int, ready *sync.WaitGroup, ch chan struct{}) int {
+	var frame [8]int
+	if depth > 0 {
+		return park(depth-1, ready, ch) + frame[depth%8]
+	}
+	ready.Done()
+	<-ch
+	return frame[0]
+}
+
+func main() {
+	debug.SetGCPercent(-1) // 只观察 runtime.GC 触发的回收
+	for _, n := range []int{1_000, 10_000, 100_000} {
+		var ready, done sync.WaitGroup
+		ch := make(chan struct{})
+		ready.Add(n)
+		for range n {
+			done.Go(func() { park(16, &ready, ch) })
+		}
+		ready.Wait() // 所有 goroutine 都已阻塞
+		fmt.Fprintf(os.Stderr, "%d 个 goroutine\n", n)
+		for range 2 {
+			runtime.GC()
+		}
+		close(ch)
+		done.Wait()
+	}
+}
 ```
 
-第一次 STW（`stwGCSweepTerm`，[13.4](./mark.md)）在周期开始时**布防**：开启写屏障、把
-gcphase 切到 `_GCmark`、扫描根集合。第二次（`stwGCMarkTerm`）在周期结束时**收口**：确认
-标记完成、关闭写屏障、切到 `_GCoff`。两者各需一个对所有 P **全局一致的瞬间**:写屏障的
-开与关必须让所有 mutator 在同一逻辑时刻看到，否则会出现一部分 P 已开屏障、一部分尚未的
-窗口，从而漏标或错标。这种「全局一致瞬间」无法用每 P 本地操作廉价地拼出，停世界是当前
-体系下最直接的实现。
+gctrace 的输出与程序打印的标签都写到标准错误。在本机编译运行，并用 sed 只保留每轮的时钟时间：
 
-这背后是一个明确的工程取舍。Go 团队选择的目标不是字面上的零停顿，而是**把每次 STW 的
-工作量压到与堆栈规模无关的常数级**,Hudson 在「Getting to Go」中把目标定为 STW 不超过约
-$500\,\mu s$，实践中常远低于此。代价是周期里仍有两个不可省的同步点；收益是停顿时间不再
-随程序的堆与栈增长而恶化，这对延迟敏感的服务远比「停顿更少但不可控」要可贵。「性能的
-提升从不白来」,这里付出的是两次常数级 STW 与混合写屏障的额外开销，换来的是与规模解耦的
-可预测延迟。
+```shell
+$ go build -o marktermdemo
+$ GODEBUG=gctrace=1 ./marktermdemo 2>&1 | sed -E 's/ @[^:]*: / /; s/ ms clock.*/ ms clock/'
+1000 个 goroutine
+gc 1 0.072+0.71+0.006 ms clock
+gc 2 0.076+0.54+0.006 ms clock
+10000 个 goroutine
+gc 3 0.042+6.7+0.005 ms clock
+gc 4 0.031+4.3+0.006 ms clock
+100000 个 goroutine
+gc 5 0.052+59+0.006 ms clock
+gc 6 0.26+42+0.006 ms clock
+```
 
-继续缩小乃至消除这两次 STW，是垃圾回收前沿的同一个方向。HotSpot 的 ZGC（JEP 376）已实现
-**并发栈处理**，把根扫描也移出 STW（[9.7](../../part3concurrency/ch09sched/preemption.md)）;
-Go 的演进轨迹同样朝此推进，混合写屏障消去栈重扫只是其中一步，后续把根扫描与相位切换进一步
-并发化的设想，可参见 [13.12](./history.md) 对过去、现在与未来的梳理。两次短 STW 不是终点，
-而是当前工程权衡下的稳态。
+三个数依次是清扫终止的停顿、并发标记与标记终止的停顿（[13.1](./basic.md)），
+停顿的时间包含停止一切本身所需的时间。goroutine 增加到 100 倍，并发标记的时间随栈的总量从不到
+1 毫秒增长到数十毫秒，标记终止的停顿始终约为 6 微秒。第一个数在多次运行之间波动较大，与 goroutine
+的数目没有对应关系。在浏览器中运行时，并发标记要慢得多，但标记终止的停顿同样不随 goroutine 的数目变化。
 
-## 延伸阅读的文献
+## 13.6.5 两次停止一切
 
-1. Austin Clements, Rick Hudson. *Proposal: Eliminate STW stack re-scanning (Hybrid Write Barrier).*
-   Go issue #17503, 2016. https://github.com/golang/go/issues/17503
-   （混合写屏障消去栈重扫，标记终止得以变短的根因）
-2. Austin Clements, Rick Hudson. *Concurrent mark termination (replace Mark2 with a race-free
-   distributed termination algorithm).* Go issue #11970, 2016.
-   https://github.com/golang/go/issues/11970 （`gcMarkDone` 的设计来源）。彻底删去 Mark2、把
-   标记终止简化为一次性确认的后续工作见 Austin Clements. *Proposal: Simplify mark termination
-   and eliminate mark 2.* Go issue #26903, 2018（go1.12 落地）.
-   https://github.com/golang/go/issues/26903
-3. The Go Authors. *runtime/mgc.go: `gcMarkDone`、`gcMarkTermination`、`gcIsMarkDone`、`setGCPhase`.*
-   https://github.com/golang/go/blob/master/src/runtime/mgc.go （go1.26 实现）
-4. The Go Authors. *runtime/proc.go: `forEachP`（ragged barrier）.*
-   https://github.com/golang/go/blob/master/src/runtime/proc.go
-5. Rick Hudson. *Getting to Go: The Journey of Go's Garbage Collector.* ISMM 2018 keynote.
-   https://go.dev/blog/ismmkeynote （STW 目标与并发 GC 演进的第一手叙述）
-6. Go issue #27993: *runtime: mark termination sometimes leaves work behind.*
-   https://github.com/golang/go/issues/27993 （进入标记终止后残留工作需重启标记的情形）
-7. 本书 [13.2 写屏障技术](./barrier.md)、[13.3 GC 的步调](./pacing.md)、
-   [13.4 扫描标记与标记辅助](./mark.md)、[13.5 清扫与位图](./sweep.md)、
-   [13.12 过去、现在与未来](./history.md)。
+一轮回收中有两次停止一切。第一次在开始时，称为清扫终止：补完上一轮遗留的清扫（[13.5](./sweep.md)），清空
+`sync.Pool` 与运行时内部的几个缓存池，开始新一轮的调步，把阶段切换到 `_GCmark` 以开启写屏障，
+准备根标记任务，把各 P 正在使用的微对象块标为黑色，最后允许标记辅助与后台标记。它并不扫描根，
+根的扫描在世界重启之后并发进行（[13.1](./basic.md)）。之所以要停止一切，
+源码注释给出的理由是写屏障必须在任何对象被标记之前对所有 P 生效
+[[Go Authors, 2026a](#ref-go-authors-2026a)]：
+
+```go
+	// Enter concurrent mark phase and enable
+	// write barriers.
+	//
+	// Because the world is stopped, all Ps will
+	// observe that write barriers are enabled by
+	// the time we start the world and begin
+	// scanning.
+```
+
+第二次即本节讨论的标记终止。两次停顿中的工作通常都与堆和栈的大小无关。
+即便上一轮的清扫尚未完成就开始新的一轮（例如调用 `runtime.GC`），剩余的 span
+也会在停止一切之前并发地清扫，留给第一次停顿的只是可能的残余（[13.5](./sweep.md)）。
+剩下的开销主要是停止一切本身：它要等每个正在运行的 goroutine 到达安全点，Go 1.14
+引入的异步抢占缩短了这段等待（[9.7](../../part3concurrency/ch09sched/preemption.md)）。
+
+两次停顿并非原理上不可去除。2016 年的设计文档在展望部分提出：开启写屏障所需的全局内存屏障可以改用不规则屏
+障或 Linux 的 `membarrier` 系统调用实现，标记终止中余下的任务也各有消除的办法
+[[Clements and Hudson, 2016](#ref-clements-hudson-2016)]。此后，标记终止中已不再有任何标记工作，
+本地缓存与堆剖析的冲刷也移到了世界重启之后（[13.5](./sweep.md)），但截至 Go 1.26，两次停止一切仍然保留。
+回收器演进的整体脉络见 [13.12](./history.md)。
+
+## 13.6.6 小结
+
+判定标记完成，需要确认所有 P 的本地缓存与写屏障缓冲中都没有剩余的工作。Go 1.12 起，`gcMarkDone`
+用一道不规则屏障让每个 P 冲刷本地状态，并检查是否有 P 交出过工作；没有，则一轮之内即可断定终止。
+写屏障缓冲中的残余指针必然指向黑色对象，可以丢弃；弱指针的转换则在终止期间被阻塞。
+停止一切之后的复查是对一个至今未查明的问题的补救。混合写屏障消除了栈的重新扫描，
+标记终止的停顿因而与堆和栈的大小无关，只剩约数微秒的收尾与停止一切本身的等待。
+
+## 延伸阅读
+
+- <a id="ref-clements-2015"></a>[Clements, 2015] Austin Clements. *Proposal: Decentralized GC
+  coordination.* Go design document, 2015. https://go.dev/design/11970-decentralized-gc
+  讨论见 Go issue #11970：https://github.com/golang/go/issues/11970
+  以显式的状态机取代 Go 1.5 的协调 goroutine，随 Go 1.6 实现。
+- <a id="ref-clements-2016a"></a>[Clements, 2016a] Austin Clements. runtime: make stack re-scan O(# dirty
+  stacks). Go commit 2a889b9d93, 2016. https://go.dev/cl/20700
+  随 Go 1.7 发布。
+- <a id="ref-clements-2016b"></a>[Clements, 2016b] Austin Clements. runtime: disable stack rescanning by
+  default. Go commit bd640c882a, 2016. https://go.dev/cl/31766
+  随 Go 1.8 发布。
+- <a id="ref-clements-2018a"></a>[Clements, 2018a] Austin Clements. *Proposal: Simplify mark termination
+  and eliminate mark 2.* Go design document, 2018. https://go.dev/design/26903-simplify-mark-termination
+  讨论见 Go issue #26903：https://github.com/golang/go/issues/26903
+- <a id="ref-clements-2018b"></a>[Clements, 2018b] Austin Clements. runtime: eliminate mark 2 and fix mark
+  termination race. Go commit 9108ae7751, 2018. https://go.dev/cl/134318
+  随 Go 1.12 发布。
+- <a id="ref-clements-2018c"></a>[Clements, 2018c] Austin Clements. runtime: remove
+  GODEBUG=gcrescanstacks=1 mode. Go commit 198440cc3d, 2018. https://go.dev/cl/134777
+  随 Go 1.12 发布。
+- <a id="ref-clements-2019"></a>[Clements, 2019] Austin Clements. runtime: work around "P has cached GC
+  work" failures. Go commit 95a6f112c6, 2019. https://go.dev/cl/156140
+  随 Go 1.12 发布。
+- <a id="ref-clements-hudson-2016"></a>[Clements and Hudson, 2016] Austin Clements, Rick Hudson.
+  *Proposal: Eliminate STW stack re-scanning.* Go design document, 2016.
+  https://go.dev/design/17503-eliminate-rescan
+  讨论见 Go issue #17503：https://github.com/golang/go/issues/17503
+  附录记录了标记完成判定中的竞争。
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *runtime/mgc.go.* `gcMarkDone`、
+  `gcMarkTermination`、`gcMark`、`gcStart`、`setGCPhase`. Go 1.26 源码.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mgc.go
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *runtime/proc.go.* `forEachP`
+  与不规则屏障. Go 1.26 源码. https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/proc.go
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *runtime/mgcmark_greenteagc.go.*
+  `gcMarkWorkAvailable`、`spanQueue`. 另见 src/runtime/mgcwork.go. Go 1.26 源码.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mgcmark_greenteagc.go
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. *Go 1.26 Release Notes.* 2026.
+  https://go.dev/doc/go1.26
+- <a id="ref-hudson-2018"></a>[Hudson, 2018] Rick Hudson. "Getting to Go: The Journey of Go's Garbage
+  Collector." *The Go Blog*, 2018. https://go.dev/blog/ismmkeynote
+  ISMM 2018 主题演讲的讲稿，回顾了各版本的停顿目标与实际停顿。
+- <a id="ref-ianlancetaylor-2018"></a>[ianlancetaylor, 2018] ianlancetaylor. Go issue #27993. *runtime:
+  error message: P has cached GC work at end of mark termination.* 2018.
+  https://github.com/golang/go/issues/27993
+- <a id="ref-knyszek-2024"></a>[Knyszek, 2024] Michael Knyszek. runtime: prevent weak->strong conversions
+  during mark termination. Go commit 80d306da50, 2024. https://go.dev/cl/623615
+  随 Go 1.24 发布，并移植到 Go 1.23.4。
+- <a id="ref-matocha-camp-1998"></a>[Matocha and Camp, 1998] Jeff Matocha, Tracy Camp. "A Taxonomy of
+  Distributed Termination Detection Algorithms." *Journal of Systems and Software*, 43(3), 1998, 207-221.
+  https://doi.org/10.1016/S0164-1212(98)10034-1
+- 本书 [13.2 写屏障技术](./barrier.md)、[13.3 触发频率及其调步算法](./pacing.md)、
+  [13.4 扫描标记与标记辅助](./mark.md)、[13.5 清扫与位图](./sweep.md)、
+  [13.12 过去、现在与未来](./history.md)。

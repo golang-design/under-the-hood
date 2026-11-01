@@ -5,242 +5,299 @@ title: "13.2 写屏障技术"
 
 # 13.2 写屏障技术
 
-[13.1](./basic.md) 给出了三色抽象与并发回收的轮廓：回收器把对象从白染灰、由灰染黑，
-让一道「灰色波面」在对象图上单调推进，波面扫过之处即为已确认存活。若赋值器（mutator，
-即用户态代码）在波面推进时停下不动，这套抽象自洽且会正确收敛。问题恰恰在于赋值器不会停。
-并发回收的根本困难是：回收器追踪对象图的同时，赋值器在改写它，两者对同一张图各执一词。
+[13.1.4](./basic.md) 说明了并发标记的风险：赋值器把一个白色对象的指针写入黑色对象，
+同时破坏了从灰色对象通往它的所有路径，回收器便会漏掉这个仍然可达的对象。**写屏障**（write barrier）
+是防止这种情况的手段：编译器在可能指向堆的指针写入处插入一小段代码，在写入发生时把必要的信息告知回收器。
+本节先介绍两类经典的写屏障及其各自的代价，再讨论 Go 1.8 起使用的混合写屏障，
+最后说明它在编译器与运行时中的实现。
 
-这一节要回答的是：赋值器的一次指针写入，凭什么不会让回收器漏标一个存活对象。答案是**写屏障**
-（write barrier）：编译器在堆指针写入处插入的一小段代码，让赋值器把「我动了哪条边」告知回收器。
-我们先看清并发改图为何会漏标（[13.2.1](#1321-并发改图为何会漏标)），由此引出两条三色不变性
-（[13.2.2](#1322-两条三色不变性)）；再看堵住漏标的两个屏障族（[13.2.3](#1323-两个屏障族-dijkstra-插入与-yuasa-删除)）；
-最后落到 Go 自 1.8 起沿用至今的混合写屏障（[13.2.4](#1324-go-的混合写屏障)），
-理解它为何能一举消除标记终止阶段那次代价高昂的栈重扫。
+这里的写屏障是垃圾回收意义上的概念，指赋值器执行的一段软件逻辑，与处理器层面约束访存顺序的内存屏障
+（memory barrier，见 [11.9](../../part3concurrency/ch11sync/mem.md)）不是一回事。两者在 Go 的实现中有一处
+交集，13.2.4 将会提到。
 
-需要先厘清一处常见的名词混淆。本节的「写屏障」是垃圾回收意义上的赋值器屏障，是一段**软件**
-逻辑，它与 CPU 层面阻止访存重排的内存屏障（memory barrier，见 [11.9](../../part3concurrency/ch11sync/mem.md)）
-是两回事。两者唯一的交点在于：Go 的写屏障实现为保证自身在多核下的正确性，确实依赖了一处访存
-顺序约束，这一点留到 [13.2.4](#1324-go-的混合写屏障) 再谈。
+## 13.2.1 两类写屏障
 
-## 13.2.1 并发改图为何会漏标
+漏标需要两个条件同时成立：赋值器把指向白色对象的指针写入黑色对象；并且从灰色对象通往该白色对象的原有路径
+被破坏，回收器来不及看到它 [[Wilson, 1992](#ref-wilson-1992)]。一次指针写入 `*slot = ptr` 涉及两个指针：
+写入的新值 `ptr` 与被覆盖的旧值 `*slot`。写屏障可以监视其中任意一个，由此分为两类，各自排除一个条件。
 
-考虑回收器正扫到一半的某个瞬间。设灰色对象 $A$ 指向白色对象 $B$，赋值器此时并发地做两件事：
-把一个已被染黑的对象 $C$ 指向 $B$，再把 $A$ 到 $B$ 的那条引用抹去。于是 $B$ 现在只挂在黑色
-对象 $C$ 之下。回收器认为黑色对象已扫描完毕、不会再访问，而通往 $B$ 的灰色入口又被抹掉了，
-$B$ 就此从波面上消失，最终被当作垃圾错误回收。
-
-```mermaid
-flowchart LR
-    subgraph before["改图前"]
-        A1["A 灰"]:::grey -->|ref| B1["B 白"]:::white
-        C1["C 黑"]:::black
-    end
-    subgraph after["改图后：B 漏标"]
-        A2["A 灰"]:::grey -.->|删除 ref| B2["B 白"]:::white
-        C2["C 黑"]:::black -->|新增 ref| B2
-    end
-    before --> after
-    classDef white fill:#fff,stroke:#333,color:#000
-    classDef grey fill:#bbb,stroke:#333,color:#000
-    classDef black fill:#333,stroke:#000,color:#fff
-```
-
-把这一瞬拆开看，漏标恰由两件事**同时**发生才成立。[Wilson, 1992] 将其精确为两个条件：
-
-- 条件一：赋值器令某个黑色对象引用了白色对象（上例中 $C \to B$）；
-- 条件二：从灰色对象出发、尚未被回收器走过的、通往该白色对象的路径，被赋值器破坏（上例中 $A \to B$ 被删）。
-
-只要破坏掉其中任意一个，漏标就不会发生：条件一不成立，则白色对象始终只挂在灰色对象之下，
-波面终会扫到它；条件二不成立，则即便白色对象被写进了黑色对象，从灰色对象出发仍存一条未走过的
-路径能抵达它。两条屏障族（[13.2.3](#1323-两个屏障族-dijkstra-插入与-yuasa-删除)）正是分别封死这两条路。
-
-这里还藏着一个常被忽略的角色：赋值器自身的颜色。把回收器看作被影响的对象、赋值器看作施加影响的
-行为，便可给赋值器也染色。**黑色赋值器**指其根（主要是 goroutine 栈）已被扫描、回收器不会再扫；
-**灰色赋值器**指其栈尚未扫描，或虽扫过但仍需重扫。赋值器的颜色直接决定回收能否收尾：只要还存在
-灰色赋值器，回收器在结束前就必须重新扫描其根，而重扫时赋值器又可能往根里插入新的非黑引用，如此
-往复。最坏情况下，回收器只能停下全部赋值器线程（即 STW）才能取得一份干净的根快照。这正是
-pre-1.8 的 Go 所付出的代价，也是本节最终要消除的东西。
-
-与栈相关的还有一个选择：新分配对象染什么色。若染白，可避免无谓地把新对象留到下一轮；但黑色赋值器
-已扫描完毕、不会再被回收器触及，它一旦分配出白色对象并藏入栈中，就会直接酿成漏标。为把实现复杂度
-压到最低，**令新分配对象一律为黑**通常是安全的，Go 即采此策。这一选择会与下文的混合屏障严丝合缝地
-咬合。
-
-## 13.2.2 两条三色不变性
-
-把上一节两个条件翻译成对对象图的约束，就得到两条强弱不同的不变性。
-
-**强三色不变性**（strong tricolor invariant）：不存在黑色对象指向白色对象的指针。这等于直接禁止
-条件一。波面之后（黑色区域）是一片「净土」，回收器可以放心不再回看。
-
-**弱三色不变性**（weak tricolor invariant）：黑色对象可以指向白色对象，但该白色对象必须**同时**
-存在一条从某个灰色对象出发、尚未被走过的可达路径。这相当于允许条件一发生，却用「保留一条灰色入口」
-来禁止条件二。
-
-强不变性：
-
-$$
-\nexists\, b \in \text{black},\ w \in \text{white}:\ b \to w
-$$
-
-弱不变性：
-
-$$
-\forall\, w \in \text{white 且被某 black 引用}:\ \exists\ \text{从某 grey 出发、未访问的路径可达}\ w
-$$
-
-强不变性是更苛刻的约束，弱不变性则给了实现更大的回旋余地：**只要还留着一条未走过的、通往白色
-对象的路径，就允许黑色对象指向白色对象。**两条屏障族的分野，本质就是各自去维护其中一条不变性。
-
-## 13.2.3 两个屏障族：Dijkstra 插入与 Yuasa 删除
-
-漏标既然由「黑指白」与「断灰路」两件事合成，封堵之法也就分成两族，恰好对应一次指针写入里
-两个可被监视的对象：被写入的新指针 `ptr`，与被覆盖的旧值 `*slot`。[Pirinen, 1998] 把屏障可做的
-基本动作归纳为三种：把白色对象染灰以扩大波面、扫描对象并染黑以推进波面、把黑色对象退回灰色以
-后撤波面。两族屏障都用第一种动作（`shade`，把尚为白色的对象染灰并入队待扫），区别只在染哪个对象。
-
-**Dijkstra 插入屏障**（insertion barrier），又称增量更新屏障（incremental update）[Wilson, 1992]，
-监视被写入的新指针，把「插入」这一行为告知回收器，维护强三色不变性。其核心是：凡有指针被写进
-对象，无论它将来是否会被删，都先把被指向者染灰 [Dijkstra et al., 1978]。
+插入写屏障（insertion barrier）监视新值，又称增量更新（incremental update）屏障。
+它在写入之前把新值指向的对象置灰，确保写入之后黑色对象不会指向白色对象，从而排除第一个条件，
+维持强三色不变式。这一思路来自 Dijkstra 等人 [[Dijkstra et al., 1978](#ref-dijkstra-1978)]，Go 1.7
+使用的正是一种粗化的 Dijkstra 屏障，它不检查 `slot` 所在对象的颜色，一律置灰
+[[Clements and Hudson, 2016](#ref-clements-hudson-2016)]：
 
 ```go
-// Dijkstra 插入屏障：染新写入的指针
-func DijkstraWritePointer(slot *unsafe.Pointer, ptr unsafe.Pointer) {
-    shade(ptr)
-    *slot = ptr
+// Dijkstra 插入屏障（伪代码）
+writePointer(slot, ptr):
+	shade(ptr)
+	*slot = ptr
+```
+
+删除写屏障（deletion barrier）监视旧值，又称起始快照（snapshot-at-the-beginning）屏障。
+它在旧值被覆盖之前将其置灰，于是任何通往白色对象的路径被破坏时，回收器都会得到另一条路径，
+第二个条件无从成立，维持的是弱三色不变式。其最知名的形式来自 Yuasa [[Yuasa, 1990](#ref-yuasa-1990)]：
+
+```go
+// Yuasa 删除屏障（伪代码）
+writePointer(slot, ptr):
+	shade(*slot)
+	*slot = ptr
+```
+
+起始快照这个名字说明了它的效果：标记开始时可达的对象，本轮都不会被回收，即使它们在标记期间变得不可达。
+这样保留下来、要到下一轮才能回收的对象称为浮动垃圾（floating garbage）。插入屏障同样会产生浮动垃圾，
+因为被置灰的新值可能随即又被覆盖。
+
+两类屏障都只把白色对象置灰，对象的颜色单调地由白变灰、由灰变黑，标记的总工作量因此以堆的大小为上界。
+Steele 的屏障则相反，它把黑色对象退回灰色，同一对象可能被反复扫描
+[[Clements and Hudson, 2016](#ref-clements-hudson-2016)]。Pirinen 依据赋值器自身的颜色，
+对各种屏障做了系统的分类 [[Pirinen, 1998](#ref-pirinen-1998)]。
+
+赋值器的颜色指它的根，主要是 goroutine 的栈，在回收器看来处于什么状态。栈已被扫描、
+回收器不再需要回头看它的赋值器是黑色的；栈尚未被扫描，或扫描后又可能藏有白色指针、
+需要重新扫描的赋值器是灰色的。灰色赋值器意味着标记结束前必须重新扫描它的栈。
+
+## 13.2.2 两类屏障在 Go 中的代价
+
+对 Go 而言，问题的关键在于栈。goroutine 栈上的指针写入极为频繁，若对每次栈写入都执行写屏障，开销难以接受，
+因此两类屏障都需要对栈做特殊处理，而每种处理都伴随一次停止一切。
+
+Go 1.5 至 1.7 使用插入屏障 [[Hudson, 2015](#ref-hudson-2015)]，栈上的写入不设屏障。
+代价是栈只能处于「永久灰色」（permagrey）的状态：回收开始时扫描过的栈，只在其 goroutine
+再次运行之前保持黑色，此后就可能藏有白色对象的指针，必须视为灰色。标记结束前，
+回收器要在停止一切的状态下重新扫描所有灰色的栈。设计文档指出，在 goroutine 数量众多的程序中，
+这次重新扫描可能耗时数十乃至数百毫秒，是 Go 1.7 中最后一个与程序规模相关、没有上界的停顿来源
+[[Clements and Hudson, 2016](#ref-clements-hudson-2016)]。
+
+删除屏障能使扫描过的栈保持黑色，但栈上的写入同样不设屏障，起始快照必须包含所有栈，
+因此要求在标记开始时停止一切，一次性扫描或复制全部栈。Yuasa 提出这一算法时，针对的是只有一个线程、
+栈很小的系统；Go 程序常有成千上万个栈，在停止一切的状态下处理它们同样代价高昂。
+若改为要求所有栈都扫描完毕之后才能扫描堆对象，又会在栈扫描与堆扫描之间形成并行的瓶颈。设计文档还引用
+Pirinen 的结论：对于黑色赋值器，除 Yuasa 屏障之外的所有屏障都需要读屏障，
+而指针读取的频率比写入高出一个数量级以上，这在性能上无法接受
+[[Clements and Hudson, 2016](#ref-clements-hudson-2016)]。
+
+## 13.2.3 混合写屏障
+
+Go 1.8 将两类屏障结合起来，得到**混合写屏障**（hybrid write
+barrier）[[Clements and Hudson, 2016](#ref-clements-hudson-2016)]。`mbarrier.go` 开头的注释先说明，
+它结合了置灰被覆盖对象的 Yuasa 式删除屏障与置灰被写入对象的 Dijkstra 式插入屏障，
+插入部分只在调用者的栈为灰色时才需要；随后给出伪代码，并说明两次置灰与其中的条件如何共同阻止赋值器藏匿对象
+[[Go Authors, 2026a](#ref-go-authors-2026a)]：
+
+```go
+//     writePointer(slot, ptr):
+//         shade(*slot)
+//         if current stack is grey:
+//             shade(ptr)
+//         *slot = ptr
+//
+// ……
+//
+// The two shades and the condition work together to prevent a mutator
+// from hiding an object from the garbage collector:
+//
+// 1. shade(*slot) prevents a mutator from hiding an object by moving
+// the sole pointer to it from the heap to its stack. If it attempts
+// to unlink an object from the heap, this will shade it.
+//
+// 2. shade(ptr) prevents a mutator from hiding an object by moving
+// the sole pointer to it from its stack into a black object in the
+// heap. If it attempts to install the pointer into a black object,
+// this will shade it.
+//
+// 3. Once a goroutine's stack is black, the shade(ptr) becomes
+// unnecessary. shade(ptr) prevents hiding an object by moving it from
+// the stack to the heap, but this requires first having a pointer
+// hidden on the stack. Immediately after a stack is scanned, it only
+// points to shaded objects, so it's not hiding anything, and the
+// shade(*slot) prevents it from hiding any other pointers on its
+// stack.
+```
+
+赋值器藏匿一个对象只有两种途径：把指向它的唯一指针从堆移到栈上，或从栈上移入堆中的黑色对象。删除部分
+`shade(*slot)` 堵住前者，因为从堆中摘下指针就是覆盖它，被覆盖的对象随即被置灰；插入部分 `shade(ptr)` 堵住
+后者。第三点说明了插入部分为何只在栈为灰色时才需要：要把对象从栈移入堆，它必须先藏在栈上；而一个刚扫描完的
+栈只指向已置灰的对象，删除部分又阻止它此后再从堆中藏匿新的指针。
+
+由此得到混合写屏障最重要的性质：栈一旦被扫描变黑，就始终保持黑色，不再需要重新扫描。各个 goroutine
+的栈可以在标记开始后逐个并发扫描，扫描时只需暂停被扫描的那一个 goroutine，
+标记终止时也不必再停止一切去重扫栈。混合写屏障维持的是弱三色不变式：已扫描的黑色栈可能持有白色对象的指针，
+但这个白色对象一定受到灰色对象的保护。设计文档还指出，这一屏障要求新分配的对象直接标为黑色，而 Go
+原本就是这样做的；它与 IBM 实时 Java 中所用 Metronome 回收器的「双重写屏障」等价，
+后者是增量而非并发的回收器，但同样要把停止一切的时间严格限制在很小的范围内
+[[Clements and Hudson, 2016](#ref-clements-hudson-2016)] [[Auerbach et al., 2007](#ref-auerbach-2007)]。
+
+效果十分显著。Clements 在关闭栈重扫的提交中报告：GOMAXPROCS=12 时，不计停止一切本身所需的时间，
+标记终止的最坏耗时稳定在 100 微秒以内；在一个专门制造大量脏栈的基准中，50 万个脏栈时停止一切的 95%
+分位耗时从 150 毫秒降到 195 微秒，接近三个数量级 [[Clements, 2016b](#ref-clements-2016b)]。Go 1.8
+的发布说明称，回收停顿通常低于 100 微秒，常常低至 10 微秒 [[Go Authors, 2017](#ref-go-authors-2017)]。
+
+## 13.2.4 Go 的实现：无条件的混合屏障
+
+Go 实际实现的混合屏障省去了「当前栈是否为灰色」这个条件，总是同时置灰旧值与新值。Clements
+在实现它的提交中说明了原因：channel 操作会在两个 goroutine 的栈之间直接复制数据，
+屏障需要同时检查源栈与目标栈的颜色，而当时没有办法把这些信息传给写屏障
+[[Clements, 2016a](#ref-clements-2016a)]。设计文档也讨论过这种无条件的变体：它的正确性更容易论证，
+因为堆中根本不存在由黑色对象指向白色对象的指针；代价是在标记阶段的大部分时间里开销约为有条件版本的两倍
+[[Clements and Hudson, 2016](#ref-clements-hudson-2016)]。直到 Go 1.26，屏障依然是无条件的，`wbBufFlush1`
+中仍留有一条 TODO，设想在栈已被扫描时跳过新值。
+
+`mbarrier.go` 中还有一段关于访存顺序的说明，讨论的是另一个条件：两类屏障本都可以只在 `slot`
+所在的对象为黑色时才执行。设想赋值器先写入 `slot`，再读取 `slot` 所在对象的标记位，
+而回收器线程同时先设置该标记位，再读取 `slot`。若两条线程的写与读之间没有昂贵的内存屏障，在包括 386 与
+amd64 在内的多数硬件上，两者可能都读到旧值，赋值器以为对象仍是白色而跳过屏障，
+回收器则没有看到新写入的指针。这正是 Peterson 与 Dekker 互斥算法所要避免的重排。Go 宁可无条件置灰，
+也不在每次指针写入时付出内存屏障的代价 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
+这就是本节开头所说的写屏障与内存屏障的交集。
+
+### 编译器插入的屏障
+
+写屏障由编译器在 SSA 的 `writebarrier` 阶段插入。该阶段的注释描述了生成的代码形态
+[[Go Authors, 2026b](#ref-go-authors-2026b)]：
+
+```go
+// writebarrier pass inserts write barriers for store ops (Store, Move, Zero)
+// when necessary (the condition above). It rewrites store ops to branches
+// and runtime calls, like
+//
+//	if writeBarrier.enabled {
+//		buf := gcWriteBarrier2()	// Not a regular Go call
+//		buf[0] = val
+//		buf[1] = *ptr
+//	}
+//	*ptr = val
+```
+
+`writeBarrier.enabled` 只在标记与标记终止阶段为真（[13.1.4](./basic.md)），
+其余时间一次指针写入的额外开销只是一次加载与一次条件跳转。屏障开启时，`gcWriteBarrier2` 在当前 P
+的写屏障缓冲中预留两个槽位并返回其地址，生成的代码把新值与旧值依次存入，然后才执行真正的写入。
+下面的函数把一个指针写入结构体的字段：
+
+```go
+package wb
+
+type T struct{ p *int }
+
+func set(t *T, v *int) {
+	t.p = v
 }
 ```
 
-`shade(ptr)` 保守地假设 `*slot` 所在对象可能已是黑色，于是先把 `ptr` 染灰，确保它不会在写入后
-仍为白色，直接堵死条件一。代价有二：其一，被保守染灰的对象里可能混进本应回收的垃圾，要拖到下一轮
-才清掉（浮动垃圾）；其二，若对每一次指针写入都设屏障，开销可观，而栈上写入又格外频繁。Go 在
-pre-1.8 的折中是**栈上写入不设屏障**，转而把发生过写入的栈标记为「恒灰」（permagrey）。这恰恰
-制造出了灰色赋值器，代价就是必须在标记终止阶段 STW，重新扫描这些栈。这次重扫是 pre-1.8 暂停时间
-的主要来源，也是混合屏障要除掉的病灶。
+用 `-gcflags=-S` 查看 amd64 上第 6 行生成的指令：
 
-**Yuasa 删除屏障**（deletion barrier），又称起始快照屏障（snapshot-at-the-beginning），
-监视被覆盖的旧值，维护弱三色不变性。其思路是：赋值器删除一条指针前，先把即将失去的旧目标染灰
-[Yuasa, 1990]，仿佛在改图之前为对象图照了一张快照，凡快照中存活者本轮一律不回收。
-
-```go
-// Yuasa 删除屏障：染被覆盖的旧值
-func YuasaWritePointer(slot *unsafe.Pointer, ptr unsafe.Pointer) {
-    shade(*slot)
-    *slot = ptr
-}
+```shell
+$ GOARCH=amd64 go build -gcflags=-S . 2>&1 | grep 'wb.go:6)' | grep -v PCDATA | sed 's/.*)\t//'
+TESTB	AL, (AX)
+CMPL	runtime.writeBarrier(SB), $0
+JEQ	36
+MOVQ	(AX), CX
+CALL	runtime.gcWriteBarrier2(SB)
+MOVQ	BX, (R11)
+MOVQ	CX, 8(R11)
+MOVQ	BX, (AX)
 ```
 
-`shade(*slot)` 在覆盖前把旧目标染灰，于是这次写入总会留下一条「灰到灰」或「灰到白」的路径，
-条件二无从成立。Yuasa 屏障的好处是回收结束时无需重扫即可精确回收所有白色对象；代价是它会拦截
-写操作令波面后撤，从而产生冗余扫描，且基于起始快照意味着本轮中变为不可达的对象要等下一轮才回收。
+`t` 在 `AX` 中，`v` 在 `BX` 中。第一条指令以一次读取探测 `t` 是否为空指针。`writeBarrier`
+为零时直接跳到最后一条指令完成写入；否则先把旧值 `t.p` 读入 `CX`，调用 `gcWriteBarrier2` 取得缓冲地址
+`R11`，把新值与旧值存入缓冲，再执行写入。这正是上面注释所描述的形态。
 
-## 13.2.4 Go 的混合写屏障
+编译器只在必要时插入屏障。写入目标是当前栈帧中的地址时不需要屏障；目标若已知是刚分配、尚为零值的内存，
+则不必记录旧值；写入的值若是 nil 或全局变量的地址，不可能指向堆，则不必记录新值。
+只有新旧两个值都无需记录时，屏障才会整个省去 [[Go Authors, 2026b](#ref-go-authors-2026b)]。
+但如果一个指向栈的指针被传给了被调函数，经由它的写入仍会带有屏障，因为编译器无法确定它不指向堆。
+写入全局变量同样需要屏障：`mbarrier.go` 解释说，许多回收器忽略对全局变量的写入，
+改在标记终止时重新扫描全局区，但这会增加停顿，Go 因此对全局变量的写入也执行屏障，以免在标记终止时重扫
+[[Go Authors, 2026a](#ref-go-authors-2026a)]。整块复制或清零含指针的内存时，如 `typedmemmove` 与
+`wbZero`，运行时用 `bulkBarrierPreWrite` 一次处理其中所有的指针槽位。
 
-两族屏障各自只能堵住一条漏标路径，于是各有一处必须 STW 的硬伤：Dijkstra 屏障若放过栈写入，
-就欠下一次标记终止时的栈重扫；Yuasa 屏障要求回收开始时对全部根做一次快照，那一刻同样要停下
-赋值器。Go 在 1.8 把两者合一，得到**混合写屏障**（hybrid write barrier）[Clements & Hudson, 2016]，
-化解了这处两难，沿用至今。`runtime/mbarrier.go` 顶部的注释把它写成这样的伪代码：
+### 写屏障缓冲
 
-```go
-// 混合写屏障（mbarrier.go 中的算法形态）
-func writePointer(slot *unsafe.Pointer, ptr unsafe.Pointer) {
-    shade(*slot)              // Yuasa 删除部分：染被覆盖的旧值
-    if current_stack_is_grey {
-        shade(ptr)            // Dijkstra 插入部分：仅当本 goroutine 栈尚灰时才需要
-    }
-    *slot = ptr
-}
-```
+置灰并不在屏障的快速路径中立即完成。Go 1.10 起，屏障只把指针存入每个 P 私有的缓冲 `wbBuf`，缓冲有
+512 个槽位，写满时才调用 `wbBufFlush` 统一处理 [[Go Authors, 2026c](#ref-go-authors-2026c)]。
+快速路径用汇编实现，不破坏任何通用寄存器，因而免去了普通 Go 函数调用保存寄存器的开销；
+慢速路径则保存全部寄存器，并且不允许出现任何可能观察到这一栈帧的安全点。Clements 在引入缓冲的提交中报告，
+写屏障的平均开销因此降至原来的约四分之一 [[Clements, 2017](#ref-clements-2017)]。此前，
+对同一类型多个指针字段的一组写入已经共用一次分支，但每个指针仍各调用一次屏障；Go 1.21
+改为由屏障调用返回缓冲中的空间，由生成的代码自行存入指针，一次调用最多可为 8 个指针预留空间
+[[Randall, 2022](#ref-randall-2022)]。上面汇编中的 `gcWriteBarrier2` 即为两个指针预留空间。
 
-两次 `shade` 各封死一条对象「藏匿」之路，注释把这件事讲得很清楚：
-
-- `shade(*slot)`（删除部分）阻止赋值器把「指向某对象的唯一指针」从堆挪到自己栈上来藏匿它，
-  一旦它要从堆里摘走这条指针，旧目标就先被染灰；
-- `shade(ptr)`（插入部分）阻止赋值器把这样的唯一指针从栈塞进堆里的黑色对象来藏匿它，
-  一旦它要把指针装进黑色对象，被装入者就先被染灰。
-
-关键在那个条件：`shade(ptr)` **仅当本 goroutine 的栈尚为灰色时才需要**。因为要把对象从栈藏进堆，
-前提是它先藏在栈上；而一段栈刚被扫描完，其上只剩已染灰的对象，再不藏匿任何东西，配合 `shade(*slot)`
-也阻止它在自己栈上新藏指针。这就是混合屏障的枢纽所在：**一段栈只要被扫描、染黑一次，就会一直保持
-黑色，永不需要重扫。**回收器在标记开始时把各 goroutine 栈逐一扫描、染黑（这一步可与赋值器并发，
-无需全局 STW），此后栈再无重扫之虞。pre-1.8 那次主导暂停时间、必须 STW 的标记终止栈重扫，就此
-被彻底拿掉。Go 1.8 的暂停时间因此跌入亚毫秒级，这正是混合屏障最实在的回报。它与「新分配对象染黑」
-（[13.2.1](#1321-并发改图为何会漏标)）也正好咬合：栈黑、新对象黑，黑色区域才始终自洽。
-
-代价是写屏障的成本被「摊匀」了：pre-1.8 把开销集中在标记终止那一次 STW 重扫，混合屏障则把它拆成
-每次堆指针写入时一份**常数**开销。这是一桩用吞吐换延迟的典型交易，把一段不可预测的长暂停，换成了
-散布在程序运行全过程中的、可预测的小额支出。
+刷新缓冲时，`wbBufFlush1` 逐个处理缓冲中的指针：跳过空指针等明显不指向堆的值，找到指针所在的对象，
+若对象尚未标记则设置其标记位；不含指针的对象标记后即为黑色，其余对象放入回收器的工作队列，成为灰色。Green
+Tea 回收器下，适合按 span 扫描的小对象改为让其所在的 span 排队（[13.11](./greentea.md)）。
 
 ```mermaid
 flowchart TD
-    W["堆指针写入 slot ← ptr"] --> EN{"writeBarrier.enabled?<br/>gcphase 处于 _GCmark 或 _GCmarktermination"}
-    EN -->|否| DIRECT["直接写入，无开销"]
-    EN -->|是| SHADE1["shade(*slot)：染旧值<br/>Yuasa 删除，封堵 堆→栈 藏匿"]
-    SHADE1 --> SHADE2["shade(ptr)：染新值<br/>Dijkstra 插入，封堵 栈→黑堆 藏匿"]
-    SHADE2 --> STORE["*slot = ptr"]
-    DIRECT --> DONE["完成"]
-    STORE --> DONE
+    W["编译器生成的指针写入 *slot = ptr"] --> EN{"writeBarrier.enabled？"}
+    EN -->|否| STORE["*slot = ptr"]
+    EN -->|是，标记或标记终止阶段| GET["gcWriteBarrier2：<br/>在本 P 的 wbBuf 中预留两个槽位"]
+    GET --> FULL{"缓冲已满？"}
+    FULL -->|否| PUT["buf[0] = ptr，buf[1] = *slot"]
+    FULL -->|是| FLUSH["wbBufFlush：<br/>标记缓冲中的对象，<br/>含指针者放入工作队列"]
+    FLUSH --> GET
+    PUT --> STORE
 ```
-
-值得点出两处「伪代码」与「真实现」的落差，它们正是这套机制的精微处。
-
-其一，注释里那个 `if current_stack_is_grey` 的条件，在 Go 的实际汇编实现 `gcWriteBarrier` 里被
-**去掉了**：无论栈黑栈灰，`ptr` 一律被染。原因是访存顺序。要让屏障读到的「slot 所在对象的颜色」
-与赋值器的写入彼此可见，需要在写与读之间插一道开销高昂的内存屏障；在 386/amd64 这类允许「读越过
-较早的写」的硬件上，省掉它会让赋值器与回收器都观察到陈旧的颜色位。Go 团队权衡之后，宁可无条件多
-染一次 `ptr`，也不愿为这个条件付内存屏障的代价。这是为绕开硬件内存模型而做的取舍，也是本节开头
-所说「软件写屏障与 CPU 内存屏障的唯一交点」。
-
-其二，屏障只对**堆**指针写入生效，且只在标记期才打开。栈上对当前栈帧的写入由编译器略去屏障
-（[13.2.1](#1321-并发改图为何会漏标) 所说的「栈写无屏障」）；写入全局变量则照设屏障，免得到标记
-终止时还要重扫全局区。开关由 `writeBarrier.enabled` 控制，它在 `gcphase` 进入 `_GCmark` 或
-`_GCmarktermination` 时置位，回收一结束即关闭，因此非标记期的指针写入零开销。屏障代码本身不是
-赋值器手写的，而是编译器在每处堆指针写入前自动插入（[3.2](../../part1overview/ch03life/compile.md)）。
-
-无条件双染还带来一个直接后果：着色成本翻倍，编译器要插入的代码也随之增多，二进制随之变大。
-Go 1.10、1.11 为此引入**批量写屏障缓存**（见 `runtime/mwbbuf.go`）：屏障快路径不立即着色，只把
-待染的指针压进一个每 P 私有的缓冲（`wbBuf`，容量 512），缓冲满或遇 GC 状态切换时再统一 flush 到
-回收工作队列。快路径写成汇编、不触动通用寄存器，从而省去常规函数调用的开销，把每次写入的常数成本
-又压低了一截。
-
-放进谱系看，混合屏障并非 Go 独创。注释指出它等价于 IBM 实时 Java 的 Metronome 所用的双重写屏障；
-在那里回收器是增量而非并发的，但同样要面对在严格时限内安全改图的难题。这条思路与 [13.1](./basic.md)
-所述的并发标记、[13.6](./termination.md) 的标记终止彼此衔接：写屏障保证的弱三色不变性，正是标记
-能够与赋值器并发而不漏标的前提。
 
 ## 13.2.5 小结
 
-并发回收的写屏障，归根到底是用一段插在指针写入处的逻辑去维护三色不变性。Go 早期取较易实现的
-Dijkstra 插入屏障，为保强不变性不得不把栈留到标记终止时 STW 重扫，这次重扫主导了当时的暂停。
-1.8 起改用 Dijkstra 插入与 Yuasa 删除合成的混合屏障，将强不变性弱化为弱不变性，换来「栈扫一次、
-此后恒黑、永不重扫」的性质，从而抹去那次集中式 STW，把暂停压进亚毫秒。代价是每次堆指针写入的一份
-常数开销，再由批量缓存摊薄。性能的提升从不白来，这一回，它来自把一段不可预测的长暂停，重新安置成
-散落于全程的可预测小额支出。
+写屏障在赋值器修改指针时维持三色不变式。插入屏障维持强不变式，删除屏障维持弱不变式；在 Go 中，
+前者要求在标记终止时停止一切以重扫栈，后者要求在标记开始时停止一切以扫描全部栈。Go 1.8
+的混合写屏障结合二者，使扫描过的栈永远保持黑色，消除了栈重扫这一最大的停顿来源。
+实际实现无条件地同时置灰新值与旧值，以简化 channel 等跨栈写入的处理；其开销由编译器的按需插入、
+仅在标记期开启的全局开关以及每 P 的写屏障缓冲共同压低。
 
-## 延伸阅读的文献
+## 延伸阅读
 
-1. Austin Clements, Rick Hudson. *Eliminate STW stack re-scanning (Hybrid write barrier).*
-   Go proposal, golang/go#17503, 2016.
-   https://github.com/golang/proposal/blob/master/design/17503-eliminate-rescan.md
-   （混合屏障的设计与正确性证明，本节主线的一手来源）
-2. Taiichi Yuasa. *Real-time garbage collection on general-purpose machines.*
-   Journal of Systems and Software, 11(3):181-198, 1990.
-   DOI: [10.1016/0164-1212(90)90084-Y](https://doi.org/10.1016/0164-1212(90)90084-Y)
-   （删除屏障 / 起始快照的原始论文）
-3. Edsger W. Dijkstra, Leslie Lamport, A. J. Martin, C. S. Scholten, E. F. M. Steffens.
-   *On-the-Fly Garbage Collection: An Exercise in Cooperation.*
-   Communications of the ACM, 21(11):966-975, 1978.
-   DOI: [10.1145/359642.359655](https://doi.org/10.1145/359642.359655)
-   （插入屏障与三色标记的奠基之作）
-4. Paul R. Wilson. *Uniprocessor Garbage Collection Techniques.*
-   Proc. International Workshop on Memory Management (IWMM), LNCS 637, 1992.
-   （漏标两条件、强 / 弱三色不变性、增量更新与起始快照的综述）
-5. Pekka P. Pirinen. *Barrier Techniques for Incremental Tracing.*
-   Proc. International Symposium on Memory Management (ISMM), 1998.
-   DOI: [10.1145/286860.286863](https://doi.org/10.1145/286860.286863)
-   （屏障基本动作的分类框架）
-6. The Go Authors. *runtime/mbarrier.go、runtime/mwbbuf.go、runtime/mgc.go.*
-   https://github.com/golang/go/tree/master/src/runtime
-   （混合屏障实现、批量缓存与 `writeBarrier.enabled` / `gcphase` 门控）
-7. 本书 [13.1 垃圾回收的基本想法](./basic.md)、[13.6 标记终止阶段](./termination.md)、
-   [11.9 内存一致模型](../../part3concurrency/ch11sync/mem.md).
+- <a id="ref-auerbach-2007"></a>[Auerbach et al., 2007] Joshua Auerbach, David F. Bacon, Bob Blainey,
+  Perry Cheng, Michael Dawson, Mike Fulton, David Grove, Darren Hart, Mark Stoodley. "Design and
+  Implementation of a Comprehensive Real-Time Java Virtual Machine." *EMSOFT '07*, 2007, 249-258.
+  https://doi.org/10.1145/1289927.1289967
+- <a id="ref-clements-2016a"></a>[Clements, 2016a] Austin Clements. runtime: implement unconditional
+  hybrid barrier. Go commit 5380b22991, 2016. https://go.dev/cl/31765
+  随 Go 1.8 发布。
+- <a id="ref-clements-2016b"></a>[Clements, 2016b] Austin Clements. runtime: disable stack rescanning by
+  default. Go commit bd640c882a, 2016. https://go.dev/cl/31766
+  随 Go 1.8 发布。
+- <a id="ref-clements-2017"></a>[Clements, 2017] Austin Clements. runtime: buffered write barrier
+  implementation. Go commit e9079a69f3, 2017. https://go.dev/cl/73711
+  随 Go 1.10 发布。
+- <a id="ref-clements-hudson-2016"></a>[Clements and Hudson, 2016] Austin Clements, Rick Hudson.
+  *Proposal: Eliminate STW stack re-scanning.* Go design document, golang/go#17503, 2016.
+  https://github.com/golang/proposal/blob/master/design/17503-eliminate-rescan.md
+  混合屏障的设计与正确性证明，本节主线的一手来源。
+- <a id="ref-dijkstra-1978"></a>[Dijkstra et al., 1978] Edsger W. Dijkstra, Leslie Lamport, A. J. Martin,
+  C. S. Scholten, E. F. M. Steffens. "On-the-Fly Garbage Collection: An Exercise in Cooperation."
+  *Communications of the ACM*, 21(11), 1978, 966-975. https://doi.org/10.1145/359642.359655
+  插入屏障与三色标记的奠基之作。
+- <a id="ref-go-authors-2017"></a>[Go Authors, 2017] The Go Authors. *Go 1.8 Release Notes.* 2017.
+  https://go.dev/doc/go1.8
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/mbarrier.go、
+  src/runtime/mwbbuf.go、src/runtime/mgc.go（混合屏障实现、批量缓存与 `writeBarrier.enabled` / `gcphase`
+  门控）. Go 1.26 源码. https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors.
+  src/cmd/compile/internal/ssa/writebarrier.go. Go 1.26 源码.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/ssa/writebarrier.go
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/runtime/mwbbuf.go、
+  src/runtime/asm_amd64.s （`wbBuf`、`gcWriteBarrier`）. Go 1.26 源码.
+  https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
+- <a id="ref-hudson-2015"></a>[Hudson, 2015] Richard Hudson. "Go GC: Prioritizing low latency and
+  simplicity." *The Go Blog*, 2015. https://go.dev/blog/go15gc
+  Go 1.5 的回收器使用 Dijkstra 式插入屏障。
+- <a id="ref-pirinen-1998"></a>[Pirinen, 1998] Pekka P. Pirinen. "Barrier Techniques for Incremental
+  Tracing." *Proceedings of the International Symposium on Memory Management (ISMM)*, 1998, 20-25.
+  https://doi.org/10.1145/286860.286863
+  屏障基本动作的分类框架。
+- <a id="ref-randall-2022"></a>[Randall, 2022] Keith Randall. cmd/compile: batch write barrier calls. Go
+  commit 21d82e6ac8, 2022. https://go.dev/cl/447781
+  随 Go 1.21 发布。
+- <a id="ref-wilson-1992"></a>[Wilson, 1992] Paul R. Wilson. "Uniprocessor Garbage Collection Techniques."
+  *International Workshop on Memory Management (IWMM)*, LNCS 637, 1992, 1-42.
+  https://doi.org/10.1007/BFb0017182
+  漏标两条件、三色不变性、增量更新与起始快照的综述。
+- <a id="ref-yuasa-1990"></a>[Yuasa, 1990] Taiichi Yuasa. "Real-Time Garbage Collection on General-Purpose
+  Machines." *Journal of Systems and Software*, 11(3), 1990, 181-198.
+  https://doi.org/10.1016/0164-1212(90)90084-Y
+  删除屏障 / 起始快照的原始论文。
+- 本书 [13.1 垃圾回收的基本想法](./basic.md)、[13.6 标记终止阶段](./termination.md)、
+  [11.9 内存一致模型](../../part3concurrency/ch11sync/mem.md)。
