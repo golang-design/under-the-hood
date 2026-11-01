@@ -400,7 +400,7 @@ func (m *Map) PutSlot(typ *abi.MapType, key unsafe.Pointer) unsafe.Pointer {
   Go 1.24 实现所依据的、满足 Go 规范要求的 Swiss Table 实现。
 - <a id="ref-go-authors-2026"></a>[Go Authors, 2026] The Go Authors. `internal/runtime/maps/map.go`.
   https://github.com/golang/go/blob/release-branch.go1.26/src/internal/runtime/maps/map.go
-  （开发版本：https://github.com/golang/go/blob/master/src/internal/runtime/maps/map.go）
+  （开发版本：<https://github.com/golang/go/blob/master/src/internal/runtime/maps/map.go>）
   包注释详细说明了可扩展哈希、目录、分裂与遍历的设计。
 - <a id="ref-openjdk-2014"></a>[OpenJDK, 2014] OpenJDK. "JEP 180: Handle Frequent HashMap Collisions with
   Balanced Trees." 2014. https://openjdk.org/jeps/180

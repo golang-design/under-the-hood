@@ -17,7 +17,7 @@ Readers of different backgrounds will not find the same entry point suitable.
 - You already have a foundation in operating systems or computer architecture. You can head straight for the part you most want to read. Chapters like scheduling ([Chapter 9](./part3concurrency/ch09sched)) and memory allocation and reclamation ([Chapter 12](./part4memory/ch12alloc) and [Chapter 13](./part4memory/ch13gc)) assume the reader can follow terms like threads, caches, and virtual memory, and they will not be an obstacle to you.
 - You come with a specific problem to look up. Using the book as a manual is a legitimate way to read it too. Each section's title is meant to be as self-describing as possible, so go straight from the table of contents to the mechanism you want; there is no need to read a whole chapter for the sake of one section.
 
-When a term first appears, the main text includes its original English form. If you run into an unfamiliar concept, the [glossary](./glossary) at the end of the book collects the core vocabulary that runs through the whole text, and you can look things up there at any time.
+When a term first appears, the main text includes its original English form. If you run into an unfamiliar concept, the [glossary](./glossary.md) at the end of the book collects the core vocabulary that runs through the whole text, and you can look things up there at any time.
 
 ## A Two-Pass Reading for the Hard Chapters
 

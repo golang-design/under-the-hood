@@ -391,7 +391,7 @@ Go 1.27 才以受限的形式解除，经过见 [8.4.2](./future.md)。提案认
 - <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors.
   `cmd/compile/internal/noder/reader.go`.
   https://github.com/golang/go/blob/master/src/cmd/compile/internal/noder/reader.go
-  （Go 1.26：https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/noder/reader.go）
+  （Go 1.26：<https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/noder/reader.go>）
   `readerDict` 与 `shapify`：字典条目与形状归并的实际实现。
 - <a id="ref-go-authors-2022"></a>[Go Authors, 2022] The Go Authors. Go 1.18 Release Notes.
   https://go.dev/doc/go1.18

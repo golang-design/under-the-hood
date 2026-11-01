@@ -195,7 +195,7 @@ double-compiling，DDC）[[Wheeler, 2005](#ref-wheeler-2005)]：另选一个独�
   提出此后每年把起点前移到上一年发布的版本。
 - <a id="ref-thompson-1984"></a>[Thompson, 1984] Ken Thompson. "Reflections on Trusting Trust."
   *Communications of the ACM*, 27(8): 761–763, 1984. https://doi.org/10.1145/358198.358210 （ACM
-  数字图书馆：https://dl.acm.org/doi/10.1145/358198.358210）
+  数字图书馆：<https://dl.acm.org/doi/10.1145/358198.358210>）
   1983 年的图灵奖演讲，描述了能够代代相传的编译器后门。
 - <a id="ref-wheeler-2005"></a>[Wheeler, 2005] David A. Wheeler. "Countering Trusting Trust through
   Diverse Double-Compiling." *Proceedings of the 21st Annual Computer Security Applications Conference

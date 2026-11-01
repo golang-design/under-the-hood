@@ -6,7 +6,7 @@ title: "11.3 Atomic Operations"
 # 11.3 Atomic Operations
 
 `sync/atomic` is the layer of Go's synchronization primitives that sits closest to the hardware.
-Higher-level tools such as the mutex ([11.1](./mutex.md)) and channels ([8](../ch08channel)) are all
+Higher-level tools such as the mutex ([11.1](./mutex.md)) and channels ([10](../ch10chan/readme.md)) are all
 built on top of atomic operations internally. It provides "indivisible" reads, writes, and
 read-modify-writes: an atomic operation either happens in full or not at all, and no other goroutine
 ever sees it half-finished. But the meaning of atomic operations goes far beyond "no tearing." It is
@@ -342,7 +342,7 @@ func handler() { c := cfg.Load().(*Config); _ = c } // reader: grab a complete s
 ```
 
 Its internal implementation is textbook-level carefulness. An `interface{}` is composed at runtime of
-two parts, "type pointer + data pointer" ([2](../../part1prologue)); to atomically replace the whole
+two parts, "type pointer + data pointer" ([4.2](../../part2lang/ch04type/interface.md)); to atomically replace the whole
 interface, one must avoid having readers run into the half-finished "type already swapped, data not yet
 swapped." `Value`'s approach is: on the first `Store`, it first uses CAS to set the type pointer to a
 special in-progress marker `firstStoreInProgress`; during that time `runtime_procPin` forbids the

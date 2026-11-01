@@ -516,6 +516,7 @@ Go 又一次选择了后者。
   随 Go 1.26 发布。
 - <a id="ref-niemeyer-2011"></a>[Niemeyer, 2011] Gustavo Niemeyer. *Death of goroutines under control.*
   2011. https://blog.labix.org/2011/10/09/death-of-goroutines-under-control ；配套库 `gopkg.in/tomb.v2`。
+  存档：https://web.archive.org/web/20250812232118/https://blog.labix.org/2011/10/09/death-of-goroutines-under-control
   tomb，协作式取消的早期实践。
 - <a id="ref-openjdk-2022"></a>[OpenJDK, 2022] OpenJDK. JDK-8289610. *Degrade Thread.stop.* JDK 20, 2022.
   https://bugs.openjdk.org/browse/JDK-8289610

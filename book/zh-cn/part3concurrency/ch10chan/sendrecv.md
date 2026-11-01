@@ -517,7 +517,7 @@ func main() {
   第 4.1 节讨论插队与公平，第 5 节给出测量。
 - <a id="ref-randall-2015a"></a>[Randall, 2015a] Keith Randall. runtime: simplify buffered channels. Go
   commit 8e496f1d69, 2015. https://go.dev/cl/9345
-  修复 issue #11506；次日因 issue #13169 被回滚（https://go.dev/cl/16716）。
+  修复 issue #11506；次日因 issue #13169 被回滚（<https://go.dev/cl/16716>）。
 - <a id="ref-randall-2015b"></a>[Randall, 2015b] Keith Randall. runtime: simplify chan ops, take 2. Go
   commit e410a527b2, 2015. https://go.dev/cl/16740
   修复 issue #13169，随 Go 1.6 发布。

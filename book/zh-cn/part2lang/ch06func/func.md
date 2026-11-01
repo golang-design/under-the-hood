@@ -315,7 +315,7 @@ panic 的调用栈中，循环体所在的函数名为 `main.main-range1`，这�
 
 - <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. "Go internal ABI specification."
   https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/abi-internal.md
-  （开发版本：https://github.com/golang/go/blob/master/src/cmd/compile/abi-internal.md）
+  （开发版本：<https://github.com/golang/go/blob/master/src/cmd/compile/abi-internal.md>）
   闭包上下文寄存器（amd64 的 RDX、arm64 的 R26）与寄存器传参的规定。
 - <a id="ref-chase-cox-2023a"></a>[Chase and Cox, 2023a] David Chase, Russ Cox. "Fixing For Loops in Go
   1.22." The Go Blog, 2023. https://go.dev/blog/loopvar-preview

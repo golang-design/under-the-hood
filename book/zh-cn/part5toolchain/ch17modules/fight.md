@@ -204,8 +204,8 @@ sequenceDiagram
 
 1. Russ Cox. *Go & Versioning（vgo 系列，2018 年 2 月，共七篇）.*
    https://research.swtch.com/vgo 。其中 *Minimal Version Selection*
-   （https://research.swtch.com/vgo-mvs）给出 MVS 限定在 Horn 公式子类、避开 NP 完全的论证，
-   *Semantic Import Versioning*（https://research.swtch.com/vgo-import）阐述主版本进路径的设计。
+   （<https://research.swtch.com/vgo-mvs>）给出 MVS 限定在 Horn 公式子类、避开 NP 完全的论证，
+   *Semantic Import Versioning*（<https://research.swtch.com/vgo-import>）阐述主版本进路径的设计。
 2. The Go Authors. *Using Go Modules（官方博客系列）.* https://go.dev/blog/using-go-modules
 3. Sam Boyer 等. *dep：Go 依赖管理工具（官方实验，现已归档）.* https://github.com/golang/dep
 4. The Go Authors. *Go 1.11 Release Notes（模块的实验性初步支持）.* https://go.dev/doc/go1.11

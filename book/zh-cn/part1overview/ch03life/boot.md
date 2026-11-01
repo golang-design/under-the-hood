@@ -311,6 +311,7 @@ Linux 上不依赖 C 库，而是直接发起系统调用（Linux 保证系统�
   Mitchell (eds.). *System V Application Binary Interface, AMD64 Architecture Processor Supplement*.
   https://gitlab.com/x86-psABIs/x86-64-ABI
   （2014 年版 PDF：https://www.uclibc.org/docs/psABI-x86_64.pdf ，ELF 进程栈与辅助向量 auxv 的布局）
+  存档：https://web.archive.org/web/20260918150420/https://www.uclibc.org/docs/psABI-x86_64.pdf
   其中「Process Initialization」一节规定了程序启动时栈的布局和辅助向量各项的类型编号。
 - <a id="ref-drepper-2013"></a>[Drepper, 2013] Ulrich Drepper. "ELF Handling For Thread-Local Storage."
   2013. https://akkadia.org/drepper/tls.pdf

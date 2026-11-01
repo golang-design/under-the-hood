@@ -197,7 +197,7 @@ netpoller 上排队」，此刻成了屏幕上一段段可点开、可放大的�
 1. The Go Authors. *Package runtime/trace.* https://pkg.go.dev/runtime/trace ;
    *Command trace（`go tool trace`）.* https://pkg.go.dev/cmd/trace
 2. Dmitry Vyukov. *Go Execution Tracer（design proposal）.* 2014.
-   https://go.googlesource.com/proposal/+/master/design/17432-traces.md
+   https://go.dev/s/go15trace
 3. Michael Knyszek. *More predictable benchmarking with `testing.B.Loop`; Execution tracer overhaul & flight recorder.* The Go Blog, 2024.
    https://go.dev/blog/execution-traces-2024
 4. Michael Knyszek 等. *Execution tracer overhaul（设计文档）.*

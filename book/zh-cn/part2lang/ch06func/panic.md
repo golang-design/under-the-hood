@@ -636,7 +636,7 @@ panic 本身的代价也较高：它要借助栈展开器逐帧查找延迟调�
   `gopanic`、`nextDefer`、`nextFrame`、`gorecover`、`recovery` 与 `fatalpanic` 的实现。
 - <a id="ref-go-authors-2026e"></a>[Go Authors, 2026e] The Go Authors. `runtime/runtime2.go`：`_panic` 与
   `_defer`。 https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/runtime2.go
-  （运行时源码目录：https://github.com/golang/go/tree/master/src/runtime）
+  （运行时源码目录：<https://github.com/golang/go/tree/master/src/runtime>）
 - <a id="ref-dempsky-2023"></a>[Dempsky, 2023] Matthew Dempsky. "runtime: refactor defer processing." Go
   commit 9eb1d5317b, 2023. https://go.googlesource.com/go/+/9eb1d5317b
   Go 1.22 中 `gopanic`、`Goexit` 与 `deferreturn` 改为共用以 `_panic` 为状态的循环，即 `nextDefer` 与

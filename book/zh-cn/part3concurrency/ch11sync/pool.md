@@ -446,7 +446,7 @@ func main() {
   Behavior." *Communications of the ACM*, 11(5): 323–333, 1968. https://doi.org/10.1145/363095.363141
 - <a id="ref-fitzpatrick-2013"></a>[Fitzpatrick, 2013] Brad Fitzpatrick. Go issue #4720. *sync: add Pool
   type.* 2013. https://github.com/golang/go/issues/4720
-  `sync.Pool` 的提案与讨论；实现见 Go commit 8c6ef061e3（https://golang.org/cl/41860043），随 Go 1.3 发布。
+  `sync.Pool` 的提案与讨论；实现见 Go commit 8c6ef061e3（<https://golang.org/cl/41860043>），随 Go 1.3 发布。
 - <a id="ref-ghemawat-menage-nd"></a>[Ghemawat and Menage, n.d.] Sanjay Ghemawat, Paul Menage.
   *TCMalloc: Thread-Caching Malloc.* https://google.github.io/tcmalloc/design.html
   前端缓存按线程或按逻辑 CPU 划分，与本节的按 P 分片同构。

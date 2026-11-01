@@ -453,7 +453,7 @@ Go 选择了另一条路：`defer` 不与类型绑定，也不需要额外的语
 - <a id="ref-scales-et-al-2019"></a>[Scales et al., 2019] Dan Scales, Keith Randall, Austin Clements.
   "Proposal: Low-cost defers through inline code, and extra funcdata to manage the panic case." 2019.
   https://go.googlesource.com/proposal/+/master/design/34481-opencoded-defers.md
-  （另一写法：https://go.googlesource.com/proposal/+/refs/heads/master/design/34481-opencoded-defers.md）
+  （另一写法：<https://go.googlesource.com/proposal/+/refs/heads/master/design/34481-opencoded-defers.md>）
   开放编码 `defer` 的设计文档。
 - <a id="ref-scales-2019"></a>[Scales, 2019] Dan Scales. "cmd/compile, cmd/link, runtime: make defers
   low-cost through inline code and extra funcdata." Go commit be64a19d99, 2019.
@@ -470,7 +470,7 @@ Go 选择了另一条路：`defer` 不与类型绑定，也不需要额外的语
   Go 1.22 中统一 `gopanic`、`Goexit` 与 `deferreturn` 的重构。
 - <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `runtime/panic.go`.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/panic.go
-  （开发版本：https://github.com/golang/go/blob/master/src/runtime/panic.go）
+  （开发版本：<https://github.com/golang/go/blob/master/src/runtime/panic.go>）
   `deferproc`、`deferprocStack`、`newdefer`、`deferreturn` 与 `nextDefer` 的实现。
 - <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *The Go Programming Language
   Specification*, "Defer statements". https://go.dev/ref/spec#Defer_statements

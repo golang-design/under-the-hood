@@ -583,7 +583,7 @@ I/O 完成端口，`Sleep` 等的精度由 15.6 毫秒提高到 0.5 毫秒 [[Go 
 - <a id="ref-pratt-2021"></a>[Pratt, 2021] Michael Pratt. Comment on golang/go#44343, 2021.
   https://github.com/golang/go/issues/44343#issuecomment-780845628
   原因分析见同一 issue 的 https://github.com/golang/go/issues/44343#issuecomment-780894325 。
-  Windows 上的问题由 Quim Muntal 的 Go commit cf52e70997（https://go.dev/cl/488675）在 Go 1.23 中
+  Windows 上的问题由 Quim Muntal 的 Go commit cf52e70997（<https://go.dev/cl/488675>）在 Go 1.23 中
   修复。
 - <a id="ref-sokolov-2013"></a>[Sokolov, 2013] Sokolov Yura. *time: make timers heap 4-ary.* 2013.
   https://golang.org/cl/13094043
