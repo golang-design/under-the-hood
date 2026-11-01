@@ -5,159 +5,118 @@ title: "11.7 并发安全散列表"
 
 # 11.7 并发安全散列表
 
-> `sync.Map` 在 Go 1.24 经历了一次彻底的内部重写：原先的
-> read/dirty 双 map 设计被换成一个并发散列字典树（hash-trie）。本节先把这两代设计
-> 各自的来由讲清楚，再把它们放回并发散列表的解法谱系里。
-
-语言内建的 `map` 不是并发安全的。多个 Goroutine 在没有同步的前提下同时读写同一个 `map`，
-运行时会主动探测到并发访问并以 `fatal error: concurrent map read and map write` 终止进程
-（[5.2](../../part2lang/ch05data/map.md) 介绍过这个检测机制，它是不可恢复的，`recover`
-拦不住）。对可用性有要求的服务，这是一处必须正面回答的设计问题：当多个 Goroutine 要共享
-一张表，应当用什么结构。
-
-最朴素的答案是给一张普通 `map` 套一把锁：
+语言内建的 `map` 不是并发安全的。多个 goroutine 在没有同步的情况下读写同一个 `map`，运行时会尽力检测，
+一旦发现就以 `fatal error: concurrent map writes` 或 `concurrent map read and map write` 终止程序，
+`recover` 无法截获（[5.4.4](../../part2lang/ch05data/swisstable.md)）。多个 goroutine 共享一张表时，
+最直接的做法是给普通的 `map` 配一把锁：
 
 ```go
-// 一张普通 map 加一把读写锁，是最直接、也最常够用的并发安全表
 type RWMutexMap struct {
 	mu   sync.RWMutex
-	data map[any]any
+	data map[string]int
 }
 
-func (m *RWMutexMap) Load(k any) (v any, ok bool) {
+func (m *RWMutexMap) Load(k string) (v int, ok bool) {
 	m.mu.RLock()
 	v, ok = m.data[k]
 	m.mu.RUnlock()
 	return
 }
 
-func (m *RWMutexMap) Store(k, v any) {
+func (m *RWMutexMap) Store(k string, v int) {
 	m.mu.Lock()
 	m.data[k] = v
 	m.mu.Unlock()
 }
 ```
 
-这套写法简单、类型安全（键值类型由使用方自己定），在多数场景下也足够快。它的瓶颈只在一处：
-所有读都要竞争同一把锁。`RWMutex` 允许多个读者并发持锁，但持锁本身要更新读者计数，这是一次
-对共享缓存行的原子写，核数一多就成为争用点（[11.2](./mutex.md) 讲过这件事）。`sync.Map`
-要解决的，正是这个「读多到锁本身都嫌贵」的场景。在看它怎么做之前，先把整张解法地图铺开。
+这种写法简单，键与值的类型由使用者决定，多数场景下也足够快。它的瓶颈在读锁本身：`RLock` 与 `RUnlock`
+各要对 `readerCount` 做一次原子加（[11.2.6](./mutex.md)），所有读者都在修改同一条缓存行。2016 年，Bryan
+C. Mills 报告，在多核机器上仅仅反复加读锁、解读锁，随着 `GOMAXPROCS` 增大，每次操作的耗时会增加到
+8 倍左右 [[Mills, 2016a](#ref-mills-2016a)]。`sync.Map` 针对的就是这种读多到连读锁都嫌贵的场景。
+它至今有过两代实现：Go 1.9 引入的双表设计，以及 Go 1.24 起默认采用的并发散列字典树。
 
-## 11.7.1 并发散列表的解法谱系
+## 11.7.1 并发散列表的谱系
 
-让一张散列表支持并发，业界积累了一条从粗到精的谱系，理解它能让我们看清 `sync.Map` 两代设计
-各自站在哪里。
+让散列表支持并发，大致有以下几条路线。
 
-**一把全局锁。** 上面的 `RWMutexMap` 即是。正确、简单，但所有操作串行化在一把锁上，
-是扩展性的下限。
+**一把全局锁。** 上面的 `RWMutexMap` 即是。正确而简单，但所有写操作都串行化在一把锁上，
+读操作也要修改锁的状态。
 
-**锁分段（lock striping）。** 把表切成若干段，每段一把锁，键按散列值落到某一段，操作只锁
-所在段。$S$ 个段理论上把锁争用降低 $S$ 倍。Doug Lea 为 Java 写的 `ConcurrentHashMap`
-（JDK 1.5，2004）是这一思路的经典实现，早期默认 16 段。代价是段粒度固定：段太少仍争用，
-段太多则浪费内存且全表操作（如 `size`、`resize`）变复杂。JDK 8 进一步把段锁细化到桶级别，
-读路径做到无锁（依赖 `volatile` 数组项），写路径在桶头上用 CAS 或 `synchronized`。
+**锁分段**（lock striping）。把表分成若干段，每段一把锁，键按散列值落入某一段，操作只锁所在的段。Doug Lea
+为 Java 设计的 `ConcurrentHashMap` 是经典的例子 [[Lea, n.d.](#ref-lea-nd)]。Java 7 的文档写明，
+表在内部分区，以容许构造参数 `concurrencyLevel`（默认 16）所指示数目的并发更新
+[[Oracle, 2011](#ref-oracle-2011)]；Java 8 的文档则改称这个参数只是一个容量上的提示
+[[Oracle, 2014](#ref-oracle-2014)]。
 
-**无锁散列表。** Cliff Click 的 lock-free hash table（2007）更进一步，用一组状态机与 CAS
-完成插入、扩容与迁移，读写全程不加锁，扩容期间新旧表并存、读写协助搬迁。它把扩展性推到极致，
-代价是实现极其精巧、难以验证，且对内存模型的依赖很重。
+**无锁散列表。** 2007 年，Cliff Click 介绍了一个无等待的并发散列表（摘要写作「wait-free (lock-free)」），
+声称单线程性能优于多数散列表，多线程性能则优于所有比较过的实现，即使修改频繁也能扩展到 768 个 CPU；
+正确性的论证也另辟蹊径，不用通常的先行发生、内存序与内存屏障的思路，算法不需要内存屏障、双字比较并交换，
+也没有比较并交换的自旋循环 [[Click, 2007](#ref-click-2007)]。
 
-**散列字典树与可快照的并发结构。** 另一条线索来自函数式数据结构。Phil Bagwell 2001 年提出
-*Hash Array Mapped Trie*（HAMT）：把键的散列值按每 $b$ 位切片，逐层索引一棵分支因子为
-$2^b$ 的字典树，叶子存键值。它天然支持结构共享，是 Scala、Clojure 不可变 map 的底层。
-Aleksandar Prokopec 等人 2012 年在此之上提出 *CTrie*（concurrent trie），用一个间接节点
-（I-node）作为 CAS 的稳定锚点，使插入、删除全程无锁，并支持 $O(1)$ 的无锁、线性一致快照
-（这是它相对其他并发表最独特的能力）。`sync.Map` 在 Go 1.24 的新实现，正属于这条线。
+**散列字典树。** 2001 年，Phil Bagwell 以数组映射字典树（Array Mapped Trie）
+为基础提出**散列字典树**（HAMT）：把键的散列值按固定的位数切段，每一段在一层中选择一个分支，
+节点用位图记录哪些分支存在，从而只为存在的分支分配空间；它不需要预先分配根散列表，插入、
+查找与删除的时间与键集的大小无关 [[Bagwell, 2001](#ref-bagwell-2001)]。HAMT 后来成为 Scala、Clojure
+等语言不可变映射的基础。2012 年，Aleksandar Prokopec 等人在此基础上提出并发字典树 CTrie，它是无锁的，
+并支持高效的非阻塞快照 [[Prokopec et al., 2012](#ref-prokopec-et-al-2012)]。
 
-```mermaid
-flowchart TD
-    P["问题：让散列表支持并发"] --> A["一把全局锁<br/>简单，全部串行"]
-    P --> B["锁分段<br/>Java ConcurrentHashMap"]
-    P --> C["无锁散列表<br/>Cliff Click，CAS + 状态机"]
-    P --> D["散列字典树<br/>HAMT / CTrie，无锁 + 可快照"]
-    A -.读多写少专门优化.-> E["sync.Map 第一代<br/>read/dirty 双 map（2017）"]
-    D -.同一条线.-> F["sync.Map 第二代<br/>HashTrieMap（Go 1.24）"]
-```
+`sync.Map` 的第一代实现不在这几条路线上，它是针对读多写少负载的一种特化；第二代实现属于散列字典树一族，
+但在关键处与 HAMT 和 CTrie 都不相同，11.7.4 节会具体说明。
 
-`sync.Map` 的两代实现并不在谱系上孤立，它们分别从「读多写少的特化」与「散列字典树」两个方向
-落地。下面依次拆解。
+## 11.7.2 第一代：读写分离的双表
 
-## 11.7.2 第一代：read/dirty 双 map 的设计
+Mills 在报告读写锁问题的同时提出 issue #18177：对读写比很高的表，用小心维护的 `atomic.Value`
+往往比修好读写锁更好，标准库中就有很多这样的表，尤其在 `reflect` 包里；
+但这样的表要正确而高效地实现并不容易，标准库应当提供一个 [[Mills, 2016b](#ref-mills-2016b)]。实现先作为
+`golang.org/x/sync/syncmap` 发布，2017 年 2 月移入标准库，随 Go 1.9 发布
+[[Mills, 2017](#ref-mills-2017)]。
 
-`sync.Map` 自 2017 年（Go 1.9）引入，文档开宗明义地圈定了它擅长的两类场景，至今未变：
+最初的文档只有寥寥数语。Rob Pike 在 issue #21587 中批评它「正确但没有帮助」：它与 `map` 有何不同，
+何时该用，何时不该用，性能特征如何，新手读了都不会明白。Russ Cox 随后改写了文档
+[[Cox, 2017](#ref-cox-2017)]，改写后的说明沿用至今 [[Go Authors, 2026a](#ref-go-authors-2026a)]：`Map`
+是一种特化的类型，多数代码应当使用普通的 `map` 加上单独的锁或协调，以获得更好的类型安全，
+也更容易与表的内容一起维护其他不变量；`Map` 针对两种常见用法做了优化：其一，一个键只写入一次、
+却被读取多次，例如只增不减的缓存；其二，多个 goroutine 读、写、覆盖互不相交的键集。
 
-1. **写一次、读多次**，键一旦写入就基本只读，类似只增不减的缓存；
-2. **多个 Goroutine 读写互不相交的键集**，各自操作各自的键。
-
-这两类场景的共同点是：稳定状态下，绝大多数操作要么是读，要么命中的键早已存在。第一代设计
-据此立下一个核心赌注，把已稳定的键放进一张只读、可无锁访问的表，让热路径彻底绕开锁。
-
-为此 `Map` 维护两张表，一张原子可读的 `read` 与一张受锁保护的 `dirty`，裁剪后的速写：
+这两种用法的共同点是：稳定之后，绝大多数操作命中的键早已存在。第一代实现据此把表分成两张，
+一张可以无锁读取，一张受互斥锁保护。Go 1.23 中的定义如下，注释有删节：
 
 ```go
-// sync.Map 第一代（Go 1.9-1.23）：read/dirty 双 map（速写）
 type Map struct {
 	mu Mutex
 
-	// read 是可无锁读的那一半。它是一个原子加载的只读快照，
-	// load 永远不需要 mu；只有把 dirty 提升上来时才整体替换它。
+	// read contains the portion of the map's contents that are safe for
+	// concurrent access (with or without mu held).
+	// ……
 	read atomic.Pointer[readOnly]
 
-	// dirty 是受 mu 保护的那一半，持有最新的全部键，
-	// 也是新键唯一的落点。
+	// dirty contains the portion of the map's contents that require mu to be
+	// held. To ensure that the dirty map can be promoted to the read map quickly,
+	// it also includes all of the non-expunged entries in the read map.
+	// ……
 	dirty map[any]*entry
 
-	// misses 记录 read 没命中、被迫加锁查 dirty 的次数。
-	// 累积到一定阈值就把 dirty 整体提升为 read。
+	// misses counts the number of loads since the read map was last updated that
+	// needed to lock mu to determine whether the key was present.
+	// ……
 	misses int
 }
 
+// readOnly is an immutable struct stored atomically in the Map.read field.
 type readOnly struct {
 	m       map[any]*entry
-	amended bool // dirty 里有 read 没有的键时为 true
+	amended bool // true if the dirty map contains some key not in m.
 }
 ```
 
-关键不在两张 `map`，而在它们存的是 `*entry`，一个指向值的指针的指针。`read` 与 `dirty`
-对同一个键持有的是**同一个 `entry` 指针**，于是「更新一个已存在键的值」退化成对 `entry` 内部
-那个原子指针做一次 CAS，两张表自动看到同一份新值，无需任何同步：
+`read` 指向一个不可变的 `readOnly`，其中的 `map` 一经发布就不再修改，任何 goroutine 都可以不加锁地读它。
+`dirty` 包含 `read` 中所有未被清除的键，再加上新写入的键，只能在持有 `mu` 时访问。两张表中存放的都是
+`*entry`，同一个键在两张表中指向同一个 `entry`。值存放在 `entry` 内的原子指针 `p` 中，
+因此更新一个已有的键只需对 `p` 做一次原子操作，两张表同时看到新值，不必加锁。
 
-```go
-// entry 是键对应的槽。值通过原子指针更新，避免锁。
-type entry struct {
-	// p 指向实际的值。三种状态：
-	//   正常指针  -> 有效值
-	//   nil      -> 已删除，但 dirty 仍可能保留此 entry
-	//   expunged -> 已删除，且 dirty 不再持有此 entry
-	p atomic.Pointer[any]
-}
-```
-
-**无锁读路径。** `Load` 先原子加载 `read`，命中就直接返回，整条路径没有锁：
-
-```go
-func (m *Map) Load(key any) (value any, ok bool) {
-	read := m.loadReadOnly()      // 原子加载只读快照
-	e, ok := read.m[key]
-	if !ok && read.amended {      // read 没有、dirty 可能有
-		m.mu.Lock()
-		read = m.loadReadOnly()   // 加锁后再查一次，避免与提升竞争
-		e, ok = read.m[key]
-		if !ok && read.amended {
-			e, ok = m.dirty[key]
-			m.missLocked()        // 记一次 miss，可能触发提升
-		}
-		m.mu.Unlock()
-	}
-	if !ok {
-		return nil, false
-	}
-	return e.load()
-}
-```
-
-**misses 计数与提升。** 只有当一个键在 `read` 里查不到时，才退化到加锁查 `dirty`。
-每发生一次这样的慢路径就记一次 miss；一旦 miss 累积到 `len(dirty)`，意味着「重建 read 的成本
-已经被慢路径摊销掉了」，便把整张 `dirty` 原子提升为新的 `read`，并清空 `dirty`、归零计数：
+读操作先查 `read`。命中就直接返回；未命中且 `amended` 为真，说明 `dirty` 中有 `read` 没有的键，才加锁去查
+`dirty`，并记一次未命中。未命中的次数累计到 `dirty` 的大小时，`dirty` 整体提升为新的 `read`：
 
 ```go
 func (m *Map) missLocked() {
@@ -165,172 +124,295 @@ func (m *Map) missLocked() {
 	if m.misses < len(m.dirty) {
 		return
 	}
-	m.read.Store(&readOnly{m: m.dirty}) // dirty 整体上位为新的只读快照
+	m.read.Store(&readOnly{m: m.dirty})
 	m.dirty = nil
 	m.misses = 0
 }
 ```
 
-这套提升机制把「读到一个新写入的键起初要加锁」摊平成均摊无锁。新键先只进 `dirty`，经若干次
-慢路径访问后提升进 `read`，此后对它的读便都走无锁快路径。第一类场景（写一次读多次）于是收敛
-到几乎全无锁读；第二类场景（互不相交的键集）则因各 Goroutine 很少互相 miss，也很少争锁。
+注释给出了阈值的理由：未命中的次数足以抵偿复制 `dirty` 的代价时，才值得提升。提升之后 `dirty` 为空；
+下一次写入新键时，`dirtyLocked` 把 `read` 浅复制一份作为新的 `dirty`。新写入的键起初只在 `dirty` 中，
+读它要加锁；经过一次提升，它才进入 `read`，此后的读取都不加锁。
 
-**惰性删除。** 删除不立刻从 `read` 移除键，只把 `entry.p` 原子置为 `nil`，被置 `nil` 的
-`entry` 仍留在 `read` 里。留待下一次 `dirty` 重建时，若届时 `dirty` 已新建，就把这些 `nil`
-进一步 CAS 成 `expunged` 并不再复制进新 `dirty`，物理删除推迟到此刻。`nil`/`expunged` 两态
-区分「删了但 read 还认得」与「删了且 dirty 已弃」，让删除也尽量留在无锁的 `entry` 操作上。
+删除也尽量不加锁。键若在 `read` 中，删除只是把它的 `entry.p` 原子地置为 nil，键仍留在 `read` 里；键若只在
+`dirty` 中，则加锁直接从 `dirty` 删除。`entry.p` 因此有三种状态：
 
-第一代的整张哲学，是用空间（两份 `map`）和一点延迟（新键要被读若干次才提升）换读路径的无锁。
-它对自己声明的两类场景确实漂亮，但代价也写在设计里。
+- 正常的指针：键有效，记录在 `read` 中，`dirty` 非空时也在 `dirty` 中；
+- nil：键已删除，此时 `dirty` 为空，或者 `dirty` 中仍有这个 `entry`；
+- `expunged`：键已删除，`dirty` 非空，且 `dirty` 中没有这个 `entry`。
 
-## 11.7.3 第一代的退化：为何要重写
+`dirtyLocked` 复制 `read` 时，把值为 nil 的 `entry` 用比较并交换改为 `expunged`，不复制进新的 `dirty`。
+等这个 `dirty` 下一次被提升为 `read`，这些键才真正从 `read` 中消失。在此之前若又有人写入一个已是
+`expunged` 的键，必须先在锁内把它改回 nil 并加入 `dirty`，否则通过 `dirty` 查找的读者会找不到它。nil 与
+`expunged` 的区分，正是为了记住 `dirty` 中是否还有这个 `entry`。
 
-read/dirty 的均摊无锁，前提是「键集趋于稳定」。一旦工作负载偏离声明的两类场景，它会显著退化：
+这套设计的代价也写在其中。新键要等一次提升才进入无锁路径；每次提升之后写入第一个新键，都要把整张 `read`
+复制一遍，键集不断变化时，这样的复制会反复发生；锁仍然只有一把，写操作一多，所有慢速路径又挤回 `mu` 上。
+指针也很多，Mills 在 issue #21031 中指出，这种实现浪费了跟随指针的 CPU 时间，
+稳态下每个键至少多占一个指针的内存 [[Mills, 2017b](#ref-mills-2017b)]。
 
-- **写密集或键频繁增删（churn）。** 每写入一个 `read` 里没有的新键都要加锁，miss 累积到阈值
-  又要把整张 `dirty` 复制一遍重建。键集不断变动时，$O(n)$ 的整表复制成了常态开销。
-- **内存放大。** 稳定状态下同一份键在 `read` 与 `dirty` 各存一份指针，删除又靠惰性回收，
-  内存占用接近两倍。
-- **锁的粒度仍是全局。** 慢路径上只有一把 `mu`，churn 让慢路径变频繁后，所有写重新挤回这把锁，
-  分段、无锁谱系上的扩展性收益一概享受不到。
+## 11.7.3 接口与同步保证
 
-`unique` 包（Go 1.23 引入的值规范化设施）把这些短板放大到无法接受：它的内部表是写密集、
-键不断进出的，正是 read/dirty 最差的负载。社区为此先在 `internal/concurrent` 落地了一个
-并发散列字典树，随后顺势用它重写了 `sync.Map`。Go 1.24（2025 年初）起，`sync.Map` 不再有
-read/dirty，它的实现只剩薄薄一层，把全部工作转交给 `internal/sync.HashTrieMap`：
+`sync.Map` 的接口在第一代实现期间逐步扩充：
 
-```go
-// Go 1.24 起的 sync.Map：API 不变，实现整体换成 HashTrieMap
-type Map struct {
-	_ noCopy
-	m isync.HashTrieMap[any, any]
+| 版本 | 新增的方法 | issue |
+| --- | --- | --- |
+| Go 1.9 | `Load`、`Store`、`LoadOrStore`、`Delete`、`Range` | #18177 |
+| Go 1.15 | `LoadAndDelete` | #33762 |
+| Go 1.20 | `Swap`、`CompareAndSwap`、`CompareAndDelete` | #51972 |
+| Go 1.23 | `Clear` | #61696 |
+
+`LoadAndDelete` 以及 `Swap`、`CompareAndSwap`、`CompareAndDelete` 由 Changkun Ou 实现
+[[Ou, 2019](#ref-ou-2019)] [[Ou, 2022a](#ref-ou-2022a)]。
+
+文档用内存模型的术语给出保证：写操作同步先于观察到其效果的读操作。哪些调用算读、哪些算写，文档逐一列明：
+`Load`、`LoadAndDelete`、`LoadOrStore`、`Swap`、`CompareAndSwap` 与 `CompareAndDelete` 是读操作；
+`Delete`、`LoadAndDelete`、`Store` 与 `Swap` 是写操作；`LoadOrStore` 在返回 `loaded` 为假时是写操作，
+`CompareAndSwap` 与 `CompareAndDelete` 在成功时是写操作 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
+这段说明由 Cox 在 2022 年写入，随 Go 1.19 发布 [[Cox, 2022](#ref-cox-2022)]；Go 1.20 新增的三个方法，
+其分类是 Changkun Ou 随后补上的 [[Ou, 2022b](#ref-ou-2022b)]。
+
+`LoadOrStore` 的语义值得多看一眼：键不存在时写入给定的值，存在时返回已有的值，
+二者在一次不可分割的操作中完成。每个 goroutine 都以自己的提议调用它，写入成功的只有一个，
+所有调用者得到的都是同一个值。这正是 11.3.3 节所说的共识，`LoadOrStore` 与比较并交换一样，能为任意多个
+goroutine 解决共识（[11.3.3](./atomic.md)）：
+
+```go {run=true}
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func main() {
+	type result struct {
+		actual any
+		loaded bool
+	}
+	var m sync.Map
+	var results [8]result
+	var wg sync.WaitGroup
+	for id := range results {
+		wg.Go(func() {
+			actual, loaded := m.LoadOrStore("key", id) // 各自提议自己的编号
+			results[id] = result{actual, loaded}
+		})
+	}
+	wg.Wait()
+
+	stored, agree := 0, true
+	for _, r := range results {
+		if !r.loaded {
+			stored++ // loaded 为假：这次调用写入了值
+		}
+		agree = agree && r.actual == results[0].actual
+	}
+	fmt.Println("写入成功的调用：", stored)
+	fmt.Println("所有调用得到同一个值：", agree)
 }
-
-func (m *Map) Load(key any) (any, bool) { return m.m.Load(key) }
-func (m *Map) Store(key, value any)     { m.m.Store(key, value) }
 ```
 
-公开 API 一字未改，这次重写对用户完全透明：换掉的只是「同一份契约如何兑现」。
+运行结果如下：
+
+```
+写入成功的调用： 1
+所有调用得到同一个值： true
+```
 
 ## 11.7.4 第二代：HashTrieMap
 
-`HashTrieMap` 是 CTrie 那条线的工程化落地。它把键的 64 位散列值按每 4 位一段切片，逐层索引一棵
-**分支因子为 16** 的字典树。每个内部节点（间接节点）有 16 个孩子槽，第 $L$ 层用散列值的第 $L$
-段（4 位）选孩子，$64 / 4 = 16$ 层即可走完所有散列位。裁剪后的结构：
+第二代实现并非为 `sync.Map` 而写。2024 年，Michael Knyszek 为即将加入的 `unique` 包（Go 1.23）
+在新的内部包 `internal/concurrent` 中加入了一个并发散列字典树 `HashTrieMap`
+[[Knyszek, 2024a](#ref-knyszek-2024a)]。提交说明写道，它专为频繁成功的查找、相对少见的插入与删除而构建；
+单线程下 `LoadOrStore` 的性能与加锁的 `map` 相当，`Load` 在作者机器的 24 个核上完美扩展。随后它被移到
+`internal/sync`，补齐了 `sync.Map` 的全部操作。Knyszek 发现，几乎在每一项基准测试中，
+`HashTrieMap[any, any]` 都比 `sync.Map` 快，于是在 Go 1.24 中把它作为 `sync.Map` 的默认实现
+[[Knyszek, 2024b](#ref-knyszek-2024b)] [[Knyszek, 2024c](#ref-knyszek-2024c)]。issue #70683
+列出的微基准测试中，查找多数不命中的情形快了约 27%，针对旧实现弱点构造的反复分配与反复删除的情形分别快了约
+67% 与 78%；查找多数命中的情形则慢了约 7%。Go 1.24 的发布说明写道，新实现尤其改善了修改操作：
+大型表上对互不相交的键集的修改不太可能再相互争用，查找也不再需要预热才能做到低争用；
+遇到问题可以在构建时设置 `GOEXPERIMENT=nosynchashtriemap` 切回旧实现
+[[Go Authors, 2025](#ref-go-authors-2025)]。这一开关默认开启了整整一个发布周期之后，Knyszek 在 Go 1.26
+中删除了旧实现 [[Knyszek, 2025](#ref-knyszek-2025)]。
+
+今天的 `sync.Map` 只是一层包装，每个方法都转交给 `HashTrieMap`：
+
+```go
+type Map struct {
+	_ noCopy
+
+	m isync.HashTrieMap[any, any]
+}
+
+func (m *Map) Load(key any) (value any, ok bool) {
+	return m.m.Load(key)
+}
+```
+
+字典树有两种节点 [[Go Authors, 2026b](#ref-go-authors-2026b)]：
 
 ```go
 const (
+	// 16 children. This seems to be the sweet spot for
+	// load performance: any smaller and we lose out on
+	// 50% or more in CPU performance. Any larger and the
+	// returns are minuscule (~1% improvement for 32 children).
 	nChildrenLog2 = 4
-	nChildren     = 1 << nChildrenLog2 // 每个内部节点 16 个孩子，经测是 load 性能的甜点
+	nChildren     = 1 << nChildrenLog2
 	nChildrenMask = nChildren - 1
 )
 
-// 间接节点：字典树的内部节点
+// indirect is an internal node in the hash-trie.
 type indirect[K comparable, V any] struct {
 	node[K, V]
-	dead     atomic.Bool                          // 节点已被摘除，读者须重试
-	mu       Mutex                                // 仅保护本节点 children 的变更
+	dead     atomic.Bool
+	mu       Mutex // Protects mutation to children and any children that are entry nodes.
 	parent   *indirect[K, V]
-	children [nChildren]atomic.Pointer[node[K, V]] // 16 个原子孩子槽
+	children [nChildren]atomic.Pointer[node[K, V]]
 }
 
-// 叶子节点：键值对，溢出链处理散列冲突
+// entry is a leaf node in the hash-trie.
 type entry[K comparable, V any] struct {
 	node[K, V]
-	overflow atomic.Pointer[entry[K, V]] // 同槽冲突的键串成链
+	overflow atomic.Pointer[entry[K, V]] // Overflow for hash collisions.
 	key      K
 	value    V
 }
 ```
 
-设计的支点是 `children` 数组里每个槽都是 `atomic.Pointer`。**读路径全程无锁**，从根开始，
-每层取散列值的 4 位选一个孩子槽，原子加载该槽，是叶子就在溢出链上比对键并返回，是间接节点就
-下沉一层：
+内部节点 `indirect` 有 16 个孩子槽，每个槽都是原子指针；叶子 `entry` 保存键和值，散列值完全相同的键用
+`overflow` 串成链表。键的散列值在 64 位平台上有 64 位，每层用其中 4 位选择孩子，至多 16 层。
+散列函数取自对应 `map` 类型的散列函数，每张表在初始化时还取一个随机种子，同一个键在不同的表中散列值不同，
+这与内建 `map` 抵御哈希洪水的办法相同（[5.3.2](../../part2lang/ch05data/map.md)）。
+
+查找只有原子加载：
 
 ```go
 func (ht *HashTrieMap[K, V]) Load(key K) (value V, ok bool) {
-	hash := ht.keyHash(/* key */)
+	ht.init()
+	hash := ht.keyHash(abi.NoEscape(unsafe.Pointer(&key)), ht.seed)
+
 	i := ht.root.Load()
-	hashShift := 8 * goarch.PtrSize // 64
+	hashShift := 8 * goarch.PtrSize
 	for hashShift != 0 {
-		hashShift -= nChildrenLog2          // 每层吃掉 4 位
-		n := i.children[(hash>>hashShift)&nChildrenMask].Load() // 原子加载孩子槽
+		hashShift -= nChildrenLog2
+
+		n := i.children[(hash>>hashShift)&nChildrenMask].Load()
 		if n == nil {
-			return *new(V), false           // 槽空，键不存在
+			return *new(V), false
 		}
 		if n.isEntry {
-			return n.entry().lookup(key)    // 到叶子，溢出链上比对键
+			return n.entry().lookup(key)
 		}
-		i = n.indirect()                    // 下沉一层
+		i = n.indirect()
 	}
-	panic("ran out of hash bits")
+	panic("internal/sync.HashTrieMap: ran out of hash bits while iterating")
 }
 ```
 
-整条读路径只有原子加载，没有任何锁、没有 CAS、没有 miss 计数。对所有键一视同仁，不存在第一代
-那种「新键要被读若干次才进无锁快路径」的预热期。
+从根开始，每层取 4 位散列值，原子地加载对应的孩子槽：槽为空，键不存在；是叶子，就在溢出链上比较键；
+是内部节点，就下降一层。读叶子的 `key` 与 `value` 不需要原子操作，因为叶子一经发布就不再修改：`Swap` 与
+`CompareAndSwap` 修改一个键的值时，在锁内新建一个叶子替换旧的，而不是改写旧叶子。这与第一代不同，
+所有键都走同一条无锁路径，没有「先加锁、提升之后才无锁」的预热。
 
-```mermaid
-flowchart TD
-    H["对 key 求散列 hash（64 位）"] --> R["root.Load() 取根间接节点"]
-    R --> SEL["取 hash 第 L 段 4 位<br/>选 children 槽并原子 Load"]
-    SEL --> CHK{槽内容?}
-    CHK -->|nil| MISS["键不存在，返回 ok=false"]
-    CHK -->|间接节点| DOWN["下沉一层，L 加 1，回到选槽"]
-    CHK -->|叶子 entry| OV["溢出链上逐个比对 key"]
-    DOWN --> SEL
-    OV --> FOUND{命中?}
-    FOUND -->|是| RET["返回 value, true"]
-    FOUND -->|否| MISS
-```
+写操作先用同样的方式无锁地找到位置，再锁住该位置所在的内部节点，在锁内重新检查：
+槽的内容是否仍是刚才看到的，节点是否已被标记为 `dead`。检查不通过就释放锁，从根重来。以 `LoadOrStore`
+插入新键为例，若目标槽为空，直接存入新叶子；若槽中已有一个别的叶子，就要向下扩展出一层或几层内部节点，
+直到两个键的散列值在某一层分开。扩展出的子树先在私下建好，最后才用一次原子存储挂到槽上，注释写道：
+最后发布，读者就不会看到旧叶子不在树中的中间状态。锁的范围是单个内部节点，不同子树上的写操作可以并行，
+这相当于一种随着树的形状自然生长的锁分段。
 
-**写路径的锁是局部的。** `Store`、`LoadOrStore`、删除会锁住相关那个间接节点的 `mu`，
-而非一把全局锁，不同子树上的写得以真正并行。这正是锁分段思想在字典树上的自然形态：段不再是
-固定切分，而是随树的形状动态生长。删除一个键后若间接节点变空，会被标记 `dead` 并从父节点
-摘除，读者撞上 `dead` 节点便重试，由此保持树的紧凑。散列冲突（同槽的不同键）落在叶子的
-`overflow` 链上线性处理。
+删除使一个内部节点变空时，删除者在仍持有该节点锁的情况下锁住父节点，把该节点标记为 `dead`，
+从父节点中摘除，再继续向上检查，使树保持紧凑。加锁的次序总是先子后父，插入等其他操作只锁一个节点，
+因此不会死锁。被标记为 `dead` 的节点可能仍被并发的写者找到，所以写者在锁内检查 `dead`，发现后从根重来；
+读者不检查 `dead`：被摘除的节点已经为空，读者在其中只会得到「键不存在」，与删除之后的状态一致。
 
-把它和第一代对照：read/dirty 用「整表复制 + 提升」换读的无锁，写密集时复制成本爆炸；
-`HashTrieMap` 用「不可变路径 + 局部锁」换读的无锁，写只触及一条根到叶的路径与一个节点的锁，
-天然随键集生长而分散。代价是单次读要走最多 16 层指针跳转，常数因子比一次 `map` 散列查找略高，
-但省掉了第一代的预热、整表复制与内存翻倍。对 `unique` 那类写密集负载，这是决定性的改善；
-对第一代擅长的读多写少负载，它也不输。
+与 11.7.1 节的两种字典树相比，`HashTrieMap` 沿用了 HAMT 按散列值逐段索引字典树的思路，
+但每个内部节点固定有 16 个槽，不做 HAMT 的位图压缩；它的读路径无锁，写路径却对单个节点加锁，不像 CTrie
+那样完全无锁；它也不提供快照，`Range` 与 `All` 的文档明确说明，遍历不一定对应表的任何一个一致快照。
+这些取舍都偏向简单与读的速度。
 
-## 11.7.5 何时用 sync.Map，何时用 RWMutex + map
+## 11.7.5 何时使用
 
-两代实现换了内里，官方给用户的指引始终如一：**多数代码应当用普通 `map` 配一把锁，而不是
-`sync.Map`**。理由有两层。
+两代实现换了内部，文档的指引不变：多数代码应当使用普通的 `map` 加一把锁，`sync.Map`
+只在它声明的两种用法下，且锁争用经测量确为瓶颈时才值得使用。新实现消除了旧实现的一些退化，
+例如键集频繁变化时的整表复制与新键的预热，但它的接口仍以 `any` 为键和值，这带来两项代价。
 
-其一是适用面。`sync.Map` 的优势集中在它声明的两类场景。落在其外、尤其读写均衡或需要频繁
-全表操作的负载，`RWMutex + map` 往往更简单也不更慢。
+其一是类型安全。键和值的类型无法由编译器检查，取出的值还要做类型断言。其二是分配。非指针类型的值转换为
+`any` 时通常需要在堆上分配，以 `string` 为键的表，每次写入都要多一次分配；`HashTrieMap` 本身是泛型的，
+`sync.Map` 却只能使用 `HashTrieMap[any, any]`。由于兼容性的约束，`sync.Map` 不能改为泛型类型。Ian Lance
+Taylor 在 2025 年提出新的 `sync/v2` 包，用泛型的 `Map` 与 `Pool` 替代现有的两个类型，截至 Go 1.26
+这一提案仍在讨论之中 [[Taylor, 2025](#ref-taylor-2025)]。
 
-其二是类型安全的代价，常被忽略。`sync.Map` 的键值是 `any`，每次存取都伴随装箱、拆箱与接口
-断言，编译器无从为其检查键值类型；`RWMutex + map` 则可以是 `map[string]*Session` 这样静态
-类型化的表，类型错误在编译期就被挡下。Go 1.18 的泛型并未改变 `sync.Map` 的公开签名（它仍是
-`any`），享受不到 `HashTrieMap[K, V]` 内部那套泛型，类型安全的损失依旧存在。
+## 延伸阅读
 
-把 `sync.Map` 当成为特定场景打磨的专用工具：确认负载落在它的两类用例里、且锁争用经实测确为
-瓶颈时再用它，其余情况普通 `map` 加一把锁是更稳妥的默认选择。性能的提升从不白来，`sync.Map`
-用类型安全和适用面的收窄，换来了那两类场景下的无锁读。
-
-## 延伸阅读的文献
-
-1. Phil Bagwell. *Ideal Hash Trees.* EPFL Technical Report, 2001.
-   https://infoscience.epfl.ch/record/64398 （HAMT，散列字典树的源头）
-2. Aleksandar Prokopec, Nathan G. Bronson, Phil Bagwell, Martin Odersky.
-   *Concurrent Tries with Efficient Non-Blocking Snapshots.* PPoPP 2012.
-   https://doi.org/10.1145/2145816.2145836 （CTrie，HashTrieMap 的直接思想来源）
-3. Doug Lea. *Overview of package util.concurrent (ConcurrentHashMap).* 及 JSR-166。
-   http://gee.cs.oswego.edu/dl/classes/EDU/oswego/cs/dl/util/concurrent/intro.html
-   （锁分段并发散列表的经典实现）
-4. Cliff Click. *A Lock-Free Hash Table.* Stanford EE380, 2007 年 2 月 21 日。
-   https://web.stanford.edu/class/ee380/Abstracts/070221.html
-5. The Go Authors. *sync.Map documentation.* https://pkg.go.dev/sync#Map
-   （两类适用场景与内存模型保证的官方说明）
-6. The Go Authors. *internal/sync/hashtriemap.go.* Go 源码树。
-   https://github.com/golang/go/blob/master/src/internal/sync/hashtriemap.go
-7. Go issue golang/go#21031（sync.Map 可扩展性的讨论）、#70683（unique 推动的重写），
-   及 `HashTrieMap` 引入、`sync.Map` 改用其实现的相关提交。
-8. 本书 [5.2 散列表](../../part2lang/ch05data/map.md)、[11.2 互斥锁](./mutex.md)、
-   [12.2 分配器组件](../../part4memory/ch12alloc/component.md)（mcentral 的「为并发而重构数据
-   结构」是同一类演进）。
+- <a id="ref-bagwell-2001"></a>[Bagwell, 2001] Phil Bagwell. *Ideal Hash Trees.* EPFL Technical Report,
+  2001. https://infoscience.epfl.ch/record/64398
+  HAMT，散列字典树的源头。
+- <a id="ref-click-2007"></a>[Click, 2007] Cliff Click. *A Fast Wait-Free HashTable.* Stanford EE380
+  Computer Systems Colloquium, February 21, 2007.
+  https://web.stanford.edu/class/ee380/Abstracts/070221.html
+- <a id="ref-cox-2017"></a>[Cox, 2017] Russ Cox. sync: document when and when not to use Map. Go commit
+  3f150934e2, 2017. https://go.dev/cl/83796
+  修复 issue #21587，随 Go 1.10 发布。
+- <a id="ref-cox-2022"></a>[Cox, 2022] Russ Cox. runtime, sync, sync/atomic: document happens-before
+  guarantees. Go commit a71ca3dfbd, 2022. https://go.dev/cl/381316
+  随 Go 1.19 发布。
+- <a id="ref-go-authors-2025"></a>[Go Authors, 2025] The Go Authors. *Go 1.24 Release Notes.*
+  https://go.dev/doc/go1.24
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *sync.Map documentation.*
+  https://pkg.go.dev/sync#Map
+  两类适用场景与内存模型保证的官方说明。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *internal/sync/hashtriemap.go.* Go
+  源码树。 https://github.com/golang/go/blob/master/src/internal/sync/hashtriemap.go
+  本节摘录取自 Go 1.26。
+- <a id="ref-knyszek-2024a"></a>[Knyszek, 2024a] Michael Anthony Knyszek. internal/concurrent: add
+  HashTrieMap. Go commit fa470f6245, 2024. https://go.dev/cl/573956
+  随 Go 1.23 发布。
+- <a id="ref-knyszek-2024b"></a>[Knyszek, 2024b] Michael Anthony Knyszek. sync: make HashTrieMap[any, any]
+  the default implementation of Map. Go commit aecb8faa91, 2024. https://go.dev/cl/608335
+  随 Go 1.24 发布。
+- <a id="ref-knyszek-2024c"></a>[Knyszek, 2024c] Michael Anthony Knyszek. Go issue #70683. *sync: replace
+  Map implementation with HashTrieMap.* 2024. https://github.com/golang/go/issues/70683
+  记录 Go 1.24 的替换及其微基准测试。
+- <a id="ref-knyszek-2025"></a>[Knyszek, 2025] Michael Anthony Knyszek. sync: remove synchashtriemap
+  GOEXPERIMENT. Go commit e15a14c4dd, 2025. https://go.dev/cl/690395
+  随 Go 1.26 发布。
+- <a id="ref-lea-nd"></a>[Lea, n.d.] Doug Lea. *Overview of package util.concurrent (ConcurrentHashMap).*
+  及 JSR-166。 http://gee.cs.oswego.edu/dl/classes/EDU/oswego/cs/dl/util/concurrent/intro.html
+  锁分段并发散列表的经典实现。
+- <a id="ref-mills-2016a"></a>[Mills, 2016a] Bryan C. Mills. Go issue #17973. *sync: RWMutex scales poorly
+  with CPU count.* 2016. https://github.com/golang/go/issues/17973
+- <a id="ref-mills-2016b"></a>[Mills, 2016b] Bryan C. Mills. Go issue #18177. *sync: add a Map to replace
+  RWLock+map usage.* 2016. https://github.com/golang/go/issues/18177
+- <a id="ref-mills-2017"></a>[Mills, 2017] Bryan C. Mills. sync: import Map from x/sync/syncmap. Go commit
+  959025c0ac, 2017. https://go.dev/cl/36617
+  随 Go 1.9 发布。
+- <a id="ref-mills-2017b"></a>[Mills, 2017b] Bryan C. Mills. Go issue #21031. *sync: reduce pointer
+  overhead in Map.* 2017. https://github.com/golang/go/issues/21031
+- <a id="ref-oracle-2011"></a>[Oracle, 2011] Oracle. ConcurrentHashMap. *Java Platform, Standard Edition 7
+  API Specification*, 2011.
+  https://docs.oracle.com/javase/7/docs/api/java/util/concurrent/ConcurrentHashMap.html
+- <a id="ref-oracle-2014"></a>[Oracle, 2014] Oracle. ConcurrentHashMap. *Java Platform, Standard Edition 8
+  API Specification*, 2014.
+  https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/ConcurrentHashMap.html
+- <a id="ref-ou-2019"></a>[Ou, 2019] Changkun Ou. sync: add new Map method LoadAndDelete. Go commit
+  2e8dbae85c, 2019. https://go.dev/cl/205899
+  修复 issue #33762，随 Go 1.15 发布。
+- <a id="ref-ou-2022a"></a>[Ou, 2022a] Changkun Ou. sync: add new Map method Swap, CompareAndSwap,
+  CompareAndDelete. Go commit 395323c4d0, 2022. https://go.dev/cl/399094
+  修复 issue #51972，随 Go 1.20 发布。
+- <a id="ref-ou-2022b"></a>[Ou, 2022b] Changkun Ou. sync: document memory model for
+  Swap/CompareAnd{Swap,Delete} in Map. Go commit f07910bd57, 2022. https://go.dev/cl/459715
+  随 Go 1.21 发布。
+- <a id="ref-prokopec-et-al-2012"></a>[Prokopec et al., 2012] Aleksandar Prokopec, Nathan G. Bronson, Phil
+  Bagwell, Martin Odersky. "Concurrent Tries with Efficient Non-Blocking Snapshots." *PPoPP 2012*,
+  151–160, 2012. https://doi.org/10.1145/2145816.2145836
+  CTrie。
+- <a id="ref-taylor-2025"></a>[Taylor, 2025] Ian Lance Taylor. Go issue #71076. *proposal: sync/v2: new
+  package.* 2025. https://github.com/golang/go/issues/71076
+- 本书 [5.3 散列表](../../part2lang/ch05data/map.md)、
+  [5.4 Swiss Table](../../part2lang/ch05data/swisstable.md)、[11.2 互斥锁](./mutex.md)、
+  [12.2 分配器组件](../../part4memory/ch12alloc/component.md)（mcentral 的「为并发而重构数据结构」
+  是同一类演进）。

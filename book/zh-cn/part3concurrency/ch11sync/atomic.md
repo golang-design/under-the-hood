@@ -5,318 +5,605 @@ title: "11.3 原子操作"
 
 # 11.3 原子操作
 
-`sync/atomic` 是 Go 同步原语里最贴近硬件的一层。互斥锁（[11.1](./mutex.md)）、channel
-（[8](../ch08channel)）这些更高层的工具，内部都建立在原子操作之上。它提供「不可分割」的读写与
-读改写：一个原子操作要么完整发生、要么没发生，中间不会被别的 goroutine 看到一半。但原子操作的
-意义远不止「防撕裂」。它是无锁编程的地基，而无锁编程背后，有一套关于「哪些原语能做什么」的
-深刻理论，那是本节真正想讲清的东西。
+[11.2](./mutex.md) 中互斥锁的快速路径只是一次比较并交换。本节讨论这类操作本身：`sync/atomic`
+提供哪些操作，编译器如何把它们翻译成机器指令；比较并交换为什么在各种原子操作中处于中心地位；无锁算法能
+提供怎样的进展保证，又要面对哪些困难；以及 Go 为什么只提供顺序一致的原子操作，并在 Go 1.19
+引入了原子类型。各个接口加入的版本见 [11.1.4](./basic.md)。
 
-本节先把基本操作摆出来，落到 CAS 这块基石；再退后一步，借 Herlihy 的共识层级回答「为什么是
-CAS」；接着进入无锁的暗礁 ABA 与内存回收，说明 Go 为何把硬的无锁结构留在运行时内部；最后回到
-工程，讲 `sync/atomic` 的顺序一致承诺，以及 Go 1.19 那次把「该用原子访问」编进类型的演进。
+## 11.3.1 不可分割的读改写
 
-## 11.3.1 几种基本操作
+一个操作是**原子操作**（atomic operation），是指其他 goroutine 只能观察到它执行之前或执行之后的状态，
+观察不到中间状态。困难通常不在单次读或写，而在「读出、计算、写回」这样的组合：两个 goroutine 同时
+执行 `x++`，可能读到同一个旧值，各自加一后写回，结果只加了一次。
 
-原子操作的家族不大：`Load`（原子读）、`Store`（原子写）、`Add`（原子增减）、`Swap`（原子交换）、
-`CompareAndSwap`（比较并交换，CAS），以及 Go 1.23 起补齐的 `And`/`Or`（原子位运算）。它们都落到
-单条带 `LOCK` 前缀的 CPU 指令上：x86 上 CAS 是 `LOCK CMPXCHG`，ARMv8 上是 `LDXR`/`STXR` 的
-load-linked / store-conditional 重试对，加法是 `LOCK XADD`。换言之，原子性的最终保证来自硬件，
-`sync/atomic` 只是把这些指令包装成可移植的 Go 函数。
-
-其中 CAS 是无锁编程的基石。它原子地完成「如果当前值还是我以为的那个，就改成新值，否则什么都
-不做并告诉我失败」：
+`sync/atomic` 由 Russ Cox 于 2011 年加入 Go [[Cox, 2011](#ref-cox-2011)]。
+包文档用等价的顺序代码说明每种读改写操作的语义，整段代码作为一个不可分割的步骤执行
+[[Go Authors, 2026a](#ref-go-authors-2026a)]：
 
 ```go
-// CompareAndSwap 的语义（伪代码，整体不可分割地执行）
-func CompareAndSwapInt64(addr *int64, old, new int64) (swapped bool) {
-    if *addr == old {
-        *addr = new
-        return true
-    }
-    return false
+// 交换（SwapT）
+old = *addr
+*addr = new
+return old
+
+// 比较并交换（CompareAndSwapT）
+if *addr == old {
+	*addr = new
+	return true
 }
+return false
+
+// 加法（AddT）
+*addr += delta
+return *addr
 ```
 
-为什么单单一个 CAS 就够撑起无锁？因为几乎所有无锁算法都能写成同一种骨架，一个**重试循环**：
-读出当前值，据它算出想要的新值，再用 CAS 把它写回去；只有「这期间没人动过」时 CAS 才成功，
-否则拿到的就是别人更新后的值，重来一遍即可。
+载入与存储（`LoadT`、`StoreT`）分别是 `return *addr` 与 `*addr = val` 的原子版本。Go 1.23 加入的
+`AndT` 与 `OrT` 对 `*addr` 做按位与、按位或；与 `AddT` 不同，它们返回的是旧值。
+
+其中最通用的是**比较并交换**（compare-and-swap，CAS）。任何「根据旧值算出新值」的更新，都可以写成一个
+重试循环：读出当前值，算出新值，再用 CAS 写回；如果在此期间有其他 goroutine 修改了这个变量，CAS 失败，
+循环重新读取：
 
 ```go
 for {
-    old := atomic.LoadInt64(&x)   // 读当前值
-    new := f(old)                 // 据它算出期望的新值
-    if atomic.CompareAndSwapInt64(&x, old, new) {
-        break                     // 没人抢先改过，提交成功
-    }
-    // CAS 失败说明有别的 goroutine 抢先改了 x，拿新值再算一遍
+	old := atomic.LoadInt64(&x)
+	if atomic.CompareAndSwapInt64(&x, old, f(old)) {
+		break
+	}
 }
 ```
 
-```mermaid
-flowchart TD
-    S["想把 x 从旧值改成新值"] --> L["读取当前值 cur"]
-    L --> CMP["据 cur 算出期望的新值"]
-    CMP --> CAS{"CompareAndSwap(x, cur, 新值) 成功?"}
-    CAS -->|成功| DONE["提交完成"]
-    CAS -->|"失败：有人抢先改了 x"| L
+这个循环不会阻塞：一个 goroutine 的 CAS 失败，说明另一个 goroutine 的 CAS 刚刚成功。竞争不激烈时，
+它比加锁便宜，省去了休眠与唤醒；竞争激烈时，大量 CAS 失败，变量所在的缓存行在处理器之间来回传递，
+吞吐量可能还不如一把锁。此外，系统整体虽然一直在前进，某个 goroutine 却可能一再失败，迟迟完成不了
+自己的更新。这是饥饿，而不是活锁：活锁是指所有参与者都在活动却没有一个取得进展（11.3.4）。
+
+包文档开头的提醒因此值得认真对待：这些函数需要非常小心才能正确使用；除了特殊的底层应用，同步最好
+使用 channel 或 `sync` 包提供的设施 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
+
+## 11.3.2 从函数到指令
+
+`sync/atomic` 中的函数在 Go 源码里只有声明，没有函数体；`asm.s` 中的汇编桩直接跳转到运行时的
+`internal/runtime/atomic` 包。不过在常规构建中，这些桩并不会被调用。编译器把 `sync/atomic` 的函数
+登记为 `internal/runtime/atomic` 中对应函数的别名，而后者是编译器的内建函数（intrinsic），调用处直接
+展开成指令 [[Go Authors, 2026b](#ref-go-authors-2026b)]：
+
+```go
+// cmd/compile/internal/ssagen/intrinsics.go
+	/******** sync/atomic ********/
+
+	// Note: these are disabled by flag_race in findIntrinsic below.
+	alias("sync/atomic", "LoadInt32", "internal/runtime/atomic", "Load", all...)
+	alias("sync/atomic", "LoadInt64", "internal/runtime/atomic", "Load64", all...)
+	// ……
 ```
 
-这个循环里藏着无锁的代价。与锁不同，CAS 失败不会让 goroutine 阻塞，而是立刻重试。竞争平和时
-这很划算，省去了上锁、可能的睡眠与唤醒；可一旦竞争激烈，多个 goroutine 反复读到彼此覆盖后的值、
-反复 CAS 失败，CPU 全耗在空转上，吞吐反而不如一把老老实实的锁。还有一处隐患叫**活锁**：大家都
-在重试，系统整体看似在动，单个 goroutine 却可能长时间提交不成。所以原子操作适合的是单字、
-低竞争、或读多写少的场景，计数器、标志位、配置指针之类；把一段复杂临界区硬拆成 CAS 循环，
-往往得不偿失。
+注释中的例外是竞态检测器：以 `-race` 构建时，这些调用不展开，而是进入运行时为竞态检测准备的版本，
+由检测器把原子操作记为同步事件（[11.9](./mem.md)）。
 
-## 11.3.2 共识层级：为什么是 CAS
+用 Go 1.26 编译五个只包含单个原子操作的函数，`-gcflags=-S` 输出中的关键指令如下（`int64` 版本）：
 
-读者或许会问，既然 `Load` 与 `Store` 也是原子的，为什么不能拿它们搭出无锁结构，偏要 CAS？
-答案出自 Herlihy 1991 年的经典工作，**共识层级**（consensus hierarchy），它给「一个同步原语到底
-有多强」一个精确的、可证明的度量。
+| 操作 | amd64 | arm64（默认） |
+| --- | --- | --- |
+| `LoadInt64` | `MOVQ` | `LDAR` |
+| `StoreInt64` | `XCHGQ` | `STLR` |
+| `AddInt64` | `LOCK XADDQ` | `LDADDALD`，或 `LDAXR`/`STLXR` 循环 |
+| `CompareAndSwapInt64` | `LOCK CMPXCHGQ` | `CASALD`，或 `LDAXR`/`STLXR` 循环 |
+| `OrInt64` | `LOCK CMPXCHGQ` 循环 | `LDORALD`，或 `LDAXR`/`STLXR` 循环 |
 
-考虑 $n$ 个线程要就一个值达成一致：每个线程提议一个值，最终所有线程必须读到同一个被选中的提议，
-且这个值确实是某个线程提议过的。能用某种共享对象在**无等待**（每个线程有限步内完成，不依赖别人
-进度）的前提下解决 $n$ 个线程共识的最大 $n$，就是该对象的**共识数**（consensus number）。
+amd64 一列有一处不对称：原子载入只是普通的 `MOVQ`，原子存储却用了 `XCHGQ`。x86 的内存模型只允许一种
+重排，即写入暂存在存储缓冲中时，后面的读可以先完成（[11.9](./mem.md)）。原子载入因此不需要额外的指令；
+原子存储则必须阻止后面的读越过它，而带内存操作数的 `XCHG` 自动具有 `LOCK` 语义，相当于一道完整的内存屏障。
+`OrInt64` 用的是循环，因为 x86 的 `LOCK OR` 不返回旧值；如果调用者丢弃返回值，Go 1.24 起编译器会
+改用一条 `LOCK ORQ` [[Randall, 2024](#ref-randall-2024)]。
+
+arm64 一列取决于处理器是否支持 ARMv8.1 的大系统扩展（Large System Extensions，LSE）。ARMv8.0 只有
+独占载入与独占存储这一对指令（load-linked/store-conditional，LL/SC），读改写操作要写成循环；LSE 才提供了
+单条的原子加法与比较并交换。默认构建在每个调用处检查运行时变量 `arm64HasATOMICS`，两条路径都生成：
+
+```asm
+	MOVBU	runtime.arm64HasATOMICS(SB), R3
+	TBZ	$0, R3, 32           // 不支持 LSE 时，跳到偏移 32 处的循环
+	MOVD	R1, R27
+	CASALD	R27, (R0), R2        // ARMv8.1：一条指令完成比较并交换
+	CMP	R1, R27
+	CSET	EQ, R3
+	JMP	56
+	LDAXR	(R0), R27            // ARMv8.0：独占载入
+	CMP	R1, R27
+	BNE	52
+	STLXR	R2, (R0), R27        // 独占存储；独占载入之后若有其他核心写过该地址，则失败
+	CBNZ	R27, 32              // 失败则重试
+	CSET	EQ, R3
+	MOVD	R3, R0
+	RET
+```
+
+以 `GOARM64=v8.1` 构建时，检查与循环都被省去，只剩 `CASALD`。由此可见，原子操作并不总是一条指令：
+在没有 LSE 的处理器上，它本身就是 11.3.1 那样的重试循环，只是写在了硬件指令层面。
+
+## 11.3.3 共识层级
+
+载入与存储也是原子的，为什么无锁算法离不开比较并交换？Herlihy 用**共识数**（consensus number）回答了
+这个问题 [[Herlihy, 1991](#ref-herlihy-1991)]。
+
+在共识问题中，$n$ 个进程各自提出一个值，最后都要决定一个值，并且满足两个条件：所有进程的决定相同
+（一致性），决定的值是某个进程提出过的（有效性）。此外，协议必须是**无等待**的（wait-free）：无论其他
+进程运行多快，甚至停止运行，每个进程都在自己的有限步内完成。一种共享对象能为多少个进程解决无等待共识，
+其中最大的 $n$ 就是它的共识数；没有上限时，共识数为无穷。共识数刻画了一种原语的同步能力：如果 $X$ 的
+共识数是 $n$，$Y$ 的共识数 $m$ 小于 $n$，那么在多于 $m$ 个进程的系统中，无法用 $Y$ 构造出 $X$ 的无等待实现
+（定理 1）。
 
 ```mermaid
 flowchart LR
-    RW["原子读 / 写寄存器<br/>共识数 = 1"] --> FAA["FetchAndAdd / Swap / 队列 / 栈<br/>共识数 = 2"]
-    FAA --> CAS["CompareAndSwap / LL-SC<br/>共识数 = ∞"]
+    RW["读写寄存器<br/>共识数 1"] --> RMW["测试并设置、交换、取后加<br/>FIFO 队列、栈<br/>共识数 2"]
+    RMW --> CAS["比较并交换<br/>共识数 ∞"]
 ```
 
-普通的原子读写寄存器，共识数只有 **1**，连两个线程都协调不了。直觉上的证明是这样：两个线程
-要对「谁先到」达成共识，必有一个临界时刻，系统状态在「最终选 A」与「最终选 B」之间摇摆。用读写
-寄存器，先手线程只能要么读、要么写某个单元。若它读，没留下任何痕迹，后手无从分辨它是否来过；
-若它写，要么写到一个后手会立刻覆盖的单元（痕迹被抹去），要么两人写的是不同单元，而后手读的
-次序又决定不了谁先。无论怎么排，总能构造出两个线程都无法区分的执行，于是无等待共识不可能。
-这是一个典型的**不可能性**（impossibility）结论，与 FLP 同属一脉。
+读写寄存器的共识数是 1（定理 2），连两个进程都无法达成共识。证明从一个关键状态入手：此时两个进程
+各自的下一步都会把结果确定下来，P 的一步导向决定 $x$，Q 的一步导向决定 $y$。逐一检查这两步可能是什么：
+如果其中一步是读，它只改变读者自己的状态，另一个进程无从察觉，单独运行下去会得出同样的决定；如果两步
+写的是不同的寄存器，先后次序不影响结果状态；如果写的是同一个寄存器，后写的覆盖了先写的，先写者留下的
+痕迹被抹去。每种情况下，总有一个进程无法区分「对方先走」与「自己先走」，矛盾。
 
-而 **CAS 的共识数是无穷**。证明却出奇地短：拿一个初值为「无人胜出」的共享单元，每个线程都用
-`CompareAndSwap(&cell, 空, 我的提议)` 去抢；只有第一个成功的把自己的值写了进去，其余全部失败，
-然后所有线程读出 `cell`，读到的就是那个唯一的胜者。一行 CAS 就让任意多线程达成了无等待共识。
+非平凡的读改写操作至少能解决两个进程的共识（定理 3）：两个进程各自先登记自己的提议，再对同一个
+寄存器做一次读改写，看到初值的一方就是先到者。但测试并设置、交换与取后加止步于 2（定理 4）。这类
+操作两两之间要么可交换（两次取后加的结果与次序无关），要么后者覆盖前者（两次交换）：第三个进程看到的
+结果，或者不反映次序，或者只反映最后一次操作。FIFO 队列也是如此（定理 7），栈、双端队列与优先队列只需
+对证明稍作改动。
 
-这条 $1$ 与 $\infty$ 的鸿沟，正是各语言原子库都把 CAS 摆在中心的根本原因。Herlihy 进一步证明，
-任何共识数为 $\infty$ 的原语都是**通用**（universal）的：有了它，任何顺序对象都能机械地改造成一个
-等价的无等待并发实现（所谓 universal construction）。CAS 之于无锁世界，就像图灵机之于可计算性，
-是那把万能钥匙。ARM、POWER 一族用的 load-linked / store-conditional（LL/SC）是 CAS 的近亲，
-共识数同样是 $\infty$；而 `FetchAndAdd`、`Swap`、乃至原子队列与栈，共识数都停在 2，搭不出
-对任意线程数都无等待的协调。Go 把 `Add`/`Swap`/`CAS` 都给了用户，但唯有 CAS 撑得起一般的无锁
-算法，原因就在这里。
+比较并交换的共识数是无穷（定理 5）。协议只有一步：寄存器初始为空，每个进程尝试把空值换成自己的
+提议，成功者的提议就是决定。寄存器一旦非空就不再改变，后来者的 CAS 全部失败，但不会抹去先到者留下的值。
+Herlihy 指出，这个协议显然是无等待的，因为它没有循环。下面的程序就是这个协议，8 个 goroutine 重复
+1000 轮：
 
-## 11.3.3 无锁的谱系：阻塞、无锁、无等待
+```go {run=true}
+package main
 
-「无锁」其实是一族保证，强弱有别。Herlihy 与 Shavit 在《多处理器编程的艺术》里给出标准的三档
-**进展性**（progress）层次：
+import (
+	"fmt"
+	"sync"
+	"sync/atomic"
+)
 
-- **无阻塞**（obstruction-free）：若某个线程在某一刻独占运行（别人都暂停），它一定能在有限步内
-  完成。最弱，多个线程同时推进时可能互相搅黄，谁都进不去（活锁）。
-- **无锁**（lock-free）：任何时刻，只要让系统继续跑，**总有某个**线程能完成操作。它排除了死锁与
-  活锁，保证整体在推进，但不保证每个线程都不挨饿。上一节的 CAS 重试循环正是典型：每次有人 CAS
-  失败，必有另一人 CAS 成功了。
-- **无等待**（wait-free）：**每个**线程都在与其它线程无关的有限步内完成。最强，也最难实现，
-  代价通常是更复杂的算法与更高的常数开销。
-
-```mermaid
-flowchart TD
-    WF["无等待 wait-free<br/>每个线程有限步完成（最强）"] --> LF["无锁 lock-free<br/>总有线程能推进，无死锁/活锁"]
-    LF --> OF["无阻塞 obstruction-free<br/>独占运行时能完成"]
-    OF --> BL["有锁 blocking<br/>持锁者阻塞则全员停摆"]
-```
-
-值得点破一处常见误解：Go 的 channel 与 mutex 内部用 CAS，但它们本身是**有锁**的，会让 goroutine
-阻塞、让出。用了原子指令不等于「无锁」；无锁是对进展性的保证，不是对实现手法的描述。真正追求
-lock-free 的，是 Treiber 栈、Michael-Scott 队列这类专门的并发数据结构。以最简单的 Treiber 栈
-为例，它把整个无锁压栈写成一个 CAS 循环：
-
-```go
-// 无锁栈的压栈：把 11.3.1 的重试循环套在「换栈顶指针」上
-type node struct {
-    val  int
-    next *node
-}
-type Stack struct {
-    top atomic.Pointer[node] // 栈顶，Go 1.19 类型化原子
+// decide 是 Herlihy 的比较并交换共识协议：没有循环，每个 goroutine 都在常数步内完成。
+func decide(cell *atomic.Pointer[int], proposal *int) int {
+	cell.CompareAndSwap(nil, proposal) // 只有第一个成功；此后 cell 不再改变
+	return *cell.Load()
 }
 
-func (s *Stack) Push(v int) {
-    n := &node{val: v}
-    for {
-        old := s.top.Load()  // 读当前栈顶
-        n.next = old         // 新节点指向它
-        if s.top.CompareAndSwap(old, n) {
-            return           // 栈顶没变过，挂上去成功
-        }
-        // 有人抢先改了栈顶，拿新栈顶重试
-    }
+func main() {
+	const n, rounds = 8, 1000
+	good := 0
+	for range rounds {
+		var cell atomic.Pointer[int]
+		decisions := make([]int, n)
+		var wg sync.WaitGroup
+		for i := range n {
+			wg.Go(func() {
+				proposal := 100 + i // 每个 goroutine 提议一个不同的值
+				decisions[i] = decide(&cell, &proposal)
+			})
+		}
+		wg.Wait()
+
+		agreed := true // 一致性：所有 goroutine 的决定相同
+		for _, d := range decisions {
+			agreed = agreed && d == decisions[0]
+		}
+		valid := 100 <= decisions[0] && decisions[0] < 100+n // 有效性：决定是某个提议
+		if agreed && valid {
+			good++
+		}
+	}
+	fmt.Printf("%d 轮中，%d 个 goroutine 的决定一致且有效的轮数：%d\n", rounds, n, good)
 }
 ```
 
-这段代码看着无害，却恰恰是下一节那枚暗礁的引信。
+运行结果如下：
 
-## 11.3.4 ABA 与内存回收：无锁的暗礁
-
-CAS 有一个著名的陷阱，**ABA 问题**。线程读到值 A，正打算 CAS，期间别的线程把它从 A 改成 B、
-又改回 A；CAS 看到「还是 A」便以为没人动过，照旧提交，其实结构早已天翻地覆。
-
-把它放回上面的 Treiber 栈就具体了：线程甲 `Load` 到栈顶节点 A，记下 `A.next` 指向 B，正要
-`CompareAndSwap(A, B)` 弹出 A。此刻线程乙连弹两次，把 A 和 B 都弹走，又压回一个**复用了 A
-那块内存**的新节点 A'；A' 的 `next` 早已指向别处。甲的 CAS 比较的是指针值，A' 与 A 地址相同，
-于是 CAS 成功，栈顶被设回一个 `next` 已失效的节点，栈就此损坏。问题的根子有二：CAS 只认值不认
-「这中间发生过什么」，以及被弹出的节点内存被提前回收复用了。
-
-经典对策分两类。其一，给指针**附一个版本号/标签**（tagged pointer），每次修改连标签一起递增，
-让 ABA 暴露成 $A_1 \neq A_3$，CAS 比的是「指针+标签」整体，复用同一地址也骗不过它。代价是要一条
-能原子操作双字宽度的指令（x86 的 `LOCK CMPXCHG16B`），且标签终会回绕。其二，从根上解决「内存
-何时能安全回收」，这是更深的一类技术：
-
-- **危险指针**（hazard pointers，Michael 2004）：每个线程把自己正在访问的指针登记到一处公共
-  数组，回收方在真正释放前先扫一遍，凡被登记的一律推迟回收。
-- **纪元回收**（epoch-based reclamation）：用全局递增的「纪元」分代，只有确认所有线程都越过了某个
-  纪元，那之前退休的节点才安全释放。
-- **RCU**（read-copy-update）：Linux 内核里读者几乎零开销、写者复制后延迟释放的范式。
-
-```mermaid
-sequenceDiagram
-    participant 甲
-    participant 栈顶
-    participant 乙
-    甲->>栈顶: Load 读到 A，记下 A.next=B
-    乙->>栈顶: 弹出 A、弹出 B
-    乙->>栈顶: 压回复用 A 内存的新节点 A'
-    甲->>栈顶: CAS(A, B) 误以为没变，成功
-    Note over 栈顶: 栈顶被设回失效节点，结构损坏
+```
+1000 轮中，8 个 goroutine 的决定一致且有效的轮数：1000
 ```
 
-这正是 Go 选择**不**鼓励用户手写复杂无锁结构的背景。无锁的正确性极其微妙，ABA 与内存回收是反复
-绊倒老手的暗礁，而 Go 又有 GC：垃圾回收恰好天然消解了一类 ABA，只要还有指针指向某节点，它就
-不会被回收复用，`atomic.Pointer[T]` 因此比 C 里裸指针的 CAS 安全得多（GC 充当了一种自动的内存
-回收方案）。即便如此，Go 仍把真正棘手的无锁结构留在运行时内部，调度器的工作窃取队列、内存分配
-的无锁 span 集合（[12.2](../../part4memory/ch12alloc/component.md)）这些经过反复打磨的快路径，
-而向用户层只提供地基原语，并建议优先用 channel 与锁。这与 [11.9](./mem.md) 只暴露顺序一致原子、
-不暴露弱序原子，是同一种「把复杂度挡在外面」的取舍。
+Herlihy 进一步证明，共识数为 $n$ 的对象在不超过 $n$ 个进程的系统中是通用的（universal）：任何顺序
+对象都能用它构造出无等待的实现。构造的思路是把对象表示为一条操作日志，各进程就「下一个操作是谁的」
+反复达成共识。比较并交换因此对任意多个进程都是通用的。不过这一构造需要 $O(n^3)$ 个存储单元，是可行性
+的证明，而不是实用的设计；实用的无锁数据结构仍要针对具体的数据类型逐一设计。ARM 的 LL/SC 指令对
+同样能实现比较并交换，11.3.2 中的循环就是例子。
 
-## 11.3.5 原子操作是顺序一致的
+这些结论有一个前提：无等待。[11.2.1](./mutex.md) 提到，Lamport 的面包店算法只用读写就解决了互斥，
+这与定理 2 并不矛盾，因为互斥允许等待：一个进程停在临界区里，其他进程就一直等下去。消息传递也是如此。
+Herlihy 由定理 7 推出，只通过 FIFO 队列通信的消息传递体系结构无法解决三个进程的共识；但 Go 的 channel
+会阻塞，它的实现本身也用了锁（[10.6](../ch10chan/lockfree.md)）。共识层级衡量的，是不允许等待时
+一种原语能做到什么。
 
-`sync/atomic` 的所有操作都是**顺序一致原子**（sequentially consistent atomics）。自 Go 1.19 的
-内存模型修订起，这条成了明文承诺（[11.9](./mem.md)）：所有原子操作存在一个全局全序，若原子操作
-$A$ 的效果被原子操作 $B$ 观察到，则 $A$ happens before $B$。这意味着原子操作不仅自身不可分割，
-还能在 goroutine 间建立发生序，可以正经地用作同步手段，而不只是「防撕裂」。一个原子写之前的
-普通写，对观察到该原子写的读者也一并可见，这正是无锁算法赖以传递数据的根据。
+## 11.3.4 进展条件
 
-把它放进各语言的谱系看，Go 的取舍格外鲜明：
+**无锁**（lock-free）这个词常被用来指「不用锁」，但它的准确含义是一种进展保证。Herlihy 与 Shavit
+把并发对象的进展条件分为几档 [[Herlihy and Shavit, 2008](#ref-herlihy-shavit-2008)]：
 
-| 语言 | 暴露的内存序 | 设计取向 |
+| 进展条件 | 保证 | 例子 |
 | --- | --- | --- |
-| C / C++11 | `relaxed`/`acquire`/`release`/`acq_rel`/`seq_cst` 整套 | 榨干硬件，把弱序的难度交给开发者 |
-| Java | `volatile`（SC）+ `VarHandle` 细粒度序 | 默认 SC，专家可下探 |
-| Rust | `Ordering::{Relaxed,Acquire,Release,AcqRel,SeqCst}` | 同 C++ 一套档位 |
-| **Go** | **仅顺序一致** | 只给一档，刻意不暴露弱序 |
+| 阻塞 | 一个线程在临界区内停顿，其他线程随之等待 | `sync.Mutex`、channel |
+| 无阻碍（obstruction-free） | 单独运行的线程在有限步内完成 | Herlihy 等人的双端队列 |
+| 无锁（lock-free） | 总有某个线程在有限步内完成 | CAS 重试循环、Treiber 栈 |
+| 无等待（wait-free） | 每个线程都在有限步内完成 | 11.3.3 的共识协议 |
 
-C++ 那张内存序菜单能贴着硬件压榨出每一分性能，代价是把「读懂弱内存模型」这桩出了名难的事原样
-丢给应用开发者，`relaxed` 原子里的 out-of-thin-air 之类问题至今是学界硬骨头（[11.9](./mem.md)）。
-Go 的判断是：对绝大多数程序，SC 原子的性能已经够用，它换来的可推理性远比那一点峰值更值。于是
-Go 只给顺序一致这一档。这与 Go 在调度、垃圾回收上一贯的性格一致，以可控的性能让渡，换取语义的
-简单与不易出错。读者用 `atomic.AddInt64` 时无需在脑中模拟 store buffer，这本身就是一种设计上的
-善意。
+后三档统称非阻塞（nonblocking）：任何线程的延迟或失败都不会阻止其他线程前进。
+**无阻碍**（obstruction-free）是其中最弱的一档，由 Herlihy、Luchangco 与 Moir 提出：
+只要一个线程最终能单独运行（其他线程都不执行步骤），它就能取得进展
+[[Herlihy et al., 2003](#ref-herlihy-et-al-2003)]。多个线程同时运行时，它们可能反复使彼此的操作失败，
+这就是活锁。无锁排除了活锁，但只保证系统整体前进，不保证每个线程前进；Herlihy 等人的说法是，
+饥饿在原理上可能发生，只是在实践中很少出现。无等待则连饥饿也排除了。11.3.1 的 CAS 循环是无锁的，
+而不是无等待的。
 
-## 11.3.6 类型化原子：把「该用原子访问」编进类型
+进展条件是算法的性质，而不是所用指令的性质。`sync.Mutex` 建立在原子操作之上，但一个 goroutine
+在持有锁时被换下，其他 goroutine 就只能等待，所以它是阻塞的。最早的无锁数据结构之一是 Treiber 栈
+[[Treiber, 1986](#ref-treiber-1986)]：栈顶是一个指针，压栈与弹栈都是 11.3.1 那样的 CAS 循环（代码见
+11.3.5 的例子）。Michael 与 Scott 后来给出了非阻塞与阻塞两种并发队列算法
+[[Michael and Scott, 1996](#ref-michael-scott-1996)]，Java 的 `ConcurrentLinkedQueue`
+就基于其中的无锁队列 [[Oracle, 2023](#ref-oracle-2023)]。
 
-`sync/atomic` 早期只有函数式 API，如 `atomic.AddInt64(&x, 1)`。它能用，却有两个长期为人诟病的
-陷阱。
+## 11.3.5 ABA 与内存回收
 
-其一，**漏用**。没有任何机制阻止在别处对同一变量做普通（非原子）访问，`x++` 与
-`atomic.AddInt64(&x, 1)` 在编译器眼里访问的是同一个普通 `int64`，一旦某处漏用原子函数，就埋下
-一个数据竞争，而编译期无从察觉，只能寄望 `-race` 在运行时撞上。其二，**对齐**。32 位平台上对
-64 位变量做原子操作要求 8 字节对齐，而结构体里裸 `int64` 字段的对齐取决于它前面字段的排布，
-于是出现过教科书级的坑：结构体字段顺序一调，同一份代码在 amd64 上跑得好好的，到 32 位 ARM 上就
-因未对齐的原子访问而崩溃。
+CAS 只比较值，不知道值在此期间经历过什么。如果一个变量从 A 变成 B，又变回 A，CAS 会认为它没有被修改过。
+这就是 **ABA 问题**。下面的程序在 Treiber 栈上演示它。为了让结果确定，程序在单个 goroutine 中按顺序
+执行两个线程（甲、乙）的步骤，模拟一种可能的交错：
 
-Go 1.19 引入**类型化原子**（提案 #50860），从类型层面一举堵上这两个口子：
+```go {run=true}
+package main
 
-```go
-// 裁剪后的类型速写：把 int64 包成一个只能原子访问的类型
-type Int64 struct {
-    _ noCopy   // go vet 据此报告「首次使用后被复制」
-    _ align64  // 强制 8 字节对齐，消除 32 位平台的对齐坑
-    v int64    // 私有字段，外部够不着，只能走方法
+import (
+	"fmt"
+	"strings"
+	"sync/atomic"
+)
+
+type node struct {
+	name string
+	next *node
 }
 
-func (x *Int64) Load() int64            { return LoadInt64(&x.v) }
-func (x *Int64) Store(val int64)        { StoreInt64(&x.v, val) }
-func (x *Int64) Add(delta int64) int64  { return AddInt64(&x.v, delta) }
-func (x *Int64) CompareAndSwap(old, new int64) bool {
-    return CompareAndSwapInt64(&x.v, old, new)
+// stack 是 Treiber 栈。
+type stack struct{ top atomic.Pointer[node] }
+
+func (s *stack) push(n *node) {
+	for {
+		old := s.top.Load()
+		n.next = old
+		if s.top.CompareAndSwap(old, n) {
+			return
+		}
+	}
+}
+
+func (s *stack) pop() *node {
+	for {
+		old := s.top.Load()
+		if old == nil {
+			return nil
+		}
+		if s.top.CompareAndSwap(old, old.next) {
+			return old
+		}
+	}
+}
+
+func (s *stack) String() string {
+	var names []string
+	for n := s.top.Load(); n != nil; n = n.next {
+		names = append(names, n.name)
+	}
+	return "[" + strings.Join(names, " ") + "]"
+}
+
+func main() {
+	var s stack
+	s.push(&node{name: "C"})
+	s.push(&node{name: "B"})
+	s.push(&node{name: "A"})
+	fmt.Printf("初始的栈：%s\n", s.String())
+
+	// 甲执行 pop 的前半段：读到栈顶 A 及其后继 B，随后被挂起。
+	old := s.top.Load()
+	next := old.next
+
+	// 乙在此期间弹出 A 与 B，再把同一个节点 A 压回。
+	a, b := s.pop(), s.pop()
+	s.push(a)
+	fmt.Printf("乙弹出 %s、%s，再压回 %s：%s\n", a.name, b.name, a.name, s.String())
+
+	// 甲恢复执行：栈顶仍是 A，比较并交换成功。
+	ok := s.top.CompareAndSwap(old, next)
+	fmt.Printf("甲的比较并交换成功：%v；栈：%s\n", ok, s.String())
 }
 ```
 
-把变量声明成 `atomic.Int64`，由于 `v` 是私有字段，访问它就**只能**通过 `Load`/`Store`/`Add`/`CompareAndSwap`
-等方法，普通访问在类型层面被堵死，漏用的可能性从源头消失。`align64` 这个零宽度标记字段告诉
-编译器对整个类型施加 8 字节对齐，对齐坑也随之消失。`noCopy` 则让 `go vet` 拦下「原子变量被值
-复制」这个另一类隐蔽错误。整套类型化原子是 `atomic.Int32/Int64/Uint32/Uint64/Uintptr/Bool/Pointer[T]/Value`。
+运行结果如下：
 
-泛型成全了其中最有意思的一个，`atomic.Pointer[T]`。它用类型参数把「这是一个 `*T` 的原子指针」
-表达出来，读写自带类型，省去满地的 `unsafe.Pointer` 转换。源码里它还藏了个巧思：
+```
+初始的栈：[A B C]
+乙弹出 A、B，再压回 A：[A C]
+甲的比较并交换成功：true；栈：[B C]
+```
+
+甲的 CAS 把栈顶设为它早先读到的 B，而 B 已经被乙弹出：它此时既在乙的手中，又回到了栈里。
+
+在手动管理内存的语言中，ABA 更常见的来源是内存复用：节点 A 被弹出后释放，分配器又把同一块内存分给了
+一个新节点，CAS 比较地址时无法分辨新旧。Go 的垃圾回收器消除了这种情况：只要甲还持有指向 A 的指针，
+A 就不会被回收，更不会被重新分配。但上面的程序说明，垃圾回收不能消除程序自己复用节点造成的 ABA。
+
+对付 ABA 的第一类办法是给指针附加一个计数，每次修改都递增，CAS 同时比较指针与计数。运行时的无锁栈
+`lfstack` 就这样做 [[Go Authors, 2026c](#ref-go-authors-2026c)]，它由 Dmitry Vyukov 在 2012 年为
+并行垃圾回收编写 [[Vyukov, 2012](#ref-vyukov-2012)]：
+
+```go
+func (head *lfstack) push(node *lfnode) {
+	node.pushcnt++
+	new := lfstackPack(node, node.pushcnt)
+	for {
+		old := atomic.Load64((*uint64)(head))
+		node.next = old
+		if atomic.Cas64((*uint64)(head), old, new) {
+			break
+		}
+	}
+}
+```
+
+`lfstackPack` 把指针与推入计数合成一个 64 位字：在 64 位平台上，计数存放在地址用不到的高位与节点对齐所空出
+的低位；在 32 位平台上，指针与计数各占一半。运行时之所以需要这个计数，是因为它放弃了垃圾回收的保护：
+`lfstack` 不保留垃圾回收器可见的指针，节点必须分配在 Go 堆之外，`lfnodeValidate` 在节点来自堆时直接报错。
+计数的位数有限（64 位平台上只有十几到二十几位），终究会回绕；但要让它恰好回到原值，
+同一个节点必须在一次读与 CAS 之间被推入至少 $2^{16}$ 次，实践中可以忽略。
+
+第二类办法回答一个更一般的问题：一个节点从数据结构中移除之后，何时才能安全地释放？此时可能还有线程
+持有它的指针。
+
+- **危险指针**（hazard pointer）：每个线程把自己即将访问的指针登记在一个公共位置，回收者在释放节点前
+  检查这些登记，被登记的节点推迟释放 [[Michael, 2004](#ref-michael-2004)]。
+- **纪元回收**（epoch-based reclamation）：维护一个全局纪元，被移除的节点按纪元放入待回收列表；当所有
+  线程都观察到当前纪元时，两个纪元之前的列表就可以安全释放 [[Fraser, 2004](#ref-fraser-2004)]。
+- **读-复制-更新**（read-copy-update，RCU）：读者不做任何同步，写者复制并修改数据后替换指针，旧版本推迟到
+  所有线程都经过一次静止状态之后才释放 [[McKenney and Slingwine, 1998](#ref-mckenney-slingwine-1998)]。
+
+对 Go 的用户代码而言，垃圾回收器就是这样一种回收方案。运行时自己的堆外结构则不能依赖它，
+一种办法是干脆不释放：span 集合（spanSet）的索引数组从不归还，注释给出的理由正是可能还有并发的无锁访问
+[[Go Authors, 2026d](#ref-go-authors-2026d)]。
+
+Go 中的无锁结构都是实现细节，没有作为通用数据结构导出。除了 `lfstack`（用于垃圾回收的工作缓冲区等），
+还有每个 P 的本地运行队列：只有所属的 P 向其中放入 G，窃取者用 CAS
+从中取出（[9.2.2](../ch09sched/steal.md)）；`sync.Pool` 中的 `poolDequeue` 是固定大小、
+单生产者多消费者的无锁队列（[11.6](./pool.md)）；Go 1.24 起 `sync.Map` 底层的散列字典树读路径无锁，
+写路径对单个内部节点加锁（[11.7](./map.md)）。
+
+## 11.3.6 顺序一致
+
+原子操作除了不可分割，还关系到其他内存访问的可见性。Go 1.19 修订的内存模型规定
+[[Go Authors, 2022](#ref-go-authors-2022)]：
+
+> `sync/atomic` 包中的 API 统称为「原子操作」，可用于同步不同 goroutine 的执行。如果原子操作 A 的效果
+> 被原子操作 B 观察到，那么 A 同步先于 B。程序中执行的所有原子操作，表现得如同按某种顺序一致的次序
+> 执行。
+
+由同步先于关系可以推出先行发生关系（[11.9](./mem.md)）：一个 goroutine 在原子存储之前的普通写入，
+对通过原子载入观察到这次存储的 goroutine 可见。用 `atomic.Pointer` 发布一个构造好的对象，依靠的正是
+这一点。后半句的顺序一致则要求所有原子操作排成一个全序，与各 goroutine 的程序次序相容。内存模型指出，
+这与 C++ 的顺序一致原子操作和 Java 的 `volatile` 变量语义相同。
+
+这条规定写进内存模型用了九年。2013 年 3 月，Cox 提出议题，指出内存模型与 `sync/atomic` 的文档都没有说明
+原子操作提供什么保证，并认为这些保证「当然应该尽可能弱」[[Cox, 2013](#ref-cox-2013)]。Vyukov 随即反问
+为什么要尽可能弱，因为弱原子操作很难用来编程，并在随后的评论中指出，顺序一致最容易定义，也最容易理解和解释
+[[Vyukov, 2013](#ref-vyukov-2013)]。2021 年，Cox 在关于更新 Go 内存模型的文章中采纳了这一立场
+[[Cox, 2021](#ref-cox-2021)]，议题于 2022 年随 Go 1.19 关闭。
+
+文章给出了不提供获取/释放（acquire/release）语义的两个理由。其一，程序常常需要推断多个变量上原子操作的
+相对次序：`sync.WaitGroup` 的旧实现用两个原子变量分别记录计数与等待者数目，运行时的信号量同样依赖
+信号量的值与等待者计数两个原子变量（[11.2](./mutex.md)）。只用获取/释放语义，这样的程序即使没有数据竞争，
+也不再表现为顺序一致，很难推理。其二，硬件正在缩小两者的差距：ARMv8 的 `LDAR` 与 `STLR` 既用于实现
+顺序一致的原子操作，也是获取/释放语义的推荐实现（11.3.2 的 arm64 一列正是这两条指令）。如果 Go 只承诺
+获取/释放语义，在 ARMv8 上写出的程序可能在不知不觉中依赖了更强的次序，换到更弱的平台上才出错。
+同样的理由也使 Go 没有另外提供一套获取/释放的接口。至于不参与同步的原子操作（C++ 与 Rust 中的
+relaxed），文章认为在缺乏证据时不应加入，并说明了需要的证据：在实际程序中普遍适用，且在广泛使用的
+系统上带来显著的性能提升。
+
+| 语言 | 原子操作可选的内存序 |
+| --- | --- |
+| C/C++11 | `relaxed`、`consume`、`acquire`、`release`、`acq_rel`、`seq_cst`，默认 `seq_cst` |
+| Java 9 起 | `VarHandle` 的 Plain、Opaque、Release/Acquire、Volatile 四种模式 [[Lea, 2018](#ref-lea-2018)] |
+| Rust | `Relaxed`、`Release`、`Acquire`、`AcqRel`、`SeqCst` |
+| Go | 仅顺序一致 |
+
+顺序一致的代价落在哪些指令上，取决于硬件：在 amd64 上是原子存储所用的 `XCHG`，在 arm64 上是 `LDAR`
+与 `STLR`。
+
+## 11.3.7 原子类型
+
+函数形式的接口有一个根本的缺陷。Cox 在同一篇文章中指出，要消除对同一块内存的数据竞争，所有访问都必须
+是原子的：原子写与普通读并发，或者普通写与原子读并发，仍然是数据竞争。因此，一个值是否应当以原子方式
+访问，是这个值的性质，而不是某一次访问的性质 [[Cox, 2021](#ref-cox-2021)]。Java 的 `volatile int` 与
+C++ 的 `atomic<int>` 都把这一信息放进类型；Go 的 `atomic.AddInt64(&x, 1)` 则不能阻止别处写 `x++`。
+
+Cox 随后提出了原子类型的提案，随 Go 1.19 发布：`Bool`、`Int32`、`Int64`、`Uint32`、`Uint64`、`Uintptr`
+与 `Pointer[T]` [[Cox, 2022a](#ref-cox-2022a)]。提案解释了为什么不用一个泛型的 `atomic.Val[T]`：
+不同类型需要不同的方法集合（`Bool` 与 `Pointer[T]` 不应有 `Add`），而当时无法写出一个同时容纳指针与
+各种整数的约束；即使写得出，`atomic.Val[int32]` 也不如 `atomic.Int32` 好用。以 `Int64` 为例
+[[Go Authors, 2026a](#ref-go-authors-2026a)]：
+
+```go
+// An Int64 is an atomic int64. The zero value is zero.
+//
+// Int64 must not be copied after first use.
+type Int64 struct {
+	_ noCopy
+	_ align64
+	v int64
+}
+
+// Add atomically adds delta to x and returns the new value.
+func (x *Int64) Add(delta int64) (new int64) { return AddInt64(&x.v, delta) }
+```
+
+三个字段各有用途。`v` 不导出，包外只能通过方法访问它，普通访问在编译期就被排除了。`noCopy` 实现了空的
+`Lock` 与 `Unlock` 方法，使 `go vet` 的 copylocks 检查能发现首次使用后的复制。`align64` 解决的是
+32 位平台的对齐问题：包文档的 BUG 一节写明，在 ARM、386 与 32 位 MIPS 上，
+调用者必须自行保证以原子方式访问的 64 位字按 64 位对齐；可以依赖按 64 位对齐的，只有分配的结构体、
+数组或切片中的第一个字，以及全局变量或局部变量中的第一个字。结构体中的 `int64` 字段是否对齐，
+取决于它前面的字段，同一份代码可能在 amd64 上正常，在 32 位 ARM 上崩溃。`align64` 是一个空结构体，
+编译器在计算结构体布局时识别 `sync/atomic` 与 `internal/runtime/atomic` 中这个名字，
+把整个类型的对齐要求提高到 8 字节；文件中的注释特意说明，它被复制到其他包中就不会生效。
+运行时自己的原子类型也在同一版本中改用了它 [[Knyszek, 2022](#ref-knyszek-2022)]。
+
+`Pointer[T]` 的第一个字段来自 Go 1.20 的两次修改：
 
 ```go
 type Pointer[T any] struct {
-    _ [0]*T        // 提一下 *T，让不同 Pointer[T] 之间无法相互转换（issue 56603）
-    _ noCopy
-    v unsafe.Pointer
+	// Mention *T in a field to disallow conversion between Pointer types.
+	// See go.dev/issue/56603 for more details.
+	// Use *T, not T, to avoid spurious recursive type definition errors.
+	_ [0]*T
+
+	_ noCopy
+	v unsafe.Pointer
 }
 ```
 
-那个零长度数组 `[0]*T` 不占空间，存在的唯一目的是让 `atomic.Pointer[A]` 与 `atomic.Pointer[B]`
-在类型上互不兼容，堵住一条本可绕过类型安全的后门。这是 API 设计与语言特性协同演进的范例：用
-类型把「这个字段必须原子访问」从程序员的自觉，变成编译器可强制的契约。新代码应一律优先用类型化
-原子，而非裸函数。
+最初的定义中没有出现 `T`，于是 `atomic.Pointer[A]` 与 `atomic.Pointer[B]` 的底层类型相同，可以直接相互
+转换，等于不经 `unsafe` 就把 `*A` 当成了 `*B`。议题 #56603 给出的程序借此写越了界，导致段错误。修复时先
+加入了零长度的 `[0]T` 字段 [[Poliwczak, 2022](#ref-poliwczak-2022)]，却使 `type List struct { Next
+atomic.Pointer[List] }` 这样的链表定义报告「无效的递归类型」；Cox 随后把它改成 `[0]*T`，就像字段类型写成
+`*List` 时递归是合法的一样 [[Cox, 2022b](#ref-cox-2022b)]。
 
-`atomic.Value` 是这一族里特别的一个，它用于**整体地、原子地**替换一个任意类型的值，典型用途是
-配置热更新：后台准备好整份新配置，用 `Store` 一次性换上，所有读者用 `Load` 要么读到完整的旧
-配置、要么读到完整的新配置，绝不会读到「改了一半」的中间态。
+`atomic.Value` 早在 Go 1.4 就已加入，由 Vyukov 编写，用于写时复制的惯用法：写者构造一份新的数据，用
+`Store` 整体替换；读者用 `Load` 取得某个完整的版本，不会看到修改到一半的状态
+[[Vyukov, 2014](#ref-vyukov-2014)]。提交说明中的基准测试显示，读操作随处理器数增加而扩展：1、2、
+4 个处理器时每次读分别为 21.7、8.63 与 4.33 ns。
+
+`Value` 内部存放一个 `any`，即类型指针与数据指针两个字（[4.2](../../part2lang/ch04type/interface.md)），
+而一次原子操作只能写一个字。首次 `Store` 需要先后写入两个字，`Value` 用一个特殊的标记处理这段过渡：
 
 ```go
-var cfg atomic.Value           // 存 *Config
-cfg.Store(loadConfig())        // 启动时放一份
-
-func reload() { cfg.Store(loadConfig()) }          // 写者：整体替换
-func handler() { c := cfg.Load().(*Config); _ = c } // 读者：无锁取一份完整快照
+func (v *Value) Store(val any) {
+	// ……
+	for {
+		typ := LoadPointer(&vp.typ)
+		if typ == nil {
+			// Attempt to start first store.
+			// Disable preemption so that other goroutines can use
+			// active spin wait to wait for completion.
+			runtime_procPin()
+			if !CompareAndSwapPointer(&vp.typ, nil, unsafe.Pointer(&firstStoreInProgress)) {
+				runtime_procUnpin()
+				continue
+			}
+			// Complete first store.
+			StorePointer(&vp.data, vlp.data)
+			StorePointer(&vp.typ, vlp.typ)
+			runtime_procUnpin()
+			return
+		}
+		if typ == unsafe.Pointer(&firstStoreInProgress) {
+			// First store in progress. Wait.
+			// Since we disable preemption around the first store,
+			// we can wait with active spinning.
+			continue
+		}
+		// ……
+	}
+}
 ```
 
-它的内部实现是一处教科书级的小心翼翼。`interface{}` 在运行时由「类型指针 + 数据指针」两段组成
-（[2](../../part1prologue)），要原子地换掉整个 interface，就得避免读者撞见「类型已换、数据还没换」
-的半成品。`Value` 的办法是：首次 `Store` 时先用 CAS 把类型指针置成一个特殊的进行中标记
-`firstStoreInProgress`，期间 `runtime_procPin` 禁止当前 goroutine 被抢占，待数据指针、类型指针
-依次落定再放行；读者一旦 `Load` 看到这个标记，就知道首次写入尚未完成，返回 nil。这是一种轻量
-的写时复制：读者无锁、写者整体替换，适合读远多于写的配置类数据。Go 1.19 后，多数新代码可以用
-`atomic.Pointer[Config]` 替代 `atomic.Value`，既有类型安全又免去类型断言，唯有需要存放「类型在
-运行期才确定」的值时，`atomic.Value` 仍不可替代。
+首次写入的 goroutine 用 CAS 把类型字从空设为 `firstStoreInProgress` 的地址，再依次写入数据字与类型字。
+读者在 `Load` 中看到空值或这个标记时，返回 `nil`，好像还没有写入过。与之竞争的写者则自旋等待；
+`runtime_procPin` 禁止首次写入者在这段时间被抢占，自旋因而很快结束。首次写入之后，类型字不再改变，
+每次 `Store` 只需原子地替换数据字，类型不一致时引发 panic。Go 1.17 又为它加入了 `Swap` 与
+`CompareAndSwap`。
 
-## 11.3.7 小结：地基与边界
+有了 `Pointer[T]` 之后，存放指针的场合通常不再需要 `Value`：`Pointer[T]` 有静态类型，
+读取时不需要类型断言。`Value` 适合值的具体类型在运行时才确定、但首次存储后保持不变的场合。
 
-原子操作是 Go 并发设施的最底层，往上托起 mutex、channel 与整个运行时的无锁快路径。本节的主线
-可以收成三句：CAS 是无锁世界里共识数为 $\infty$ 的万能原语，理论上撑得起任何无锁结构；但无锁的
-正确性被 ABA 与内存回收这些暗礁守着，工程上极难做对；Go 因此把硬的无锁结构关进运行时，向用户
-只给顺序一致的地基原语，并用类型化原子把「该原子访问」变成编译期契约。下一节
-（[11.9](./mem.md)）会把这里的「顺序一致」「happens before」放进完整的内存模型里讲透，那是理解
-本节每一处承诺的来由所在。
+## 延伸阅读
 
-## 延伸阅读的文献
-
-1. Maurice Herlihy. "Wait-Free Synchronization." *ACM TOPLAS*, 13(1), 1991.
-   https://doi.org/10.1145/114005.102808 （共识层级；读写共识数为 1、CAS 为 ∞；通用构造）
-2. Maurice Herlihy, Nir Shavit. *The Art of Multiprocessor Programming.* Morgan Kaufmann,
-   2008（修订版 2020）。（无阻塞/无锁/无等待的进展性层次；Treiber 栈与无锁数据结构）
-3. Maged M. Michael. "Hazard Pointers: Safe Memory Reclamation for Lock-Free Objects."
-   *IEEE TPDS*, 15(6), 2004. https://doi.org/10.1109/TPDS.2004.8 （ABA 与安全内存回收）
-4. Maged M. Michael, Michael L. Scott. "Simple, Fast, and Practical Non-Blocking and
-   Blocking Concurrent Queue Algorithms." *PODC 1996*.
-   https://doi.org/10.1145/248052.248106 （Michael-Scott 无锁队列）
-5. R. Kent Treiber. *Systems Programming: Coping with Parallelism.* IBM Research Report
-   RJ 5118, 1986. （最早的无锁栈，CAS 重试循环的原型）
-6. The Go Authors. *The Go Memory Model* (Version of June 6, 2022)：Atomic Values.
-   https://go.dev/ref/mem （`sync/atomic` 的顺序一致承诺）
-7. Go proposal #50860, *sync/atomic: add typed atomic values.*
-   https://github.com/golang/go/issues/50860 （类型化原子的动机与设计；对齐与漏用陷阱）
-8. The Go Authors. *src/sync/atomic/type.go、value.go.*
-   https://github.com/golang/go/tree/master/src/sync/atomic （`align64`/`noCopy`/`Pointer[T]`
-   的实现；issue #56603 的 `[0]*T` 防转换技巧）
+- <a id="ref-cox-2011"></a>[Cox, 2011] Russ Cox. sync/atomic: new package. Go commit 22eab1f5c7, 2011.
+  https://github.com/golang/go/commit/22eab1f5c78bb432b951426175b01c9bf97241f3
+- <a id="ref-cox-2013"></a>[Cox, 2013] Russ Cox. Go issue #5045. *doc: define how sync/atomic interacts
+  with memory model.* 2013. https://github.com/golang/go/issues/5045
+  2022 年 7 月随 Go 1.19 的内存模型修订关闭。
+- <a id="ref-cox-2021"></a>[Cox, 2021] Russ Cox. Updating the Go Memory Model (Memory Models, Part 3).
+  research!rsc, 12 July 2021. https://research.swtch.com/gomm
+- <a id="ref-cox-2022a"></a>[Cox, 2022a] Russ Cox. Go proposal #50860. *sync/atomic: add typed atomic
+  values.* 2022. https://github.com/golang/go/issues/50860
+  原子类型的动机与设计，以及不采用泛型 `atomic.Val[T]` 的理由；实现见 CL 381317，随 Go 1.19 发布。
+- <a id="ref-cox-2022b"></a>[Cox, 2022b] Russ Cox. sync/atomic: allow linked list of atomic pointers
+  again. Go commit b14cf3d93a, 2022. https://go.dev/cl/450655
+  随 Go 1.20 发布。
+- <a id="ref-fraser-2004"></a>[Fraser, 2004] Keir Fraser. *Practical Lock-Freedom.* Technical Report
+  UCAM-CL-TR-579, University of Cambridge Computer Laboratory, 2004. https://doi.org/10.48456/tr-579
+  5.2.3 节为纪元回收。
+- <a id="ref-go-authors-2022"></a>[Go Authors, 2022] The Go Authors. *The Go Memory Model* (Version of
+  June 6, 2022)：Atomic Values. https://go.dev/ref/mem
+  `sync/atomic` 的顺序一致承诺。
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors.
+  *src/sync/atomic/doc.go、type.go、 value.go.* https://github.com/golang/go/tree/master/src/sync/atomic
+  `align64`/`noCopy`/`Pointer[T]` 的实现；issue #56603 的 `[0]*T` 防转换技巧。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. src/cmd/compile/internal/ssagen/
+  intrinsics.go. Go 1.26 源码.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/ssagen/intrinsics.go
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/runtime/lfstack.go. Go 1.26
+  源码. https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/lfstack.go
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. src/runtime/mspanset.go. Go 1.26
+  源码. https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mspanset.go
+- <a id="ref-herlihy-1991"></a>[Herlihy, 1991] Maurice Herlihy. "Wait-Free Synchronization." *ACM
+  Transactions on Programming Languages and Systems*, 13(1): 124–149, 1991.
+  https://doi.org/10.1145/114005.102808
+  共识层级；读写寄存器的共识数为 1，比较并交换为无穷；通用构造。
+- <a id="ref-herlihy-et-al-2003"></a>[Herlihy et al., 2003] Maurice Herlihy, Victor Luchangco, Mark Moir.
+  "Obstruction-Free Synchronization: Double-Ended Queues as an Example." *Proceedings of the 23rd
+  International Conference on Distributed Computing Systems (ICDCS)*, 522–529, 2003.
+  https://doi.org/10.1109/ICDCS.2003.1203503
+- <a id="ref-herlihy-shavit-2008"></a>[Herlihy and Shavit, 2008] Maurice Herlihy, Nir Shavit. *The Art of
+  Multiprocessor Programming.* Morgan Kaufmann, 2008（修订版 2020）。
+  无阻碍、无锁、无等待等进展条件；Treiber 栈与无锁数据结构。
+- <a id="ref-knyszek-2022"></a>[Knyszek, 2022] Michael Anthony Knyszek. runtime/internal/atomic: align
+  64-bit types to 8 bytes everywhere. Go commit 0f715f1ac9, 2022. https://go.dev/cl/404096
+  随 Go 1.19 发布。
+- <a id="ref-lea-2018"></a>[Lea, 2018] Doug Lea. Using JDK 9 Memory Order Modes. 2018.
+  https://gee.cs.oswego.edu/dl/html/j9mm.html
+- <a id="ref-mckenney-slingwine-1998"></a>[McKenney and Slingwine, 1998] Paul E. McKenney, John D.
+  Slingwine. "Read-Copy Update: Using Execution History to Solve Concurrency Problems." *Parallel and
+  Distributed Computing and Systems*, 509–518, 1998.
+  http://www.rdrop.com/users/paulmck/RCU/rclockpdcsproof.pdf
+- <a id="ref-michael-2004"></a>[Michael, 2004] Maged M. Michael. "Hazard Pointers: Safe Memory Reclamation
+  for Lock-Free Objects." *IEEE Transactions on Parallel and Distributed Systems*, 15(6): 491–504, 2004.
+  https://doi.org/10.1109/TPDS.2004.8
+  ABA 与安全内存回收。
+- <a id="ref-michael-scott-1996"></a>[Michael and Scott, 1996] Maged M. Michael, Michael L. Scott.
+  "Simple, Fast, and Practical Non-Blocking and Blocking Concurrent Queue Algorithms." *Proceedings of the
+  15th ACM Symposium on Principles of Distributed Computing (PODC)*, 267–275, 1996.
+  https://doi.org/10.1145/248052.248106
+  Michael-Scott 无锁队列。
+- <a id="ref-oracle-2023"></a>[Oracle, 2023] Oracle. ConcurrentLinkedQueue. *Java SE 21 & JDK 21 API
+  Specification*, 2023.
+  https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ConcurrentLinkedQueue.html
+- <a id="ref-poliwczak-2022"></a>[Poliwczak, 2022] Mateusz Poliwczak. sync/atomic: disallow type
+  conversions of atomic.Pointer[T]. Go commit 6bead8f77a, 2022. https://go.dev/cl/448275
+  修复 issue #56603，随 Go 1.20 发布。
+- <a id="ref-randall-2024"></a>[Randall, 2024] Keith Randall. cmd/compile: make sync/atomic AND/OR
+  operations intrinsic on amd64. Go commit c18ff29295, 2024. https://go.dev/cl/594738
+  随 Go 1.24 发布。
+- <a id="ref-treiber-1986"></a>[Treiber, 1986] R. Kent Treiber. *Systems Programming: Coping with
+  Parallelism.* IBM Research Report RJ 5118, 1986.
+  最早的无锁栈，CAS 重试循环的原型。
+- <a id="ref-vyukov-2012"></a>[Vyukov, 2012] Dmitriy Vyukov. runtime: add lock-free stack. Go commit
+  a5dc7793c0, 2012. https://github.com/golang/go/commit/a5dc7793c0fba8d6c81098248a4fc2e8b0ddad34
+  从并行垃圾回收的修改中拆出，随 Go 1.1 发布。
+- <a id="ref-vyukov-2013"></a>[Vyukov, 2013] Dmitry Vyukov. Comment on golang/go#5045, 2013.
+  https://github.com/golang/go/issues/5045#issuecomment-66076281
+  2013 年 3 月 14 日至 15 日的几条评论主张原子操作采用顺序一致语义。
+- <a id="ref-vyukov-2014"></a>[Vyukov, 2014] Dmitriy Vyukov. sync/atomic: add Value. Go commit 98a1e207e2,
+  2014. https://github.com/golang/go/commit/98a1e207e29359dba86769877021838bb77b12c3
+  随 Go 1.4 发布。
+- 本书 [11.2 互斥锁](./mutex.md)、[11.9 内存一致模型](./mem.md)、
+  [4.2 接口](../../part2lang/ch04type/interface.md)。
