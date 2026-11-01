@@ -5,24 +5,22 @@ title: "7.5 错误处理的未来"
 
 # 7.5 错误处理的未来
 
-前几节里我们见过 `error` 接口的朴素、`%w` 包装与错误链的检视。读者读到这里，心里多半积着
-一个没有说出口的疑问：`if err != nil` 这三行模板，年复一年地铺满每个 Go 程序，难道就没有
-办法收掉吗？这个疑问并不孤单。从 2018 年的 go2 草案到 2025 年的一纸结论，Go 团队为它前后
-推敲了七年，提出过 `check`/`handle`、`try`、`?` 等多套语法，又把它们一一收回。本节把这条
-没有走通的语法之路，与另一条悄然走通的库演进之路，并排摆出来，并交代 Go 团队最终给出的
-判断：在可见的将来，错误处理不会迎来专门的语法。
+前几节讨论的 `%w`、`errors.Is`、`errors.As` 等改进，解决的是错误如何检查、如何携带上下文。
+另一个问题始终悬而未决：`if err != nil` 这几行样板代码，能否用新的语法写得更短？从 2018 年到
+2025 年，Go 团队先后提出了 `check`/`handle`、`try` 与 `?` 三套完整的方案，社区提出的方案更是
+数以百计，但没有一个被采纳。2025 年 6 月，Go 团队宣布在可预见的将来不再为错误处理寻求语法上的
+改变 [[Griesemer, 2025](#ref-griesemer-2025)]。
 
-理解这个结局，比记住任何一套被否决的语法都重要。它不是搁置，而是一次有据可依的「不做」，
-背后是 Go 对「显式优于简洁」的一次郑重重申。
+本节依次介绍这三次尝试及其被放弃的原因，2025 年这一决定的理由，以及同一时期在标准库中实际
+落地的改进。
 
-## 7.5.1 被否决的语法尝试
+## 7.5.1 check 与 handle：2018 年的草案
 
-### check / handle：2018 年的 go2 草案
-
-错误处理语法化的第一次正式尝试，是 2018 年随「Go 2」蓝图公布的 `check`/`handle` 草案。
-它引入两个关键字：`check` 是一个表达式，对返回 `(T, error)` 的调用求值，错误为 `nil` 时
-取出 `T`，否则把控制权交给最近的 `handle` 块；`handle` 是一个语句，声明当前函数里检查
-失败时的善后逻辑。一个典型的文件拷贝在草案下写成这样：
+2018 年 8 月，Go 团队随 Go 2 的草案设计发布了错误处理的问题概述
+[[Cox, 2018b](#ref-cox-2018b)]与 Marcel van Lohuizen 的草案设计 [[Lohuizen, 2018](#ref-lohuizen-2018)]。
+草案引入两个关键字：`check` 是一个表达式，作用于返回 `(T, error)` 的调用，错误为 `nil` 时得到
+`T`，否则把错误交给处理程序；`handle` 是一个语句，声明检查失败时执行的处理程序。问题概述中的
+`CopyFile` 在草案下写成这样：
 
 ```go
 func CopyFile(src, dst string) error {
@@ -30,13 +28,13 @@ func CopyFile(src, dst string) error {
 		return fmt.Errorf("copy %s %s: %v", src, dst, err)
 	}
 
-	r := check os.Open(src)     // 失败则跳到上面的 handle
+	r := check os.Open(src)
 	defer r.Close()
 
 	w := check os.Create(dst)
-	handle err {                 // handle 可叠加，后声明的先生效
+	handle err {
 		w.Close()
-		os.Remove(dst)
+		os.Remove(dst) // （仅当某个 check 失败时）
 	}
 
 	check io.Copy(w, r)
@@ -45,177 +43,230 @@ func CopyFile(src, dst string) error {
 }
 ```
 
-它的野心在 `handle` 链：多个 `handle` 按声明逆序生效，让人联想到 `defer` 的栈式语义，能把
-「出错时回滚」的清理逻辑沿调用顺序层层铺开。代价也正在于此。读者要读懂某一行 `check`
-失败后会发生什么，得在脑子里维护一个 `handle` 栈，与 `defer` 栈彼此独立又彼此纠缠。社区
-普遍反馈它「为省下 `if` 而引入了一套新的、需要单独学习的控制流」，复杂度未必比它消除的更低。
-草案最终被判定过于复杂而未进入提案阶段。
+按照草案的规定，一个 `check` 失败时，会按声明的相反顺序依次执行词法作用域内的所有处理程序，
+直到其中一个执行了 `return`。与 `defer` 不同，`handle` 是词法作用域的，循环体中声明的处理程序
+不会随迭代累积；处理程序总是在所有延迟函数之前执行。
 
-### try()：2019 年那个撤回的内建函数
+这套设计的问题也在这里：要弄清某一行 `check` 失败之后会发生什么，读者需要在脑中维护一条处理
+程序链，而它与 `defer` 的执行顺序相互独立又彼此交织。Go 团队后来的总结是，`check` 与 `handle`
+被认为过于复杂，于是转向了一个简单得多的方案 [[Griesemer, 2025](#ref-griesemer-2025)]。
 
-吸取 `check`/`handle` 太重的教训，Robert Griesemer 在 2019 年 6 月提出了走向另一极的方案，
-[提案 32437](https://github.com/golang/go/issues/32437)：一个名为 `try` 的内建函数。它的
-签名可以这样理解：接受一个返回 `(T1, ..., Tn, error)` 的表达式，错误为 `nil` 时返回前 $n$ 个
-值，否则用这个错误**从所在函数提前返回**。于是 `CopyFile` 的开头一段缩成：
+## 7.5.2 try：2019 年被拒绝的提案
+
+2019 年 6 月，Robert Griesemer 按照 Go 2 的提案流程 [[Griesemer, 2018](#ref-griesemer-2018)]
+提出了内建函数 `try`（提案 32437）[[Griesemer, 2019](#ref-griesemer-2019)]。`try` 作用于最后一个结果为
+`error` 的调用：错误为 `nil` 时返回其余的结果，否则以该错误作为结果，从所在函数立即返回。
+为错误补充上下文的工作，则交给 `defer` 与具名的结果参数。提案中的 `CopyFile` 是这样的：
 
 ```go
-// try 之前：四行模板换装错误后向上抛
-r, err := os.Open(src)
-if err != nil {
-	return fmt.Errorf("copy %s %s: %v", src, dst, err)
-}
+func CopyFile(src, dst string) (err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("copy %s %s: %v", src, dst, err)
+		}
+	}()
 
-// try 之后：一行，错误为 nil 取值，否则 return
-func CopyFile(src, dst string) error {
-	r := try(os.Open(src))     // err != nil 时，CopyFile 立即 return err
+	r := try(os.Open(src))
 	defer r.Close()
 
 	w := try(os.Create(dst))
-	defer w.Close()
+	defer func() {
+		w.Close()
+		if err != nil {
+			os.Remove(dst) // 仅当某个「try」失败时
+		}
+	}()
+
 	try(io.Copy(w, r))
+	try(w.Close())
 	return nil
 }
 ```
 
-`try` 不引入新关键字、不引入新控制结构，只是一个内建函数，语法面看上去极克制。错误的
-装饰则交给 `defer` 配合具名返回值去做。提案一出，社区的讨论旋即升温到 Go 历史上罕见的规模，
-反对的核心只有一句：`try` 把 `return` 藏进了一个看起来像普通函数调用的表达式里。
+`try` 不引入新的关键字，也不引入新的控制结构，但这个议题在 GitHub 上收到了八百余条评论。反对
+意见的核心在于，`try` 会让所在函数返回，却写成一个普通函数调用的样子：`x := try(f())` 读起来与
+`x := len(f())` 没有区别，返回点因此不再一目了然。
 
-这正是 Go 一贯所忌讳的，**隐藏的控制流**。`x := try(f())` 这一行可能让函数就此返回，而它
-读起来和 `x := len(f())` 没有区别。在一门把「读代码就能看出控制流走向」奉为信条的语言里，
-这是难以接受的退让。提案还带来一连串次生问题：`try` 难以用在测试里（期望 `t.Fatal` 而非
-`return`），对错误的装饰被迫绕道 `defer`，调试时断点也难以落在那条隐式的返回上。同年，
-提案被作者主动撤回，理由正是社区在控制流可读性上的强烈分歧。
+2019 年 7 月 16 日，Griesemer 代表提案评审委员会宣布提前拒绝这一提案，并说明了原因：讨论指出了
+一些设计时忽略的问题，最突出的是对插入调试输出与分析代码覆盖率的影响；更重要的是，许多人明确
+表示，这个提案针对的根本不是一个值得解决的问题。Griesemer 承认，团队在前一年 8 月的问题概述中阐述了要
+解决的问题，却没有引导足够的讨论去确认这个问题本身是否正确；那份问题概述甚至可能被同一天发布的
+泛型草案抢走了全部注意力 [[Griesemer, 2019](#ref-griesemer-2019)]。
 
-### 更轻的 if-err 与 ? 提案
+## 7.5.3 ?：2025 年的提案
 
-`try` 撤回之后，社区并未死心，转而探索更轻的形态。最有代表性的是 2024 年的 `?` 运算符
-提案，它把 Rust 的 `?` 几乎照搬过来：
+2025 年 1 月，Ian Lance Taylor 提交了提案 71203 [[Taylor, 2025](#ref-taylor-2025)]，借鉴 Rust 的 `?`
+运算符（Rust 1.13 起提供，2016 年 [[Rust, 2016](#ref-rust-2016)]）。按照提案，赋值语句或表达式语句
+之后可以跟一个 `?`，它检查最后一个值是否为 `nil`；不为 `nil` 时执行 `?` 之后的语句块，块中隐式
+声明的 `err` 即为该错误。语句块可以省略，省略时直接返回该错误：
 
 ```go
-r := os.Open(src)?     // 等价于 if err != nil { return ..., err }
+func CopyFile(src, dst string) error {
+	r := os.Open(src) ? {
+		return fmt.Errorf("copy %s %s: %v", src, dst, err)
+	}
+	defer r.Close()
+	// ...
+}
+
+func Run() error {
+	Start() ? // Start 返回的错误不为 nil 时，将其返回
+	Wait() ?  // Wait 返回的错误不为 nil 时，将其返回
+	return nil
+}
 ```
 
-后缀一个 `?`，错误非空就携错返回。它比 `try` 更轻，连函数调用的外壳都省了，却也把
-「隐藏控制流」的问题推到了极致：一个标点就能让函数返回。还有诸如以 `||` 兜底
-（`f() || return err`）等变体，思路大同小异，都在「少写几个字符」与「让返回显形」之间
-反复拉扯。它们都未能聚拢足够的支持。
+与 `try` 不同，带语句块的形式让错误处理的代码仍然显式可见。但这个提案同样迅速被大量评论和细节修改的建议淹
+没。Taylor 关闭了提案，把讨论转到 GitHub Discussions（71460）[[Taylor, 2025](#ref-taylor-2025)]。
+修改后的版本反响稍好，但仍未获得广泛的支持 [[Griesemer, 2025](#ref-griesemer-2025)]。
 
-七年里被认真对待又被放下的方案，可以列成一条清晰的时间线：
+三次正式的尝试可以列成下表：
 
-| 年份 | 方案 | 形态 | 结局 |
-| --- | --- | --- | --- |
-| 2018 | `check` / `handle` | 关键字 + handle 栈 | 过于复杂，未立案 |
-| 2019 | `try(...)` | 内建函数，隐式返回 | 隐藏控制流，作者撤回 |
-| 2024 | `expr?` | 后缀运算符 | 支持不足 |
-| 2025 | （全部） | 错误处理语法 | 决定不再追求 |
+| 时间 | 方案 | 形式 | 结局 |
+| :-- | :-- | :-- | :-- |
+| 2018 年 8 月 | `check` / `handle` | 关键字与处理程序链 | 被认为过于复杂，未形成正式提案 |
+| 2019 年 6 月 | `try(...)` | 内建函数，隐式返回 | 2019 年 7 月被拒绝 |
+| 2025 年 1 月 | `expr ?` | 后缀运算符，可带语句块 | 转为讨论，未获广泛支持 |
+| 2025 年 6 月 | （全部） | 错误处理的专门语法 | 决定不再寻求 |
 
-## 7.5.2 2025：决定不再追求专门语法
+## 7.5.4 2025 年的决定
 
-2025 年 6 月 3 日，Griesemer 代表 Go 团队发文，给这条路画上句号：在可见的将来，Go 不再
-追求错误处理的语法变更，并将关闭现有及新到的、以错误处理语法为主旨的提案，不再逐一深究。
-这不是一次拖延，而是一次有论据的结论。文中给出的理由值得逐条体会：
+2025 年 6 月 3 日，Griesemer 在 Go 博客上发表了 *[ On | No ] syntactic support for error handling*。
+文章宣布，在可预见的将来，Go 团队将停止寻求错误处理方面的语法改变，并将关闭所有主要关注错误处理
+语法的现有提案与新提案，不再逐一深究 [[Griesemer, 2025](#ref-griesemer-2025)]。
 
-- **十五年、数百份提案，始终没有共识。** 连 Go 团队内部对该走哪条路都不能取得一致。一项
-  语言级改动，若连设计者都说服不了彼此，便没有落地的资格。
-- **语言改动是强制的，库改动是可选的。** 这一条最关键。泛型（[8](../ch08generics)）落地后，
-  不想用的人可以照旧不用；但一旦给错误处理加了新语法，几乎所有人都被迫去读、去学、去在
-  两种写法间做选择。Go 的设计准则之一是「不提供做同一件事的多种方式」，新语法恰恰会
-  打破它。
-- **更好的错误处理来自上下文，而非更短的语法。** 团队反复强调，真正有价值的改进是给错误
-  补充上下文信息（错在哪、为何错），而不是把 `if err != nil` 压成一行。后者省的是打字，
-  前者省的是排障时间。
-- **实现与维护的成本高昂。** 新语法要贯穿编译器、文档、`gofmt`、`go vet`、IDE 等整条工具链，
-  而 Go 团队规模不大，优先级有限。
-- **显式的 `if err != nil` 更利于调试。** 一条独立的语句，可下断点、可插日志、可单步，
-  这些都是隐式返回所没有的。
+文章并不讳言支持改变的理由：在 Go 的用户调查中，缺少更好的错误处理支持始终是最主要的抱怨。但
+Go 团队列出的反对理由更多：
 
-文章给出的替代方向，没有一条是语法：用辅助函数补充错误上下文，往标准库添加像 `cmp.Or`
-这样的小工具，以及借助 IDE 的代码补全与「折叠样板」功能，在显示层而非语言层缓解视觉噪音。
+- **现状已经可用。** Go 处理错误的方式虽然有时显得冗长，但完全可行。连 Go 团队内部对问题本身
+  都没有共同的理解，更没有一致认为问题确实存在。
+- **语言的改变会波及所有人。** 一旦引入新语法，几乎所有人都得开始使用它，否则代码就显得不合
+  惯例；这也违背了 Go「不为同一件事提供多种写法」的原则。
+- **真正处理了错误，冗长就不再显眼。** 如果错误确实得到了处理，例如补充了上下文，样板代码在
+  其中所占的比例就小得多。
+- **工具可以减轻书写的负担。** 今天的 IDE 提供了强大的代码补全，甚至有大语言模型的辅助，写下
+  基本的错误检查并不费事；支持 Go 的 IDE 也可以提供一个开关，在显示时隐藏错误处理的代码。
+- **显式的检查便于调试。** 如果错误处理的逻辑都藏在 `check`、`try` 或 `?` 背后，为了插入断点或
+  调试输出，可能先得把代码改回显式的写法。
+- **改变代价高昂。** 语言的改变代价很高，Go 团队规模不大，还有许多其他优先事项。
+- **询问过的用户都反对。** 文章提到，Go 团队在 Google Cloud Next 2025 的展台与 Go 聚会上询问过的
+  每一位 Go 用户，都坚决认为不应为了错误处理而改变语言；许多人说，缺少专门的错误处理语法这一点，
+  在刚从其他语言转来时感受最明显。
+文章给出的替代方案都不是语法：用辅助函数为错误补充上下文，以及借助标准库的新功能减少样板代码，
+这正是 Rob Pike 在 2015 年的《Errors are values》中所提倡的思路 [[Pike, 2015](#ref-pike-2015)]。
+例如，Go 1.22 加入的 `cmp.Or` 返回第一个不等于零值的参数，`error` 是可比较的接口类型，因此可以用
+它一次处理一组错误：
 
-## 7.5.3 真正落地的，是库而非语言
+```go {run=true}
+package main
 
-把镜头从「没走通的语法」转向「走通了的演进」，会看到一条截然不同、却始终热闹的主线。
-错误处理这些年所有真正落地的改进，无一例外发生在**库一级**，对语言文法毫发无伤：
+import (
+	"cmp"
+	"fmt"
+	"strconv"
+)
 
-- **Go 1.13（2019）：`%w` 包装与错误链。** `fmt.Errorf` 的 `%w` 动词让一个错误「包住」
-  另一个错误，配合 `errors.Is`、`errors.As`、`errors.Unwrap` 形成可检视的错误链。这是
-  `pkg/errors`（[7.2](./inspect.md)）多年实践被吸收进标准库的成果，全部是 `errors` 与 `fmt`
-  两个包的事，编译器一行未动。
-- **Go 1.20（2023）：`errors.Join` 与多重 `%w`。** `Join` 把若干并列的错误合成一个，
-  通过 `Unwrap() []error` 暴露给 `Is`/`As` 检视；同一版本里 `fmt.Errorf` 也允许一次写多个
-  `%w`。错误链由此从一条线扩展为一棵树。
+func printSum(a, b string) error {
+	x, err1 := strconv.Atoi(a)
+	y, err2 := strconv.Atoi(b)
+	if err := cmp.Or(err1, err2); err != nil {
+		return err
+	}
+	fmt.Println("result:", x+y)
+	return nil
+}
+
+func main() {
+	fmt.Println(printSum("1", "2"))
+	fmt.Println(printSum("1", "x"))
+	fmt.Println(printSum("y", "x")) // 只返回第一个非 nil 的错误
+}
+```
+
+```
+result: 3
+<nil>
+strconv.Atoi: parsing "x": invalid syntax
+strconv.Atoi: parsing "y": invalid syntax
+```
+
+## 7.5.5 落地的是库，而不是语法
+
+与语法上的屡次失败相对，错误处理这些年真正落地的改进，全部发生在标准库中，没有改动语言的文法：
+
+- **Go 1.13（2019）：包装与检查。** `%w`、`errors.Unwrap`、`errors.Is`、`errors.As`
+  [[Neil and Amsterdam, 2019](#ref-neil-amsterdam-2019)] [[Amsterdam, 2019](#ref-amsterdam-2019)]，
+  见 [7.2](./inspect.md)。
+- **Go 1.20（2023）：多重包装。** `errors.Join` 与 `fmt.Errorf` 中的多个 `%w`，错误链由此成为
+  错误树 [[Go Authors, 2023](#ref-go-authors-2023)]。
 
   ```go
-  err := errors.Join(errClose, errFlush) // 两个独立错误合成一个
-  if errors.Is(err, errFlush) { /* 仍可逐一检视 */ }
+  err := errors.Join(errClose, errFlush) // 两个独立的错误合并为一个
+  if errors.Is(err, errFlush) { /* 仍可分别检查 */ }
   ```
 
-- **Go 1.21（2023）：`log/slog`。** 结构化日志进入标准库，错误从此能作为带键的结构化字段
-  （`slog.Any("err", err)`）记录，与上下文一同输出，呼应了团队「错误处理重在上下文」的判断。
-  它同样是一个新包，而非新语法。
-- **Go 1.26（2025）：`errors.AsType` 泛型版。** 签名 `func AsType[E error](err error) (E, bool)`
-  借泛型（[8](../ch08generics)）取代了 `As` 那个需要传指针的别扭接口：
+- **Go 1.21（2023）：结构化日志。** `log/slog` 使错误可以作为带键的字段记录
+  [[Amsterdam, 2023](#ref-amsterdam-2023)]，见 [7.3](./context.md)。
+- **Go 1.26（2026）：泛型的 `errors.AsType`。** 借助泛型取代 `As` 需要传入指针的接口
+  [[Go Authors, 2026](#ref-go-authors-2026)]：
 
   ```go
   if pe, ok := errors.AsType[*fs.PathError](err); ok {
-      fmt.Println("失败路径:", pe.Path)
+  	fmt.Println("失败路径:", pe.Path)
   }
   ```
 
-  值得玩味的是，它恰好印证了 2025 决定里的那条逻辑：泛型这种**可选**的语言能力一旦具备，
-  错误处理便能在库一级顺势改善，而无需任何错误处理**专属**的语法。
+`AsType` 恰好说明了 2025 年决定背后的逻辑：泛型这种通用的语言能力具备之后，错误处理可以在库的
+层面随之改进，而不需要任何专为错误处理设计的语法。Russ Cox 在 2019 年把 Go 的演进方式概括为
+「实验、简化、发布」，`check` 与 `try` 正是在实验之后被放弃的 [[Cox, 2019b](#ref-cox-2019b)]。
+库的改动是增量的，旧代码照常工作，新功能按需取用；语法的改动则会影响每一份代码与每一位读者。
+Go 在错误处理上的实际策略，是把能放进库的改进都放进库，而让语言的文法保持不变。
 
-这条对照给出的结论很直白：语言层屡攻不下，库层却节节推进。原因不难理解，库改动是加法，
-旧代码原样可用，新工具按需取用；语法改动是乘法，一旦引入便乘到每一份源码、每一个读者
-头上。Go 在错误处理上的真实策略，是把所有能放进库的改进都放进库，把语言文法守得纹丝不动。
+## 7.5.6 显式优于简洁
 
-语法之路虽止，开放的余地仍在，只是都落在语言之外。2025 决定里点名的几个方向值得留意：
-其一是工具链层面的「样板折叠」，让 IDE 在显示时把成段的 `if err != nil` 折起或淡化，
-源码不变而观感变；其二是错误上下文的标准化，社区仍在讨论 `errors.Join` 之上更结构化的
-诊断信息（如错误所携带的字段、调用栈、可机读的分类），这是把 `pkg/errors`
-（[7.2](./inspect.md)）的堆栈思路继续库化的延长线。这些都不触碰文法，却可能在未来几年里
-继续改善错误处理的实际体验。换言之，故事没有结束，只是确定不会在语法这一章里续写。
+回顾这七年，Go 团队并非因循守旧，而是在显式与简洁之间一再选择了前者，并且每次都公开说明了理由。
+`check`/`handle` 被放弃，是因为它以复杂换取简短；`try` 被拒绝，是因为它把返回藏进了一个看似普通
+的表达式。被反复申明的底线是：阅读一段 Go 代码时，控制流应当一目了然。
 
-## 7.5.4 稳定的哲学：显式优于简洁
+放在语言谱系中看，这一选择的含义更加清楚。异常把错误交给隐式的控制转移，Go 从一开始就没有
+采用（见 [7.1.1](./value.md)）。Rust 的 `?` 则是另一种做法：错误仍然是值，只是用一个后缀运算符
+省去手写的分支。`?` 正是 `try` 想要提供的东西，Rust 接受了它，因为 Rust 本就允许表达式改变控制流；
+Go 看到了同样的设计，却没有接受。两种语言在同一个问题上做出了相反的选择，反映的是对「控制流是否
+应当始终显式可见」这一问题的不同回答。把错误当作普通的返回值、用普通的控制流处理，是 Go 自诞生
+起的立场，2025 年的决定只是把这一立场又一次明确地写了下来。
 
-退一步看这七年，会发现 Go 团队并非守旧，而是一次次把「显式」放在了「简洁」之前，而且
-每一次都讲清了为什么。`check`/`handle` 败在它用复杂换简洁，`try` 与 `?` 败在它们用隐式
-控制流换简洁。被反复申辩的那条底线始终是：读一段 Go 代码，控制流应当一目了然，错误
-不该在某个不起眼的表达式里悄悄改变函数的走向。
+## 延伸阅读
 
-把 Go 放回语言谱系里看，对照尤其清楚。把错误处理交给语法，大致有两条路。一条是异常，
-C++、Java、Python 走的路：错误沿调用栈隐式上抛，正常路径写得干净，代价是控制流在
-`throw` 与 `catch` 之间跳跃，难以从局部代码看清。Go 从一开始就拒绝了异常。另一条是
-「值的语法糖」，Rust 的 `?` 是其代表，错误仍是值（`Result`），只是用一个后缀标点省去
-手写的分发。`?` 正是 `try` 想要的东西，而 Rust 选择了它，因为 Rust 本就接受「表达式
-可以隐式改变控制流」（`?`、`match` 都是表达式）。Go 看着同一个设计，选择了不要，这并非
-没看见，而是看见了仍不取。两种语言在同一个十字路口走向相反，背后是对「控制流是否应当
-始终显形」这件事不同的信仰。把错误当作普通返回值、用普通控制流处理，是 Go 自诞生起就
-立下的「错误即值」立场，2025 年的决定，不过是把这个立场又一次明明白白地写了下来。
-
-性能与简洁从不白来。Go 用满屏的 `if err != nil` 换来的，是任何人翻开任何一段 Go 代码，
-都能不依赖语言魔法地看清错误流向何处。这笔交易未必人人乐意，但它是被反复权衡、被公开
-辩护的一次清醒选择，而非疏忽。错误处理的未来，大概率就是它现在的样子：语法不变，
-库继续生长。
-
-## 延伸阅读的文献
-
-1. Robert Griesemer. *Error Syntax: A Retrospective and Decision.* The Go Blog, 2025-06-03.
-   https://go.dev/blog/error-syntax （Go 团队决定不再追求错误处理语法的正式声明与理由）
-2. Robert Griesemer, et al. *Proposal: A built-in Go error check function, "try".* 2019,
-   issue 32437（已撤回）. https://github.com/golang/go/issues/32437
-3. The Go Authors. *Go 2 Draft: Error Handling Overview（check/handle）.* 2018.
-   https://go.googlesource.com/proposal/+/master/design/go2draft-error-handling-overview.md
-4. Russ Cox. *Go 2, Here We Come!（Toward Go 2 系列）.* The Go Blog, 2018-11-29.
-   https://go.dev/blog/go2-here-we-come
-5. The Go Authors. *Go 1.20 Release Notes（errors.Join 与多重 %w）.* 2023.
-   https://go.dev/doc/go1.20#errors
-6. The Go Authors. *Package errors（含 1.26 引入的泛型 AsType）.*
-   https://pkg.go.dev/errors
-7. The Go Authors. *Working with Errors in Go 1.13（%w 包装与错误链）.* The Go Blog, 2019.
-   https://go.dev/blog/go1.13-errors
-8. Russ Cox. *Experiment, Simplify, Ship.* The Go Blog, 2019.
-   https://go.dev/blog/experiment （「先库后语言、先实验再固化」的演进哲学，正是本节主线的注脚）
-9. Jonathan Amsterdam. *proposal: Go 2 error values（#29934）.* 2019.
-   https://github.com/golang/go/issues/29934 （错误值演进的总提案，串起被否决与被采纳的诸多方案）
+- <a id="ref-griesemer-2025"></a>[Griesemer, 2025] Robert Griesemer. *[ On | No ] syntactic support for
+  error handling.* The Go Blog, 2025-06-03. https://go.dev/blog/error-syntax （Go 团队决定不再追求
+  错误处理语法的正式声明与理由）
+- <a id="ref-griesemer-2019"></a>[Griesemer, 2019] Robert Griesemer. *Proposal: A built-in Go error check
+  function, "try".* 2019, issue 32437（已被拒绝）. https://github.com/golang/go/issues/32437 ；
+  设计文档 https://go.googlesource.com/proposal/+/master/design/32437-try-builtin.md ；
+  拒绝说明 https://github.com/golang/go/issues/32437#issuecomment-512035919
+- <a id="ref-cox-2018b"></a>[Cox, 2018b] Russ Cox. *Error Handling, Problem Overview（check/handle）.*
+  2018. https://go.googlesource.com/proposal/+/master/design/go2draft-error-handling-overview.md
+- <a id="ref-griesemer-2018"></a>[Griesemer, 2018] Robert Griesemer. *Go 2, here we come!* The Go Blog,
+  2018-11-29. https://go.dev/blog/go2-here-we-come （Go 2 提案流程的说明，本节所述各提案均经此流程）
+- <a id="ref-go-authors-2023"></a>[Go Authors, 2023] The Go Authors. *Go 1.20 Release Notes（errors.Join
+  与多重 %w）.* 2023. https://go.dev/doc/go1.20#errors
+- <a id="ref-go-authors-2026"></a>[Go Authors, 2026] The Go Authors. *Package errors（含 1.26 引入的泛型
+  AsType）.* https://pkg.go.dev/errors ；*Go 1.26 Release Notes.* https://go.dev/doc/go1.26
+- <a id="ref-neil-amsterdam-2019"></a>[Neil and Amsterdam, 2019] Damien Neil, Jonathan Amsterdam. *Working
+  with Errors in Go 1.13（%w 包装与错误链）.* The Go Blog, 2019. https://go.dev/blog/go1.13-errors
+- <a id="ref-cox-2019b"></a>[Cox, 2019b] Russ Cox. *Experiment, Simplify, Ship.* The Go Blog, 2019.
+  https://go.dev/blog/experiment （「先库后语言、先实验再固化」的演进哲学，正是本节主线的注脚）
+- <a id="ref-amsterdam-2019"></a>[Amsterdam, 2019] Jonathan Amsterdam. *proposal: Go 2 error values
+  （#29934）.* 2019. https://github.com/golang/go/issues/29934 （错误值演进的总提案，串起被否决与被
+  采纳的诸多方案）
+- <a id="ref-lohuizen-2018"></a>[Lohuizen, 2018] Marcel van Lohuizen. *Error Handling, Draft Design.*
+  2018. https://go.googlesource.com/proposal/+/master/design/go2draft-error-handling.md
+- <a id="ref-taylor-2025"></a>[Taylor, 2025] Ian Lance Taylor. *proposal: spec: reduce error handling
+  boilerplate using ? (#71203).* 2025. https://go.dev/issue/71203 ；讨论
+  https://github.com/golang/go/discussions/71460
+- <a id="ref-rust-2016"></a>[Rust, 2016] The Rust Project. *Rust 1.13.0 Release Notes: Stabilize the `?`
+  operator.* 2016. https://github.com/rust-lang/rust/blob/master/RELEASES.md#version-1130-2016-11-10
+- <a id="ref-pike-2015"></a>[Pike, 2015] Rob Pike. *Errors are values.* The Go Blog, 2015.
+  https://go.dev/blog/errors-are-values
+- <a id="ref-amsterdam-2023"></a>[Amsterdam, 2023] Jonathan Amsterdam. *Structured Logging with slog.* The
+  Go Blog, 2023. https://go.dev/blog/slog

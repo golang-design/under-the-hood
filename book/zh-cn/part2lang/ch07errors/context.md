@@ -5,243 +5,386 @@ title: "7.3 错误格式与上下文"
 
 # 7.3 错误格式与上下文
 
-一个好的错误，不只是「出错了」，而是能告诉人：在做什么的时候、因为什么、出了什么错。问题的
-演化（[7.1](./value.md)）与值检查（[7.2](./inspect.md)）给了我们传递与检视错误的机制，这一节
-谈机制之上的工程实践，错误的文本应当怎么写、上下文如何沿调用链一层层累积、以及当人写的文字
-不够用时，栈轨迹与结构化日志如何按需补上。贯穿其间的，是 Go 在错误信息上的一个总体倾向：
-人写的语义上下文，优于机器采的栈轨迹。
+一条有用的错误消息，应当说明程序当时在做什么、因为什么而失败。[7.2](./inspect.md) 讨论了程序
+如何检查错误，本节讨论错误如何呈现给人：错误消息应当怎样书写，上下文如何沿调用链逐层累积，
+以及当人写的上下文不够用时，调用栈与结构化日志如何补充。
 
-## 7.3.1 `Error() string` 的约定
+Go 在这方面的倾向是：由程序员在每一层写下语义上的上下文，而不是由运行时自动采集调用栈。
+标准库的错误默认不带调用栈，需要时由第三方库或用户自己的类型添加。
 
-`error` 接口只要求一个方法：
+## 7.3.1 错误消息的书写约定
 
-```go
-type error interface {
-    Error() string
-}
-```
+Go 的错误消息有一条广为遵循的约定：首字母小写，末尾不加标点。Go 官方的代码评审指南（Go Code Review
+Comments）[[Go Wiki, n.d.](#ref-go-wiki-nd)]解释了原因：错误消息通常会被拼接在其他上下文之后打印，例如
+`log.Printf("Reading %s: %v", filename, err)`，若错误消息首字母大写，整句话中间就会出现一个多余的大写字
+母。指南同时说明，这条约定不适用于日志消息，因为日志本身以行为单位，不会被嵌入其他消息之中。
 
-围绕这唯一的方法，Go 社区形成了一套不成文却处处可见的风格约定：错误字符串首字母小写、
-结尾不加标点。约定背后的原因很实际。错误极少独立出现，它们几乎总是被层层包装、首尾相接，
-拼成一条更长的字符串。设想三层调用各自补一句上下文，最终用户看到的是：
+错误消息因此可以层层拼接。三层调用各自补充一段，最终得到的是一条以 `: ` 分隔、从高层意图
+到底层原因的消息：
 
 ```
-read config: open /etc/app.conf: permission denied
+load config: open /etc/app.conf: permission denied
 ```
 
-这是三段错误用 `: ` 拼接而成的一条因果链。若每一段都按句子的写法首字母大写、末尾加句号，
-拼起来便成了「Read config: Open /etc/app.conf: Permission denied.」，一串大写字母与句号
-散落在句子中间，读起来支离破碎。小写、无尾标点的片段，才能顺畅地嵌进任意位置，串成一条
-连贯的链。这条约定细小，却是 Go 错误信息能层层拼接而不失可读的前提。
+Effective Go 还建议 [[Go Authors, 2009](#ref-go-authors-2009)]，错误消息应当尽可能标明来源，
+例如以产生错误的操作或包名作为前缀：`image` 包因格式未知而解码失败时，错误消息是 `image: unknown format`。
+`os.PathError` 是这一建议的范例，它的消息包含操作、文件路径与系统调用返回的错误，如
+`open /etc/passwx: no such file or directory`，即使在远离出错位置的地方打印，也能看出发生了什么。
 
-需要澄清一处常见的说法：检查这条约定的并不是 `go vet`。历史上它由 `golint` 负责，`golint`
-归档后，这项检查（编号 ST1005）由 `staticcheck` 等第三方工具承担。`go vet` 不管错误字符串
-的大小写，但它确实有一个与错误相关的检查，针对 `log/slog` 的结构化日志调用（见 7.3.5）。
+这条约定过去由 `golint` 检查。Ian Lance Taylor 于 2020 年 5 月提议冻结并弃用 `golint`
+（go.dev/issue/38968），其仓库随后归档 [[Taylor, 2020](#ref-taylor-2020)]；同样的检查现在由 Staticcheck
+的 ST1005 提供 [[Honnef, n.d.](#ref-honnef-nd)]。`go vet` 不检查错误消息的写法。
 
-## 7.3.2 在每一个边界补上上下文
+## 7.3.2 在每个边界补充上下文
 
-错误从底层向上传播时，每经过一个有意义的边界，都该补一句「我当时在干什么」。这正是 `%w`
-包装（[7.2](./inspect.md)）的首要用途，也是 Go 错误处理的核心实践。下面是一段典型的
-配置加载代码，它在两个不同的失败点各自标注了当时的意图：
+错误向上传播时，每经过一个有意义的边界，都应当补充一句本层正在做什么。Andrew Gerrand 在
+2011 年的博文中写道，概括上下文是错误的实现者的责任 [[Gerrand, 2011](#ref-gerrand-2011)]。这正是 `%w`
+的主要用途。下面是一个读取配置文件的函数，它在两个失败点各自补充了不同的上下文：
 
-```go
-func loadConfig(path string) (*Config, error) {
-    data, err := os.ReadFile(path)
-    if err != nil {
-        // 标注「在加载哪个配置文件」，并用 %w 保留底层 error 供判定
-        return nil, fmt.Errorf("load config %q: %w", path, err)
-    }
+```go {run=true}
+package main
 
-    var cfg Config
-    if err := json.Unmarshal(data, &cfg); err != nil {
-        // 解析失败是另一类边界，标注的语义也不同
-        return nil, fmt.Errorf("parse config %q: %w", path, err)
-    }
-    return &cfg, nil
-}
-```
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+)
 
-文件不存在时，调用者最终拿到的是 `load config "a.conf": open a.conf: no such file or
-directory`：一条从高层意图（加载配置）到底层原因（文件打不开）的完整链。`%w` 在拼出这句
-可读文字的同时，把底层的 `fs.ErrNotExist` 保留在错误树里，调用者既能把整句打印给用户，也能
-用 `errors.Is(err, fs.ErrNotExist)`（[7.2](./inspect.md)）判定具体原因。文字给人看，结构
-给程序看，两者并不冲突。
-
-这种逐层标注，本质上是用人工书写换取语义。异常语言里，错误一路向上抛，沿途的上下文由运行时
-自动采集成一条栈轨迹；Go 把这件事交还给程序员：每一层主动写一句话，最终拼成的不是一串函数名
-与行号，而是一条人类可读的、描述「程序在做什么时出了错」的语义链。代价是要勤快，每个边界都
-得记得包装，漏掉一层，链上就断一节；收益是错误信息往往比一条机器栈轨迹更说明问题，因为它讲的
-是业务意图，而非实现细节。
-
-一个值得记住的纪律：包装的文字描述本层在做什么，而不要复述下层已经说过的话。`fmt.Errorf("load
-config %q: %w", path, err)` 里，`load config` 是本层的意图，`%w` 后面交给下层去讲它自己的失败，
-两层各说一段，不重不漏。
-
-## 7.3.3 标准库的 error 不带栈
-
-逐层标注虽好，定位疑难问题时，人们有时仍想要一条机器栈轨迹，知道错误究竟从哪一行冒出来。
-标准库的 `errors.New` 与 `fmt.Errorf` 默认都不采集栈：
-
-```go
-func New(text string) error {
-    return &errorString{text}
-}
-
-type errorString struct {
-    s string
-}
-
-func (e *errorString) Error() string { return e.s }
-```
-
-一个 `errorString` 只有一个字符串字段，别无他物。这是有意的取舍，而非疏漏。采集栈轨迹需要
-`runtime.Callers` 回溯调用栈，再把程序计数器翻译成函数名与行号，这在错误高频产生的路径上
-（例如以 error 表示「未找到」「已到末尾」这类预期内的控制流）是不小的开销。Go 的判断是：
-绝大多数错误用不上栈，把栈做成默认会让所有人为少数场景买单。于是标准库选择最小的 error，
-把栈留给需要的人按需添加。这正是 Go 标准库一贯的姿态：核心极简，扩展按需。
-
-## 7.3.4 把栈与诊断信息加回来
-
-需要栈的场景，社区早有成熟方案。Dave Cheney 的 `github.com/pkg/errors` 提供 `WithStack`
-与 `Wrap`，在包装错误的同时记下当前调用栈，并约定用 `%+v` 打印出带栈的完整诊断：
-
-```go
-import "github.com/pkg/errors"
+type Config struct{ Addr string }
 
 func loadConfig(path string) (*Config, error) {
-    data, err := os.ReadFile(path)
-    if err != nil {
-        return nil, errors.Wrap(err, "load config") // 记下此处的调用栈
-    }
-    // ...
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// *fs.PathError 的消息已经包含路径，这里不再重复
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		// json 的错误不包含路径，这里补上
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	return &cfg, nil
 }
 
-// 上层打印：fmt.Printf("%+v\n", err)
-// 普通 %v 仍是一行 "load config: open a.conf: ..."，
-// %+v 则额外逐帧列出函数名与文件行号。
+func main() {
+	_, err := loadConfig("a.conf")
+	fmt.Println(err)
+	fmt.Println(errors.Is(err, fs.ErrNotExist))
+}
 ```
 
-`pkg/errors` 验证了一件事：包装、栈轨迹、可定制的打印格式，可以叠在 `error` 接口之上而不必
-改动语言。它的许多理念后来流入标准库。`golang.org/x/xerrors` 是 Go 1.13 错误特性正式落地前的
-试验田，`%w` 包装、`Is`/`As`/`Unwrap` 的雏形都在那里打磨过，最终其中的核心被吸收进标准库的
-`errors` 与 `fmt`（[7.2](./inspect.md)），而把栈轨迹留在了标准库之外，交由第三方库按需提供。
+```
+load config: open a.conf: no such file or directory
+true
+```
 
-要让自定义错误类型支持 `%+v` 这类丰富输出，靠的是 `fmt.Formatter` 接口：
+调用方拿到的消息从高层意图（加载配置）一直讲到底层原因（文件不存在），而 `%w` 又把底层的错误
+保留在错误树中，调用方可以用 `errors.Is` 判断具体原因。消息供人阅读，错误树供程序检查，二者
+互不妨碍。
+
+这里有一条值得遵守的规则：每一层只描述本层的操作，不重复下层已经说过的内容。`os.ReadFile`
+返回的 `*fs.PathError` 已经包含了操作与路径，若再写成 `fmt.Errorf("load config %s: %w", path, err)`，
+路径就会在消息中出现两次；而 `json.Unmarshal` 的错误并不知道数据来自哪个文件，路径就应当在这一层
+补上。
+
+这种逐层书写的上下文，与异常语言自动采集的调用栈不同。调用栈记录的是函数名与行号，是实现细节；
+逐层写下的消息记录的是程序当时的意图，往往更能说明问题。代价是需要程序员在每个边界都记得包装，
+漏掉一层，消息中便少了一段。
+
+## 7.3.3 标准库的错误不带调用栈
+
+`errors.New` 与 `fmt.Errorf` 都不记录调用栈。`errorString` 只有一个字符串字段，`wrapError` 只多了
+一个指向下层错误的字段（见 [7.2.1](./inspect.md)）。
+
+这是有意的选择。记录调用栈需要调用 `runtime.Callers` 回溯栈帧，打印时还要把程序计数器转换为函数名与行号。
+下表是在 Go 1.26.10、Apple M5 Pro 上的测量结果：在调用深度为 10 与 30 的位置分别创建一个错误，一种用
+`errors.New`，另一种在 `errors.New` 之外再用 `runtime.Callers` 记录至多 32 帧的程序计数器（不做符号化），
+每项运行 5 次取中位数：
+
+| 操作 | 深度 10 | 深度 30 |
+| :-- | --: | --: |
+| `errors.New` | 17.7 ns，1 次分配 | 34.1 ns，1 次分配 |
+| `errors.New` 加 `runtime.Callers` | 322.0 ns，3 次分配 | 618.3 ns，3 次分配 |
+
+仅记录程序计数器，开销就增加了一个数量级以上，并且随调用深度增长。许多错误属于预期之内的控制流，
+例如 `io.EOF`，或者「未找到」这类结果，为它们一律记录调用栈并不值得。
+
+Go 1.13 的开发周期中，错误值的实现原本包含帧信息：`fmt.Errorf` 与 `errors.New` 会记录调用位置，`%+v`
+会打印出来。这部分在发布前被删除，原因见 [7.2.5](./inspect.md)
+[[Neil and Amsterdam, 2019](#ref-neil-amsterdam-2019)]。此后标准库没有再加入这一功能，
+调用栈留给需要它的程序自行添加。
+
+## 7.3.4 为错误加上调用栈
+
+需要调用栈的场合，社区早有成熟的方案。Dave Cheney 于 2015 年底创建的 `github.com/pkg/errors` 提供 `Wrap`
+与 `WithStack`，在包装错误的同时记录调用栈，并约定以 `%+v` 打印带调用栈的详细信息
+[[Cheney, 2016c](#ref-cheney-2016c)]。它的许多做法后来影响了标准库：Go 1.13 之前，`golang.org/x/xerrors`
+作为试验场打磨了 `%w`、`Is`、`As` 与 `Unwrap` [[Go Authors, 2019](#ref-go-authors-2019)]，
+其中的核心进入了标准库，调用栈则没有。随着 Go 2 错误提案的推进，`pkg/errors` 的 README
+宣布该项目进入维护状态 [[Cheney, 2016d](#ref-cheney-2016d)]。
+
+要让自定义的错误类型支持 `%+v` 这样的详细格式，需要实现 `fmt.Formatter` 接口
+[[Go Authors, 2026](#ref-go-authors-2026)]：
 
 ```go
+// src/fmt/print.go
+type State interface {
+	// Write 用于输出格式化的结果。
+	Write(b []byte) (n int, err error)
+	// Width 返回宽度选项的值，以及它是否被设置。
+	Width() (wid int, ok bool)
+	// Precision 返回精度选项的值，以及它是否被设置。
+	Precision() (prec int, ok bool)
+
+	// Flag 报告标志 c（一个字符）是否被设置。
+	Flag(c int) bool
+}
+
+// Formatter 由任何具有 Format 方法的值实现。
+// 由实现决定如何解释 State 与 rune，
+// 并可以调用 Sprint 或 Fprint(f) 等来生成输出。
 type Formatter interface {
-    Format(f State, verb rune)
+	Format(f State, verb rune)
 }
 ```
 
-实现了 `Format` 的类型，可以完全接管自己被 `fmt` 打印时的行为：通过 `State` 拿到输出目标
-（`State` 同时是 `io.Writer`）和格式标志，再根据 `verb`（`v`、`s` 等）与标志（`f.Flag('+')`
-是否设置了 `+`）决定打印简略的一行还是带栈的多行。一个携带栈的错误类型大致这样裁剪：
+（注释为笔者所译。）实现了 `Format` 的类型完全接管自己被 `fmt` 打印时的行为：通过 `State` 写出
+结果、查询标志，再根据动词与标志（例如 `f.Flag('+')`）决定输出简短的一行还是带调用栈的多行。
+下面的程序定义了一个记录调用栈的错误类型：
 
-```go
-// 速写：一个带栈的错误，普通打印一行，%+v 打印栈
+```go {run=true}
+package main
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"runtime"
+	"strings"
+)
+
+// withStack 在创建时记录调用栈，以 %+v 打印时输出各帧的函数名
 type withStack struct {
-    err   error
-    stack []uintptr // 构造时由 runtime.Callers 采集
+	err error
+	pcs []uintptr
+}
+
+func wrapStack(err error) error {
+	var pcs [32]uintptr
+	n := runtime.Callers(2, pcs[:]) // 跳过 runtime.Callers 与 wrapStack 本身
+	return &withStack{err, pcs[:n]}
 }
 
 func (w *withStack) Error() string { return w.err.Error() }
-func (w *withStack) Unwrap() error { return w.err } // 仍可被 Is/As 穿透
+func (w *withStack) Unwrap() error { return w.err }
 
 func (w *withStack) Format(s fmt.State, verb rune) {
-    switch verb {
-    case 'v':
-        if s.Flag('+') { // %+v：先打印底层错误，再逐帧打印栈
-            fmt.Fprintf(s, "%+v", w.err)
-            for _, pc := range w.stack {
-                fn := runtime.FuncForPC(pc)
-                file, line := fn.FileLine(pc)
-                fmt.Fprintf(s, "\n\t%s\n\t\t%s:%d", fn.Name(), file, line)
-            }
-            return
-        }
-        fallthrough
-    case 's':
-        fmt.Fprint(s, w.err.Error()) // %v / %s：只打印一行
-    }
+	switch verb {
+	case 'v':
+		if s.Flag('+') {
+			fmt.Fprint(s, w.err.Error())
+			frames := runtime.CallersFrames(w.pcs)
+			for {
+				f, more := frames.Next()
+				if strings.HasPrefix(f.Function, "main.") {
+					fmt.Fprintf(s, "\n\t%s", f.Function)
+				}
+				if !more {
+					break
+				}
+			}
+			return
+		}
+		fallthrough
+	case 's':
+		fmt.Fprint(s, w.err.Error())
+	}
+}
+
+func open(path string) error {
+	return wrapStack(&fs.PathError{Op: "open", Path: path, Err: fs.ErrNotExist})
+}
+
+func loadConfig(path string) error {
+	if err := open(path); err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	return nil
+}
+
+func main() {
+	err := loadConfig("a.conf")
+	fmt.Printf("%v\n", err)
+	fmt.Printf("%+v\n", err) // 最外层的 *fmt.wrapError 不实现 Formatter
+	if ws, ok := errors.AsType[*withStack](err); ok {
+		fmt.Printf("%+v\n", ws)
+	}
+	fmt.Println(errors.Is(err, fs.ErrNotExist))
 }
 ```
 
-这样，同一个错误值，平时打印是简洁的一行，排障时 `%+v` 就能展开成带栈的诊断。`Format` 让
-「打印多详细」成为输出时才决定的事，而不必在产生错误时就固定下来。
+```
+load config: open a.conf: file does not exist
+load config: open a.conf: file does not exist
+open a.conf: file does not exist
+	main.open
+	main.loadConfig
+	main.main
+true
+```
+
+程序的输出揭示了一个容易忽略的问题：调用栈记录在内层的 `withStack` 中，而最外层是 `fmt.Errorf`
+生成的 `*fmt.wrapError`，它没有实现 `Formatter`，因此对整个错误使用 `%+v`，得到的仍然只是一行
+消息。要打印调用栈，必须先用 `errors.AsType` 找到 `withStack`。`pkg/errors` 的做法是让自己的每一种
+包装类型都实现 `Format`，以 `%+v` 打印时逐层递归；可一旦中间夹了一层标准库的 `%w` 包装，这条链
+就断了。这也说明，调用栈之类的附加信息若不进入标准库的约定，就很难在不同来源的包装之间保持。
 
 ## 7.3.5 结构化日志：错误作为字段
 
-文本拼接的链有一个天花板：它是给人读的散文，不便机器检索与聚合。当错误进入日志、要被监控
-系统按字段过滤、统计、告警时，一行字符串就显得笨拙。Go 1.21 引入的 `log/slog` 把日志从
-「格式化字符串」转向「键值对的结构化记录」，错误于是能作为一个带键的字段被记录，而非塞进
-一句话里：
+以 `: ` 拼接的消息是写给人看的，不便于机器检索与统计。错误进入日志系统、需要按字段过滤与告警时，
+一行字符串就显得不够。Go 1.21 加入的 `log/slog`（Jonathan Amsterdam，
+2023 年）[[Amsterdam, 2023](#ref-amsterdam-2023)]把日志从格式化的字符串改为键值对构成的记录，
+错误可以作为一个字段记录下来。
+
+`slog` 的 JSON 处理程序在输出一个值时，若该值是错误且没有实现 `json.Marshaler`，就输出它的
+`Error()` 字符串：
 
 ```go
-import "log/slog"
+// src/log/slog/json_handler.go（appendJSONValue 节选）
+case KindAny:
+	a := v.Any()
+	_, jm := a.(json.Marshaler)
+	if err, ok := a.(error); ok && !jm {
+		s.appendString(err.Error())
+	} else {
+		return appendJSONMarshal(s.buf, a)
+	}
+```
 
-func handle(path string) {
-    cfg, err := loadConfig(path)
-    if err != nil {
-        // 错误是一个名为 "err" 的字段，path 是另一个字段
-        slog.Error("config load failed",
-            slog.String("path", path),
-            slog.Any("err", err),
-        )
-        return
-    }
-    _ = cfg
+处理程序在输出之前会先解析实现了 `slog.LogValuer` 接口的值，因此一个错误类型可以通过实现
+`LogValue` 方法，把自己展开为一组结构化的字段：
+
+```go {run=true}
+package main
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+)
+
+// QueryError 实现了 slog.LogValuer，记录日志时展开为一组字段
+type QueryError struct {
+	Query string
+	Code  int
+	Err   error
+}
+
+func (e *QueryError) Error() string { return fmt.Sprintf("query %q: %v", e.Query, e.Err) }
+func (e *QueryError) Unwrap() error { return e.Err }
+
+func (e *QueryError) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("query", e.Query),
+		slog.Int("code", e.Code),
+		slog.String("cause", e.Err.Error()),
+	)
+}
+
+func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		// 去掉时间字段，使输出稳定
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.TimeKey && len(groups) == 0 {
+				return slog.Attr{}
+			}
+			return a
+		},
+	}))
+
+	qe := &QueryError{Query: "select 1", Code: 1205, Err: errors.New("lock wait timeout")}
+	logger.Error("query failed", "err", qe)
+
+	wrapped := fmt.Errorf("handle request: %w", qe)
+	logger.Error("request failed", "path", "/users", "err", wrapped)
 }
 ```
 
-以 JSON Handler 输出时，这条记录形如 `{"level":"ERROR","msg":"config load failed",
-"path":"a.conf","err":"load config \"a.conf\": ..."}`。`msg` 是稳定的、可聚类的事件名，
-`path` 与 `err` 是可被检索过滤的字段。逐层标注积累出的那条语义链，此刻成为 `err` 字段的值，
-两套实践在这里衔接：人写的上下文负责「讲清楚发生了什么」，结构化字段负责「让机器查得到、
-统计得出」。这正是错误处理与可观测性（[16 工具与可观测性](../../part5toolchain/ch16tools)）的
-交汇点。
+```
+{"level":"ERROR","msg":"query failed","err":{"query":"select 1","code":1205,"cause":"lock wait timeout"}}
+{"level":"ERROR","msg":"request failed","path":"/users","err":"handle request: query \"select 1\": lock wait timeout"}
+```
 
-`slog` 的键值接口有一处易错：它接受交替的 `key, value` 变长参数，写漏一个值或把非字符串
-放在键的位置，编译期不会报错，运行期才出问题。前面提到的 `go vet` 的 `slog` 检查正是为此
-而生，它会在静态分析时报出键值不匹配的调用，例如缺了最后一个值、或键的位置放了个整数。
-本节用 `slog.String`、`slog.Any` 显式构造 `Attr`，既避开了这个坑，也让字段类型一目了然。
+第二条记录再次出现了上一小节的问题：`QueryError` 一旦被 `%w` 包装，最外层的 `*fmt.wrapError` 不是
+`LogValuer`，日志中只剩下一行字符串。`slog` 只看传给它的那个值，并不遍历错误树。若需要结构化的
+字段，应当在记录日志之前用 `errors.AsType` 取出具体的错误。
 
-## 7.3.6 设计取舍与谱系
+`slog` 的便捷函数接受交替出现的键与值，例如 `slog.Info(msg, "path", p)`。漏写一个值，或者把
+非字符串放在键的位置，编译器都不会报错。为此，Go 1.21 的 `go vet` 加入了 `slog` 检查
+（6d4d71c5ab）。对下面两行代码：
 
-把这一节收束成一句话：Go 在错误格式上倾向于人写的语义上下文，而把机器栈轨迹做成可选项。
+```go
+slog.Info("config loaded", "path", "a.conf", "retries")
+slog.Warn("slow", 42, "ms")
+```
 
-- 标准库默认不带栈，鼓励逐层用 `%w` 标注。常见错误因此高度可读，讲的是业务意图；代价是
-  程序员要勤于包装，且默认拿不到栈。
-- 需要栈时，`fmt.Formatter` 加 `runtime.Callers` 即可把带栈的诊断叠加上去，`pkg/errors`
-  把这套做法工具化，其理念经 `x/xerrors` 试验后部分进入标准库。深度诊断按需扩展，不让多数人
-  为少数场景买单。
-- 需要机器可查时，`log/slog` 把错误降格为一个结构化字段，与监控系统对接。
+`go vet` 报告：
 
-放进谱系看，这与异常语言的路线恰成对照。Java、Python 用自动采集的栈轨迹换取「零成本的
-上下文」，代价是栈轨迹冗长、充斥实现细节、且无法表达业务语义；Rust 的 `Result` 与 `?` 同样
-默认不带栈，社区靠 `anyhow`、`thiserror` 等库补充上下文与（可选的）回溯，与 Go 的
-`pkg/errors` 思路高度相似。一个朴素的 `Error() string` 接口，配上社区约定、`%w` 包装、
-`fmt.Formatter` 与 `log/slog`，撑起了从「一句话错误」到「带栈结构化诊断」的整个谱系。核心
-极简、按需扩展，是 Go 标准库反复出现的样子。
+```
+main.go:6:2: call to slog.Info missing a final value
+main.go:7:20: slog.Warn arg "42" should be a string or a slog.Attr (possible missing key or value)
+```
 
-## 延伸阅读的文献
+用 `slog.String`、`slog.Int` 等函数显式构造 `slog.Attr`，可以从根本上避免这类错误。
 
-1. Andrew Gerrand. *Error handling and Go.* Go 博客, 2011.
-   https://go.dev/blog/error-handling-and-go
-2. Russ Cox 等. *Working with Errors in Go 1.13.* Go 博客, 2019.
-   https://go.dev/blog/go1.13-errors （`%w`、`Is`/`As`/`Unwrap` 的设计与取舍）
-3. Dave Cheney. *github.com/pkg/errors*（`Wrap`/`WithStack`、`%+v` 带栈打印）.
-   https://github.com/pkg/errors ；
-   *Stack traces and the errors package.* 2016.
-   https://dave.cheney.net/2016/06/12/stack-traces-and-the-errors-package
-   （`pkg/errors` 栈轨迹设计的作者自述）
-4. The Go Authors. *golang.org/x/xerrors*（Go 1.13 错误特性的试验田）.
-   https://pkg.go.dev/golang.org/x/xerrors
-5. The Go Authors. *Package log/slog*（Go 1.21 结构化日志）.
-   https://pkg.go.dev/log/slog
-6. The Go Authors. *Package fmt*（`Formatter`、`State` 接口）.
-   https://pkg.go.dev/fmt#Formatter
-7. Dominik Honnef. *staticcheck ST1005: Incorrectly formatted error string.*
-   https://staticcheck.dev/docs/checks#ST1005 （错误字符串大小写与标点的检查）
-8. 本书 [7.1 问题的演化](./value.md)、[7.2 错误值检查](./inspect.md)、
-   [16 工具与可观测性](../../part5toolchain/ch16tools).
+## 7.3.6 比较与小结
+
+Java 与 Python 的异常在创建或抛出时自动记录调用栈，上下文的获得不需要额外的代码，代价是每个异常都要付出采
+集调用栈的开销，并且栈中充满实现细节，不表达业务语义。Rust 的 `Result` 与 Go 的错误一样默认不带调用栈；
+Rust 1.65（2022 年）稳定了 `std::backtrace::Backtrace` [[Rust, 2022](#ref-rust-2022)]，社区常用的
+`anyhow` 与 `thiserror` 则分别提供不透明的错误与结构化的错误类型，按需附加上下文与调用栈，思路与 Go 的
+`pkg/errors` 相近。
+
+Go 的选择可以概括为三层：
+
+- 标准库的错误不带调用栈，鼓励以 `%w` 逐层补充上下文。错误消息讲的是程序的意图，但需要程序员
+  勤于包装，默认也拿不到调用栈。
+- 需要调用栈时，用 `runtime.Callers` 与 `fmt.Formatter` 自行添加，或使用第三方库。代价是每次
+  创建错误的开销，以及附加信息在不同来源的包装之间难以保持。
+- 需要机器检索时，用 `log/slog` 把错误作为结构化字段记录，必要时实现 `LogValuer`。
+
+## 延伸阅读
+
+- <a id="ref-gerrand-2011"></a>[Gerrand, 2011] Andrew Gerrand. *Error handling and Go.* The Go Blog, 2011.
+  https://go.dev/blog/error-handling-and-go
+- <a id="ref-neil-amsterdam-2019"></a>[Neil and Amsterdam, 2019] Damien Neil, Jonathan Amsterdam. *Working
+  with Errors in Go 1.13.* The Go Blog, 2019. https://go.dev/blog/go1.13-errors
+  （`%w`、`Is`/`As`/`Unwrap` 的设计与取舍）
+- <a id="ref-cheney-2016d"></a>[Cheney, 2016d] Dave Cheney. *github.com/pkg/errors*（`Wrap`/`WithStack`、
+  `%+v` 带栈打印）. https://github.com/pkg/errors ；
+  <a id="ref-cheney-2016c"></a>[Cheney, 2016c] Dave Cheney. *Stack traces and the errors package.* 2016.
+  https://dave.cheney.net/2016/06/12/stack-traces-and-the-errors-package
+  （`pkg/errors` 栈轨迹设计的作者自述）
+- <a id="ref-go-authors-2019"></a>[Go Authors, 2019] The Go Authors. *golang.org/x/xerrors*（Go 1.13
+  错误特性的试验田）. https://pkg.go.dev/golang.org/x/xerrors
+- <a id="ref-amsterdam-2023"></a>[Amsterdam, 2023] The Go Authors. *Package log/slog*（Go 1.21
+  结构化日志）. https://pkg.go.dev/log/slog ；Jonathan Amsterdam. *Structured Logging with slog.* The Go
+  Blog,
+  2023. https://go.dev/blog/slog ；`go vet` 的 slog 检查：https://go.googlesource.com/go/+/6d4d71c5ab
+- <a id="ref-go-authors-2026"></a>[Go Authors, 2026] The Go Authors. *Package fmt*（`Formatter`、`State`
+  接口）. https://pkg.go.dev/fmt#Formatter
+- <a id="ref-honnef-nd"></a>[Honnef, n.d.] Dominik Honnef. *staticcheck ST1005: Incorrectly formatted
+  error string.* https://staticcheck.dev/docs/checks#ST1005 （错误字符串大小写与标点的检查）
+- <a id="ref-go-wiki-nd"></a>[Go Wiki, n.d.] The Go Authors. *Go Code Review Comments: Error Strings.*
+  https://go.dev/wiki/CodeReviewComments#error-strings
+- <a id="ref-go-authors-2009"></a>[Go Authors, 2009] The Go Authors. *Effective Go: Errors.*
+  https://go.dev/doc/effective_go#errors
+- <a id="ref-taylor-2020"></a>[Taylor, 2020] Ian Lance Taylor. *x/lint: freeze and deprecate.* 2020.
+  https://go.dev/issue/38968
+- <a id="ref-rust-2022"></a>[Rust, 2022] The Rust Release Team. *Announcing Rust 1.65.0.* 2022.
+  https://blog.rust-lang.org/2022/11/03/Rust-1.65.0/
+- 本书 [7.1 问题的演化](./value.md)、[7.2 错误值检查](./inspect.md)、
+  [16 工具与可观测性](../../part5toolchain/ch16tools).
