@@ -107,3 +107,13 @@ defaultContentLanguageInSubdir = false
     [markup.goldmark.extensions.passthrough.delimiters]
         block = [['$$', '$$'], ['\[', '\]']]
         inline = [['$', '$'], ['\(', '\)']]
+
+# The zh source is hard-wrapped. Drop a soft line break between two East Asian
+# wide characters, which a browser would otherwise render as a space. Breaks
+# next to Latin text still render as a space, which is where the zh text wants
+# one (Go 1.26 为基准); the source never breaks between full-width punctuation
+# and Latin text, where it does not.
+[markup.goldmark.extensions.cjk]
+    enable = true
+    eastAsianLineBreaks = true
+    eastAsianLineBreaksStyle = "simple"
