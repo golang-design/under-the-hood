@@ -5,242 +5,285 @@ title: "8.2 基于合约的泛型"
 
 # 8.2 基于合约的泛型
 
-> 本节内容另有一份配套的线上演讲：[YouTube 在线](https://www.youtube.com/watch?v=E16Y6bI2S08)、
-> [Google Slides 讲稿](https://changkun.de/s/go2generics/)。讲稿录于合约提案尚在讨论的 2019 年，
-> 与本节互为印证。
+> 本节另有一份配套的演讲：[YouTube 录像](https://www.youtube.com/watch?v=E16Y6bI2S08)、
+> [Google Slides 讲稿](https://changkun.de/s/go2generics/)。演讲录于合约草案尚在讨论的 2019 年，
+> 可与本节对照阅读。
 
-[8.1](./history.md) 用一句话带过了「先有合约、后转向接口即约束」这段演进。这一节把那句话展开：
-合约究竟长什么样、它有多强的表达力、又为何最终被放弃。这段被否决的设计不是历史的废料，它解释了
-今天 `[T Ordered]` 语法的由来，也示范了 Go 设计中一个反复出现的动作,先做出一个表达力很强但
-偏复杂的方案，再回头追问「这件事能不能用已有的概念表达」，逼着复杂度去赚取自己存在的资格。
+[8.1](./history.md) 只用一句话提到了约束的设计从合约转向接口的过程。本节展开这段过程：合约是什么样子，
+它的表达能力有多强，又为何最终被放弃。这段被否决的设计解释了今天 `[T Ordered]` 这一语法的由来，也表明了
+Go 设计中反复出现的一种做法：先提出一个表达能力强但较为复杂的方案，再追问它所做的事能否用已有的概念表达。
 
-本节展示的所有 `contract` 语法都已废弃，仅出现在 2018 年至 2020 年的 go2draft 草案里，
-**任何一个 Go 编译器都从未接受过它们**。下文凡是合约写法，都按其在草案中的原貌呈现，并明确标注
-「已废弃」，以免与今天可用的语法混淆。
+本节展示的 `contract` 语法只出现在 2018 年至 2020 年的设计草案中，从未被任何正式发布的 Go 编译器接受。凡是
+合约的写法，下文都按草案原貌给出，并在注释中注明「已废弃」，以免与今天的语法混淆。
 
-## 8.2.1 约束想解决什么
+## 8.2.1 约束要解决的问题
 
-泛型函数迟早要回答一个问题：类型参数 `T` 能做哪些操作？写一个求最大值的 `Max`，函数体里要用到
-比较运算符 `<`，可 `T` 若被实例化成一个不支持比较的类型（比如某个 struct 或 slice），这段代码就
-不成立。于是泛型机制必须提供一种手段，让作者**声明** `T` 必须支持哪些操作，并让编译器据此在
-实例化处做检查。这就是「约束」（constraint）。
+泛型函数必须回答一个问题：类型参数 `T` 的值可以进行哪些操作？求最大值的 `Max` 要用到比较运算符 `<`，若
+`T` 被实例化为一个不支持比较的类型，例如某个结构体或切片，函数体便不再成立。因此泛型机制必须提供一种手段，
+让函数的作者**声明** `T` 必须支持哪些操作，并让编译器在实例化处据此检查。这就是**约束**（constraint）。
 
-约束不是可有可无的修饰。没有它，泛型只剩两条退路：要么像 C++ 早期模板那样**完全不约束**，类型
-错误推迟到实例化时才以一长串难懂的报错暴露出来；要么像 `interface{}` 那样**放弃静态信息**，靠
-运行时断言兜底，把类型安全和性能一并丢掉（[8.1](./history.md) 的两难）。约束的价值，正是把
-「`T` 得能做什么」这件事提前到声明处讲清楚，让错误在调用点就被拦下，也让编译器有依据生成正确的
-代码。问题只剩一个：用什么语法把这组要求写出来。
+没有约束，泛型只有两条退路。一条是像 C++ 的模板那样完全不加约束，类型错误推迟到实例化时才以冗长难懂的错误
+信息暴露出来；另一条是像 `interface{}` 那样放弃静态的类型信息，依靠运行时的断言，同时牺牲类型安全与性能
+（[8.1](./history.md)）[[Cox, 2009](#ref-cox-2009)]。约束把「`T` 必须能做什么」提前到声明处说明，
+使错误在调用处即被发现，也使编译器有依据生成正确的代码。剩下的问题是，用什么语法写出这组要求。
 
 ## 8.2.2 合约：一段不会执行的代码
 
-2018 年 go2draft 给出的第一版答案，是引入一个新关键字 `contract`。合约形如一个函数：它带一组
-类型参数，函数体里**罗列**这些类型必须满足的条件。以 `Max` 为例，最朴素的设想是直接在体内写出
-要用到的运算符（这是草案探讨过的更早一版写法）：
+2018 年 8 月，Ian Lance Taylor 与 Robert Griesemer 发布了合约的设计草案，并在当年的 GopherCon 上作了介绍
+[[Taylor and Griesemer, 2018](#ref-taylor-griesemer-2018)]。草案引入了一个新的关键字 `contract`。
+合约在形式上像一个函数：它有一组类型参数，函数体中写出使用这些类型的代码，凡是能使这段代码通过类型检查的类
+型，就满足这个合约。例如，要求类型支持 `<`：
 
 ```go
-// 已废弃：2018 草案早期设想，运算符直接写进合约体
-contract Ordered(t T) {
-    t < t
-}
-func Max(type T Ordered)(a, b T) T {
-    if a < b {
-        return b
-    }
-    return a
+// 已废弃：2018 年草案的写法，合约体是一段只做类型检查的代码
+contract ordered(e Ele) { e < e }
+
+func Max(type T ordered)(a, b T) T {
+	if a < b {
+		return b
+	}
+	return a
 }
 ```
 
-合约体里的 `t < t` 不是要执行的语句，它的意思是「凡满足 `Ordered` 的类型 `T` 都必须支持 `<`」。
-请留意类型参数的声明方式,草案用的是**圆括号**：`func Max(type T Ordered)(a, b T) T`，类型参数列表
-前缀一个 `type` 关键字。这与今天的方括号 `[T Ordered]` 是两套不同的语法，括号从圆到方的这次更换，
-本身就是后文要交代的演进的一部分。
+合约体中的 `e < e` 并不会执行，它的含义是「满足 `ordered` 的类型必须支持 `<`」；同理，`x == x`
+表示可比较，`var x bool = v.Equal(v)` 表示必须有一个返回 `bool` 的 `Equal` 方法。另一处与今天不同的是类型
+参数的声明方式：草案使用圆括号，并以关键字 `type` 开头，写作 `func Max(type T ordered)(a, b T) T`。
+括号从圆括号改为方括号，也是后文所述演变的一部分。
 
-把运算符写进函数体看似自然，却很快遇到麻烦：`+(T, T) T` 这样的算符要求写起来既重复又含糊，还会
-和分号自动插入规则纠缠。草案因此转向一种更明确的写法,**类型列表**（type list）：直接枚举出哪些
-具体类型属于这个合约。这才是 go2draft 中合约的规范形态：
+以代码表达约束看似自然，问题却在于这段代码能写成什么样子几乎没有限制：读者必须推断一段任意的代码究竟对类型
+提出了哪些要求，而编译器也要回答同样的问题。2019 年 7 月，Taylor 在介绍修订后的草案时写道，他们收到了大量
+反馈，认为此前的合约过于复杂；新的合约写起来、读起来与理解起来都简单得多，它可以规定类型参数的底层类型，
+可以列出类型参数的方法，也可以描述不同类型参数之间的关系 [[Taylor, 2019](#ref-taylor-2019)]。修订后的合约
+不再是任意的代码，而是一份列表 [[Taylor and Griesemer, 2019](#ref-taylor-griesemer-2019)]。允许的类型以
+**类型列表**（type list）枚举：
 
 ```go
-// 已废弃：2018 草案的规范形态,用类型列表枚举允许的底层类型
+// 已废弃：2019 年草案的写法，以类型列表枚举允许的类型
 contract Ordered(T) {
-    T int, int8, int16, int32, int64,
-        uint, uint8, uint16, uint32, uint64, uintptr,
-        float32, float64,
-        string
+	T int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64, uintptr,
+		float32, float64,
+		string
 }
+
 func Max(type T Ordered)(a, b T) T {
-    if a < b {
-        return b
-    }
-    return a
+	if a < b {
+		return b
+	}
+	return a
 }
 ```
 
-`Ordered` 列出的这些类型恰好都支持 `<`，于是编译器只要确认 `T` 被实例化成列表中的某一个，
-就知道 `a < b` 合法。方法要求则另写一行，类型名后跟方法签名：
+列表中的类型都支持 `<`，编译器只需确认 `T` 的底层类型是其中之一，便可知道 `a < b` 合法。方法要求写成类型
+名之后跟方法签名，合约之间还可以嵌入组合，被嵌入合约的条件就地展开：
 
 ```go
-// 已废弃：要求 T 必须实现 String() string
-contract Stringer(T) {
-    T String() string
+// 已废弃：要求 X 有 String 与 Print 两个方法
+contract stringer(X) {
+	X String() string
 }
-```
 
-合约还能**组合**：把另一个合约的名字嵌入体内，等价于把被嵌合约的条件就地展开。
-
-```go
-// 已废弃：嵌入 Stringer，再追加一个 Print 方法要求
 contract PrintStringer(X) {
-    Stringer(X)
-    X Print()
+	stringer(X)
+	X Print()
 }
 ```
 
-最能体现合约表达力的，是它能约束**多个类型参数之间的关系**。一个合约可以带 `(P1, P2)` 两个类型
-参数，在体内写出跨参数的方法签名,要求 `P1` 上有一个接收 `P1`、返回 `P2` 的方法，同时限定 `P2`
-的底层类型：
+合约最能体现其表达能力之处，是描述**多个类型参数之间的关系**。草案中的一个例子是图：节点类型必须有一个
+返回其所有边的方法，边类型必须有一个返回其两端节点的方法，两个类型参数互相引用：
 
 ```go
-// 已废弃：约束 P1、P2 两个类型参数及其相互关系
-contract C(P1, P2) {
-    P1 m1(x P1)
-    P2 m2(x P1) P2
-    P2 int, float64
+// 已废弃：一个合约同时约束 Node 与 Edge 两个类型参数
+contract G(Node, Edge) {
+	Node Edges() []Edge
+	Edge Nodes() (from Node, to Node)
 }
-func F(type P1, P2 C)(x P1, y P2) P2 { /* ... */ }
+
+type Graph(type Node, Edge G) struct { ... }
 ```
 
-`m2(x P1) P2` 这一行同时牵动两个类型参数：它要求 `P2` 有一个方法，参数类型是 `P1`、返回类型是 `P2`。
-这种跨参数的关系约束，是普通接口（描述单个类型）天然说不出口的,它正是合约「像第二种语言」那份
-表达力的来源，也是后来用接口替代时必须想清楚如何承接的难点。到这里合约的全部本领就摆开了：
-枚举底层类型、要求方法、组合既有合约、约束多参数关系。它确实强大，几乎能描述任何想得到的类型间
-约束,而这份「几乎无所不能」，恰恰是它的隐患所在。
+草案特别指出，这里的 `Node` 与 `Edge` 并不是接口类型，而是具有特定方法的具体类型，例如 `*Vertex` 与
+`*FromTo`。一个接口只描述一个类型，这种跨类型参数的关系一度被视为合约独有的能力，也是后来以接口取代合约时
+必须解决的难点。到这里，合约的全部能力都已展示：枚举底层类型、要求方法、组合已有的合约，以及约束多个类型
+参数之间的关系。
 
 ## 8.2.3 为何被放弃
 
-问题恰恰出在「强大」上。合约把约束写成一段形似函数体、却又不会执行的代码，这种「似是而非」带来
-两层认知负担。其一，合约体里能写的东西自成一套规则：哪些语句合法、`t < t` 表示运算符要求而非求值、
-类型列表用逗号分隔、方法要求写成另一种形式,这套规则只在合约体内有效，与真正的 Go 代码似像非像。
-读者要在脑子里维护「这是合约语境，不是普通函数」的开关。其二，它在语言里立起了**第二套声明机制**：
-描述「一个值有哪些方法」用 `interface`，描述「一个类型参数要满足哪些条件」却要用 `contract`，两者
-职责高度重叠，却各有语法。
+修订后的合约虽然简单了许多，却仍然在语言中建立了第二套声明机制：描述一个值有哪些方法用 `interface`，描述
+一个类型参数须满足哪些条件却用 `contract`，二者的职责高度重叠，语法却各不相同。2020 年 6 月，Taylor 与
+Griesemer 发布了新的设计草案，并在博客中写道：「最大的改动是我们放弃了合约这一概念。合约与接口类型之间的
+区别令人困惑，因此我们要消除这一区别。」[[Taylor and Griesemer, 2020a](#ref-taylor-griesemer-2020a)]
 
-2020 年 6 月的「The Next Step for Generics」把这层顾虑说得很直白：「最大的改动是我们放弃了合约这个
-概念。合约与接口类型之间的区别令人困惑，所以我们要消除这个区别。」（"The difference between
-contracts and interface types was confusing, so we're eliminating that difference."）这正是 Go 一贯的
-口味,它对「往语言里加一门小语言」极为警惕，宁可在已有抽象上做推广，也不轻易引入需要单独学习的
-新机制。合约被否，不是因为它做不到，而是因为它要求用户学一套新东西，而这套新东西所做的事，
-另一个人人已懂的概念恰好能承担。
+新草案说明了这一决定的两点理由：许多人难以理解合约与接口类型的区别；而且事实证明，
+合约可以用一组相应的接口表示，去掉合约并不损失表达能力
+[[Taylor and Griesemer, 2020b](#ref-taylor-griesemer-2020b)]。合约被放弃，并不是因为它做不到什么，
+而是因为它要求使用者学习一套新的机制，而这套机制所做的事，一个人人都已熟悉的概念恰好能够承担。
 
-## 8.2.4 简化的洞察：从方法集到类型集
+草案还回答了另一个自然的问题：为什么不允许以运算符作为方法名，例如 `+(T) T`，从而只用方法描述一切约束？
+草案的回答是这并不足够：移位 `<<` 与下标 `[]` 接受任意整数类型的操作数，需要一种描述「任意整数类型」
+的机制；`==` 的结果是无类型的布尔值；类型转换、`range` 以及无类型常量的取值范围都需要新的记法；
+还要决定支持 `<` 是否意味着也支持 `<=`，支持 `+` 是否意味着也支持 `++`。相比之下，
+类型列表只需要一种新的语法结构，再加一个新的名字 `comparable`
+[[Taylor and Griesemer, 2020b](#ref-taylor-griesemer-2020b)]。
 
-那个能承担约束职责的旧概念，就是接口。接口本来描述「一个类型得有哪些**方法**」,这是它的
-**方法集**（method set）语义。约束要表达的「一个类型得支持哪些操作」，与之高度重合：方法是操作，
-运算符也是操作。差的只是接口原本说不出「`T` 的底层类型必须是 `int`」这类要求。
+## 8.2.4 从方法集到类型集
 
-简化的关键，是把接口的语义从「方法集」推广为**类型集**（type set）：一个接口不再只描述「实现了
-这组方法的类型」，而直接描述「**哪些类型**满足它」。方法集是类型集的一种特例(实现了某组方法的所有
-类型构成一个集合)，而类型集还能用别的方式划定：枚举底层类型、取并集、内建的 `comparable`。
-约束于是不必再发明 `contract`，复用接口即可。`Ordered` 从一段合约代码，变成一个普通的（约束）接口：
+能够承担约束职责的已有概念就是接口。接口原本描述一个类型必须有哪些方法，即它的**方法集**（method set）。
+约束要表达的是一个类型必须支持哪些操作，二者高度重合：方法是操作，运算符也是操作，所缺的只是接口无法表达
+「`T` 的底层类型必须是 `int`」这类要求。2020 年的草案因此允许作为约束的接口包含类型列表，写法是在接口中以
+`type` 开头列出类型：
 
 ```go
-// 最终方案：约束就是一个用类型集描述的接口
+// 已废弃：2020 年 6 月草案的写法，接口中以 type 开头的类型列表
 type Ordered interface {
-    ~int | ~int8 | ~int16 | ~int32 | ~int64 |
-        ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr |
-        ~float32 | ~float64 |
-        ~string
-}
-func Max[T Ordered](a, b T) T {
-    if a < b {
-        return b
-    }
-    return a
+	type int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64, uintptr,
+		float32, float64,
+		string
 }
 ```
 
-同一个 `Max`，对照着读最能看清这次取舍带来的收益。新写法里出现了两个为类型集服务的记号：`|` 是
-**并集**，把多个类型并进同一个集合；`~T` 表示「底层类型为 `T` 的所有类型」,有了 `~`，
-`type Celsius float64` 这样以 `float64` 为底层类型的自定义类型也落在 `Ordered` 里，而不必逐一列举。
-方法要求则直接沿用接口原有的写法（`String() string`），无需另立规则。一个会嵌入另一个的合约组合，
-也回归成接口的嵌入。一门小语言被拆解，重新落回 `interface` 这个早已存在的概念上。
-
-至于 8.2.2 末尾那个「普通接口说不出口」的难点,合约约束多个类型参数之间的关系，接口方案靠
-**参数化接口**接了下来。当年合约 `C(P1, P2)` 描述的跨参数要求，可以拆成两个带类型参数的接口，再让
-`F` 的类型参数列表把它们的参数对齐：
+2021 年 4 月，Taylor 提出以**类型集**（type set）重新表述接口的语义（#45346），该提案于同年 7 月被接受
+[[Taylor, 2021](#ref-taylor-2021)]。按照这一表述，接口不再只描述「实现了这组方法的类型」，
+而是直接描述一个类型的集合，即哪些类型满足它。方法集只是划定类型集的一种方式（实现了某组方法的所有类型构成
+一个集合），类型集还可以用并集、底层类型以及预声明的 `comparable` 来划定。于是 `Ordered`
+成为一个普通的接口：
 
 ```go
-// 最终方案：用参数化接口承接当年合约的多参数关系约束
-type I1[P1 any] interface {
-    m1(x P1)
+// 最终方案：约束是一个以类型集描述的接口
+type Ordered interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 |
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr |
+		~float32 | ~float64 |
+		~string
 }
-type I2[P1, P2 any] interface {
-    m2(x P1) P2
-    ~int | ~float64
+
+func Max[T Ordered](a, b T) T {
+	if a < b {
+		return b
+	}
+	return a
 }
-func F[P1 I1[P1], P2 I2[P1, P2]](x P1, y P2) P2 { /* ... */ }
 ```
 
-`F[P1 I1[P1], P2 I2[P1, P2]]` 这一行在实例化时把 `I2` 里的 `P1` 与 `I1` 的 `P1` 绑成同一个类型，
-合约当年用专门语法表达的关系，于是落进了接口与类型参数已有的组合规则里，没有再多发明一个概念。
-对一类常见而合约要靠枚举勉强表达的约束,「这个类型必须支持 `==`」，类型集方案还内建了
-`comparable`，直接把「可比较」作为一个类型集纳入语言，省去了 `Ordered` 那样列举全部可比较类型的
-笨拙。换言之，简化非但没有损失合约的核心表达力，还在最吃紧的几处给了更顺手的写法。
+新的写法中有两个为类型集服务的记号：`|` 表示**并集**，把多个类型并入同一个集合；`~T` 表示**底层类型为 `T`
+的所有类型**。有了 `~`，`type Celsius float64` 这样以 `float64` 为底层类型的自定义类型也属于 `Ordered`，
+`Max(Celsius(21.5), 19)` 可以直接调用，而不必在约束中逐一列举。2020 年草案中的类型列表同样按底层类型匹配，
+类型集只是把这一规则写成了显式的记号，并去掉了 `type` 关键字。方法要求沿用接口原有的写法，合约之间的组合也
+回归为接口的嵌入。
+
+8.2.2 末尾的难点，即多个类型参数之间的关系，则由**参数化接口**解决：接口本身也可以带有类型参数。合约 `G`
+描述的图可以拆成两个带类型参数的接口，再在 `Graph` 的类型参数列表中把它们的参数对齐
+[[Taylor and Griesemer, 2021](#ref-taylor-griesemer-2021)]：
+
+```go
+// 最终方案：以参数化接口表达多个类型参数之间的关系
+type NodeConstraint[Edge any] interface {
+	Edges() []Edge
+}
+
+type EdgeConstraint[Node any] interface {
+	Nodes() (from, to Node)
+}
+
+type Graph[Node NodeConstraint[Edge], Edge EdgeConstraint[Node]] struct { ... }
+```
+
+`Graph[Node NodeConstraint[Edge], Edge EdgeConstraint[Node]]` 在实例化时把两个约束中的 `Node` 与 `Edge`
+绑定为同一组类型。合约以专门的语法表达的关系，就这样落入了接口与类型参数已有的组合规则之中，
+没有引入新的概念。以 `*Vertex` 与 `*FromTo` 实例化时，Go 1.21 及以后的编译器甚至可以只根据节点切片推断出边
+的类型（见 [8.3](./checker.md)）。对于「类型必须支持 `==`」这一常见的约束，类型集方案提供了预声明的
+`comparable`，不必像合约那样列举所有可比较的类型。简化并没有损失合约的核心表达能力。
 
 ## 8.2.5 演进的时间线
 
-从合约到类型集并非一步到位，而是分两步逐级**减负**的，每一步都甩掉一些机制。把时间线拉直：
+从合约到类型集并非一步完成。按时间排列：
 
 ```mermaid
 flowchart LR
-    A["2018 go2draft<br/>contract 关键字<br/>类型列表 + 圆括号<br/>(type T C)"]
-    B["2020.6 草案修订<br/>放弃 contract<br/>接口承载约束<br/>接口内仍叫「类型列表」"]
-    C["2021.8 提案 43651<br/>方括号 [T C]<br/>「类型集」语义<br/>~T 近似 + | 并集"]
-    A -->|"消除第二套语法"| B
-    B -->|"语义统一为类型集"| C
+    A["2018.8 合约草案<br/>合约体是一段代码<br/>圆括号 (type T C)"]
+    B["2019.7 修订草案<br/>合约改为类型列表<br/>与方法列表"]
+    C["2020.6 类型参数草案<br/>放弃合约<br/>接口承载约束"]
+    D["2020.8<br/>改用方括号 [T C]"]
+    E["2021.2 提案 #43651<br/>被接受"]
+    F["2021.7 类型集 #45346<br/>~T 与 | 取代 type 列表"]
+    A --> B --> C --> D --> E --> F
 ```
 
-第一步在 2020 年 6 月：合约被整体撤除，约束的职责交给接口，接口内部仍沿用「类型列表」这个说法
-（当时尚无 `~` 与「类型集」这套术语）。第二步落在 2021 年 8 月的最终提案 43651：语法定型为方括号
-`[T Constraint]`，并把接口的语义正式表述为「类型集」，引入 `~T` 近似元素与 `|` 并集运算符。
-正是在这一版里，「type set」成为规范术语，`Ordered` 写成今天的样子。值得一提的是，类型参数的括号
-也在这条线上从圆变方,圆括号 `(type T C)` 与普通参数列表混在一起难以区分，方括号 `[T C]` 一眼可辨，
-是同一股「降低读者负担」的力气在语法细节上的延续。
+2018 年 8 月的草案以一段代码描述约束 [[Taylor and Griesemer, 2018](#ref-taylor-griesemer-2018)]；2019 年
+7 月的修订把合约改为类型列表与方法列表 [[Taylor and Griesemer, 2019](#ref-taylor-griesemer-2019)]；
+2020 年 6 月的草案放弃了合约，由接口承载约束
+[[Taylor and Griesemer, 2020b](#ref-taylor-griesemer-2020b)]，同年 8 月改用方括号声明类型参数；2021 年
+1 月，草案转为正式提案 #43651，并于 2 月被接受
+[[Taylor and Griesemer, 2021](#ref-taylor-griesemer-2021)]；2021 年 7 月，类型集的提案 #45346 被接受，
+`~T` 与 `|` 取代了以 `type` 开头的类型列表 [[Taylor, 2021](#ref-taylor-2021)]。2022 年 3 月，这一设计随
+Go 1.18 发布。
 
-每一步都在做减法：先去掉 `contract` 这个关键字，再把「类型列表」收编进「类型集」这一个统一语义。
-复杂度并非凭空消失，而是被反复追问「能不能用已有概念表达」,挤压到最后只剩下接口这一个旧抽象的
-自然延伸。
+括号的变化有其具体原因。最终的提案解释说，圆括号的写法可行，却带来了若干语法分析上的歧义：在
+`var f func(x(T))` 中，无法确定这是一个参数类型为实例化类型 `x(T)` 的函数，还是一个名为 `x`、
+类型为带括号的 `(T)` 的参数；`[]T(v1)` 与 `[]T(v2){}` 在读到左括号时无法区分类型转换与复合字面量；
+`interface { M(T) }` 中的 `M(T)` 既可能是方法，也可能是嵌入的实例化接口。这些歧义可以靠添加括号解决，
+但写法别扭；此外，`func F(T any)(v T)(r1, r2 T)` 与 `F(int)(1)` 这样一连串的括号也让许多人感到困扰
+[[Taylor and Griesemer, 2021](#ref-taylor-griesemer-2021)]。
+
+每一步都在做减法：先把合约体从任意的代码收窄为列表，再去掉 `contract` 这个关键字，最后把类型列表收编进
+类型集这一统一的语义。复杂度在一次次「能否用已有概念表达」的追问中被压缩，最终只剩下接口这一已有抽象的
+自然推广。
 
 ## 8.2.6 这次取舍说明了什么
 
-合约的兴废，是 Go 设计过程的一个标本。它印证的不是「简单总比复杂好」这类空话，而是一条更具体的
-工作方法：**先允许一个表达力强但偏复杂的方案存在，再反复追问能否用既有概念替代它，让复杂度自己去
-证明不可或缺**。合约最终没能通过这道追问,它要求用户学一门只用于约束的小语言，而它所做的一切，
-推广后的接口都能做。复杂度没有赚到自己的位置，于是被裁撤。
+合约的兴废体现了一种具体的工作方法：先允许一个表达能力强但较为复杂的方案存在，再反复追问能否以已有的概念
+替代它，让复杂度证明自己不可或缺。合约没有通过这一追问：它要求使用者学习一套只用于约束的机制，而它所做的
+一切，推广后的接口都能做到。
 
-把视野放到 Go 之外，这段弧线并不孤单。C++ 的 **Concepts** 几乎是同一个故事：它本是一套描述模板参数
-约束的机制，因被认为过于复杂而在 2009 年从 C++0x 草案中**移除**，此后经历多年重做，直到 C++20 才以
-精简后的形态正式落地（本章题词中 Stroustrup 谈的正是 Concepts）。一套约束机制因复杂而被搁置、
-简化后再回归,Go 的合约走的是同一条路，只是它在落地前就完成了这次自我精简，没有把复杂度推给用户去
-承受一轮再回收。两相对照可见，「约束该如何表达」是泛型设计中一个公认棘手、各家都交过学费的问题。
+C++ 的 **Concepts** 经历了相似的过程，结局却不同。Concepts 是一套描述模板参数要求的机制，
+旨在解决模板接口缺乏明确规定、错误信息难以理解的问题。为 C++0x 设计的 Concepts 在
+2009 年被从标准草案中移除；同年，Stroustrup 与 Gabriel Dos Reis、Andrew Sutton 从头开始重新设计，
+2015 年形成了技术规范 [[Stroustrup, 2017](#ref-stroustrup-2017)]，最终于 C++20 进入标准。值得注意的是，
+C++20 的 `requires` 表达式以一段不会执行的代码描述要求，例如
+`requires(T x) { { x == x } -> std::convertible_to<bool>; }` [[Smith, 2020](#ref-smith-2020)]，与 Go
+2018 年草案中的合约体十分接近。Go 放弃了这种形式，选择以类型集描述约束；C++ 则保留了它，
+并以命名的概念加以组织。两种语言对同一问题给出了不同的回答，这也说明「约束应当如何表达」
+是泛型设计中公认的难题。
 
-读懂这段被放弃的历史，今天 `[T Constraint]` 那份「恰到好处的朴素」便不再是理所当然,它是一版强大
-方案被否、再被简化的结果。接下来 [8.3](./checker.md) 会进入类型检查，看编译器如何用类型集这套语义，
-在实例化处真正校验 `T` 是否满足约束。
+理解了这段被放弃的历史，便能明白今天 `[T Constraint]` 的朴素并非理所当然，而是一个表达能力很强的方案被否
+决、再被简化的结果。[8.3](./checker.md) 讨论编译器如何依据类型集，在实例化处检查 `T` 是否满足约束。
 
-## 延伸阅读的文献
+## 延伸阅读
 
-1. Russ Cox. *The Generic Dilemma.* 2009. https://research.swtch.com/generic
-   （泛型的两难，合约要解决的约束问题正源于此处的取舍压力）
-2. Ian Lance Taylor, Robert Griesemer. *Contracts — Draft Design*（2018，已被取代）.
-   https://go.googlesource.com/proposal/+/master/design/go2draft-contracts.md
-3. The Go Authors. *The Next Step for Generics.* 2020-06.
-   https://go.dev/blog/generics-next-step （宣布放弃合约、改由接口承载约束的转折点）
-4. Ian Lance Taylor, Robert Griesemer. *Type Parameters — Draft Design*（2020，接口即约束、
-   类型列表阶段）.
-   https://go.googlesource.com/proposal/+/master/design/go2draft-type-parameters.md
-5. Ian Lance Taylor, Robert Griesemer. *Type Parameters Proposal*（最终方案，2021-08，
-   类型集 / `~T` / `|`）.
-   https://go.googlesource.com/proposal/+/refs/heads/master/design/43651-type-parameters.md
-6. The Go Authors. *Why Generics?* Go 博客, 2019. https://go.dev/blog/why-generics
-7. Bjarne Stroustrup. *Concepts: The Future of Generic Programming.* 2017.
-   （C++ Concepts 的兴废，与 Go 合约同构的另一段约束机制简化史）
+- <a id="ref-cox-2009"></a>[Cox, 2009] Russ Cox. "The Generic Dilemma." 2009.
+  https://research.swtch.com/generic
+  泛型的两难，合约所要解决的约束问题即源于其中的取舍。
+- <a id="ref-taylor-griesemer-2019"></a>[Taylor and Griesemer, 2019] Ian Lance Taylor, Robert Griesemer.
+  "Contracts — Draft Design." Go design document, 2019-07-31（已被取代）.
+  https://go.googlesource.com/proposal/+/master/design/go2draft-contracts.md
+  修订后的合约草案：类型列表、方法列表与多类型参数的合约。
+- <a id="ref-taylor-griesemer-2020a"></a>[Taylor and Griesemer, 2020a] Ian Lance Taylor, Robert Griesemer.
+  "The Next Step for Generics." The Go Blog, 2020-06-16. https://go.dev/blog/generics-next-step
+  宣布放弃合约、改由接口承载约束的转折点。
+- <a id="ref-taylor-griesemer-2020b"></a>[Taylor and Griesemer, 2020b] Ian Lance Taylor, Robert Griesemer.
+  "Type Parameters — Draft Design." Go design document, 2020.
+  https://go.googlesource.com/proposal/+/master/design/go2draft-type-parameters.md
+  以接口表示约束、接口中包含类型列表的阶段；「What happened to contracts?」一节说明了放弃合约的理由。
+- <a id="ref-taylor-griesemer-2021"></a>[Taylor and Griesemer, 2021] Ian Lance Taylor, Robert Griesemer.
+  "Type Parameters Proposal." Go design document, 2021-08-20.
+  https://go.googlesource.com/proposal/+/refs/heads/master/design/43651-type-parameters.md
+  最终方案：方括号、类型集、`~T` 与 `|`，以及选择方括号的理由。
+- <a id="ref-taylor-2019"></a>[Taylor, 2019] Ian Lance Taylor. "Why Generics?" The Go Blog, 2019-07-31.
+  https://go.dev/blog/why-generics
+  泛型的必要性，以及修订后的合约相对于 2018 年草案的简化。
+- <a id="ref-stroustrup-2017"></a>[Stroustrup, 2017] Bjarne Stroustrup. "Concepts: The Future of Generic
+  Programming, or How to Design Good Concepts and Use Them Well." WG21 P0557R1, 2017-01-31.
+  https://www.stroustrup.com/good_concepts.pdf
+  C++ Concepts 的设计与历史，与 Go 合约相对照的另一段约束机制的演变。
+- <a id="ref-taylor-griesemer-2018"></a>[Taylor and Griesemer, 2018] Ian Lance Taylor, Robert Griesemer.
+  "Contracts — Draft Design." Go design document, 2018-08-27.
+  https://github.com/golang/proposal/blob/00fd2f6529/design/go2draft-contracts.md
+  最初的合约草案：合约体是一段只做类型检查的代码。
+- <a id="ref-taylor-2021"></a>[Taylor, 2021] Ian Lance Taylor. "spec: generics: use type sets to remove
+  type keyword in constraints." golang/go#45346, 2021. https://github.com/golang/go/issues/45346
+  以类型集重新表述接口的语义，引入 `~T` 与 `|`。
+- <a id="ref-smith-2020"></a>[Smith, 2020] Richard Smith, ed. "Working Draft, Standard for Programming
+  Language C++." WG21 N4861, 2020. https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2020/n4861.pdf
+  C++20 的最终工作草案，§13.7.8 [temp.concept] 定义了概念。

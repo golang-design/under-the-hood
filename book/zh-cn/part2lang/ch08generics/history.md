@@ -5,276 +5,446 @@ title: "8.1 泛型设计的演进"
 
 # 8.1 泛型设计的演进
 
-泛型是 Go 等待最久、争论最烈、也最能体现其设计哲学的一项特性。从 2009 年开源到 2022 年的
-Go 1.18 才落地，这十三年的迟疑与最终的取舍，本身就是一堂语言设计课。这一节回答三个问题：
-Go 为何久久不加泛型、最终怎样加的、它在底层又是如何实现的。后者尤其关键，因为 Go 的实现
-没有照搬任何一家成例，而是走了一条独特的中间道路，这条道路才是它对那个十三年难题的真正回答。
-设计本身一路如何演变（合约、类型集、多轮语法提案），留待 [8.4](./future.md) 细说，本节只取
-其骨架。
+**泛型**（generics）指以类型为参数编写函数与数据结构，使同一段代码可以用于多种类型。Go 于 2009 年开源，
+直到 2022 年 3 月发布的 Go 1.18 才支持泛型 [[Go Authors, 2022](#ref-go-authors-2022)]，
+其间经历了十余年的讨论与多份被放弃的草案。本节讨论三个问题：Go 为何长期没有泛型，最终加入的语法有何特点，
+以及编译器如何实现它。从合约到类型集的设计演变见 [8.2](./contracts.md)，类型集与类型推断等类型检查问题见
+[8.3](./checker.md)，Go 1.18 以后的进展见 [8.4](./future.md)。
 
 ## 8.1.1 久拖不决：泛型的两难
 
-缺了泛型，写一段对多种类型行为相同的代码会变成什么样？最直接的办法是为每个类型各抄一份：
+没有泛型时，对多种类型执行相同逻辑的代码只有三种写法。第一种是为每种类型各写一份：
 
 ```go
-func MaxInt(a, b int) int         { if a > b { return a }; return b }
-func MaxFloat64(a, b float64) float64 { if a > b { return a }; return b }
-func MaxUintptr(a, b uintptr) uintptr { if a > b { return a }; return b }
-// ……每多一个类型，就多抄一份逻辑相同的代码
+func MaxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func MaxFloat64(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// 每增加一种类型，就要再写一份逻辑相同的代码
 ```
 
-逻辑一字不差，只有类型不同。第二条路是用 `interface{}` 把类型差异抹掉，让一份代码服务所有类型：
+这些函数的逻辑完全相同，只有类型不同。第二种是以空接口 `interface{}` 抹去类型的差别，让一份代码处理所有
+类型：
 
 ```go
 func Max(a, b interface{}) interface{} {
-    // 编译器不知道 a、b 能否比较，只能在运行时断言
-    if a.(int) > b.(int) { // 写死了 int，换类型就崩；且每次调用都装箱、断言
-        return a
-    }
-    return b
+	// 编译器不知道 a 与 b 能否比较大小，只能在运行时断言其类型
+	if a.(int) > b.(int) { // 只能处理 int，传入其他类型时断言失败并引发 panic
+		return a
+	}
+	return b
 }
 ```
 
-这条路丢掉了静态类型安全（比较操作要到运行时才知道对不对），还附带装箱与类型断言的开销。
-第三条路是代码生成：写一份模板，用工具按类型批量产出具体版本，社区里 `genny` 是当年的代表：
+这种写法失去了静态类型检查，类型错误要到运行时才暴露，每次调用还要付出装箱与类型断言的开销
+（[4.2](../ch04type/interface.md)）。第三种是代码生成：先写一份模板，再由工具为每种类型生成具体的代码。
+`genny` 是当时较常用的工具之一，它的模板本身就是可以编译的 Go 代码：
 
 ```go
+package maxgen
+
 import "github.com/cheekybits/genny/generic"
 
-// 用 genny 生成具体类型版本：
-//   cat max.go | genny gen "T=int,float64,uintptr" > max_gen.go
-type T generic.Type
+// T 是占位类型。执行
+//
+//	cat max.go | genny gen "T=int,float64" > max_gen.go
+//
+// 即可为 int 与 float64 各生成一份具体的函数。
+type T generic.Number
 
-func MaxT(a, b T) T { if a > b { return a }; return b }
+func MaxT(a, b T) T {
+	if a > b {
+		return a
+	}
+	return b
+}
 ```
 
-代码生成恢复了静态类型与性能，代价是构建流程里多一道生成步骤、改一处要重新生成、且工具本身
-不参与类型检查。三条路各有取舍，没有一条令人满意，这正是 Go 程序员长期的真实处境。
+代码生成恢复了静态类型检查与运行效率，代价是构建过程多出一个生成步骤，模板修改后必须重新生成，而且生成
+工具本身并不理解 Go 的类型系统。三种写法各有缺点，这正是 Go 程序员在 Go 1.18 之前的处境。
 
-久拖的根由，Russ Cox 早在 2009 年就点破，即「泛型的两难」（the generic dilemma）：在
-「慢的程序员、慢的编译器、慢的运行时」三者之间，任何一种泛型实现似乎只能三选其二。
+Russ Cox 在 2009 年 12 月的一篇短文中把这一处境概括为**泛型的两难**（the generic
+dilemma）[[Cox, 2009](#ref-cox-2009)]。文中把已有的做法归为三类：C 的做法是不提供泛型，这拖慢了程序员，
+但不增加语言的复杂度；C++ 的做法是在编译期为每种类型特化代码，这拖慢了编译，并生成大量重复的代码；Java
+的做法是把一切隐式装箱，这拖慢了执行。Cox 的结论是：「泛型的两难在于：要缓慢的程序员，
+要缓慢的编译器与臃肿的二进制文件，还是要缓慢的执行速度？」
 
 ```mermaid
 flowchart TD
-    D["泛型的两难<br/>(三者择二)"]
-    P["慢的程序员<br/>无泛型：手抄 / 代码生成"]
-    C["慢的编译器<br/>为每个类型生成专门代码"]
-    R["慢的运行时<br/>统一装箱、间接调用"]
+    D["泛型的两难"]
+    P["不提供泛型（C）<br/>程序员的负担加重"]
+    C["编译期特化（C++）<br/>编译变慢，二进制文件膨胀"]
+    R["隐式装箱（Java）<br/>执行变慢"]
     D --- P
     D --- C
     D --- R
 ```
 
-不加泛型，省了编译器与运行时的代价，却把负担压给程序员（上面三条路都是这个意思）。C++ 模板
-选了快运行时，牺牲编译速度与代码体积；Java 选了快编译与小体积，牺牲运行时的装箱开销。Go 极度
-看重编译速度与运行时简洁，迟迟没找到一个三者都不太差的方案，于是宁可不做，也不愿草率引入一个
-会侵蚀这些价值的设计。这种「想清楚再做」的克制，是 Go 一贯的性格。
+Go 既重视编译速度，也重视运行效率，长期没有找到一个在三方面都可以接受的方案，因此宁可暂不提供泛型。
+这并不是说 Go 团队没有尝试。Ian Lance Taylor 在 2010 年至 2013 年间先后写了四份泛型草案，Bryan C. Mills
+在 2016 年提出了编译期函数与一等类型的方案，它们都没有被采纳
+[[Go Authors, 2026b](#ref-go-authors-2026b)]。2016 年 4 月，Andrew Gerrand 开启议题 #15292，随附 Taylor
+自 2011 年起撰写的总体性文档「Go 应当有泛型」；Taylor 在文中把此前的四份草案作为历史资料列出，
+并承认它们「都在不同方面存在缺陷」，议题本身也说明，其目的不是在当时加入泛型，而是展示一份完整的提案应当是
+什么样子 [[Taylor, 2016](#ref-taylor-2016)]。2018 年 8 月，Russ Cox 发表「泛型：问题概述」，与 Taylor 和
+Robert Griesemer 的合约草案一同重启了设计 [[Cox, 2018](#ref-cox-2018)]。此后三年间，
+合约被以接口表示的约束所取代；2021 年 2 月，Taylor 与 Griesemer 的类型参数提案（#43651）被接受
+[[Taylor and Griesemer, 2021](#ref-taylor-griesemer-2021)]，一年后随 Go 1.18 发布。这一段演变详见
+[8.2](./contracts.md)。
 
 ## 8.1.2 落地的语法：约束即接口
 
-Go 1.18 最终落地的语法只在已有概念上做了一处加法，方括号声明类型参数，约束写成一个接口：
+Go 1.18 加入的语法只在已有的概念上增加了一处：函数与类型可以在方括号中声明**类型参数**（type parameter），
+每个类型参数带有一个**约束**（constraint），约束本身是一个接口
+[[Taylor and Griesemer, 2021](#ref-taylor-griesemer-2021)]：
 
 ```go
 func Max[T cmp.Ordered](a, b T) T { // T 是类型参数，cmp.Ordered 是它的约束
-    if a > b {
-        return a
-    }
-    return b
+	if a > b {
+		return a
+	}
+	return b
 }
 
-_ = Max[int](3, 5)   // 显式实例化
-_ = Max(3.0, 5.0)    // 类型推导，等价于 Max[float64]
+var x = Max[int](3, 5) // 显式给出类型实参
+var y = Max(3.0, 5.0)  // 由实参推断，等价于 Max[float64](3.0, 5.0)
 ```
 
-关键的概念创新是把接口从「方法集」推广为「类型集」（type set）：一个约束接口描述的不再只是
-「实现了哪些方法」，而是「哪些类型满足它」。于是 `comparable`（可比较的类型）、`~int`
-（底层类型为 int 的类型）、`int | string`（类型的并集）都能作为约束写进接口。用既有的接口
-概念去承载泛型约束，避免了再引入「第二种语言」，这正是几经周折后方案的精髓。约束、类型集、
-以及从 2018 年合约提案到这套语法的多轮演进，详见 [8.4](./future.md)。
+`cmp.Ordered` 是 Go 1.21 加入标准库的约束，允许所有支持 `<`、`<=`、`>=`、`>` 运算符的类型；Go 1.18
+发布时，与它对应的 `constraints.Ordered` 位于实验性的 `golang.org/x/exp/constraints` 中。同样自 Go 1.21
+起，`max` 与 `min` 已是内建函数 [[Go Authors, 2023](#ref-go-authors-2023)]，这里的 `Max` 只用于说明。
 
-## 8.1.3 实现：GC 形状 stenciling 加字典
+关键的变化在于对接口的推广。此前，接口描述一个**方法集**：实现了哪些方法的类型满足该接口。
+作为约束的接口则描述一个**类型集**（type set）：哪些类型满足它。除了方法，约束中还可以写出类型的并集
+（`int | string`）、底层类型为某一类型的所有类型（`~int`），以及预声明的约束 `comparable`（可以用 `==` 与
+`!=` 比较的类型）[[Griesemer and Taylor, 2022](#ref-griesemer-taylor-2022)]。以已有的接口承载约束，
+避免了在语言中再引入一套独立的约束机制；这一点几经反复才确定，详见 [8.2](./contracts.md)。
+类型集的精确定义及其在类型检查中的作用见 [8.3](./checker.md)。
 
-实现才是 Go 破解两难的地方。两个极端各有代价。一端是「完全单态化」（full
-monomorphization），C++ 模板与 Rust 都走这条路：编译器为每个具体类型实参各生成一份专门代码，
-`Max[int]` 与 `Max[float64]` 是两份独立的机器码。好处是运行时零开销、可深度特化，代价是代码
-膨胀、编译变慢，以及（尤以 C++ 模板为甚）出了名难懂的错误信息。另一端是「完全类型擦除」
-（type erasure），Java 泛型的做法：所有实例共用一份代码，值一律装箱成 `Object`。好处是代码
-紧凑、编译快，代价是装箱与间接访问的运行时开销。Go 不愿付任一端的全价，于是落在中间：
+## 8.1.3 实现：GC 形状模板化与字典
+
+类型参数提案本身并不规定实现方式。提案引用了 Cox 的「泛型的两难」，并指出这一设计使人们不必再选择缓慢的
+程序员，至于在缓慢的编译器（为每组类型实参分别编译）与缓慢的执行速度（以方法调用完成对类型参数值的每一种
+操作）之间如何取舍，则留给实现决定 [[Taylor and Griesemer, 2021](#ref-taylor-griesemer-2021)]。
+
+2020 年，Keith Randall 在三份设计文档中比较了可能的实现。第一种是**单态化**（monomorphization），Go
+的文档称之为模板化（stenciling）：编译器为每一组类型实参复制一份函数体，代入具体的类型后再编译，
+`Max[int]` 与 `Max[float64]` 是两份独立的机器码 [[Randall, 2020a](#ref-randall-2020a)]。C++ 的模板与 Rust
+的泛型都采用这种做法。它没有额外的运行时开销，每份代码都可以针对具体类型充分优化；代价是代码膨胀、
+编译变慢，即两难中「缓慢的编译器与臃肿的二进制文件」。第二种是**字典**（dictionary）：
+每个泛型函数只生成一份代码，与具体类型有关的信息由调用方以一个额外的参数传入
+[[Randall, 2020b](#ref-randall-2020b)]。这种做法代码紧凑、编译快，代价是对类型参数值的许多操作都要经过字典
+间接完成，接近两难中「缓慢的执行速度」；Java 的泛型在编译后**擦除**（erase）类型参数、
+所有实例共用一份代码 [[Bracha et al., 1998](#ref-bracha-et-al-1998)]，也属于共用代码的一端。
+第三份文档提出了二者之间的折中，即 Go 1.18 实际采用的 **GC 形状模板化**（GC shape stenciling）加字典
+[[Randall, 2020c](#ref-randall-2020c)] [[Scales, 2022](#ref-scales-2022)]：
 
 ```mermaid
 flowchart LR
-    M["完全单态化<br/>C++ 模板 / Rust<br/>每类型一份代码<br/>快，但代码膨胀、编译慢"]
-    G["Go<br/>GC 形状 stenciling + 字典<br/>按内存布局分组生成代码<br/>运行时字典补类型相关信息"]
-    E["类型擦除<br/>Java 泛型<br/>一份代码 + 装箱<br/>紧凑，但有装箱与间接开销"]
+    M["单态化<br/>C++ 模板、Rust<br/>每组类型实参一份代码"]
+    G["Go<br/>GC 形状模板化 + 字典<br/>每种形状一份代码<br/>其余类型信息由字典传入"]
+    E["共用一份代码<br/>字典方案、Java 的类型擦除<br/>类型相关的操作间接完成"]
     M --- G --- E
 ```
 
-Go 的办法叫「GC 形状（GC shape）stenciling 加字典（dictionary）」。名字拗口，但拆开看只有
-两半：stencil 是「按形状去重的代码模板」，dictionary 是「补回类型差异的运行时小抄」。先说前
-一半。它不为每个具体类型都生成一份代码，而是按「GC 形状」分组：内存布局相同、指针位置相同的
-一组类型共用一份生成代码（一个 stencil，模板印版）。之所以叫「GC 形状」而非单纯「内存布局」，
-是因为垃圾回收要据此判断一块内存里哪些字是指针（[13](../../part4memory/ch13gc)），指针位置一致是同形状的
-硬条件，这也点出 Go 的实现一开始就与它的垃圾回收纠缠在一起。一个类型的形状，编译器取它的
-底层类型（underlying type）来代表。这意味着
-`Max[int]` 与 `Max[float64]` 形状不同（一个 8 字节整数、一个 8 字节浮点，标量类型不合并），
-各得一份 stencil；而所有「以指针实参实例化、约束又只是普通接口」的调用会塌缩到同一个形状。
-在编译器里这一步叫 `Shapify`，它对指针实参直接取一个统一的 `*byte` 作形状：
+### 形状
+
+编译器不为每一种类型实参生成代码，而是先把类型实参归入 **GC 形状**（GC shape），同一形状的类型共用一份代
+码。这一名称来自 Randall 的设计：一个类型的 GC 形状指它在内存分配器与垃圾回收器眼中的样子，由大小、
+对齐要求以及哪些部分是指针决定
+（[第 13 章](../../part4memory/ch13gc/readme.md)）[[Randall, 2020c](#ref-randall-2020c)]。
+实际的实现采用了更细的划分。Go 1.18 的实现文档写道，两个类型属于同一形状，当且仅当它们的底层类型相同，
+或者二者都是指针类型；这样划分是为了保证字典中永远不需要放入运算符的实现：`int` 与 `float64`
+的运算是不同的机器指令，`int16` 与 `int32` 的移位运算也各不相同，因此它们都属于不同的形状
+[[Scales, 2022](#ref-scales-2022)]。Randall 的文档还指出了另一个原因：在基于寄存器的调用约定下，
+`struct{ x, y int }` 与 `[2]int` 大小与指针布局相同，分配到寄存器的方式却不同，仅凭大小与指针布局无法确定
+参数放在哪里。
+
+在 Go 1.26 中，确定形状的是 `cmd/compile/internal/noder` 包中的 `shapify` 函数
+[[Go Authors, 2026a](#ref-go-authors-2026a)]，其核心逻辑如下：
 
 ```go
-// 形状归并的核心规则（取自 cmd/compile/internal/noder 的 Shapify，已裁剪）
-//   指针实参 + 约束是普通接口 ⇒ 元素类型不影响生成代码，统一用 *byte 作形状
-//   其余情形           ⇒ 以类型的底层类型（underlying type）作形状
-func Shapify(targ *types.Type, basic bool) *types.Type {
-    under := targ.Underlying()
-    if basic && targ.IsPtr() && !targ.Elem().NotInHeap() {
-        under = types.NewPtr(types.Types[types.TUINT8]) // 所有指针塌缩为 *byte
-    }
-    // ……以 under 为键，在 shape 包里查得（或新建）唯一的形状类型
+// Go 1.26 cmd/compile/internal/noder/reader.go，有删节，注释为笔者所加
+func shapify(targ *types.Type, basic bool) *types.Type {
+	// basic 为 true 表示对应类型参数的约束是基本接口（只含方法的接口）。
+	// 此时指针所指向的类型不影响生成的代码，所有指针都以 *byte 为形状。
+	pointerShaping := basic && targ.IsPtr() && !targ.Elem().NotInHeap()
+	// ……
+	under := targ.Underlying() // 其余情形以底层类型为形状
+	if pointerShaping {
+		under = types.NewPtr(types.Types[types.TUINT8])
+	}
+	// ……以 under 为键，在 go.shape 包中查找或创建唯一的形状类型
 }
 ```
 
-于是凡是「以指针实例化、约束又只是 `any` 这类普通接口」的泛型函数，无论指针指向 `Node` 还是
-`os.File`，都共用同一份机器码，这正是混合方案省下代码体积的要害：指针是泛型容器里最常见的
-实参，把它们一网打尽，单态化的膨胀就被压住了大半。需要说明的是，
-现行实现只塌缩指针，相同尺寸的标量（如 `int` 与 `int64`）尚未合并，源码里的 `TODO` 仍把更
-激进的形状归并列为未来工作。形状越粗，省的代码越多，但下面要讲的字典与间接开销也越重，这是
-一个仍在调整的旋钮。
+形状类型都位于一个名为 `go.shape` 的特殊包中，例如 `go.shape.int`、`go.shape.string`；被归并的指针一律以
+`go.shape.*uint8` 表示。可见在 Go 1.26 中，指针的归并还有一个前提：类型参数的约束必须是只含方法的基本接
+口，例如 `any`。`shapify` 的注释中有一段待办说明，形状还可以划分得更粗：把所有指针形状的类型归为一类，
+把大小与对齐相同的标量归为一类，递归地对复合类型的元素做形状化，并丢弃结构体的字段名与标签；
+但要实现其中一部分，需要先追踪类型参数在函数体中实际是如何被使用的。
 
-同一份 stencil 要服务多个具体类型，它缺的那部分「类型相关信息」从哪来？答案是调用时由一个
-「运行时字典」作为隐藏参数传进去。每个被实例化的泛型函数都对应一个编译期生成的字典，按需
-携带这一份实例真正用得到的东西：
+### 字典
 
-```go
-// 某个泛型实例的运行时字典携带什么（概念速写，非源码结构体）
-type dictionary struct {
-    // 类型参数与派生类型的类型描述符：用于 new、类型断言、把值塞进 interface{}
-    typ_T      *_type   // 类型参数 T 实参的描述符，如 *Node
-    derived    []*_type // 函数体里出现的派生类型，如 []T、map[T]V 的描述符
+同一份形状代码要服务多种类型，它缺少的类型信息由**字典**补足。字典是编译期静态生成的只读数据，每一组
+「泛型函数与具体类型实参」对应一个字典，例如 `main..dict.Max[int]`；编译器为每个形状实例增加一个隐藏的首
+参数 `.dict`，调用时把字典的地址传入 [[Scales, 2022](#ref-scales-2022)]。在 Go 1.26 中，运行时字典依次由四
+部分组成，对应 `readerDict` 结构的最后四个字段 [[Go Authors, 2026a](#ref-go-authors-2026a)]：
 
-    // 子字典：函数体若调用别的泛型函数，被调者的字典在此预先备好
-    subdicts   []unsafe.Pointer
+- 约束中所声明方法的方法表达式，用于调用类型参数的方法；
+- 子字典，即函数体内调用其他泛型函数时传给被调函数的字典；
+- 类型描述符（[4.1](../ch04type/type.md)），用于把类型参数的值转换为空接口，以及类型断言与类型分支；
+- 接口表 `itab`（[4.2](../ch04type/interface.md)），用于把类型参数的值转换为非空接口。
 
-    // itab：把类型实参转成某约束接口时所需的接口表（见 4.2）
-    itabs      []*itab
+只有单凭形状无法完成的操作才需要查询字典。下面的程序以三种类型实例化 `Max`，以两种指针类型实例化 `Last`：
 
-    // 类型参数的方法表达式：约束若声明了方法，按实参类型解析到的具体实现
-    methods    []unsafe.Pointer
+```go {run=true}
+package main
+
+import (
+	"cmp"
+	"fmt"
+	"os"
+)
+
+type Node struct{ v int }
+
+//go:noinline
+func Max[T cmp.Ordered](a, b T) T {
+	if a > b {
+		return a
+	}
+	return b
 }
-```
 
-这几类条目并非凭空罗列，它们对应编译器内部 `readerDict` 真实持有的几组数据（类型描述符、
-子字典、itab、方法表达式）。逻辑是：凡是「单凭形状无法确定、必须知道具体类型才能做」的事，
-形状代码就不自己算，而是去字典里取。要 `new(T)` 就查 `typ_T`，要把 `T` 装进 `interface{}`
-就查它的描述符，要调用约束里的方法就查 `methods`，要再调另一个泛型函数就把对应 `subdicts`
-传下去。
-
-这条「把类型相关的东西显式作为隐藏参数传递」的思路，与 [4.2](../ch04type/interface.md) 谈到的
-Haskell「类型类的字典传递」一脉相承。Haskell 编译一个受 `Ord a` 约束的函数时，会把 `Ord` 的
-方法实现打包成一个字典，作为额外参数传入；Go 的运行时字典正是这套机制在命令式语言里的回响。
-两端的代价也一样：经字典的一次间接访问。手写一个受具体接口约束、直接调用其方法的函数，方法
-调用是一次普通的接口分派；而形状化的版本若要调约束方法或构造 `T` 的值，得先读字典、再间接
-跳转，因此泛型代码有时未必比手写的具体类型代码快。这是 Go 团队后续版本持续打磨的方向，
-也是混合方案为省代码所付的那一笔利息。
-
-把这条机制落到 `Max` 上走一遍，整张图就连起来了。`Max` 的约束是 `cmp.Ordered`，它能接受的
-实参只有可比较大小的标量（整数、浮点、字符串），所以 `Max` 这个例子里没有指针塌缩可言，每个
-具体类型各得一份 stencil，`>` 直接编译成该形状对应的机器指令，不经字典：
-
-```go
-_ = Max[int]    // 形状 int    ⇒ stencil_A，> 编译成整数比较指令，字典只携带 int 描述符
-_ = Max[int64]  // 形状 int64  ⇒ stencil_B（标量互不合并），字典携带 int64 描述符
-_ = Max[string] // 形状 string ⇒ stencil_C，> 编译成字符串比较，字典携带 string 描述符
-```
-
-指针塌缩的好处要换一个约束才看得见。考虑一个 `any` 约束的工具函数，它对元素只搬运、不比较：
-
-```go
+//go:noinline
 func Last[T any](s []T) T { return s[len(s)-1] }
 
-_ = Last[*Node] // 形状 *byte ⇒ stencil_P，字典携带 *Node 的描述符
-_ = Last[*File] // 形状 *byte ⇒ 复用 stencil_P！只换字典携带 *File 的描述符
-```
-
-`Last` 的约束是普通接口 `any`，元素具体指向什么类型不影响「取末位」这段逻辑，于是 `Shapify`
-把所有指针实参塌缩成 `*byte`，`Last[*Node]` 与 `Last[*File]` 共用同一份机器码。可以把这份
-形状代码想成下面这样，原本要知道 `T` 的地方都改成「向字典要」：
-
-```go
-// stencil_P 服务所有指针实参（概念示意，非真实生成码）
-func Last_ptr(dict *dictionary, s sliceHeader) unsafe.Pointer {
-    // 取末位只是指针算术，与 T 的具体类型无关，形状代码自己就能做；
-    // 唯有当要把结果装进 interface{}、或 new(T) 时，才去 dict.typ_T 取描述符
-    return elemAt(s, s.len-1)
+func main() {
+	fmt.Println(Max(3, 5), Max[int64](3, 5), Max("a", "b"))
+	n := Last([]*Node{{1}, {2}})
+	f := Last([]*os.File{os.Stdout})
+	fmt.Println(n.v, f == os.Stdout)
 }
 ```
 
-`Last[*Node]` 与 `Last[*File]` 区别只在传入的字典不同。这就是混合方案的全部诀窍：代码按形状
-去重，类型差异收进字典。`Max` 展示标量各占一份、`>` 内联不查字典的一面；`Last` 展示指针塌缩
-共享一份、靠字典补类型描述符的一面。两面合起来，才是 GC 形状 stenciling 的完整图景。
+```
+5 5 b
+2 true
+```
 
-形式地看，设程序里出现 $n$ 个不同的具体类型实参、归并后得到 $s$ 个形状（$s \le n$，指针越多
-$s$ 越小于 $n$），完全单态化的代码量正比于 $n$，类型擦除正比于 $1$，而 Go 介于其间，正比于
-$s$。代价侧则相反：单态化的每次调用都是直连、无额外间接；擦除与 Go 都要付间接访问，Go 这笔
-间接只在「必须知道具体类型」的操作上发生（构造 `T`、装箱、调约束方法），比擦除「事事装箱」
-要省。换言之 Go 用一个可调的 $s$，在代码体积 $O(s)$ 与间接开销之间换得了一个折中点，而把
-旋钮（形状归并多激进）留给了未来。
+以 `GOOS=linux GOARCH=amd64 go build` 编译，再用 `go tool nm` 查看二进制文件中的符号，与这两个函数有关的
+只有以下几项：
 
-## 8.1.4 跨语言对照
+```
+main.Max[go.shape.int]
+main.Max[go.shape.int64]
+main.Max[go.shape.string]
+main.Last[go.shape.*uint8]
+main..dict.Max[int]
+main..dict.Max[int64]
+main..dict.Max[string]
+main..dict.Last[*main.Node]
+main..dict.Last[*os.File]
+```
 
-把实现策略排开看，泛型的版图就清晰了。**C++ 模板**与 **Rust** 走完全单态化：运行时零开销、
-能高度特化，代价是代码膨胀、编译慢，以及难懂的错误信息（C++ 模板尤甚，Rust 以 trait bound
-把约束前置，错误信息友善许多）。**Java** 走类型擦除：泛型只存在于编译期，运行时被擦成
-`Object` 加装箱，因此 Java 没有运行时的泛型类型信息（写不出 `List<int>`，只能 `List<Integer>`）。
-**C#** 做了「具体化」（reified）泛型：运行时保留类型参数，值类型不装箱、引用类型共享代码，
-由 CLR 在加载时按需特化，比 Java 更进一步。**Haskell** 用类型类加字典传递，Go 的字典法正是
-这条线在命令式语言里的回响。
+`Max` 的约束 `cmp.Ordered` 只允许标量与字符串，三个类型实参的底层类型互不相同，因此各得一份代码；`int` 与
+`int64` 大小相同，也没有被合并。`Last` 的约束是 `any`，两个指针类型被归入同一形状 `*uint8`，共用一份代码，
+只是字典不同。以 `-gcflags=-S` 查看汇编，`main` 中调用 `Max(3, 5)` 的代码为：
 
-Go 在这张版图上的位置是「中间偏务实」：既不像模板那样为零开销与特化付出膨胀，也不像擦除那样
-彻底放弃类型信息，而是按 GC 形状分组共享代码、用字典补齐差异，在代码体积、编译速度与运行时
-性能三者间求一个各方面都还过得去的折中。它最接近的精神同道其实是 C#（都保留类型信息、都对
-引用/指针共享代码），但 Go 把「共享」的粒度交给了 GC 形状这一更贴近运行时与垃圾回收的概念。
+```asm
+LEAQ  main..dict.Max[int](SB), AX   // 字典的地址作为隐藏的第一个参数
+MOVL  $3, BX                        // a
+MOVL  $5, CX                        // b
+CALL  main.Max[go.shape.int](SB)
+```
 
-## 8.1.5 取舍与未来
+形状实例本身则是：
 
-Go 泛型刻意省略了许多别家有的东西：没有模板元编程、没有特化（specialization）、没有高阶
-类型（higher-kinded types）、没有运算符重载、方法不能带额外的类型参数。这些省略是有意的，
-团队反复强调「先加最小可用的泛型，再看实践需要什么」，避免重蹈「一口气加一大堆复杂特性却
-尾大不掉」的覆辙。
+```asm
+TEXT  main.Max[go.shape.int](SB), DUPOK|NOSPLIT|NOFRAME|ABIInternal, $0-24
+CMPQ  CX, BX       // 直接比较 a 与 b，没有使用 AX 中的字典
+JGE   9
+MOVQ  BX, AX
+RET
+MOVQ  CX, AX
+RET
+```
 
-后续演进延续这一节奏。Go 1.21 为标准库补上了 `slices`、`maps`、`cmp` 等泛型工具包，让泛型
-从语言特性变为日常可用的库；Go 1.24 补齐了泛型类型别名（[4.3](../ch04type/alias.md)）；而
-字典间接带来的性能开销，以及更激进的形状归并，仍在被逐步打磨。
+参数区的大小是 24 字节，比 `a` 与 `b` 多出的 8 字节就是字典指针。`>` 在形状 `go.shape.int`
+上就是整数比较，编译器直接生成比较指令，这一实例完全不需要字典，与手写的 `MaxInt` 并无二致。
 
-实现层面仍有未竟之处可供留意。其一是形状归并的粒度，前文 `Shapify` 的 `TODO` 已列出方向：
-把相同尺寸、相同对齐的标量塌缩为同一形状，递归地对复合类型的成员做形状化，丢弃结构体的
-字段名与标签。这些优化能进一步把 $s$ 压向 $1$、省下更多代码，但需要先精确追踪「类型参数到底
-被怎样使用」，否则塌缩过头会让本可内联的操作退化为查字典。其二是去虚化（devirtualization）与
-内联：当编译器能在调用点看穿具体实例时，理应把经字典的间接调用还原为直连，把这笔利息退回去。
-这两件事都指向同一个目标，让形状化代码在保住小体积的同时，逼近手写具体类型代码的速度。泛型这十三年的故事，是 Go
-设计哲学的缩影：对复杂度极度警惕，宁可慢一步也要想清楚，最终用一个并不炫技、却各方面都站得住
-的方案落地。约束、类型集与历次语法提案的来龙去脉，是这个故事的另一半，下一节
-[8.4](./future.md) 接着讲。
+需要字典的是另一类操作。下面的 `Describe` 以 `fmt.Stringer` 为约束，在函数体中调用约束所声明的 `String`
+方法：
 
-## 延伸阅读的文献
+```go
+//go:noinline
+func Describe[T fmt.Stringer](x T) string {
+	return "<" + x.String() + ">" // 调用约束中声明的方法
+}
 
-1. Russ Cox. *The Generic Dilemma.* 2009.
-   https://research.swtch.com/generic （「三者择二」的最初表述）
-2. Ian Lance Taylor, Robert Griesemer. *Type Parameters Proposal*（Go 1.18 泛型，
-   合约到类型集的演进与最终语法）.
-   https://go.googlesource.com/proposal/+/refs/heads/master/design/43651-type-parameters.md
-3. The Go Authors. *Generics implementation: GC shape stenciling with dictionaries*
-   （go1.18 实现设计文档，本节实现部分的主要依据）.
-   https://go.googlesource.com/proposal/+/refs/heads/master/design/generics-implementation-dictionaries-go1.18.md
-4. The Go Authors. *cmd/compile/internal/noder/reader.go*（`readerDict` 与 `Shapify`，
-   字典条目与形状归并的实际实现）.
-   https://github.com/golang/go/blob/master/src/cmd/compile/internal/noder/reader.go
-5. The Go Authors. *Go 1.18 Release Notes（泛型）.* https://go.dev/doc/go1.18
-6. Robert Griesemer, Ian Lance Taylor. *An Introduction To Generics.* 2022.
-   https://go.dev/blog/intro-generics
-7. Philip Wadler, Stephen Blott. *How to make ad-hoc polymorphism less ad hoc.* POPL 1989.
-   （类型类与字典传递的原始论文，Go 字典法的理论源头）
-8. The Go Authors. *Proposal: Generics（design/15292 系列）.* golang/proposal.
-   https://github.com/golang/proposal/tree/master/design/15292 （2010 至 2018
-   历次泛型草案的存档，含 Taylor 的 Type Functions、Generalized Types、Type Parameters
-   in Go，Mills 的 Compile-time Functions，以及 Cox 的 Generics: Problem Overview，
-   本节「十三年演进」的一手脉络即源出于此）
+// 调用：Describe(&Celsius{21.5})、Describe(&Meter{8848})
+```
+
+两个实参都是指针，约束是基本接口，于是二者共用 `main.Describe[go.shape.*uint8]`。在这份代码中，编译器无从
+得知 `x.String()` 应当调用哪一个方法，只能从字典中取出：
+
+```asm
+MOVQ  (AX), CX   // 从字典的第一项取出 String 方法的入口地址
+MOVQ  AX, DX     // 闭包上下文寄存器指向这一项
+MOVQ  BX, AX     // 接收者 x
+CALL  CX         // 间接调用
+```
+
+字典的第一项保存方法表达式 `(*Celsius).String`（对另一个字典则是 `(*Meter).String`）的入口地址，
+生成的代码按调用函数值的方式（[6.1.2](../ch06func/func.md)）间接调用它。与直接调用相比，
+这次调用多了一次访存与一次间接跳转；更重要的是，编译器在编译 `Describe` 时看不到被调用的方法，
+因而无法将其内联，逃逸分析也只能作保守的假设。Randall 在设计文档中已经预见了这一点：
+形状模板化生成的代码多数与完全单态化相同，例外是对类型参数的方法调用无法在编译期确定，
+可能导致更多的堆分配，也会错过本可以进行的内联 [[Randall, 2020c](#ref-randall-2020c)]。
+
+把这一机制与 [4.2](../ch04type/interface.md) 中 Haskell 类型类的**字典传递**比较，可以看出二者一脉相承：
+Haskell 编译受 `Ord a` 约束的函数时，把 `Ord` 的方法实现打包成一个字典，作为隐式参数传入
+[[Wadler and Blott, 1989](#ref-wadler-blott-1989)]；Go 的字典同样是一个隐藏参数，只是其内容在编译期按形状
+实例的需要确定，并且只在形状不足以决定操作时才被使用。
+
+若程序中出现 $n$ 种不同的类型实参，归并后得到 $s$ 种形状（$s \le n$），完全单态化生成的代码量与 $n$
+成正比，共用一份代码的方案与 $1$ 成正比，Go 的方案则与 $s$ 成正比。运行时的代价则恰好相反：
+单态化的代码中没有额外的间接访问；共用代码的方案几乎每一种与类型有关的操作都要间接完成；Go
+只在形状无法决定的操作上查询字典，即调用类型参数的方法、转换为接口以及类型断言等。形状划分得越粗，$s$
+越小，代码越少，需要查询字典的操作也越多。`shapify` 中的待办说明表明，这一取舍仍在调整之中。
+
+## 8.1.4 理论渊源与跨语言对照
+
+以类型为参数的思想有很长的历史。Christopher Strachey 在 1967 年的讲义中区分了两种多态：
+**参数多态**（parametric polymorphism）指一个函数以统一的方式作用于任意类型，例如把一个函数依次作用于列表
+中每个元素的 `map`；**特设多态**（ad hoc polymorphism）则没有统一的规则，同一个名字在不同类型上有不同的实
+现，算术运算符即属此类 [[Strachey, 2000](#ref-strachey-2000)]。1978 年，Robin Milner 为 ML
+语言给出了参数多态的类型系统与类型推断算法 [[Milner, 1978](#ref-milner-1978)]。1989 年，David Musser 与
+Alexander Stepanov 提出 **泛型编程**（generic programming）：从具体而高效的算法出发进行抽象，
+得到可以与不同的数据表示相组合的泛型算法 [[Musser and Stepanov, 1989](#ref-musser-stepanov-1989)]，
+这一思想后来成为 C++ 标准模板库的基础。同年，Philip Wadler 与 Stephen Blott 提出 Haskell 的类型类，
+以字典传递实现受约束的多态 [[Wadler and Blott, 1989](#ref-wadler-blott-1989)]。Go 的类型参数属于参数多态，
+约束则为它加上了限制条件。
+
+在实现策略上，各语言的选择大致分布在单态化与共用代码两端之间：
+
+| 语言 | 实现策略 | 运行时的类型信息 | 主要代价 |
+| --- | --- | --- | --- |
+| C++ 模板 | 单态化 | 无需保留 | 代码膨胀、编译慢，模板的错误信息难以理解 |
+| Rust | 单态化（另有 `dyn` 动态分派） | 无需保留 | 代码膨胀、编译慢 |
+| Java | 类型擦除，所有实例共用一份代码 | 不保留类型实参 | 基本类型必须装箱，如只能写 `List<Integer>` |
+| C# | 运行时具体化，引用类型共用代码，值类型按需特化 | 保留类型实参 | 需要 JIT 在运行时生成特化的代码 |
+| Haskell | 类型类与字典传递 | 由字典提供 | 经字典的间接调用 |
+| Go | GC 形状模板化加字典 | 由字典提供 | 经字典的间接调用，部分调用无法内联 |
+
+Java 的泛型源于 Bracha、Odersky、Stoutamire 与 Wadler 在 1998 年提出的 GJ。为了与已有的类库和虚拟机兼容，
+GJ 在编译后擦除类型参数，泛型代码与原有的非泛型代码可以互相调用
+[[Bracha et al., 1998](#ref-bracha-et-al-1998)]。C# 走了另一条路：Andrew Kennedy 与 Don Syme 在 .NET
+公共语言运行时中保留类型实参，所有以引用类型实例化的代码共用一份，以值类型实例化时则由 JIT
+编译器在运行时按需生成特化的代码，值类型因此无须装箱 [[Kennedy and Syme, 2001](#ref-kennedy-syme-2001)]。
+
+Go 的位置与 C# 最为接近：二者都让指针或引用类型共用代码，并在运行时保留具体的类型信息。不同的是，Go 没有
+JIT，所有形状实例与字典都在编译期生成，共用代码的粒度由 GC 形状这一与内存布局和垃圾回收直接相关的概念决
+定。
+
+## 8.1.5 取舍
+
+Go 的泛型有意省略了许多其他语言具备的能力。类型参数提案明确列出了它不支持的内容，其中包括：特化，
+即为特定的类型实参另写一个版本；元编程，即在编译期执行代码以生成代码；以泛型函数或泛型类型作为参数的更高层
+抽象；函数参数的协变与逆变；运算符方法；部分实例化（柯里化）；变长的类型参数；以及以常量等非类型的值作为参
+数 [[Taylor and Griesemer, 2021](#ref-taylor-griesemer-2021)]。方法也不能声明额外的类型参数，这一限制直到
+Go 1.27 才以受限的形式解除，经过见 [8.4.2](./future.md)。提案认为，它已经覆盖了泛型编程的基本需求；
+其余的需求是否存在、以何种形式满足，留待实践检验。
+
+此后的演进延续了这一节奏：先提供最小可用的泛型，再根据实践补充。Go 1.21 加入了 `slices`、`maps` 与 `cmp`
+等泛型包，Go 1.24 支持了泛型类型别名（[4.3](../ch04type/alias.md)），Go 1.26 允许约束引用正在被约束的泛型
+类型本身，Go 1.27 加入了泛型方法，这些内容见 [8.4](./future.md)。在实现层面，形状划分的粒度与字典带来的间
+接开销仍是可以改进之处：更粗的形状可以进一步减少代码，但须先确认不会使本可内联的操作退化为查询字典；
+而在调用处能够确定具体实例时，Go 1.21 起的编译器已能把从字典读出的入口地址折叠为常量，
+却仍错过了内联的时机（[8.4.4](./future.md)）。泛型在 Go 中的十余年历程表明了 Go 对复杂度的态度：宁可推迟，
+也要在编译速度、运行效率与语言的简单性之间找到一个各方面都可以接受的方案。
+
+## 延伸阅读
+
+- <a id="ref-cox-2009"></a>[Cox, 2009] Russ Cox. "The Generic Dilemma." 2009-12-03.
+  https://research.swtch.com/generic
+  「三者择二」的最初表述。
+- <a id="ref-taylor-griesemer-2021"></a>[Taylor and Griesemer, 2021] Ian Lance Taylor, Robert Griesemer.
+  "Type Parameters Proposal." Go design document, 2021-08-20.
+  https://go.googlesource.com/proposal/+/refs/heads/master/design/43651-type-parameters.md
+  Go 1.18 泛型的最终设计：类型参数、约束与类型集、类型推断，以及有意省略的特性。
+- <a id="ref-scales-2022"></a>[Scales, 2022] Dan Scales. "Go 1.18 Implementation of Generics via
+  Dictionaries and Gcshape Stenciling." Go design document, 2022.
+  https://go.googlesource.com/proposal/+/refs/heads/master/design/generics-implementation-dictionaries-go1.18.md
+  Go 1.18 实现的设计文档：形状的划分、字典的格式与命名、编译器中的处理流程。
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors.
+  `cmd/compile/internal/noder/reader.go`.
+  https://github.com/golang/go/blob/master/src/cmd/compile/internal/noder/reader.go
+  （Go 1.26：https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/noder/reader.go）
+  `readerDict` 与 `shapify`：字典条目与形状归并的实际实现。
+- <a id="ref-go-authors-2022"></a>[Go Authors, 2022] The Go Authors. Go 1.18 Release Notes.
+  https://go.dev/doc/go1.18
+  泛型的正式发布。
+- <a id="ref-griesemer-taylor-2022"></a>[Griesemer and Taylor, 2022] Robert Griesemer, Ian Lance Taylor.
+  "An Introduction To Generics." The Go Blog, 2022-03-22. https://go.dev/blog/intro-generics
+  类型参数、类型集与类型推断的入门介绍。
+- <a id="ref-wadler-blott-1989"></a>[Wadler and Blott, 1989] Philip Wadler, Stephen Blott. "How to Make
+  Ad-hoc Polymorphism Less Ad Hoc." *POPL '89*, 60–76, 1989. https://doi.org/10.1145/75277.75283
+  类型类与字典传递的原始论文，Go 字典做法的理论源头。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. Proposal: Generics（design/15292
+  系列）. golang/proposal. https://github.com/golang/proposal/tree/master/design/15292
+  2010 年至 2016 年历次泛型草案的存档：Taylor 的 Type Functions、Generalized Types（两版）与 Type
+  Parameters in Go，以及 Mills 的 Compile-time Functions and First Class Types。
+- <a id="ref-taylor-2016"></a>[Taylor, 2016] Ian Lance Taylor. "Proposal: Go should have generics." Go
+  design document, created 2011-01, last updated 2016-04.
+  https://go.googlesource.com/proposal/+/master/design/15292-generics.md
+  议题 #15292 的随附文档：泛型的必要性、对一个泛型方案的要求，以及此前四份草案的列表。
+- <a id="ref-cox-2018"></a>[Cox, 2018] Russ Cox. "Generics — Problem Overview." Go design document,
+  2018-08-27. https://go.googlesource.com/proposal/+/master/design/go2draft-generics-overview.md
+  2018 年重启泛型设计时对问题的重新表述。
+- <a id="ref-randall-2020a"></a>[Randall, 2020a] Keith Randall. "Generics implementation - Stenciling." Go
+  design document, 2020.
+  https://go.googlesource.com/proposal/+/master/design/generics-implementation-stenciling.md
+  为每组类型实参各生成一份代码的方案。
+- <a id="ref-randall-2020b"></a>[Randall, 2020b] Keith Randall. "Generics implementation - Dictionaries."
+  Go design document, 2020.
+  https://go.googlesource.com/proposal/+/master/design/generics-implementation-dictionaries.md
+  只生成一份代码、以字典传入类型信息的方案。
+- <a id="ref-randall-2020c"></a>[Randall, 2020c] Keith Randall. "Generics implementation - GC Shape
+  Stenciling." Go design document, 2020.
+  https://go.googlesource.com/proposal/+/master/design/generics-implementation-gcshape.md
+  前两种方案的折中：按 GC 形状生成代码，以字典处理同一形状内不同类型的差异。
+- <a id="ref-go-authors-2023"></a>[Go Authors, 2023] The Go Authors. Go 1.21 Release Notes.
+  https://go.dev/doc/go1.21
+  内建函数 `min`、`max` 与 `cmp` 包。
+- <a id="ref-strachey-2000"></a>[Strachey, 2000] Christopher Strachey. "Fundamental Concepts in
+  Programming Languages." *Higher-Order and Symbolic Computation* 13(1–2): 11–49, 2000.
+  https://doi.org/10.1023/A:1010000313106
+  1967 年哥本哈根暑期学校的讲义，区分参数多态与特设多态。
+- <a id="ref-milner-1978"></a>[Milner, 1978] Robin Milner. "A Theory of Type Polymorphism in Programming."
+  *Journal of Computer and System Sciences* 17(3): 348–375, 1978.
+  https://doi.org/10.1016/0022-0000(78)90014-4
+  ML 的多态类型系统与类型推断算法。
+- <a id="ref-musser-stepanov-1989"></a>[Musser and Stepanov, 1989] David R. Musser, Alexander A. Stepanov.
+  "Generic Programming." *Symbolic and Algebraic Computation (ISSAC '88)*, LNCS 358: 13–25, 1989.
+  https://doi.org/10.1007/3-540-51084-2_2
+  「泛型编程」一词的出处。
+- <a id="ref-bracha-et-al-1998"></a>[Bracha et al., 1998] Gilad Bracha, Martin Odersky, David Stoutamire,
+  Philip Wadler. "Making the Future Safe for the Past: Adding Genericity to the Java Programming
+  Language." *OOPSLA '98*, 183–200, 1998. https://doi.org/10.1145/286936.286957
+  GJ 与类型擦除，Java 泛型的前身。
+- <a id="ref-kennedy-syme-2001"></a>[Kennedy and Syme, 2001] Andrew Kennedy, Don Syme. "Design and
+  Implementation of Generics for the .NET Common Language Runtime." *PLDI '01*, 1–12, 2001.
+  https://doi.org/10.1145/378795.378797
+  保留类型实参的具体化泛型：引用类型共用代码，值类型由 JIT 按需特化。
