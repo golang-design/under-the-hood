@@ -11,12 +11,20 @@ bookCollapseSection: true
 - [19.3 Software Rendering and Parallelism](./software.md)
 - [19.4 Rendering in the Browser](./wasm.md)
 
-Graphics is the oldest heterogeneous workload: long before "general-purpose GPU compute"
-became a slogan, the graphics card was already doing parallel arithmetic for every pixel on
-the screen. This chapter spreads the rendering pipeline open to see exactly where Go's code
-sits on the CPU side, and how a single draw call crosses the boundary of the driver; then it
-looks at why a graphics context is nailed to one particular system thread, where
-`LockOSThread` is not a trick but a necessity; it then turns to software rendering, which
-needs no GPU, to see how goroutines and SIMD lay down pixels in parallel on the CPU; and
-finally it steps into the browser, to see where the rendering boundary falls once Go is
-compiled to WebAssembly.
+Graphics was the first workload the GPU took on. Chapter 18 treated the GPU as a general-purpose
+parallel device; this chapter returns to its original purpose and asks where a Go program sits in
+rendering and which boundaries it has to cross.
+
+19.1 examines the structure of the rendering pipeline: how fixed-function stages and programmable
+shader stages form a data flow, why Go code lives only in the application stage on the CPU side, the
+two boundaries (FFI and shading languages) that graphics programs therefore face, and how the cost
+of draw calls drove the command-buffer design of explicit APIs such as Vulkan and WebGPU. 19.2
+covers thread affinity: an OpenGL context is current on one thread, window systems require events to
+be handled on the main thread, and Go programs arrange their rendering goroutine and the main thread
+with `runtime.LockOSThread`, as Ebitengine, Gio, Fyne and the mainthread package do. 19.3 covers
+software rendering without a GPU: splitting the frame into non-overlapping regions rendered in
+parallel by goroutines, vectorizing the inner loop with the experimental `simd` package of Go 1.27,
+and how work divides between software and GPU rendering. 19.4 covers rendering in the browser: once
+Go is compiled to WebAssembly, `syscall/js` becomes the new FFI boundary; rendering a whole frame in
+software and submitting it once reduces crossings; WebGPU adds two further boundaries; and the
+single-threaded, non-preemptive `js/wasm` runtime constrains parallelism and the frame loop.

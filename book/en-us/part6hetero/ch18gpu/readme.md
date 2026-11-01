@@ -11,12 +11,22 @@ bookCollapseSection: true
 - [18.3 The Divide Between Device Memory and the Garbage Collector](./memory.md)
 - [18.4 The Asynchronous Programming Model](./model.md)
 
-This chapter is the mechanical foundation of the part. The GPU is the most typical form of
-heterogeneous compute: a device with its own memory, its own execution model, and its own
-scheduling logic, hanging alongside the host and connected to Go by a single FFI boundary.
-We begin from that boundary, watching how a cgo call leaves Go's stack and enters the
-driver; then we watch how the runtime faces a block it can neither preempt nor measure;
-next we draw the line between device memory and the Go heap, working out why the collector
-must not touch device memory and yet threatens the host memory handed across; and finally
-we return to the concurrency model itself, to see how the GPU's asynchrony meets the
-concurrency of goroutines.
+The GPU is the most typical form of heterogeneous compute. It has its own memory, its own execution
+model and its own command queues, sits on the host side, and is connected to a Go program through a
+single FFI boundary. This chapter is about that boundary itself; the graphics, inference and agent
+chapters that follow all build on its conclusions.
+
+Section 18.1 covers the cost of crossing: the fixed cost of a cgo call, the asynchronous semantics
+of GPU commands ("return once enqueued"), kernel launch overhead, how asynchronous submission,
+operator fusion and CUDA Graphs reduce the number of crossings, and the ways of avoiding cgo
+altogether (purego, Wasm, a pure Go rewrite, an out-of-process service). Section 18.2 covers how
+blocking foreign calls affect the scheduler: how sysmon takes back a P stuck in C code, why
+concurrent blocking calls inflate the thread count, how an extra M is borrowed when a foreign thread
+calls back into Go, and how a single owner goroutine locked to its thread handles the thread
+affinity of device contexts. Section 18.3 covers the divide between device memory and the Go heap:
+why device addresses are not governed by the pointer rules, how `runtime.Pinner` and page-locked
+memory differ as two kinds of "pinning", why an asynchronous transfer requires extending the pin
+until the transfer completes, and what unified memory changes and what it does not. Section 18.4
+covers how three kinds of parallelism relate: goroutine concurrency, GPU SIMT and CPU SIMD; how
+streams and events connect to goroutines; the experimental `simd` package in Go 1.27; and the
+criteria for deciding whether a computation is worth handing to a GPU.

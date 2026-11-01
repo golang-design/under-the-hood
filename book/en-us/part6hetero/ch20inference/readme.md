@@ -10,14 +10,21 @@ bookCollapseSection: true
 - [20.2 Tokenization and Tensors](./tokenize.md)
 - [20.3 Serving, Batching, and Streaming](./serving.md)
 
-Training belongs to Python and CUDA, but at the inference and serving layer Go finds its
-footing. Once a model is frozen, what remains is a systems problem: load the weights into
-memory, feed requests to the device efficiently, and stream the generated tokens back to
-the client steadily. This chapter first looks at how a local inference runtime is wired in
-through cgo, and how tensor memory ownership is divided between Go and native libraries like
-llama.cpp and ONNX Runtime; then at tokenization, a thing that looks trivial yet is full of
-pitfalls, how byte-pair encoding cuts bytes into tokens, and why the mechanics of strings
-and bytes from Chapter 5 matter so much here; and finally it comes down to serving itself,
-how batching amortizes the cost of the device, and how streaming output and backpressure
-lean on channels and context. Ollama, an inference service written in Go, runs as the
-empirical thread through the chapter.
+Training large models relies mainly on Python and CUDA; inference and serving are a different kind
+of work. Once a model's weights are frozen, what remains are systems problems: loading several
+gigabytes of weights into memory, handing a large number of concurrent requests to the device
+efficiently, and streaming the generated tokens back to clients reliably. These problems overlap
+heavily with what Go does well, and the Ollama server process is written in Go. This chapter takes
+Ollama, llama.cpp, vLLM and a few early projects written in Go as examples and examines the work Go
+does at this layer.
+
+Section 20.1 covers how Go reaches a native inference runtime: crossing the FFI boundary through
+cgo, a subprocess or purego, why weights and the KV cache stay outside the Go heap, how native
+memory is released deterministically, and how the placement of the process boundary determines the
+topology of the system. Section 20.2 covers tokenization and tensors: how BPE evolved from a
+compression algorithm into subword segmentation, why byte-level tokenization is consistent with the
+string model of [5.2](../../part2lang/ch05data/string.md) and why streaming decoding must handle
+UTF-8 encoding boundaries, followed by tensor memory layout, the cgo pointer rules and quantization
+formats. Section 20.3 covers the service itself: prefill and decode, continuous batching and the
+paged KV cache, cache reservation at admission, flushing of streamed output, and how channels and
+context handle backpressure, cancellation and overload.

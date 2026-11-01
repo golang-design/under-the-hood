@@ -5,144 +5,149 @@ title: "18.1 Crossing the FFI Boundary"
 
 # 18.1 Crossing the FFI Boundary
 
-[15.6](../../part5toolchain/ch15compile/cgo.md) already took the cgo bridge apart: a call
-from Go into C must switch to the `g0` system stack, lay the arguments out again according
-to C's ABI, `entersyscall` to give up the P, make the call, then `exitsyscall` to win back
-a P, and the whole round comes out one or two orders of magnitude more expensive than a Go
-call. The conclusion of that section was blunt: cgo suits a **small number of
-coarse-grained** calls, and its worst enemy is a hot loop that crosses the boundary again
-and again.
+[15.6](../../part5toolchain/ch15compile/cgo.md) followed a cgo call from start to finish: switch to
+the system stack, `entersyscall`, call with C's calling convention, `exitsyscall`. By the
+measurements in that section on an Apple M5 Pro (Go 1.26.10), an empty C call takes about 16 ns,
+roughly 8 times a non-inlined Go call (about 2 ns), close to an order of magnitude; if the C
+function calls back into Go, the cost is about 72 ns. The resulting advice is that cgo suits a small
+number of coarse-grained calls and does not belong in hot loops.
 
-Set that conclusion in front of a GPU and the tension sharpens at once. The essence of GPU
-programming is precisely to **cross the boundary often**. An ordinary inference or render
-has the CPU side doing nothing but three kinds of thing: copy data from host memory to
-device memory, launch one kernel after another, and copy results back. Every one of them
-is a boundary crossing that leaves Go and enters the driver. A neural network of any size
-has hundreds or thousands of operators, and launching them one by one, naively, is hundreds
-or thousands of cgo calls strung along a single critical path. Section 15.6 says "do not
-cross the boundary inside a tight loop," and the GPU workload is by nature grown inside
-exactly such a tight loop. What this section answers is this: when crossing is unavoidable
-and must be frequent, how should the boundary be designed so that the toll does not crush
-it.
+GPU programs need to cross this boundary frequently. For one inference or render, the CPU side does
+three kinds of work: copy data from host memory to device memory, launch kernels one by one, and
+copy the results back. Each step is a call from Go into the driver. For a neural network made of
+hundreds of operators, launching them one at a time puts hundreds of boundary crossings in series on
+the critical path. Since crossing cannot be avoided, the question for this section is how to design
+the boundary so that the fixed overhead does not dominate overall performance.
 
-## 18.1.1 The Other Side of the Boundary: a World of Asynchronous Commands
+## 18.1.1 The Other Side of the Boundary: an Asynchronous Command Queue
 
-First, see clearly who stands on the far side of the bridge. When you call a C library
-function from Go, the far side is a stretch of C code that runs synchronously, and by the
-time the call returns the work is done. The GPU is not like this. What the CPU side calls
-is not "the computation itself" but **a command issued to the device**.
+When Go calls an ordinary C library function, the work is done by the time the call returns. A GPU
+driver is different: a call on the CPU side does not perform the computation itself but submits a
+command to the device.
 
-Take CUDA as an example. The software stack splits into two layers. The lower one is the
-**driver API** (`libcuda`, prefixed `cu`), corresponding directly to the capabilities the
-kernel-mode driver exposes; the upper one is the **runtime API** (`libcudart`, prefixed
-`cuda`), which wraps the driver API more conveniently and manages contexts and modules
-automatically. Whichever layer you go through, a single `cudaLaunchKernel` or
-`cudaMemcpyAsync` on the CPU side merely stuffs a command into a queue called a **stream**
-and then **returns immediately**. The actual computation is finished asynchronously by the
-GPU on its own timeline. The CPU issues orders, the GPU does the work, and the two run on
-different clocks.
+Take CUDA as an example. The host interface has two layers. The **driver API** (library `libcuda`,
+function prefix `cu`) offers fine-grained control, such as explicitly loading and unloading modules.
+The **runtime API** (library `libcudart`, prefix `cuda`) is built on top of it and initializes and
+manages the primary context and modules implicitly, which makes code simpler and gives
+correspondingly less control [[NVIDIA, n.d.b](#ref-nvidia-ndb)]. The two layers share the same
+submission semantics: calls such as `cudaLaunchKernel` and `cudaMemcpyAsync` only place a command in
+a work queue called a **stream** and return at once [[NVIDIA, n.d.a](#ref-nvidia-nda)]. The newer
+CUDA Programming Guide states it this way [[NVIDIA, n.d.c](#ref-nvidia-ndc)]:
+
+```text
+The concurrency is expressed via an asynchronous interface, where a
+dispatching function call or kernel launch returns immediately.
+Asynchronous calls usually return before the dispatched operation has
+completed and may return before the asynchronous operation has started.
+```
+
+The GPU performs the computation on its own timeline; the CPU and the GPU advance independently.
 
 ```mermaid
 sequenceDiagram
     participant Go as Go (goroutine)
     participant RT as runtime.cgocall
-    participant DRV as CUDA driver (on g0 stack)
+    participant DRV as CUDA driver (on the g0 stack)
     participant GPU as GPU command stream
     Go->>RT: C.cudaLaunchKernel(...)
-    RT->>RT: entersyscall(): give up P
-    RT->>DRV: switch to g0, align C ABI, enqueue one command
-    DRV-->>RT: return immediately (command queued, not executed)
-    RT->>RT: exitsyscall(): win back a P
+    RT->>RT: entersyscall: G enters _Gsyscall
+    RT->>DRV: switch to the g0 stack, call with the C ABI
+    DRV-->>RT: return right after enqueueing (not yet executed)
+    RT->>RT: exitsyscall: G returns to _Grunning
     RT-->>Go: return
-    Note over GPU: the GPU runs the queued kernels<br/>asynchronously on its own timeline
+    Note over GPU: the GPU executes kernels<br/>asynchronously in queue order
     Go->>RT: C.cudaStreamSynchronize(...)
-    RT->>DRV: block until the stream drains
+    RT->>DRV: block until all commands in the stream complete
 ```
 
-This "enqueue and return" semantics is the fulcrum of everything that follows. It means the
-cost of crossing the boundary (that one-or-two-orders-of-magnitude cgo tax) and the GPU's
-actual computation **can overlap**: by the time the CPU has paid the toll and returned to
-Go to issue the next order, the GPU is still digesting earlier commands. As long as
-commands are issued fast enough that the queue does not run dry, the GPU never sits idle,
-and the cgo tax is hidden in the shadow of the computation. Conversely, if you synchronize
-after every command (`cudaStreamSynchronize`), all the benefit of asynchrony is lost, and
-the fixed cost of the crossing is strung nakedly along the critical path, not one of them
-saved.
+"Return once enqueued" is the premise of the optimizations in the rest of this section. It lets the
+cost of crossing the boundary overlap with GPU computation: while the CPU finishes one call and
+returns to Go to submit the next command, the GPU is still executing earlier ones. As long as
+submission keeps up and the queue is not empty, the GPU never idles and the crossing cost stays off
+the critical path. Conversely, if every submission is followed by `cudaStreamSynchronize` to wait
+for completion, the overlap that asynchrony provides disappears and the fixed cost of every crossing
+counts in full toward the total time.
 
-## 18.1.2 Two Latencies, Do Not Confuse Them
+## 18.1.2 Two Kinds of Latency
 
-There are in fact two distinct costs stacked on the boundary, and beginners often run them
-together. Tell them apart and you can treat the right one.
+Two overheads of different origin are stacked on the boundary, and they should be considered
+separately.
 
-The first is the **cgo crossing cost**, coming from the Go side: the state transition
-section 15.6 dissected, switching stacks, `entersyscall`/`exitsyscall`, ABI alignment. It
-is the fixed tax of the action "enter C from Go," and it has nothing to do with whether the
-far side is a GPU; any C call pays it.
+The first is the **cgo crossing overhead**. It arises on the Go side and is the state transition
+analyzed in 15.6: switching stacks, `entersyscall` and `exitsyscall`, passing arguments by C's
+calling convention. Whether or not the callee is a GPU driver, every entry into C pays it.
 
-The second is **kernel launch latency**, coming from the GPU side. A launch command, from
-being enqueued, through the driver and the hardware's command processor, to actually
-beginning execution on the GPU, has an inherent latency on the order of microseconds. This
-is a physical property of the device, with nothing to do with Go; C++ calling CUDA directly
-cannot dodge it either.
+The second is the **kernel launch overhead**. It arises on the driver and device side: a command
+takes time to be submitted, processed by the driver and begin executing on the GPU. This has nothing
+to do with Go; calling CUDA directly from C++ pays it as well. NVIDIA's Alan Gray points out that on
+a modern GPU the execution time of a single kernel or memory copy is often measured in microseconds,
+and the overhead of each submission to the GPU is also on the order of microseconds
+[[Gray, 2019](#ref-gray-2019)].
 
 ```mermaid
 flowchart LR
-    A["Go code"] -->|"① cgo crossing (Go-side fixed tax)"| B["driver enqueue"]
-    B -->|"② launch latency (GPU-side inherent)"| C["GPU begins executing"]
+    A["Go code"] -->|"1. cgo crossing (Go side)"| B["driver enqueue"]
+    B -->|"2. launch overhead (driver and device side)"| C["GPU starts executing"]
     C --> D["kernel computation"]
 ```
 
-Why separate the two? Because the responses differ. The first is specific to Go/cgo and can
-in principle be trimmed by "routing around cgo," which is the topic of 18.1.4; the second
-is inherent to the device, the same in any language, and can only be hidden inside an
-overlap through **asynchrony and batching**, which is the topic of 18.1.3. Blaming GPU
-slowness simply on "Go's cgo being too heavy" is often miscounting the second cost as the
-first. For a coarse-grained large kernel, the computation runs into milliseconds and both
-latencies together are negligible; what is truly dragged down by these two costs is a large
-number of **small, fragmented kernels**, where the fixed overhead takes the lion's share.
+The two are distinguished because the remedies differ. The first is specific to cgo and can be
+reduced by avoiding cgo (18.1.4); the second is the same in every language and can only be hidden or
+amortized through asynchrony and batching (18.1.3). In magnitude, an empty cgo call costs on the
+order of ten nanoseconds and a submission on the order of microseconds. Blaming cgo for the
+performance problems of a GPU program therefore often charges the second overhead to the first. For
+large kernels that run for milliseconds, both overheads are negligible; the programs that suffer are
+those with many short-running small kernels, where the fixed overhead makes up most of the total
+time.
 
-## 18.1.3 Amortizing the Toll: Asynchrony, Batching, and Graph Capture
+## 18.1.3 Asynchrony, Batching and Graph Capture
 
-Since both the boundary crossing and the launch latency are fixed costs charged "once per
-time," the only general idea for trimming them is to **reduce the number of crossings and
-pack more work into each one**. This is the same medicine 15.6 prescribed for cgo,
-"coarse-grained calls," only on the GPU it comes in a few sharper dosages.
+Both the crossing and the launch overhead are fixed costs paid per call, so the ways of reducing
+them share one idea: cross fewer times and let each crossing carry more work. This is the same
+advice 15.6 gives for cgo, and on a GPU it takes three concrete forms.
 
-**First, issue asynchronously and synchronize late.** Do not follow each command with a
-synchronization. Push a whole run of kernels and copies asynchronously into the same stream,
-and synchronize only once, at the moment you actually need the result. Then the boundary
-crossings of the N commands overlap one another and overlap the GPU computation, and only
-the wait for that last synchronization remains on the critical path.
+**Asynchronous submission with deferred synchronization.** Instead of synchronizing after every
+command, put a series of kernels and copies into the same stream asynchronously and synchronize
+once, when the result is needed. The overheads of the individual calls then overlap with one another
+and with GPU computation, and only the wait for the final synchronization remains on the critical
+path. The sketch below contrasts the two styles (`launch` is a hypothetical C wrapper function):
 
 ```go
-// Anti-pattern: synchronize after every command. N kernels pay N times
-// "crossing + launch latency + waiting the whole way through"
+// Synchronize after every command: N kernels pay N full submissions and waits
 for _, op := range ops {
-    C.launch(op)                    // enqueue
-    C.cudaStreamSynchronize(stream) // wait for it right now: asynchrony wasted
+	C.launch(op, stream)
+	C.cudaStreamSynchronize(stream)
 }
 
-// Correct: pack the stream asynchronously, synchronize once at the end
+// Submit everything asynchronously, synchronize once at the end
 for _, op := range ops {
-    C.launchAsync(op, stream) // enqueue only, return immediately
+	C.launch(op, stream)
 }
-C.cudaStreamSynchronize(stream) // the whole batch is done, wait just this once
+C.cudaStreamSynchronize(stream)
 ```
 
-**Second, batching.** Merge many small kernels into one large kernel at the algorithm
-level, reducing the number of launches at the source. The "operator fusion" of deep
-learning frameworks does exactly this: fuse `matmul → add bias → activation` into a single
-kernel, three launches becoming one. This step usually happens in a compute-graph compiler
-outside Go, but it directly decides how many times the Go side has to cross.
+Gray's experiment quantifies the difference [[Gray, 2019](#ref-gray-2019)]. On a Tesla V100 with
+CUDA 10.1, a kernel with an execution time of 2.9 µs was launched 20000 times (in 1000 groups of
+20). Synchronizing after every launch, each kernel took 9.6 µs on average; removing the
+synchronization within a group and synchronizing only at the end of each group reduced it to 3.8 µs.
 
-**Third, graph capture (CUDA Graphs).** This pulls the rug out from under the previous two.
-In many workloads, the **structure** of that long run of commands is the same on every
-iteration, and only the data changes. CUDA Graphs lets you **capture** the whole command
-sequence into a static graph, after which each iteration needs only a single
-`cudaGraphLaunch`, and the driver replays the entire graph in one go on the device side.
-The original N boundary crossings plus N launch latencies are compressed into **one**. For
-an inference graph made of hundreds of small operators with a fixed structure, this can trim
-the CPU-side issuing cost by an order of magnitude.
+**Batching and operator fusion.** At the algorithm level, merge several small kernels into one large
+kernel to reduce the number of launches at the source. Operator fusion in deep learning frameworks
+is of this kind: for example, matrix multiplication, bias addition and the activation function are
+merged into one kernel, and three launches become one. Fusion is usually done by a graph compiler
+outside Go, but it directly determines how many times the Go side must cross the boundary.
+
+**Graph capture (CUDA Graphs).** Many workloads submit a command sequence of the same structure in
+every iteration, with only the data changing. CUDA Graphs, introduced in CUDA 10.1, let such a
+sequence be captured as a graph (`cudaStreamBeginCapture` and `cudaStreamEndCapture`); after
+instantiation (`cudaGraphInstantiate`), each iteration submits the whole graph with a single
+`cudaGraphLaunch`. In Gray's words, it provides a mechanism for "launching multiple GPU operations
+through a single CPU operation". In the same experiment, switching to a graph reduced the average
+time per kernel further from 3.8 µs to 3.4 µs; creating and instantiating the graph takes about 400
+µs, but only once, which amortizes to about 0.02 µs per kernel. These numbers also show where the
+gain comes from: the main improvement (from 9.6 µs to 3.8 µs) comes from removing per-command
+synchronization, and graph capture cuts the remaining per-submission overhead on top of that; the
+more complex the graph and the more often it is reused, the larger the gain.
 
 ```mermaid
 flowchart TB
@@ -150,130 +155,200 @@ flowchart TB
         direction LR
         n1["launch k1"] --> n2["launch k2"] --> n3["..."] --> nN["launch kN"]
     end
-    subgraph captured["Graph capture: 1 crossing per iteration"]
-        g0["cudaGraphLaunch(graph)"] --> gg["driver replays k1..kN on the device"]
+    subgraph graphcap["Graph capture: 1 crossing per iteration"]
+        g0["cudaGraphLaunch(graph)"] --> gg["driver executes k1..kN on the device side"]
     end
-    naive -.compress.-> captured
+    naive -.compress.-> graphcap
 ```
 
-All three dosages share one principle: **the number of boundary crossings is the variable
-the Go side can actually move**. How fast the kernel computes is the GPU's business; what
-the Go side can do is make every expensive crossing carry as much cargo as possible.
+The three approaches follow one principle: the variable the Go side can actually control is the
+number of crossings. How fast a kernel executes depends on the GPU; what Go can do is let each
+crossing carry as much work as possible.
 
-## 18.1.4 Routing Around cgo: a Spectrum
+## 18.1.4 Avoiding cgo: a Spectrum
 
-We said the first cost (the cgo crossing) "can in principle be routed around." That is not
-idle talk. Set the various efforts to "route around cgo" side by side and you find they are
-in fact a **spectrum**: from "still crossing at function granularity, just crossing
-differently" all the way to "not crossing at all," each rung trimming a different cost at a
-different price. Before walking it, separate cgo's two costs: a **build-time** one (needs a C
-toolchain, kills static linking and cross-compilation, see
-[15.6.4](../../part5toolchain/ch15compile/cgo.md)), and a **runtime** one, the roughly
-tens-of-nanoseconds fixed cost of each crossing (the first cost of 18.1.2). The rungs below
-each target one or both.
+The first overhead mentioned above can be reduced by avoiding cgo. The ways of doing so form a
+spectrum: at one end the boundary is still crossed at function granularity, only called in a
+different way; at the other end it is not crossed at all. To compare the trade-offs at each point,
+first split the cost of cgo into two parts. One is at **build time**: a C toolchain is required, and
+cross-compilation and static linking become difficult (see
+[15.6.6](../../part5toolchain/ch15compile/cgo.md)). The other is at **run time**: the fixed overhead
+of every crossing (the first overhead in 18.1.2).
 
-**First, `purego`: trims only the build-time cost.** Maintained by the Ebitengine project.
-At runtime it loads a shared library with `dlopen`/`dlsym`, then uses a hand-written
-assembly trampoline to call the function address directly by the platform ABI, thereby
-**bypassing cgo's code generation entirely**. Its motive is first of all an engineering one:
-not depending on a C compiler, and so keeping the things 15.6 said cgo would forfeit, static
-builds, cross-compilation, fast builds. But see clearly that `purego` still has to reuse the
-runtime's `cgocall` to do the stack switch and `entersyscall`; the comment at the top of
-`runtime/cgocall.go` names it specifically. That is, what it routes around is cgo's
-**build-time** cost, not the state transition of that one runtime-side crossing; the core of
-the first cost is still paid.
+**First, purego: removing the build-time cost.** purego, maintained by the Ebitengine project, loads
+shared libraries and looks up symbols at run time with `Dlopen` and `Dlsym`, then calls the function
+address through an assembly trampoline following the platform ABI. The whole process bypasses cgo's
+code generation and builds with `CGO_ENABLED=0`. The benefits listed in the project description are:
+no C compiler is needed and cross-compilation is simple; pure Go builds can be cached fully; and
+binaries are smaller, because cgo generates a wrapper function for every C function it calls
+[[Ebitengine, n.d.](#ref-ebitengine-nd)]. But purego does not avoid the run-time state transition.
+It calls the runtime's `cgocall` directly through `go:linkname`, and `runtime/cgocall.go` names it
+explicitly in the comment on `cgocall` [[Go Authors, 2026b](#ref-go-authors-2026b)]:
 
-**Second, WebAssembly and `wazero`: genuinely without cgo.** A more thorough path is to
-**compile the C library to WebAssembly** and run it in a **Wasm runtime written in pure
-Go**. `wazero` is exactly such a runtime: zero-dependency, not a line of cgo. Compile SQLite,
-some codec, even a CPU-side inference engine to `.wasm`, and the Go process runs it in a
-sandbox through wazero, never touching a C compiler, losing nothing of static builds and
-cross-compilation (`ncruces/go-sqlite3` runs SQLite inside pure Go exactly this way). What it
-routes around is not only the build-time cost; it drops cgo's runtime-side state transition
-too, in exchange for Wasm's own execution overhead (interpreted or JIT-compiled, usually
-slower than native) and the call boundary between host and sandbox. But for this chapter's
-GPU theme there is one hard limit to recognize: **a Wasm sandbox cannot reach the GPU
-driver**. It can move CPU-side C libraries (codecs, crypto, CPU inference) cleanly into pure
-Go, but it cannot issue commands to the graphics card for you; to drive a GPU you are still
-back on cgo, purego, or out-of-process.
+```go
+// cgocall should be an internal detail,
+// but widely used packages access it using linkname.
+// Notable members of the hall of shame include:
+//   - github.com/ebitengine/purego
+//
+// Do not remove or change the type signature.
+// See go.dev/issue/67401.
+//
+//go:linkname cgocall
+//go:nosplit
+func cgocall(fn, arg unsafe.Pointer) int32 {
+```
 
-**Third, pure-Go reimplementation: no boundary at all.** The most thorough rung is to drop
-the C library entirely and reimplement it in pure Go. Then the FFI boundary simply does not
-exist, and the build-time and runtime costs go to zero together.
-[19.3](../ch19graphics/software.md)'s software rendering is a living example of this rung: it
-calls no graphics driver and computes every pixel in Go, in place. The Go ecosystem also has
-pure-Go tokenizers, and even pure-Go inference implementations for small models. The price is
-just as real: you take on the engineering of the rewrite, and you lose the years of
-SIMD-and-hardware-hugging optimization behind the C library, so a pure-Go implementation
-often computes slower. It suits the cases where "the C library's value is not peak
-performance but functionality."
+Every call through purego therefore also passes through `entersyscall` and `exitsyscall`, and its
+run-time overhead is of the same kind as cgo's.
 
-**Fourth, out-of-process: move the boundary out of the process.** When the "C library" is in
-fact a **remote service**, there is no need to link it into the same process at all. Put the
-GPU inference in a separate service process (often written in C++/Python, snug against CUDA),
-and have the Go side talk to it over gRPC or shared memory. Then the Go process has not a
-line of cgo in it, and the boundary turns from "in-process FFI" into "inter-process IPC." The
-price is an extra serialization and a cross-process copy; the gain is a perfectly clean Go
-side. This is exactly the deployment shape Chapter 20 will return to again and again: Go
-stands at the serving and orchestration layer, with the dirty work pressed tight against the
-device walled off in another process.
+golang.design/x/accel is a complete example built on this point of the spectrum
+[[Ou, 2026a](#ref-ou-2026a)]. It runs computation on a GPU with `CGO_ENABLED=0`: kernels are written
+in a subset of Go and compiled ahead of time, and can currently run on a CPU backend and a Metal
+backend; the project describes itself as still at an early stage. On darwin it opens
+`/System/Library/Frameworks/Metal.framework/Metal` and the Objective-C runtime through purego, and
+all Metal calls are issued through purego, the great majority of them `objc_msgSend` message sends.
+Its design document lists "no cgo" as a hard requirement and also states the price: it rules out
+linking vendor libraries such as cuBLAS and cuDNN, every kernel must be written by hand, and in raw
+throughput it will not beat the vendor libraries in the short term [[Ou, 2026b](#ref-ou-2026b)].
 
-Connect the four rungs and the conclusion is clear: the FFI boundary is not an iron law of
-all-or-nothing but a spectrum you can slide along. From **cgo/purego** (function
-granularity, the most intimate and fastest, but with a crossing tax or a toolchain cost), to
-**Wasm/wazero** (run in a sandbox, routing around cgo but in exchange for Wasm overhead, and
-unable to reach the GPU), to **pure-Go reimplementation** (no boundary, zero crossing cost,
-but a rewrite and often slower), to **out-of-process IPC** (process granularity, the
-cleanest, but with a serialization cost). Which rung to pick depends on how frequent the
-calls are, how large the data is, whether you must touch the GPU at all, and how much you
-care about that pure-Go toolchain. And even if you do choose cgo in the end, there is no need
-for gloom: [18.2](./sched.md) will show that Go 1.26 itself has thinned that runtime-side
-crossing cost by roughly thirty percent.
+accel's measurements also show that the run-time cost does not disappear. Its backend design
+document records an attribution on an M2: when submitting a graph of about 790 nodes, most of the
+per-node overhead came from the foreign call itself rather than from Metal's encoder. purego's
+generic call path rebuilds the argument frame through `reflect.MakeFunc` on every call, and a single
+message send took about 667 ns; calling `objc_msgSend` directly through `purego.SyscallN` brought it
+down to about 180 ns, and the per-node overhead fell from 14.7 µs to 7.0 µs. The lesson the document
+draws is that on a backend without cgo, per-operation overhead should be sought first in the FFI
+binding and only then in the driver [[Ou, 2026c](#ref-ou-2026c)]. Running the benchmark from it on
+an Apple M5 Pro with Go 1.26.10 (10 runs), the median of the direct send was about 67 ns and that of
+the send through reflection about 207 ns, still roughly three times as much:
+
+```shell
+$ CGO_ENABLED=0 go test -run '^$' -bench '^BenchmarkFFICost$' -count 10 ./internal/mtl/
+```
+
+15.6.6 measured an empty C call at about 16 ns on the same machine. The two measure different
+things, the former a complete Objective-C message send and the latter an empty C function, so they
+are comparable only in order of magnitude.
+
+accel takes the "recordable, replayable command graph" as the decision on which the whole design
+rests: work is first recorded into a `Graph`, validation, memory planning and barrier computation
+are done once at `Build`, and every later submission is a replay [[Ou, 2026b](#ref-ou-2026b)]. The
+motivation is the same as that of CUDA Graphs, but how much it saves depends on the backend. A Metal
+command buffer can be submitted only once, so every submission still re-encodes from the planned
+node list; what is saved is validation and planning, and the per-node foreign calls remain
+[[Ou, 2026c](#ref-ou-2026c)]. The optimization of the FFI binding described above became necessary
+in exactly this context.
+
+**Second, WebAssembly and wazero: running C libraries without cgo.** A more thorough approach
+compiles the C library to WebAssembly and executes it with a Wasm runtime implemented in pure Go.
+wazero is such a runtime; it has no external dependencies and does not use cgo, so it needs no
+shared library or libc and keeps the ability to cross-compile [[Tetrate, n.d.](#ref-tetrate-nd)].
+This removes both the build-time and the run-time cost of cgo, in exchange for the execution
+overhead of Wasm itself (interpreted or compiled, usually slower than native code) and a call
+boundary between host and sandbox. `ncruces/go-sqlite3` used to be representative of this route,
+handing a Wasm build of SQLite to wazero for execution. Starting in 2026 it uses wasm2go to
+translate the Wasm build into Go source, and the release notes of v0.32.0 say this is most likely
+the last version that depends on wazero [[ncruces, 2026](#ref-ncruces-2026)]. Later versions no
+longer need a Wasm runtime, which in effect moves them to the next point on the spectrum. For this
+chapter this approach has one hard limit: a Wasm module can only call functions that the host
+explicitly imports and cannot access the GPU driver directly. It can move CPU-side C libraries
+(codecs, cryptography, SQLite) into pure Go, but it cannot submit commands to a GPU on behalf of a
+program.
+
+**Third, rewriting in pure Go: no boundary.** The most thorough approach stops using the C library
+and reimplements it in pure Go. The FFI boundary no longer exists, and both build-time and run-time
+costs vanish. The software rendering in [19.3](../ch19graphics/software.md) is of this kind: it
+calls no graphics driver and computes every pixel in Go. The cost is equally clear: the engineering
+effort of the rewrite, and the optimizations for SIMD and specific hardware that C libraries have
+accumulated over the years, so that pure Go implementations are often slower. This approach suits
+cases where the value of the C library lies mainly in its functionality rather than in peak
+performance. The wasm2go route of go-sqlite3 shows that a rewrite need not be done by a person; a
+tool can also translate compiled output into Go.
+
+**Fourth, out of process: moving the boundary out of the process.** When the needed capability can
+be provided as an independent service, it need not be linked into the same process. GPU inference is
+placed in a separate service process (usually written in C++ or Python, calling CUDA directly), and
+the Go side communicates with it through gRPC or shared memory. The Go process has no cgo; the
+boundary changes from an in-process FFI to inter-process communication, at the price of
+serialization and cross-process copies. [Chapter 20](../ch20inference/readme.md) will return to this
+deployment shape repeatedly: Go handles serving and orchestration, and the part that deals with the
+device directly is isolated in another process. The reason accel's design document gives for
+rejecting "binding the C library through a subprocess or IPC" marks the scope of this point exactly:
+per-call latency makes it unusable for kernel-level submission [[Ou, 2026b](#ref-ou-2026b)].
+
+Taking the four points together: cgo and purego cross at function granularity, which is the most
+direct, but they have run-time crossing overhead, and cgo has a build-time cost as well. Wasm
+removes cgo but brings Wasm's own overhead and cannot reach the GPU. A pure Go rewrite has no
+boundary but requires a rewrite and is often slower. The out-of-process approach isolates the most,
+but every interaction must be serialized, so it suits only coarse-grained requests. Which to choose
+depends on the call frequency, the data size, whether direct GPU access is required, and how much
+the pure Go toolchain matters. Even for those who settle on cgo, the run-time overhead is falling:
+Go 1.26 reduced the baseline runtime overhead of cgo calls by about 30%
+[[Go Authors, 2026a](#ref-go-authors-2026a)], and [18.2](./sched.md) describes one of the changes.
 
 ## Summary
 
-The GPU lifts that "cross less" admonition of 15.6 from a piece of experience into a design
-spine. The reason is that a GPU workload is by nature made of a large number of
-fine-grained commands, and every command is a boundary crossing. The remedy lies not in
-making a single crossing faster (its cost is structural), but in **reducing the number of
-crossings**: use asynchrony to overlap crossings with GPU computation, use batching and
-operator fusion to reduce commands at the source, use graph capture to compress a whole
-command sequence into one crossing. Failing all that, you can still route around cgo itself
-along a spectrum: switch to purego, compile to Wasm and run it on wazero, reimplement in
-pure Go, or move the whole boundary out of the process.
+GPUs make the advice of 15.6 to "cross less" the main line of design: a GPU workload consists of
+many fine-grained commands, and each command is a crossing. The cost of a single crossing is
+determined by its structure and is hard to compress further; the effective remedy is to reduce the
+number of crossings: asynchrony makes crossings overlap with GPU computation, batching and operator
+fusion reduce the commands at the source, and graph capture compresses a whole command sequence into
+one submission. In addition, cgo can be avoided along a spectrum: switch to purego, compile the C
+library to Wasm and run it with wazero, rewrite in pure Go, or move the boundary out of the process.
 
-This section spoke only of "cross fast, cross seldom." But the bridge carries two more
-things not yet detailed: one, what happens to the P given up and the M pinned when some
-crossing **really does block for a long time** (such as that trailing
-`cudaStreamSynchronize`), which is the business of [18.2](./sched.md); two, the pointers
-passed back and forth on the bridge, which are Go's, which are the device's, and how the GC
-should treat them, which is the business of [18.3](./memory.md).
+This section discussed only the number and cost of crossings; two questions are left for the next
+two sections. When a crossing does block for a long time (for example the final
+`cudaStreamSynchronize`), how the scheduler handles the occupied thread is the subject of
+[18.2](./sched.md). Among the pointers passed across the boundary, which belong to Go and which to
+the device, and how the garbage collector treats them, is the subject of [18.3](./memory.md).
 
 ## Further Reading
 
-1. NVIDIA. *CUDA C++ Programming Guide.*
-   https://docs.nvidia.com/cuda/cuda-c-programming-guide/
-   (the authoritative definition of asynchronous concurrent execution, streams,
-   `cudaMemcpyAsync`, and synchronization semantics)
-2. NVIDIA. *CUDA Driver API* and *CUDA Runtime API.*
-   https://docs.nvidia.com/cuda/cuda-driver-api/ ,
-   https://docs.nvidia.com/cuda/cuda-runtime-api/
-   (the layering of the driver API and the runtime API)
-3. NVIDIA. *Getting Started with CUDA Graphs.* NVIDIA Technical Blog, 2019.
-   https://developer.nvidia.com/blog/cuda-graphs/
-   (how graph capture compresses a long run of launches into one submission to trim launch
-   overhead)
-4. The Go Authors. *runtime/cgocall.go.*
-   https://github.com/golang/go/blob/master/src/runtime/cgocall.go
-   (the cgocall reuse and the mention of `purego` by name, see the comment at the top of
-   the file)
-5. Ebitengine. *purego.* https://github.com/ebitengine/purego
-   (runtime FFI without cgo: `dlopen`/`dlsym` plus an assembly trampoline)
-6. Tetrate. *wazero: the zero dependency WebAssembly runtime for Go.*
-   https://wazero.io/ , and *ncruces/go-sqlite3* (SQLite compiled to Wasm, run in pure Go)
-   https://github.com/ncruces/go-sqlite3
-   (a pure-Go, cgo-free Wasm runtime, the representative way to run C libraries without cgo)
-7. This book: [15.6 cgo](../../part5toolchain/ch15compile/cgo.md),
-   [2.2 Calling Convention](../../part1overview/ch02asm/callconv.md),
-   [18.2 The Scheduler and Blocking Foreign Calls](./sched.md),
-   [18.3 The Divide Between Device Memory and the Garbage Collector](./memory.md).
+- <a id="ref-ebitengine-nd"></a>[Ebitengine, n.d.] Ebitengine. *purego.*
+  https://github.com/ebitengine/purego
+  Run-time FFI without cgo: `Dlopen`/`Dlsym` plus an assembly trampoline.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *Go 1.26 Release
+  Notes.* 2026. https://go.dev/doc/go1.26 See the section "Faster cgo calls".
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. src/runtime/cgocall.go. Go
+  1.26 source. https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/cgocall.go The
+  comment on `cgocall` names `purego`, which reuses it through linkname.
+- <a id="ref-gray-2019"></a>[Gray, 2019] Alan Gray. *Getting Started with CUDA Graphs.* NVIDIA
+  Technical Blog, 2019. https://developer.nvidia.com/blog/cuda-graphs/ Measured time per kernel with
+  per-command synchronization, overlapped launches and graph capture.
+- <a id="ref-ncruces-2026"></a>[ncruces, 2026] ncruces. *go-sqlite3 v0.32.0.* GitHub release, 2026.
+  https://github.com/ncruces/go-sqlite3/releases/tag/v0.32.0 The release notes say this is most
+  likely the last version that depends on wazero; later versions use wasm2go.
+- <a id="ref-nvidia-nda"></a>[NVIDIA, n.d.a] NVIDIA. *CUDA C++ Programming Guide.*
+  https://docs.nvidia.com/cuda/cuda-c-programming-guide/ The authoritative definition of
+  asynchronous concurrent execution, streams, `cudaMemcpyAsync` and synchronization semantics. Since
+  CUDA 13.0 this document is marked Legacy and no longer updated; it is replaced by the new *CUDA
+  Programming Guide* ([NVIDIA, n.d.c]).
+- <a id="ref-nvidia-ndb"></a>[NVIDIA, n.d.b] NVIDIA. *CUDA Driver API* and *CUDA Runtime API.*
+  <https://docs.nvidia.com/cuda/cuda-driver-api/>, <https://docs.nvidia.com/cuda/cuda-runtime-api/>
+  The layering of the driver API and the runtime API; the differences between the two are described
+  at https://docs.nvidia.com/cuda/cuda-runtime-api/driver-vs-runtime-api.html
+- <a id="ref-nvidia-ndc"></a>[NVIDIA, n.d.c] NVIDIA. *CUDA Programming Guide: Asynchronous
+  Execution.*
+  https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/asynchronous-execution.html The
+  section of the new programming guide on streams, events and asynchronous semantics.
+- <a id="ref-ou-2026a"></a>[Ou, 2026a] Changkun Ou. *accel: Run compute on the GPU from Go.*
+  https://github.com/golang-design/accel, 2026. A GPU compute library without cgo, currently with a
+  CPU and a Metal backend; the project is at an early stage.
+- <a id="ref-ou-2026b"></a>[Ou, 2026b] Changkun Ou. *accel: design.* specs/000-decisions.md, 2026.
+  https://github.com/golang-design/accel/blob/main/specs/000-decisions.md The two locked
+  decisions "recordable, replayable command graph" and "no cgo", and the alternatives each rejected.
+- <a id="ref-ou-2026c"></a>[Ou, 2026c] Changkun Ou. *Backends: the contract, the set, and the
+  capability matrix.* specs/006-backends.md, 2026.
+  https://github.com/golang-design/accel/blob/main/specs/006-backends.md Section 4.3 records the
+  measurement and attribution of the per-node overhead of the Metal backend.
+- <a id="ref-tetrate-nd"></a>[Tetrate, n.d.] Tetrate. *wazero: the zero dependency WebAssembly
+  runtime for Go.* <https://wazero.io/>, and *ncruces/go-sqlite3* (SQLite compiled to Wasm and run
+  in pure Go) https://github.com/ncruces/go-sqlite3 A pure Go Wasm runtime without cgo, the
+  representative way of running C libraries without cgo. go-sqlite3 has used wasm2go since v0.33.
+- This book: [15.6 cgo](../../part5toolchain/ch15compile/cgo.md), [2.3
+  Calling Convention and the Register ABI](../../part1overview/ch02asm/callconv.md), [18.2
+  The Scheduler and Blocking Foreign Calls](./sched.md), [18.3
+  The Divide Between Device Memory and the Garbage Collector](./memory.md), [19.3
+  Software Rendering and Parallelism](../ch19graphics/software.md), [Chapter
+  20 AI Inference and Serving](../ch20inference/readme.md).
