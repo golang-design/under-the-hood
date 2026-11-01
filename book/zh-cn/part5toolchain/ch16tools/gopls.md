@@ -5,36 +5,31 @@ title: "16.7 语言服务协议"
 
 # 16.7 语言服务协议
 
-自动补全、跳转定义、实时报错、重构,现代编辑器里这些功能，在 Go 这边由 **`gopls`**（Go language
-server，读作「go please」）提供。它背后是**语言服务器协议**（Language Server Protocol，LSP）。
-本节讲清三件事：LSP 解开的那个组合爆炸结、gopls 如何建立在编译器前端的可复用库之上、以及它
-为何称得上 Go 工具链思想的集大成者。
+编辑器中的自动补全、跳转到定义、实时诊断与重命名，在 Go 中由 **`gopls`**（Go language server，读作「go
+please」）提供，它与编辑器之间的通信遵循**语言服务协议**（Language Server Protocol，LSP）。本节依次讨论
+LSP 要解决的问题与协议的设计，gopls 产生的背景，它如何在常驻进程中维护对工程的一致理解，以及 v0.12
+如何借用分离编译的思想控制内存，最后与其他语言的服务器作对照。
 
-## 16.7.1 LSP：解开 M×N 的结
+## 16.7.1 LSP：从 M × N 到 M + N
 
-设想没有 LSP 的世界。要让 **M 个编辑器**都支持 **N 种语言**的智能功能，朴素的做法是为每一对
-「编辑器 × 语言」单独写一套集成：VS Code 要懂 Go、懂 Rust、懂 Python，Vim 也要各懂一遍,补全、
-跳转、报错的逻辑在每一对里都重写。代价是 **M×N** 套实现，且任何一门语言的语义更新，都要在
-M 个编辑器里各自跟进。这条增长曲线注定走不远。
+要让 M 个编辑器都支持 N 种语言的语义功能，最直接的做法是为每一对「编辑器与语言」单独编写集成，共需 M × N
+套实现，语言语义的每次变化都要在 M 个编辑器中分别跟进。2016 年 6 月 27 日，Visual Studio Code
+团队公布了语言服务协议，同时宣布与 Red Hat、Codenvy 合作推动它成为开放的标准
+[[VS Code Team, 2016](#ref-vs-code-team-2016); [Wikipedia, n.d.](#ref-wikipedia-nd)]。
+协议把语义分析放进一个独立的进程，即语言服务器；编辑器作为客户端，通过标准输入输出或套接字与它通信。
+每种语言只需实现一个服务器，每个编辑器只需实现一个客户端，M × N 由此变为 M + N。
 
-LSP 把它解成 **M+N**。微软在 2016 年 6 月为 Visual Studio Code 提出这套协议(后与 Red Hat、
-Codenvy 合作开放，现已成行业标准)。它的关键是定义**一套与语言、与编辑器都无关的标准协议**：
-每门语言只需写**一个**语言服务器（实现协议），每个编辑器只需写**一个** LSP 客户端,此后任意
-编辑器配任意语言，自动打通。语言服务器是一个独立进程，编辑器通过标准输入输出或套接字与它通信。
-
-协议本身建立在 **JSON-RPC** 之上,只有三类消息：客户端发**请求**（request）等服务器回**响应**
-（response），以及单向的**通知**（notification）。位置用「文档 URI + 行列号」表示，刻意避开任何
-语言特有的抽象（如某语言的 AST 节点），这正是它能跨语言通用的前提。一次「跳转到定义」的往返
-是这样：
+协议建立在 JSON-RPC 之上，消息分为三类：客户端发出请求并等待响应，以及不需要回复的单向通知
+[[Microsoft, n.d.](#ref-microsoft-nd)]。协议有意只使用编辑器本来就理解的数据类型：文档以 URI 标识，
+位置以从零开始的行号与列偏移表示，不涉及任何语言的语法树或符号表。例如，光标停在 `main.go` 第 4 行第 13
+列的标识符上时，「跳转到定义」的请求与响应如下：
 
 ```json
-// 客户端 → 服务器：光标停在某标识符上，问它定义在哪
 { "jsonrpc": "2.0", "id": 1, "method": "textDocument/definition",
   "params": {
     "textDocument": { "uri": "file:///app/main.go" },
-    "position":     { "line": 41, "character": 7 } } }
+    "position":     { "line": 3, "character": 12 } } }
 
-// 服务器 → 客户端：定义在另一个文件的某行某列
 { "jsonrpc": "2.0", "id": 1,
   "result": {
     "uri":   "file:///app/user/user.go",
@@ -42,165 +37,224 @@ Codenvy 合作开放，现已成行业标准)。它的关键是定义**一套与
                "end":   { "line": 12, "character": 9 } } } }
 ```
 
-补全是 `textDocument/completion`，重命名是 `textDocument/rename`，格式化是
-`textDocument/formatting`。报错则走相反方向,不是客户端来问，而是服务器在分析完成后**主动推送**
-一条 `textDocument/publishDiagnostics` 通知，编辑器据此画出那些红色波浪线。编辑器把每次按键、
-每次保存通过 `textDocument/didChange`、`textDocument/didSave` 告知服务器，服务器据此维护它对工程
-的理解。智能从此与编辑器解耦：写好一个语言服务器，所有 LSP 编辑器一并受益。
+列偏移的单位是一处有代表性的细节。3.17 版之前，列偏移一律按 UTF-16 编码单元计算；3.17 版起，
+双方可以协商其他编码，但 UTF-16 仍是唯一必须支持的一种 [[Microsoft, n.d.](#ref-microsoft-nd)]。Go
+的字符串是 UTF-8，`go/token` 记录的是字节偏移，gopls 因此要在两种坐标之间换算，`protocol.Mapper`
+负责这项工作 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
 
-连接之初还有一次 `initialize` 握手,双方交换各自支持的能力（capabilities）：服务器声明它能做补全、
-能做重命名、能做哪些代码操作，客户端声明它能渲染什么。能力协商让协议得以平滑演进,一端支持新
-特性而另一端尚未跟上时，双方据握手结果各自降级，不会硬崩。正因协议把「能力」也标准化了，LSP 才
-能从最初的几个方法，长成今天覆盖语义高亮、内联提示（inlay hints）、调用层级等几十类交互的 3.x
-规范，而生态里的客户端与服务器无需统一升级即可共存。
+诊断的方向与查询相反：服务器分析完成后，以 `textDocument/publishDiagnostics` 通知主动推送错误与警告。
+编辑器则以 `textDocument/didOpen`、`textDocument/didChange` 等通知告知服务器文件的打开与修改，
+服务器据此维护文件的当前内容，包括尚未保存的修改。连接建立时，双方在 `initialize`
+请求中交换各自支持的能力（capabilities）。能力协商使协议可以逐步扩充：
+一端支持某项新功能而另一端尚不支持时，双方按协商结果各自降级。协议因此得以从最初的少数几个方法，
+扩充为今天 3.18 版中涵盖语义高亮、内联提示、调用层级等数十类交互的规范，而客户端与服务器不必同时升级。
 
-## 16.7.2 gopls：建立在 go/types 之上
+## 16.7.2 gopls 的由来
 
-`gopls` 是 Go 团队开发并维护的**官方语言服务器**,它向任何兼容 LSP 的编辑器提供这套 IDE 能力。
-它的能力，本质上**建立在编译器前端的可复用组件之上**:用 `go/parser` 把源码解析成 AST
-（[15.1](../ch15compile/parse.md)）、用 `go/types`（[8.3](../../part2lang/ch08generics/checker.md)
-的姊妹库）做类型分析、用模块机制理解依赖与构建边界（[17 模块](../ch17modules)）。这三步，正是
-编译器前端要做的事,而 Go 把它们做成了**独立、稳定、公开的标准库**，而非锁死在 `cmd/compile`
-内部。于是同一段「parse + typecheck」的逻辑，gopls 能调，`go vet`、各类 linter、代码生成器、
-`gofmt` 也都能调:
+gopls 出现之前，Go 的编辑器支持由一批各自独立的命令行工具拼成：补全用 gocode，跳转用 godef，查询用 guru，
+重命名用 gorename。gopls 的设计文档记录了当时的局面：VS Code 的 Go 扩展为支持已有的功能安装了
+24 个命令行工具；统计所有编辑器中需要迁移到模块模式的工具，共有 63 个；这些工具每次调用都要重新处理代码，
+几乎没有一个能在 100 ms 内返回结果 [[Go Authors, 2019](#ref-go-authors-2019)]。Go 1.11 引入模块之后，
+这些按 GOPATH 布局查找代码的工具都需要迁移，Rebecca Stambler 在 GopherCon 2019 的主题演讲「Go, please
+stop breaking my editor!」中讲述了这段经历与 gopls 的应对 [[Stambler, 2019](#ref-stambler-2019)]。
+
+gopls 始于 2018 年 [[Findley and Donovan, 2023](#ref-findley-and-donovan-2023)]。
+设计文档以人机交互的研究为依据定下延迟目标：对用户连续操作的直接反馈需要在 100 ms 以内才不被察觉，超过
+200 ms 就会令人烦躁，因此用户打字时发生的一切，目标都是 100 ms 以内。文档同时指出了最大的障碍：
+`go/token`、`go/ast` 与 `go/types` 这些基础库是为类似编译器的应用设计的，更关心吞吐量而不是内存，
+数据结构的设计是先增长、在程序退出时整体丢弃；它们在源码有错误时也不打算继续工作，更没有增量修改的能力
+[[Go Authors, 2019](#ref-go-authors-2019)]。编辑中的代码几乎总是有错误的，而且每次按键只改动一处。gopls
+要做的，就是在这些面向一次性编译的库之上，建立一个常驻的、容错的、增量的系统。设计文档后来补写的前言说明，
+它的前两项目标已经实现：gopls 完整实现了 LSP，并成为 VS Code Go 扩展与许多其他编辑器的默认后端。
+
+## 16.7.3 建立在 go/parser 与 go/types 之上
+
+gopls 并没有另写一套语义分析。它通过 `go/packages` 调用 `go list` 取得包的元数据，即每个包由哪些文件组成、
+依赖哪些包、采用哪些构建设置 [[Go Authors, 2024](#ref-go-authors-2024)]；再用 `go/parser`
+解析源码（[15.1](../ch15compile/parse.md)），用 `go/types` 做类型检查
+（[8.3](../../part2lang/ch08generics/checker.md)）。类型检查器在检查的同时记录每个标识符定义或引用了哪个对
+象，这就是跳转、查找引用与重命名所需的全部原料 [[Go Authors, 2026b](#ref-go-authors-2026b)]：
 
 ```go
-// 在编译器之外，把一段 Go 源码解析并类型检查,这正是 gopls 每次分析的内核
 fset := token.NewFileSet()
-f, _ := parser.ParseFile(fset, "main.go", src, parser.AllErrors) // go/parser → AST
+f, _ := parser.ParseFile(fset, "main.go", src, parser.AllErrors) // 源码 → 语法树
 info := &types.Info{
-    Defs: map[*ast.Ident]types.Object{}, // 每个标识符「定义」了什么
-    Uses: map[*ast.Ident]types.Object{}, // 每个标识符「引用」了哪个定义
+	Defs: map[*ast.Ident]types.Object{}, // 标识符定义了哪个对象
+	Uses: map[*ast.Ident]types.Object{}, // 标识符引用了哪个对象
 }
 conf := types.Config{Importer: importer.Default()}
-pkg, _ := conf.Check("app", fset, []*ast.File{f}, info)            // go/types → 类型信息
+pkg, _ := conf.Check("app", fset, []*ast.File{f}, info) // 语法树 → 类型信息
 ```
 
-`info.Defs` 与 `info.Uses` 这两张表就是「跳转定义」「查找引用」「重命名」的全部素材：标识符到
-符号、符号到所有引用点的双向映射，类型检查器顺手就建好了。换言之，gopls 没有自己的一套语义分析，
-它复用编译器前端算出的结果，只是把同一份信息按编辑器的提问重新组织。
+`Defs` 与 `Uses` 合在一起，给出了从标识符到对象、再从对象到全部引用位置的映射。gopls 的大部分功能，
+都是把类型检查器本来就要计算的信息，按编辑器的提问重新组织。
 
-这一点值得停下来说透,它解释了**为什么 Go 的工具生态格外繁荣**。把前端做成可复用的标准库，是一个
-有意为之的设计决定，而非所有语言都这么走,后文 [16.7.4](#1674-谱系与对照为何前端即库是关键) 会拿
-clangd 与 rust-analyzer 来对照。眼下只需记住一句：gopls 的智能并非另起炉灶，它把编译器本就要算的
-东西，换一个用途呈现给编辑器,而这之所以可能，全因 `go/parser`、`go/types` 早早被**库化**了
-（[15.1](../ch15compile/parse.md) 说的「简单文法 + 可复用前端」，在这里结出了果实）。
+`go/types` 与编译器的类型检查器 `cmd/compile/internal/types2` 是同一份实现的两个版本。Go 1.26 中，
+`go/types` 的 74 个非测试源文件里有 46 个由 types2 生成，文件开头标注「Code generated by "go test
+-run=Generate -write=all"」；这一生成过程由 Robert Findley 在 Go 1.21 中改为以测试的形式运行，测试会检查
+`go/types` 是否与 types2 保持同步 [[Findley, 2023](#ref-findley-2023)]。因此，
+编辑器中看到的类型错误与编译器报告的错误出自同一套规则。
 
-## 16.7.3 增量分析：每一次按键都要快
+## 16.7.4 快照：常驻进程中的一致视图
 
-把前端当库来调，只解决了「能不能算对」。gopls 真正的工程难题在「能不能算得**又快又省**」。编译器
-是一次性的：读全部源码，算一遍，产出二进制，然后退出。语言服务器恰恰相反，它**常驻**，面对一个
-**不断被编辑**的工程,读者每敲一个键，它就要在几十毫秒内重新回答「这里现在有什么错」「这里能补全
-什么」。在一个几十万行的仓库上，每次按键都重头全量解析加类型检查，是绝无可能的。
-
-gopls 的答案是一套以**不可变快照**（immutable snapshot）为核心的增量架构。它把进程状态分了层
-（裁剪后的速写，完整定义见 `gopls/internal/cache`)：
+编译器是一次性的：读入全部源码，计算一遍，输出结果后退出。语言服务器正好相反，它常驻内存，
+面对一个不断被修改的工程，同时还有多个请求在并发地读取它的状态。gopls 把状态分成几层：`Session`
+是与一个客户端的会话；`View` 是以特定构建设置观察的一棵工作区目录树；`Snapshot`
+是某次编辑之后工作区全部文件的状态；`Cache` 保存可在会话之间共享的记忆化计算结果
+[[Go Authors, 2024](#ref-go-authors-2024)]。其中 `Snapshot` 是核心
+[[Go Authors, 2026a](#ref-go-authors-2026a)]：
 
 ```go
-// gopls 的状态分层（速写）：Cache 跨会话共享，Session 持有多个 View，View 持有当前 Snapshot
-type Session struct {
-    cache *Cache          // 跨 Session 共享：解析缓存、记忆化的计算结果
-    views []*View         // 一个工作区（通常一个 go.mod 模块）对应一个 View
-}
+type Snapshot struct {
+	// sequenceID is the monotonically increasing ID of this snapshot within its View.
+	// ……
+	sequenceID uint64
+	// ……
+	store *memoize.Store // cache of handles shared by all snapshots
+	// ……
+	// refcount holds the number of outstanding references to the current
+	// Snapshot. When refcount is decremented to 0, the Snapshot maps are
+	// destroyed and the done function is called.
+	// ……
+	refcount int
+	// ……
+	// meta holds loaded metadata.
+	// ……
+	meta *metadata.Graph
 
-type Snapshot struct {       // 工作区某一刻状态的「不可变」视图
-    view     *View
-    files    map[URI]file.Handle // 此刻每个文件的内容句柄
-    packages map[PackageID]*Package // 已解析、已类型检查的包（按需、记忆化）
-    refcount int                  // 引用计数：还有分析在用它就不能回收
+	// files maps file URIs to their corresponding FileHandles.
+	// It may invalidated when a file's content changes.
+	files *fileMap
+
+	// packages maps a packageKey to a *packageHandle.
+	// It may be invalidated when a file's content changes.
+	// ……
+	packages *persistent.Map[PackageID, *packageHandle]
+	// ……
 }
 ```
 
-关键在「不可变」三字。当编辑器送来一次 `didChange`，gopls 不去**修改**当前快照，而是
-`DidModifyFiles` 先更新内容覆盖层（overlay），再调 `invalidateViewLocked` 把受影响的快照标记失效,
-下一次查询到来时，**惰性地**生成一个新快照。新快照与旧快照共享所有**未受改动波及**的部分：读者只
-改了一个文件，依赖图上够不到它的那些包，其解析与类型检查结果原样复用，不必重算。不可变加结构
-共享，让「增量」既正确（绝不会读到改了一半的中间态）又高效（只重算真正脏掉的那一小片）。引用
-计数则负责回收：没有分析再持有的旧快照，其内存得以释放，这是在大仓库上**框住内存**的关键一环。
+快照一经建立就不再修改。文件发生变化时，`Session.DidModifyFiles` 先更新未保存内容的覆盖层，再由
+`invalidateViewLocked` 以旧快照为基础克隆出新快照：
 
-一次按键到一条波浪线的往返，串起来是这样：
+```go
+	// Cancel all still-running previous requests, since they would be
+	// operating on stale data.
+	prevSnapshot.cancel()
+	// ……
+	var needsDiagnosis bool
+	s.snapshotWG.Add(1)
+	v.snapshot, needsDiagnosis = prevSnapshot.clone(ctx, v.baseCtx, changed, s.snapshotWG.Done)
+
+	// Remove the initial reference created when prevSnapshot was created.
+	prevSnapshot.decref()
+```
+
+仍在旧快照上运行的请求先被取消，它们的结果已经过时。新快照是立即克隆出来的，克隆的代价却很低：
+快照中的映射是 `persistent.Map`，一种随机化的持久树堆（treap），可以在常数时间内克隆；
+修改只需复制少量节点，其余节点由新旧两个映射共享，并以引用计数管理
+[[Go Authors, 2026a](#ref-go-authors-2026a)]。克隆时只删去受这次修改影响的条目；包的解析、
+类型检查与分析结果则在有请求需要时才重新计算，并经 `memoize.Store` 记忆化，未受影响的包直接沿用旧结果。
+不可变保证了每个请求看到的都是某一时刻完整一致的状态，不会读到改了一半的中间结果；
+结构共享保证了每次按键只需付出与改动规模相称的代价。没有请求再持有的旧快照，在引用计数降为零时释放。
+一次编辑到诊断更新的过程如下：
 
 ```mermaid
 sequenceDiagram
     participant E as 编辑器（LSP 客户端）
-    participant G as gopls（语言服务器）
-    participant T as go/parser · go/types
-    E->>G: textDocument/didChange（你敲了一个键）
-    G->>G: DidModifyFiles：更新 overlay
-    G->>G: invalidateViewLocked：旧 Snapshot 失效
-    G->>G: 惰性建新 Snapshot（复用未受影响的包）
-    G->>T: 仅对「脏」的包重新 parse + typecheck
-    T-->>G: 新的 AST 与类型信息
-    G-->>E: textDocument/publishDiagnostics（推送错误/警告）
+    participant G as gopls
+    participant T as go/parser 与 go/types
+    E->>G: textDocument/didChange
+    G->>G: DidModifyFiles：更新覆盖层
+    G->>G: invalidateViewLocked：取消旧请求，克隆新快照
+    G->>T: 只对受影响的包重新解析与类型检查
+    T-->>G: 新的语法树与类型信息
+    G-->>E: textDocument/publishDiagnostics
 ```
 
-难处不止于此。模块边界与构建约束（`//go:build` 标签、[17](../ch17modules)）决定了「哪些文件属于
-当前这次编译、用哪套依赖」,gopls 必须像 `go list` 那样准确理解它，否则跳转与补全就会指向错误的
-包。低延迟、可控内存、随仓库规模平稳伸缩，这几条彼此拉扯的约束，构成了 gopls 工程上最硬的部分。
+## 16.7.5 分离编译：v0.12 的重新设计
 
-这里藏着一处典型的工程取舍。最朴素的做法是把整个工程的全部包都解析、类型检查并常驻内存，查询
-自然飞快,但内存随仓库规模线性膨胀，大单体仓库（monorepo）下很快撑不住。另一极是什么都不缓存、
-每次查询现算，内存极省但延迟难看。gopls 走的是中间路线：包的解析与类型检查结果**按需、记忆化**
-地算出来并缓存，由快照的引用计数决定何时回收;它还把部分中间产物（如导出信息）序列化到磁盘，
-跨进程、跨会话复用，用 I/O 换内存。延迟与内存这对矛盾从未被「彻底解决」，只是被安置在了一个对
-真实工程更划算的折中点上,这与分配器、调度器里反复出现的权衡，是同一种工程智慧。
+快照解决了一致性，内存却随工程规模增长。v0.12 之前，gopls 在内存中保存工作区全部包及其全部依赖的、
+带类型信息的语法树，如同一次编译整个程序；而带类型信息的语法树通常是源码文本的 30 倍大。2023 年
+5 月发布的 v0.12 重新设计了这一部分，Robert Findley 与 Alan Donovan 在当年的 Go 博客文章中介绍了它的思路
+[[Findley and Donovan, 2023](#ref-findley-and-donovan-2023)]：
 
-## 16.7.4 谱系与对照：为何「前端即库」是关键
+- **分离编译**。编译器编译包 P 时，并不需要 P 所依赖的包的语法树，只需要它们导出 API 的摘要，即导出数据。
+  v0.12 采用同样的做法，并复用编译器的摘要格式：类型检查一个包时，依赖包以摘要的形式读入。gopls
+  的内存占用因此只与打开的包及其直接依赖成正比，而与整个工程的规模无关。文章报告的测量中，内存平均减少约
+  75%，而且工程越大，减少的比例越高。
+- **剪枝**。一个包修改之后，若它的导出摘要没有变化，依赖它的包就不必重新检查，工作量与改动的范围成正比。
+  文章指出这并非新的想法，Vesta 系统与 `go build` 都采用过；v0.12 更进一步，以 `typerefs`
+  包实现了一种基于语法分析的启发式剪枝，速度更快。
+- **持久缓存**。摘要与交叉引用、方法集等索引被序列化到磁盘上的文件缓存中，gopls 重启之后可以迅速恢复，
+  同时运行的多个 gopls 进程也可以共享这些结果 [[Go Authors, 2024](#ref-go-authors-2024)]。
 
-把 gopls 放进语言服务器这个更大的谱系里看，它的设计抉择会更清楚。所有语言服务器面对的是同一道
-题：从哪里得到一份对源码的准确、增量、可查询的理解。不同语言给出的答案，恰好暴露了各自前端
-架构的差异。
+rust-analyzer 的作者之一 Alex Kladov 在 2020 年把响应迅速的 IDE 后端归纳为三种架构：以 map-reduce
+方式预先建立索引（IntelliJ、Sorbet）；利用头文件之类的接口摘要（Merlin、clangd）；以及基于查询、
+可以提前截断的增量计算（rust-analyzer）[[Kladov, 2020](#ref-kladov-2020)]。笔者认为，v0.12 之后的 gopls
+接近第二种：Go 的导出数据扮演了头文件的角色。这条路在 Go 中走得通，得益于语言本身的两项设计：
+包是编译的单位，语言规范又禁止包直接或间接地导入自身 [[Go Authors, 2026c](#ref-go-authors-2026c)]，
+导入关系因此不会成环。每个包都可以在其依赖之后独立检查，摘要也有明确的边界。
 
-- **走「前端即库」这条路的**,gopls 与 clangd 是一类。clangd「基于 clang 编译器，内核是把 clang
-  parser 跑在一个循环里」,它复用 Clang 的前端，正如 gopls 复用 `go/parser` 与 `go/types`。共同点是
-  语言服务器与编译器**共享同一套对源码的理解**，因而精确：编译器认的，语言服务器也认，不会出现
-  「编译过了但 IDE 报错」的撕裂。
-- **没走这条路的**则要付出额外代价。Rust 的 `rustc` 长期只暴露不稳定的内部 API、不以稳定库自居,
-  rust-analyzer 因此曾作为一套**与 `rustc` 不共享代码的独立前端实现**长期存在，相当于把同一门语言
-  的解析与名称解析、类型推导**写了第二遍**。这条路并非走不通，但它把「让前端可复用」的成本，从
-  语言设计期推迟到了工具开发期，由社区重复承担。
+## 16.7.6 与其他语言服务器的对照
 
-对照之下，Go 的选择是一个**在语言设计早期就付清的预付款**：`go/parser`、`go/types` 是带向后兼容
-承诺的标准库，任何工具都能稳定依赖。这笔预付，换来的是 `gopls`、`go vet`、`gofmt`、staticcheck
-等一整条工具链**站在同一套前端之上**,它们对「这段 Go 代码是什么意思」的理解天然一致。工具生态
-的繁荣，从来不是附赠的运气，而是「简单文法 + 前端库化」（[15.1](../ch15compile/parse.md)）这条
-设计主线，在开发体验这一端长出的果实。
+所有语言服务器都要回答同一个问题：从哪里得到一份准确、增量、可查询的源码理解。clangd 的设计文档写道，
+它基于 clang 编译器，核心是在一个循环中反复运行 clang 的解析器；为了回答跨文件的查询，
+它另外维护一份符号索引 [[Clang Team, n.d.](#ref-clang-team-nd)]。clangd 与编译器共用前端，
+编辑器中的诊断与编译结果一致，这一点与 gopls 相同。rust-analyzer 则拥有自己的「编译器部分」，以 salsa
+框架实现增量与按需的计算。它的架构文档解释了不沿用传统编译器结构的一个原因：在传统编译器中，
+把语法树当作语义信息的存储很方便，在 IDE 中却行不通
+[[rust-analyzer Authors, n.d.](#ref-rust-analyzer-authors-nd)]。
 
-## 16.7.5 工具生态的集大成
+Go 的情况介于二者之间。`go/parser` 与 `go/types` 是受兼容性承诺保护的标准库，
+任何工具都可以稳定地依赖它们；`go/types` 又与编译器的 types2 同源。gopls、`go vet`
+与各种静态分析工具因此站在同一套前端之上，对一段代码含义的理解天然一致。设计文档指出的不足，即不能容错、
+不能增量，则由 gopls 在库之上补足：快照与持久数据结构提供一致的增量状态，
+分离编译与剪枝控制了内存与重复计算。
 
-gopls 可以看作 Go 工具链思想的**集大成者**,它把原本分散在多个小工具里的能力（解析、类型、模块、
-格式化、诊断、重构）整合成一个统一的、编辑器无关的智能后端。这一步也有它的演进:在 gopls 之前，
-Go 的编辑器智能由一堆各自为政的命令行工具拼凑而成,补全靠 gocode、跳转靠 godef、重命名靠
-gorename、查询靠 guru，每个工具各自把工程**重新解析一遍**，彼此不共享状态，慢且不一致。gopls
-用一个常驻进程、一份共享的工程理解，取代了这一摊,这正是「集大成」的实指。整合带来的不只是省去
-重复解析的开销，更是语义的统一：补全看到的类型、跳转落到的定义、重构改动的范围，全部出自同一份
-快照，因而彼此自洽，不会出现 A 工具认为某符号在这里、B 工具却认为在那里的撕裂。
+本章讨论的工具覆盖了 Go 程序从正确性（[16.1](./deadlock.md)、[16.2](./race.md)、[16.4](./testing.md)）、
+性能（[16.3](./trace.md)、[16.5](./perf.md)）、运行状态（[16.6](./metric.md)）到开发体验（本节）
+的各个方面。它们多数随工具链一同发布，并建立在同一组标准库之上，这是 Go 工具生态的一个显著特点。
 
-它体现了贯穿本书的几条 Go 价值观：**简单文法**让解析快而可靠（[15.1](../ch15compile/parse.md)）;
-**前端库化**让 `go/parser`、`go/types` 的能力可被无数工具复用;**统一工具链**
-（[3.1](../../part1overview/ch03life/cmd.md)）让这一切开箱即用、风格一致。一个 Go 开发者，无论用
-VS Code、Vim、Emacs 还是别的编辑器，得到的都是由同一个 gopls 驱动的、一致的智能体验,这种一致性，
-正是 Go「工程友好」哲学在开发体验层面的延伸。
+## 延伸阅读
 
-至此，工具与可观测性这一章看遍了 Go 从**正确性**（死锁检测 [16.1](./deadlock.md)、竞态检测
-[16.2](./race.md)）、**性能**（追踪 [16.3](./trace.md)、基准与画像 [16.5](./perf.md)）、**质量**
-（测试 [16.4](./testing.md)）、**运维**（指标 [16.6](./metric.md)）到**开发体验**（本节）的整套
-工具。它们共同诠释了 Go 的一个核心承诺：**一门语言的价值，不只在于它本身，更在于它周围那套
-让人把软件写对、跑快、看清、维护好的工具。** Go 把这套工具当作语言的一部分来对待,这正是它
-在工业界立足的底气。
-
-## 延伸阅读的文献
-
-1. Microsoft. *Language Server Protocol Specification (3.18).*
-   https://microsoft.github.io/language-server-protocol/
-2. Microsoft, Red Hat, Codenvy. *Language Server Protocol 公布（2016-06-27）.*
-   https://en.wikipedia.org/wiki/Language_Server_Protocol
-3. The Go Authors. *gopls 文档与源码.* https://pkg.go.dev/golang.org/x/tools/gopls ；
-   https://github.com/golang/tools/tree/master/gopls （`internal/cache` 的 Session/View/Snapshot）
-4. The Go Authors. *go/types、go/parser、go/ast（可复用的前端库）.*
-   https://pkg.go.dev/go/types ；https://pkg.go.dev/go/parser
-5. The Clang Team. *clangd Design.* https://clangd.llvm.org/design/
-   （「基于 clang 编译器，内核是把 clang parser 跑在循环里」,同构的「前端即库」思路）
-6. 本书 [15.1 词法与文法](../ch15compile/parse.md)、
-   [8.3 类型检查技术](../../part2lang/ch08generics/checker.md)、
-   [17 模块](../ch17modules)、[3.1 命令源码分析](../../part1overview/ch03life/cmd.md).
+- <a id="ref-clang-team-nd"></a>[Clang Team, n.d.] The Clang Team. *clangd Design.*
+  https://clangd.llvm.org/design/
+  「基于 clang 编译器，核心是在循环中运行 clang 的解析器」，与 gopls 同样复用编译器前端。
+- <a id="ref-findley-2023"></a>[Findley, 2023] Robert Findley. go/types: add a test that generated files
+  match types2. Go commit 59964663e5, 2023. https://go.dev/cl/462758
+  随 Go 1.21 发布。
+- <a id="ref-findley-and-donovan-2023"></a>[Findley and Donovan, 2023] Robert Findley, Alan Donovan.
+  *Scaling gopls for the growing Go ecosystem.* The Go Blog, 2023. https://go.dev/blog/gopls-scalability
+  v0.12 的分离编译、剪枝与持久缓存。
+- <a id="ref-go-authors-2019"></a>[Go Authors, 2019] The Go Authors. *gopls design documentation.*
+  https://github.com/golang/tools/blob/master/gopls/doc/design/design.md
+  汇总自 2018 至 2019 年的设计资料：目标、延迟要求与基础库的不足。
+- <a id="ref-go-authors-2024"></a>[Go Authors, 2024] The Go Authors. *Gopls architecture.*
+  https://github.com/golang/tools/blob/master/gopls/doc/design/implementation.md
+  gopls 的分层结构与 cache 层中的 Session、View、Snapshot。
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *gopls 文档与源码.*
+  https://pkg.go.dev/golang.org/x/tools/gopls ；https://github.com/golang/tools/tree/master/gopls
+  `internal/cache` 的 Session、View、Snapshot，`internal/util/persistent` 与 `internal/protocol`；
+  本节依据 gopls/v0.24.0。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors.
+  *go/types、go/parser、 go/ast（可复用的前端库）.* https://pkg.go.dev/go/types
+  ；https://pkg.go.dev/go/parser
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *The Go Programming Language
+  Specification*（Import declarations）. https://go.dev/ref/spec#Import_declarations
+- <a id="ref-kladov-2020"></a>[Kladov, 2020] Alex Kladov. *Three Architectures for a Responsive IDE.*
+  rust-analyzer blog, 2020.
+  https://rust-analyzer.github.io/blog/2020/07/20/three-architectures-for-responsive-ide.html
+- <a id="ref-microsoft-nd"></a>[Microsoft, n.d.] Microsoft. *Language Server Protocol Specification
+  (3.18).* https://microsoft.github.io/language-server-protocol/
+- <a id="ref-rust-analyzer-authors-nd"></a>[rust-analyzer Authors, n.d.] *rust-analyzer Architecture.*
+  https://rust-analyzer.github.io/book/contributing/architecture.html
+- <a id="ref-stambler-2019"></a>[Stambler, 2019] Rebecca Stambler. *Go, please stop breaking my editor!*
+  GopherCon 2019 keynote. https://www.youtube.com/watch?v=EFJfdWzBHwE
+- <a id="ref-vs-code-team-2016"></a>[VS Code Team, 2016] VS Code Team. *A Common Protocol for Languages.*
+  Visual Studio Code blog, 2016. https://code.visualstudio.com/blogs/2016/06/27/common-language-protocol
+- <a id="ref-wikipedia-nd"></a>[Wikipedia, n.d.] Wikipedia. *Language Server Protocol*（Microsoft 与 Red
+  Hat、Codenvy 于 2016 年 6 月 27 日公布）. https://en.wikipedia.org/wiki/Language_Server_Protocol
+- 本书 [15.1 词法与文法](../ch15compile/parse.md)、
+  [8.3 类型检查技术](../../part2lang/ch08generics/checker.md)、
+  [17 模块](../ch17modules)、[3.1 命令源码分析](../../part1overview/ch03life/cmd.md).
