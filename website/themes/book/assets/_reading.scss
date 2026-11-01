@@ -31,6 +31,7 @@
 
   // Code
   --code-bg: #eae7df;
+  --code-inline-bg: rgba(35, 32, 25, 0.065);
   --kw: #9a4a2e;   // keywords
   --typ: #2f6f72;  // types
   --com: #9b9385;  // comments
@@ -79,6 +80,7 @@ html.dark {
 
   // Code
   --code-bg: #211e18;
+  --code-inline-bg: rgba(255, 255, 255, 0.075);
   --kw: #e0936b;
   --typ: #74b8b2;
   --com: #736d5e;
@@ -405,11 +407,13 @@ body { padding-top: $topbar-h; }
       background: var(--accent-soft);
     }
   }
-  a.active {
-    background: var(--accent);
-    color: #fff;
+  a.active,
+  a.active:hover {
+    background: var(--accent-soft);
+    color: var(--accent);
     font-weight: 600;
-    &:hover { background: var(--accent); color: #fff; }
+    border-radius: 0 6px 6px 0;
+    box-shadow: inset 2px 0 0 var(--accent);
   }
 
   // --- Nav hierarchy ------------------------------------------------------
@@ -701,6 +705,18 @@ html[data-toc="open"] .book-toc { display: block; }
     scroll-margin-top: 78px; // clear the fixed top header on anchor jumps
   }
   h3 { font-weight: 600; font-size: 1.22em; scroll-margin-top: 78px; }
+
+  // Section numbers ("11.2.1"), split out by reading.js, echo the H1 numeral.
+  h2 .h-num,
+  h3 .h-num {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-weight: 400;
+    font-size: 1.08em;
+    color: var(--accent);
+    margin-right: 0.45em;
+    letter-spacing: 0;
+  }
   h4 { font-weight: 600; font-size: 1.05em; scroll-margin-top: 78px; }
 
   strong, b { font-weight: 600; color: var(--fg); }
@@ -711,17 +727,19 @@ html[data-toc="open"] .book-toc { display: block; }
     &:hover { text-decoration: underline; }
   }
 
-  // Inline code as a soft accent chip. Block code (pre / chroma) keeps its own
-  // surface + syntax colors — neutralize the chip there.
+  // Inline code in the text ink on a faint tint, so identifiers read as part
+  // of the sentence rather than as links. Block code (pre / chroma) keeps its
+  // own surface + syntax colors; neutralize the chip there.
   code {
     font-family: var(--font-mono);
     font-size: 0.84em;
-    background: var(--accent-soft);
-    color: var(--accent);
-    padding: 1px 6px;
+    background: var(--code-inline-bg);
+    color: var(--fg);
+    padding: 0.12em 0.4em;
     border-radius: 4px;
     white-space: nowrap;
   }
+  a code { color: var(--accent); }
   pre code,
   .highlight code,
   .chroma code {
@@ -729,6 +747,8 @@ html[data-toc="open"] .book-toc { display: block; }
     color: inherit;
     padding: 0;
     border-radius: 0;
+    font-size: inherit;   // the chip's 0.84em would shrink code inside <pre>
+    line-height: inherit;
     // The inline-code chip above sets `white-space: nowrap`, which inherits
     // into block code and collapses every newline onto one line. Restore the
     // preformatted whitespace so multi-line code blocks lay out correctly.
@@ -768,7 +788,7 @@ html[data-toc="open"] .book-toc { display: block; }
   // Lead paragraph: the first <p> right after the injected meta row.
   .reading-meta + p {
     font-size: calc(var(--reading-size) * var(--reading-scale) + 2px);
-    color: var(--fg-muted);
+    color: var(--fg);
     line-height: 1.9;
     &:lang(en) { line-height: 1.65; }
   }
@@ -862,6 +882,8 @@ html[data-toc="open"] .book-toc { display: block; }
 
     // Hide the line-number gutter column (copy still works via reading.js).
     .lntable td.lntd:first-child { display: none; }
+    // The theme's table margin left an empty band above the first line.
+    table.lntable { margin: 0; }
   }
 
   .reading-codebar {
@@ -869,8 +891,8 @@ html[data-toc="open"] .book-toc { display: block; }
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 8px 14px;
-    background: var(--bg);
+    padding: 6px 10px 6px 18px;
+    background: transparent;
     border-bottom: 1px solid var(--border);
 
     .reading-codelang {
@@ -914,15 +936,17 @@ html[data-toc="open"] .book-toc { display: block; }
   // visually larger per em, so 0.9× keeps it balanced rather than oversized.
   pre {
     background: var(--code-bg);
-    font-size: calc(var(--reading-size) * var(--reading-scale) * 0.9);
-    line-height: 1.7;
+    font-size: calc(var(--reading-size) * var(--reading-scale) * 0.82);
+    line-height: 1.6;
     color: var(--fg);
+    tab-size: 4;
   }
   .chroma {
     background: transparent;
     color: var(--fg);
-    font-size: calc(var(--reading-size) * var(--reading-scale) * 0.9);
-    line-height: 1.7;
+    font-size: calc(var(--reading-size) * var(--reading-scale) * 0.82);
+    line-height: 1.6;
+    tab-size: 4;
 
     // line-number gutter (kept, restyled faint — config emits lineNos)
     .lnt, .ln { color: var(--fg-faint); }
@@ -970,4 +994,225 @@ html[data-toc="open"] .book-toc { display: block; }
   // of definition text). The rendered SVG sets its own colors, so this only
   // affects the pre-render text.
   &:not([data-processed]) { color: transparent; }
+}
+
+// --- Epigraphs -------------------------------------------------------------
+// Part and chapter openings carry a quotation in <div class="quote">. Set it
+// as an epigraph: a thin accent rule, no panel, the attribution in small sans.
+.markdown .quote {
+  position: relative;
+  margin: 36px 0 40px;
+  padding: 2px 0 2px 24px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0;
+  background: none;
+  color: var(--fg-muted);
+  line-height: 1.8;
+
+  .quote-mark { display: none; }
+  .quote-right {
+    margin-top: 12px;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    color: var(--fg-faint);
+    text-align: left;
+  }
+}
+// Synthetic italics deform CJK glyphs; keep the Chinese line upright.
+html[lang^="zh"] .markdown .quote .quote-mark + i { font-style: normal; }
+
+// --- Part and chapter index pages ----------------------------------------
+// The opening list of chapters (or sections) becomes a grid of cards.
+.markdown.reading-index > h1 + ul,
+.markdown.reading-index > .reading-meta + ul {
+  list-style: none;
+  padding: 0;
+  margin: 28px 0 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+
+  li { margin: 0; }
+  a {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    height: 100%;
+    box-sizing: border-box;
+    padding: 14px 18px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 0.95em;
+    line-height: 1.5;
+    text-decoration: none;
+    transition: border-color 0.15s, color 0.15s;
+
+    &::after { content: "→"; color: var(--fg-faint); font-family: var(--font-sans); }
+    &:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
+    &:hover::after { color: var(--accent); }
+  }
+}
+
+// --- Landing page ----------------------------------------------------------
+.markdown.reading-home {
+  padding-top: 72px;
+
+  .home-hero {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: clamp(32px, 6vw, 88px);
+    padding-bottom: 56px;
+    border-bottom: 1px solid var(--border);
+  }
+  .home-hero-text { flex: 1 1 auto; min-width: 0; max-width: 620px; }
+  .home-eyebrow {
+    font-family: var(--font-sans);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 18px;
+  }
+  .home-title {
+    display: block;
+    font-size: clamp(40px, 5.2vw, 64px);
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    margin: 0 0 22px;
+  }
+  .home-tagline {
+    font-size: 1.22em;
+    line-height: 1.7;
+    color: var(--fg-muted);
+    margin: 0 0 32px;
+  }
+  .home-cta { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 22px; }
+  .home-btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 10px 20px;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    font-family: var(--font-sans);
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--fg);
+    text-decoration: none;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+    &:visited { color: var(--fg); }
+    &:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
+  }
+  .home-btn-primary,
+  .home-btn-primary:visited {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    &:hover { color: #fff; filter: brightness(1.08); }
+  }
+  html.dark & .home-btn-primary,
+  html.dark & .home-btn-primary:visited,
+  html.dark & .home-btn-primary:hover { color: #0d0c09; }
+  .home-count { font-family: var(--font-sans); font-size: 13px; color: var(--fg-faint); }
+  .home-cover {
+    flex: 0 0 auto;
+    width: clamp(200px, 22vw, 300px);
+    height: auto;
+    border-radius: 6px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 18px 48px rgba(35, 32, 25, 0.22);
+  }
+
+  .home-parts { padding: 48px 0 16px; }
+  .home-parts-title {
+    font-family: var(--font-sans);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--fg-faint);
+    margin: 0 0 20px;
+  }
+  .home-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  .home-part {
+    padding: 22px 22px 16px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg);
+  }
+  .home-part-head {
+    display: block;
+    margin-bottom: 12px;
+    color: var(--fg);
+    text-decoration: none;
+    &:visited { color: var(--fg); }
+    &:hover .home-part-name { color: var(--accent); }
+  }
+  .home-part-label {
+    display: block;
+    font-family: var(--font-sans);
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+  .home-part-name { font-size: 1.12em; font-weight: 600; line-height: 1.4; }
+  .home-chapters {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    li { margin: 0; }
+    a {
+      display: flex;
+      gap: 12px;
+      padding: 5px 0;
+      font-size: 0.9em;
+      line-height: 1.5;
+      color: var(--fg-muted);
+      text-decoration: none;
+      &:visited { color: var(--fg-muted); }
+      &:hover { color: var(--accent); text-decoration: none; }
+    }
+  }
+  .home-ch-num {
+    flex: 0 0 1.6em;
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: 1.1em;
+    color: var(--accent);
+    text-align: right;
+  }
+
+  // The README below repeats what the hero shows: its title, version line,
+  // badges, floated cover and "start reading" list.
+  .home-readme {
+    padding-top: 32px;
+    border-top: 1px solid var(--border);
+    margin-top: 32px;
+
+    > h1,
+    > h1 + p,
+    p:has(> img[src*="shields.io"]),
+    p:has(> a > img[src*="shields.io"]),
+    img[src*="cover"],
+    #开始阅读, #开始阅读 + ul,
+    #start-reading, #start-reading + ul { display: none; }
+  }
+}
+
+@media screen and (max-width: 820px) {
+  .markdown.reading-home {
+    padding-top: 36px;
+    .home-hero { flex-direction: column-reverse; align-items: flex-start; gap: 28px; }
+    .home-cover { width: 160px; }
+  }
 }

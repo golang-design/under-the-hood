@@ -32,6 +32,16 @@
   translation: "Go: Under the Hood"
 - id: WordmarkShort
   translation: Go
+- id: HomeEyebrow
+  translation: Based on Go 1.26
+- id: HomeTagline
+  translation: A study of Go's design and implementation, and of how it evolved.
+- id: StartReading
+  translation: Start reading
+- id: HomeContents
+  translation: Contents
+- id: HomeCount
+  translation: "{{ .Parts }} parts · {{ .Chapters }} chapters"
 - id: PrevSection
   translation: Previous
 - id: NextSection

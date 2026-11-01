@@ -1,0 +1,53 @@
+{{- /* Landing page: a hero with the cover and a call to read, then the parts
+       and their chapters as a grid. The README follows below (see list.html);
+       its own title, badges, cover and "start reading" list are hidden in
+       _reading.scss because the hero carries them. The parts come from the
+       same root the sidebar uses (menu-filetree.html). */ -}}
+{{- $bookSection := default "zh-cn" .Site.Params.BookSection -}}
+{{- $root := .Site.Home -}}
+{{- if ne $bookSection "*" -}}
+  {{- with where .Site.Sections "Section" $bookSection -}}{{- $root = index . 0 -}}{{- end -}}
+{{- end -}}
+{{- $parts := $root.Sections.ByWeight -}}
+{{- $chapters := 0 -}}
+{{- range $parts }}{{ $chapters = add $chapters (len .Sections) }}{{ end -}}
+{{- $cover := cond (eq .Site.Language.Lang "en") "assets/cover-en-v3.png" "assets/cover-cn-v3.png" -}}
+<section class="home-hero">
+  <div class="home-hero-text">
+    <div class="home-eyebrow">{{ i18n "HomeEyebrow" }}</div>
+    <h1 class="home-title">{{ .Site.Title }}</h1>
+    <p class="home-tagline">{{ i18n "HomeTagline" }}</p>
+    <div class="home-cta">
+      {{- with $root.GetPage "preface" }}
+      <a class="home-btn home-btn-primary" href="{{ .RelPermalink }}">{{ i18n "StartReading" }} →</a>
+      {{- end }}
+      <a class="home-btn" href="https://github.com/golang-design/under-the-hood">GitHub</a>
+    </div>
+    <div class="home-count">{{ i18n "HomeCount" (dict "Parts" (len $parts) "Chapters" $chapters) }}</div>
+  </div>
+  <img class="home-cover" src="{{ $cover | relURL }}" alt="{{ .Site.Title }}" width="300" height="420">
+</section>
+<section class="home-parts">
+  <h2 class="home-parts-title">{{ i18n "HomeContents" }}</h2>
+  <div class="home-grid">
+    {{- range $parts }}
+    {{- $label := replaceRE `^(第\S*部分|Part\s+[IVXLC]+)\s+.*$` "$1" .Title -}}
+    {{- $name := replaceRE `^(第\S*部分|Part\s+[IVXLC]+)\s+` "" .Title -}}
+    {{- if eq $label .Title }}{{ $label = "" }}{{ end }}
+    <div class="home-part">
+      <a class="home-part-head" href="{{ .RelPermalink }}">
+        {{- with $label }}<span class="home-part-label">{{ . }}</span>{{ end -}}
+        <span class="home-part-name">{{ $name }}</span>
+      </a>
+      <ol class="home-chapters">
+        {{- range .Sections.ByWeight }}
+        {{- $num := replaceRE `^(?:第\s*(\d+)\s*章|Chapter\s+(\d+))\s+.*$` "$1$2" .Title -}}
+        {{- $chName := replaceRE `^(?:第\s*\d+\s*章|Chapter\s+\d+)\s+` "" .Title -}}
+        {{- if eq $num .Title }}{{ $num = "" }}{{ end }}
+        <li><a href="{{ .RelPermalink }}"><span class="home-ch-num">{{ $num }}</span><span class="home-ch-name">{{ $chName }}</span></a></li>
+        {{- end }}
+      </ol>
+    </div>
+    {{- end }}
+  </div>
+</section>

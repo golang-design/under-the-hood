@@ -211,7 +211,7 @@
 
   // --- Chapter meta: reading time + 字数 --------------------------------
   function setupMeta() {
-    if (!article) return;
+    if (!article || article.classList.contains("reading-home")) return;
     var h1 = article.querySelector("h1");
     if (!h1 || article.querySelector(".reading-meta")) return;
     var m = h1.textContent.match(/^(\d+(?:\.\d+)*)\s+([\s\S]+)$/);
@@ -259,6 +259,24 @@
   }
 
   // --- Back-to-top FAB --------------------------------------------------
+  // --- Section numbers: "11.2.1 Title" -> accent numeral + title --------
+  // Only the heading's leading text node is touched, so links and code inside
+  // the heading survive.
+  function setupHeadingNums() {
+    if (!article) return;
+    article.querySelectorAll("h2, h3").forEach(function (h) {
+      var t = h.firstChild;
+      if (!t || t.nodeType !== 3) return;
+      var m = t.nodeValue.match(/^(\d+(?:\.\d+)+)\s+/);
+      if (!m) return;
+      var num = document.createElement("span");
+      num.className = "h-num";
+      num.textContent = m[1];
+      t.nodeValue = t.nodeValue.slice(m[0].length);
+      h.insertBefore(num, t);
+    });
+  }
+
   function setupFab() {
     var fab = document.createElement("button");
     fab.type = "button";
@@ -278,6 +296,7 @@
 
   function init() {
     setupMeta(); // before code enhancement so copy labels aren't counted
+    setupHeadingNums();
     enhanceCodeBlocks();
     setupFolds();
     setupScrollSpy();

@@ -1,5 +1,11 @@
 {{ define "main" }}
-<article class="markdown">
+{{- if .IsHome -}}
+<article class="markdown reading-home">
+  {{- partial "zh-cn/home" . -}}
+  <div class="home-readme">{{ .Content }}</div>
+</article>
+{{- else -}}
+<article class="markdown reading-index">
   {{- .Content -}}
   {{- if or .Params.prevSec .Params.nextSec -}}
   <nav class="reading-pagenav">
@@ -8,6 +14,7 @@
   </nav>
   {{- end -}}
 </article>
+{{- end -}}
 {{ end }}
 
 {{ define "toc" }}
