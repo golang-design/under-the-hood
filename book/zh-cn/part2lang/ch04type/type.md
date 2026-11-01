@@ -5,227 +5,307 @@ title: "4.1 运行时类型系统"
 
 # 4.1 运行时类型系统
 
-Go 是静态类型语言，类型检查发生在编译期。但 Go 又保留了相当一部分**运行时类型信息**（runtime
-type information, RTTI），正是它支撑起了接口（[4.2](./interface.md)）、类型断言、类型 switch、
-反射，以及垃圾回收对指针的精确识别。这一节回答一个看似简单的问题：编译期那套类型，到了运行时
-还剩下什么、以什么形式留存、又撑起了哪些能力。读懂这一节里那个叫**类型描述符**的小结构，
-后面的接口（[4.2](./interface.md)）、反射与精确 GC（[13](../../part4memory/ch13gc)）就都有了共同的
-落脚点。
+Go 是静态类型语言，类型检查在编译期完成 [[Cardelli and Wegner, 1985](#ref-cardelli-wegner-1985)]。但 Go
+程序在运行时仍保留了一部分类型信息，称为**运行时类型信息**（runtime type information，RTTI）：
+接口（[4.2](./interface.md)）、类型断言、类型 switch、反射，以及垃圾回收器对指针的精确识别，都依赖于它。
+本节讨论编译期的类型在运行时还保留了哪些内容、以何种形式存在，以及这些信息支撑了哪些功能。
+其核心是一个称为**类型描述符**（type descriptor）的结构。
 
-下文给出的结构体都是**裁剪后的速写**：只保留与设计相关的字段，并在注释里说明它为何存在。
-完整定义可对照 go1.26 的 `internal/abi/type.go` 与 `reflect` 包。
+下文列出的结构体只保留了与讨论相关的字段，完整定义见 Go 1.26 的 `internal/abi/type.go` 与 `reflect` 包
+[[Go Authors, 2026a](#ref-go-authors-2026a)]。
 
-## 4.1.1 每个类型都有一个描述符
+## 4.1.1 类型描述符
 
-编译器为程序里用到的**每一个类型**生成一份**类型描述符**，在 go1.26 的源码里它叫 `abi.Type`，
-运行时内部沿用旧名 `_type`。描述符被编进只读数据段，整个程序运行期间常驻不变。同一个类型
-在一个程序里通常只有一份描述符，这一点后面判断「类型是否相同」时会用到。
+编译器为程序中用到的每一个类型生成一份类型描述符。它在 Go 1.26 的源码中名为 `abi.Type`，运行时内部
+沿用旧名 `_type`。描述符位于只读数据段中，在程序运行期间保持不变。同一类型在一个程序中通常只有一份
+描述符，这一性质在判断两个值的类型是否相同时会用到。
 
 ```go
-// abi.Type：一个类型在运行时的表示（裁剪后的速写）
+// internal/abi/type.go（字段与 Go 1.26 一致，注释为说明）
 type Type struct {
-    Size_       uintptr // 该类型一个值占多少字节，分配与拷贝都要它
-    PtrBytes    uintptr // 值的前若干字节里可能含指针，GC 只需扫到这里
-    Hash        uint32  // 类型的哈希，类型 switch、接口表查找时避免重算
-    TFlag       TFlag   // 标志位：是否具名、是否带 UncommonType、GC 位图是否按需生成
-    Align_      uint8   // 该类型变量的对齐
-    FieldAlign_ uint8   // 作为结构体字段时的对齐
-    Kind_       Kind    // 种类：int、struct、slice、chan… 决定如何解释这块内存
-    // 比较该类型两个值是否相等：(指向 A, 指向 B) -> ==?
-    // 编译器按类型结构合成，map、接口比较、== 运算都落到它身上
-    Equal func(unsafe.Pointer, unsafe.Pointer) bool
-    // GC 指针位图：标出该类型哪些字（word）是指针，精确 GC 据此扫描
-    GCData    *byte
-    Str       NameOff // 类型名在名字表里的偏移（按需解出可读名字）
-    PtrToThis TypeOff // 指向「*T」描述符的偏移，构造指针类型时复用
+	Size_       uintptr // 该类型的值占用的字节数，分配与复制时使用
+	PtrBytes    uintptr // 值中可能含有指针的前缀字节数，垃圾回收器扫描到此为止
+	Hash        uint32  // 类型的哈希值，供类型 switch 与哈希表查找使用
+	TFlag       TFlag   // 标志位：是否具名、是否带有 UncommonType 等
+	Align_      uint8   // 该类型变量的对齐要求
+	FieldAlign_ uint8   // 该类型作为结构体字段时的对齐要求
+	Kind_       Kind    // 种类：int、struct、slice、chan 等
+	// 比较该类型的两个值是否相等；不可比较的类型为 nil
+	Equal func(unsafe.Pointer, unsafe.Pointer) bool
+	// 指针位图：标出该类型的哪些字（word）是指针，供垃圾回收器使用
+	GCData    *byte
+	Str       NameOff // 类型名称在名称表中的偏移
+	PtrToThis TypeOff // 类型 *T 的描述符的偏移，可能为零
 }
 ```
 
-每个字段都为某种运行时能力而存在，挑几样要紧的说。`Size_` 是分配器（[12](../../part4memory/ch12alloc)）
-和值拷贝的依据。`Kind_` 是一个枚举，告诉运行时「这块内存按哪种类型解释」，它的取值是有限的
-二十余种基础种类：
+每个字段都服务于某项运行时功能。`Size_` 是内存分配器（[第 12 章](../../part4memory/ch12alloc/readme.md)）
+与值复制的依据。`Kind_` 是一个枚举，指明这块内存应按哪一类类型解释，除 `Invalid` 外共有 26 种取值：
 
 ```go
 type Kind uint8
 
 const (
-    Invalid Kind = iota
-    Bool
-    Int
-    Int8
-    // … 省略其余整型、浮点、复数 …
-    Array
-    Chan
-    Func
-    Interface
-    Map
-    Pointer
-    Slice
-    String
-    Struct
-    UnsafePointer
+	Invalid Kind = iota
+	Bool
+	Int
+	// … 省略其余整数、浮点数与复数类型 …
+	Array
+	Chan
+	Func
+	Interface
+	Map
+	Pointer
+	Slice
+	String
+	Struct
+	UnsafePointer
 )
 ```
 
-`Kind` 只区分到「种类」，并不区分具体类型：`type Celsius float64` 与 `float64` 的 `Kind` 都是
-`Float64`，但它们是两份不同的描述符（[4.1.3](#413-名义类型与类型标识)）。`Equal` 是编译器为该类型
-合成的相等函数，map 的键比较、接口值比较、`==` 运算都最终落到它身上；当 `TFlagRegularMemory`
-置位时，整个值是一段无内部填充的连续内存，比较退化成一次 `memequal`，无需逐字段递归。
+`Kind` 只区分种类，不区分具体类型：`type Celsius float64` 与 `float64` 的 `Kind` 都是 `Float64`，但它们
+拥有两份不同的描述符（4.1.3）。
 
-带方法的具名类型还在描述符之后紧跟一段 `UncommonType`（由 `TFlagUncommon` 标记），记录方法表；
-而 struct、slice、map、func 等各自还有把 `Type` 内嵌在首部的「扩展描述符」（如 `StructType`、
-`SliceType`），多出元素类型、字段列表等信息。换言之，`abi.Type` 是所有类型描述符共享的**公共
-前缀**，运行时先读 `Kind_` 判明种类，再把指针强转成对应的扩展类型去读更多字段。
+`Equal` 是编译器为该类型生成的相等比较函数，map 的键比较、接口值的比较最终都调用它。若标志位
+`TFlagRegularMemory` 被置位，说明该类型的值是一段不含填充的连续内存，比较可以退化为一次按字节的内存比较
+（`memequal`），无须逐字段进行。切片、map、函数等不可比较的类型，`Equal` 为 `nil`。两个接口值相比较时，
+运行时若发现其动态类型的 `Equal` 为 `nil`，便会触发 panic：
 
-## 4.1.2 从编译期到运行时的桥
+```go {run=true}
+package main
 
-类型描述符的意义，在于它是把「编译期的类型」搬到运行时的唯一载体。最直接的用处是空接口。
-`any`（即 `interface{}`）在运行时就是一对指针：
+import "fmt"
 
-```go
-// 空接口的运行时布局（abi.EmptyInterface 速写）
-type EmptyInterface struct {
-    Type *Type          // 指向动态类型的描述符
-    Data unsafe.Pointer // 指向实际数据（指针型类型则其值即存于此字，详见 4.2）
+func main() {
+	var a, b any = 1, 1
+	fmt.Println(a == b)
+
+	a, b = []int{1}, []int{1}
+	fmt.Println(a == b)
 }
 ```
 
-把一个具体值装进 `any`，编译器做的事就是：把该类型的描述符地址填进 `Type`，把数据地址填进
-`Data`。于是「这个接口里装的到底是什么类型」这个运行时问题，化简为「读出 `Type` 指针、看它指向
-哪份描述符」。类型断言 `x.(T)`、类型 switch 都建立在这次读取之上：拿 `Type` 指针（或它的 `Hash`）
-去与目标类型比对。带方法的非空接口多一层 `ITab`（接口方法表），其分发机制留到
-[4.2](./interface.md) 详谈，这里只需记住：无论空接口还是非空接口，第一个字最终都通向一份
-`abi.Type`。
+```
+true
+panic: runtime error: comparing uncomparable type []int
+```
 
-这条桥是单向收窄的。编译期，类型是一套丰富的、可推导可检查的静态信息；过桥之后，运行时手里只
-剩这份描述符，外加接口值里的一个数据指针。Go 能在运行时做的一切类型相关的动作，类型断言、
-反射、GC 扫描，本质上都是在这有限的两样东西上做文章。
+这一错误只能在运行时发现：编译器知道 `a` 与 `b` 的静态类型是可比较的 `any`，却无法预知其中存放的动态
+类型。
 
-## 4.1.3 名义类型与类型标识
+带有方法的具名类型，其描述符之后还紧跟一个 `UncommonType`（由标志位 `TFlagUncommon` 标明），记录方法表。
+结构体、切片、map、函数等类型另有各自的扩展描述符（如 `StructType`、`SliceType`），它们把 `Type` 嵌入在
+首部，再追加元素类型、字段列表等信息。换言之，`abi.Type` 是所有类型描述符共有的前缀：运行时先读取
+`Kind_` 判明种类，再把指针转换为相应的扩展描述符，读取其余字段。
 
-Go 的具体类型是**名义的**（nominal）：类型的身份由它的声明决定，而非由它的结构决定。
+## 4.1.2 从编译期到运行时
+
+类型描述符是编译期的类型在运行时的唯一表示，其最直接的用途体现在空接口上。`any`（即 `interface{}`）在
+运行时由两个字组成：
 
 ```go
+// internal/abi/iface.go
+type EmptyInterface struct {
+	Type *Type          // 动态类型的描述符
+	Data unsafe.Pointer // 指向实际数据；指针形状的值直接存放于此（4.2）
+}
+```
+
+把一个具体值赋给 `any` 时，编译器把该类型描述符的地址写入 `Type`，把数据的地址写入 `Data`。于是，「接口
+中存放的是什么类型」这一运行时问题，便归结为读取 `Type` 指针、确定它指向哪一份描述符。下面的程序用
+`unsafe` 读出接口值的第一个字，验证同一类型的值共用同一份描述符：
+
+```go {run=true}
+package main
+
+import (
+	"fmt"
+	"reflect"
+	"unsafe"
+)
+
 type Celsius float64
 type Fahrenheit float64
 
-var c Celsius = 100
-var f Fahrenheit = c // 编译错误：不能把 Celsius 赋给 Fahrenheit
-var x float64 = c    // 同样错误：Celsius 不是 float64
+// eface 与 abi.EmptyInterface 的布局相同：类型描述符指针与数据指针。
+type eface struct {
+	typ, data unsafe.Pointer
+}
+
+// typeWord 返回接口值的第一个字，即动态类型的描述符地址。
+func typeWord(v any) unsafe.Pointer { return (*eface)(unsafe.Pointer(&v)).typ }
+
+func main() {
+	var a, b Celsius = 1, 2
+	var f Fahrenheit = 3
+	fmt.Println(typeWord(a) == typeWord(b)) // 同一类型
+	fmt.Println(typeWord(a) == typeWord(f)) // 底层类型相同的两个具名类型
+	fmt.Println(reflect.TypeOf(a).Kind(), reflect.TypeOf(f).Kind())
+}
 ```
 
-`Celsius` 与 `Fahrenheit` 底层都是 `float64`，三者的 `Kind` 也都是 `Float64`，却是**三份不同的
-描述符**，互相不能直接赋值。这道屏障不是运行时检查出来的，而是编译期就拒绝的；它的价值在于让
-「温度」这个语义无法被悄悄当成「另一种温度」或「裸浮点」误用。类型标识的精确规则，何时两个类型
-相同、可赋值、可转换，由语言规范的 Types 与 Type identity 两节定义。
+```
+true
+false
+float64 float64
+```
 
-名义身份在运行时的兑现方式格外简洁：因为同一类型在程序里通常只有一份描述符，判断两个值是否
-同一类型，只需比较它们描述符指针是否相等，一次指针比较即可，无需逐字段比对结构。类型 switch
-为加速还先比 `Hash`（`uint32`），哈希不等则类型必不同，省去指针解引用。
+`Celsius` 与 `Fahrenheit` 的种类相同，描述符却不同。带有方法的非空接口在类型描述符之外还多一层接口表
+（`ITab`），其方法分派机制见 [4.2](./interface.md)；这里只需注意，无论空接口还是非空接口，第一个字最终都
+指向一份 `abi.Type` [[Cox, 2009](#ref-cox-2009)]。
 
-把这一点和接口对照，能看出 Go 在类型系统上的一处刻意分工。具体类型用**名义**身份，`Celsius`
-不会被误当 `float64`；而接口的满足是**结构化**的（[4.2](./interface.md)），一个类型只要具备接口要求
-的方法集，就自动满足该接口，无需显式声明「我实现了它」。名义保证了具体类型的边界清晰，结构化
-保证了接口的解耦与可组合。两种身份规则各管一段，是 Go 类型系统简单而够用的来由之一。
+从编译期到运行时，类型信息大为收窄。编译期的类型是一套可推导、可检查的完整静态信息；到了运行时，程序
+手中只有这份描述符，加上接口值中的一个数据指针。类型断言、反射、垃圾回收器的扫描，都建立在这两者之上。
 
-## 4.1.4 反射：建立在描述符之上的自省
+## 4.1.3 名义类型与类型标识
 
-`reflect` 包让程序在运行时检视、操作任意类型的值。它不是魔法，而是对 [4.1.2](#412-从编译期到运行时的桥)
-那两个字的一层包装：`reflect.Type` 封装了 `*abi.Type`，`reflect.Value` 同时握住类型描述符与数据
-指针。Russ Cox 在《The Laws of Reflection》中把这层关系提炼为三条定律，对照接口的布局，每条都
-能落到具体的字上。
+Go 的具名类型是**名义类型**（nominal type）：类型的身份由其声明决定，而不由其结构决定。
+
+```go
+package main
+
+type Celsius float64
+type Fahrenheit float64
+
+func main() {
+	var c Celsius = 100
+	var f Fahrenheit = c
+	var x float64 = c
+	_, _ = f, x
+}
+```
+
+```
+./main.go:8:21: cannot use c (variable of float64 type Celsius) as Fahrenheit value in variable declaration
+./main.go:9:18: cannot use c (variable of float64 type Celsius) as float64 value in variable declaration
+```
+
+`Celsius` 与 `Fahrenheit` 的底层类型都是 `float64`，三者的 `Kind` 也相同，但它们是三个不同的类型，
+彼此不能直接赋值。这一限制在编译期施加，其意义在于防止「摄氏温度」被误当作「华氏温度」或普通浮点数使用。
+两个类型何时相同、何时可以赋值或转换，由语言规范中「Type identity」「Assignability」等小节精确规定
+[[Go Authors, 2026e](#ref-go-authors-2026e)]。
+
+名义类型的身份在运行时的体现十分简单：由于同一类型通常只有一份描述符，判断两个值的类型是否相同，只需比较
+两者的描述符指针。断言到具体类型的 `x.(T)` 因此只需一次指针比较。类型 switch 的分支较多时，编译器还会
+利用描述符中的 `Hash`：它把各个具体类型的分支按哈希值排序，生成运行时的二分查找（分支数不少于 5 个时
+可能改用跳转表），先按哈希值找到候选分支，再比较描述符指针加以确认。分支是接口类型时，一个具体类型是否
+满足该接口无法在编译期确定；自 Go 1.22 起，这类判断交由运行时的 `interfaceSwitch` 完成，其结果按动态
+类型缓存，后续的同类判断可以直接命中缓存 [[Go Authors, 2026c](#ref-go-authors-2026c)]。
+
+把具名类型与接口对照，可以看出 Go 类型系统中的一项分工。具名类型采用名义的身份，`Celsius` 不会被误当作
+`float64`；接口的满足关系则是**结构化**的（[4.2](./interface.md)）：一个类型只要具有接口所要求的方法集，
+就自动满足该接口，无须显式声明。前者使具体类型的边界清晰，后者使接口易于解耦与组合。
+
+## 4.1.4 反射：基于描述符的自省
+
+`reflect` 包允许程序在运行时检视和操作任意类型的值 [[Go Authors, 2026d](#ref-go-authors-2026d)]。它建立在
+4.1.2 所述的两个字之上：`reflect.Type` 封装了 `*abi.Type`，`reflect.Value` 则同时持有类型描述符与数据指
+针。Rob Pike 在 2011 年的文章《The Laws of Reflection》中把这一关系概括为三条定律
+[[Pike, 2011](#ref-pike-2011)]，每一条都可以对应到接口的布局上：
 
 ```go
 var x float64 = 3.4
 
-// 定律一：反射对象由接口值得来。
-// TypeOf/ValueOf 的入参是 any，本质是读出 EmptyInterface 的 Type 与 Data。
-t := reflect.TypeOf(x)  // t.Kind() == reflect.Float64，读的是描述符的 Kind_
-v := reflect.ValueOf(x) // v 同时握有 *abi.Type 与指向数据的指针
+// 定律一：反射对象由接口值得到。
+// TypeOf 与 ValueOf 的参数类型是 any，二者读取的正是接口值的 Type 与 Data。
+t := reflect.TypeOf(x)  // t.Kind() == reflect.Float64，读取的是描述符的 Kind_
+v := reflect.ValueOf(x) // v 同时持有 *abi.Type 与指向数据的指针
 
-// 定律二：反射对象可还原回接口值。
-var i any = v.Interface() // 把 Type 与 Data 重新拼回一个接口
+// 定律二：反射对象可以还原为接口值。
+var i any = v.Interface() // 把类型与数据重新组合为一个接口值
 
-// 定律三：要修改反射对象，它必须可设置（settable）。
-p := reflect.ValueOf(&x).Elem() // 经由指针拿到可寻址的 Value
-p.SetFloat(7.1)                 // x 变为 7.1；若对不可寻址的 v 调用则 panic
+// 定律三：要修改反射对象，其值必须可设置（settable）。
+p := reflect.ValueOf(&x).Elem() // 经由指针得到可寻址的 Value
+p.SetFloat(7.1)                 // x 变为 7.1；对不可寻址的 v 调用则会 panic
 ```
 
-第三条定律的「可设置」并非额外规则，而是接口布局的必然：`reflect.ValueOf(x)` 装进接口的是 `x`
-的**副本**，改它不会动到原变量，于是反射拒绝设置；只有先取 `&x`、再 `Elem()` 解引用，`Value` 里
-握住的才是原变量的地址，设置才有意义。理解了接口那两个字，三定律便从「需要记忆的规则」变回
-「布局的推论」。
+第三条定律中的「可设置」并非额外的规则，而是接口布局的必然结果：`reflect.ValueOf(x)` 装入接口的是 `x`
+的副本，修改它不会影响原变量，因此反射拒绝设置；只有先取 `&x`、再用 `Elem()` 解引用，`Value` 中持有的
+才是原变量的地址，设置才有意义。
 
-反射强大，代价也实在：它绕过编译期类型检查、慢于直接代码、写错只在运行时才暴露。Go 的态度是
-能不用就不用，把它留给序列化（`encoding/json`）、ORM 等确需泛化处理任意类型的库。Go 1.18 引入
-的泛型（[8](../ch08generics)）正是要让一大类「过去只能靠反射」的泛化代码，重新获得编译期类型
-安全与零反射开销。
+反射的能力很强，代价也很明显：它绕过了编译期的类型检查，执行速度慢于直接的代码，错误也只能在运行时
+暴露。因此，反射主要用于序列化（`encoding/json`）、ORM 等确实需要统一处理任意类型的库。Go 1.18 引入的
+泛型（[第 8 章](../ch08generics/readme.md)）使一大类过去只能依靠反射实现的通用代码，重新获得了编译期的
+类型安全，也不再有反射的运行时开销。
 
-## 4.1.5 GC 指针位图：描述符如何驱动精确扫描
+## 4.1.5 指针位图：描述符如何支持精确扫描
 
-描述符里的 `GCData` 与 `PtrBytes` 是垃圾回收（[13](../../part4memory/ch13gc)）的命脉。Go 用的是**精确**
-（precise）GC：扫描一块对象时，回收器必须确切知道哪些字是指针、哪些是普通数据，绝不能把一个
-碰巧像地址的整数误当指针去追。这份「哪些字是指针」的信息，正由类型描述符提供。
+描述符中的 `GCData` 与 `PtrBytes` 供垃圾回收器（[第 13 章](../../part4memory/ch13gc/readme.md)）使用。
+Go 的垃圾回收器是**精确的**（precise）：扫描一个对象时，它必须确切知道哪些字是指针、哪些是普通数据，
+不能把一个恰好形似地址的整数当作指针追踪。这一信息正由类型描述符提供。
 
-`GCData` 通常指向一张**指针位图**（ptrmask）：每一位对应该类型的一个字，1 表示指针、0 表示非指针，
-位图长度至少覆盖到 `PtrBytes`。回收器扫描某个对象，就是按它的描述符取出这张位图，逐位决定要不要
-跟进。`PtrBytes` 给出一个上界：该类型的指针只可能出现在前 `PtrBytes` 个字节内，其后纯是数据，
-扫描到此即可收手，无需走完整个值。一个尾部全是大数组的结构体因此能省下可观的扫描。
+`GCData` 通常指向一张**指针位图**（pointer mask）：每一位对应该类型的一个字，1 表示指针，0 表示非指针，
+位图的长度至少覆盖 `PtrBytes`。回收器扫描一个对象时，按其描述符取出这张位图，逐位决定是否追踪。
+`PtrBytes` 给出了一个上界：该类型的指针只可能出现在前 `PtrBytes` 个字节之内，其后都是普通数据，扫描到此
+即可结束。一个末尾是大数组的结构体，因此可以省去相当一部分扫描。
 
 ```mermaid
 flowchart TD
     SRC["编译期类型 T"] -->|编译器生成| DESC["abi.Type 描述符<br/>Kind_ / Equal / GCData / PtrBytes …"]
-    DESC -->|首字指针| EFACE["eface / iface<br/>接口值（4.2）"]
+    DESC -->|第一个字| EFACE["接口值（4.2）"]
     DESC -->|reflect 封装| REFLECT["reflect.Type / Value<br/>反射三定律"]
-    DESC -->|GCData 位图 + PtrBytes| GC["精确 GC<br/>逐字判定指针（13）"]
-    DESC -->|指针相等 / Hash| SW["类型断言 / 类型 switch"]
+    DESC -->|GCData 位图 + PtrBytes| GC["精确垃圾回收<br/>逐字判定指针（第 13 章）"]
+    DESC -->|指针比较 / Hash| SW["类型断言 / 类型 switch"]
 ```
 
-go1.26 在这里有一处值得记下的演进：`TFlagGCMaskOnDemand` 标志。早先每个类型的指针位图都在编译期
-预先算好、编进二进制，对含大量类型的程序会让只读段膨胀。设置该标志后，`GCData` 不再直接指向
-位图，而是一个 `**byte`，真正的位图由运行时在首次需要时**按需生成**并缓存（见 `runtime/type.go`
-的 `getGCMask`），以一点运行时计算换取更小的二进制。这是「描述符」这一设计仍在被持续打磨的一个
-缩影：接口稳定，背后的存储策略却随版本演化。
+描述符的存储方式仍在演进。早期每个类型的指针位图都在编译期算好并写入可执行文件，含有大型类型的程序会因此增
+大只读数据段。自 Go 1.24 起，若一个类型可能含有指针的前缀超过 16384 个字（64 位平台上为 128 KB），
+编译器便设置标志位 `TFlagGCMaskOnDemand`：此时 `GCData` 实际上是一个 `**byte`，真正的位图由运行时在首次需
+要时生成并缓存（`runtime/type.go` 中的 `getGCMask`）[[Go Authors, 2026b](#ref-go-authors-2026b)]，
+以少量运行时计算换取更小的可执行文件。Go 1.26 又把「值是否直接存放在接口的数据字中」这一信息从 `Kind_`
+的一个位移到了 `TFlag` 中的 `TFlagDirectIface`；按其注释，它只是对条件「`Size_` 与 `PtrBytes`
+都等于一个指针的大小」的缓存 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
 
-这张图把前面几节收束到一处：编译期的类型 `T` 收窄成一份 `abi.Type`，而这份描述符同时是接口、
-反射、GC、类型断言四条线路的共同源头。一个小小的只读结构，撑起了 Go 全部的运行时类型能力。
+上图把前面几小节归纳到一处：编译期的类型 `T` 收窄为一份 `abi.Type`，而这份描述符同时是接口、反射、垃圾
+回收与类型断言的共同基础。
 
-## 4.1.6 跨语言对照：RTTI 的浓淡
+## 4.1.6 与其他语言的比较
 
-「运行时还保留多少类型信息」，各语言的取舍差异很大，沿着这条轴排开，能看清 Go 站在何处。
+运行时保留多少类型信息，各种语言的取舍差异很大。
 
-**Java 与 C#** 在浓的一端。每个对象在堆上都带一个指向类元数据的头，运行时可经 `Class` / `Type`
-取得字段、方法、注解乃至泛型签名，反射几乎无所不能，这是其框架生态（依赖注入、序列化、ORM、
-动态代理）的根基。代价是每个对象的元数据指针开销、以及反射调用的运行时成本。
+**Java 与 C#** 保留得最多。堆上的每个对象都带有一个对象头，其中有指向类元数据的指针；运行时可以经由
+`Class` 或 `Type` 取得字段、方法、注解乃至泛型签名，反射的能力几乎不受限制，依赖注入、序列化、ORM、
+动态代理等框架都建立在这之上。其代价是每个对象都要负担元数据指针，反射调用也有运行时开销。
 
-**C++** 在淡的一端，恪守「不为不用的东西付费」。默认几乎不带运行时类型信息，唯有开启 RTTI 后，
-`typeid` 与 `dynamic_cast` 才有限地可用，且仅对带虚函数的多态类型有效；非多态类型在运行时根本
-无从查询其真实类型。
+**C++** 保留得最少，遵循「不为未使用的功能付出代价」的原则。启用 RTTI 时，`typeid` 与 `dynamic_cast`
+可以查询对象的动态类型，但仅限于含有虚函数的多态类型；非多态类型在运行时无法查询其真实类型。
 
-**Rust** 走得更远，**没有**通用的运行时反射。`std::any::Any` 只能借一个 `TypeId` 做有限的向下转型，
-拿不到字段与方法的结构。Rust 把泛化彻底交给编译期的泛型与 trait，信奉零运行时成本，序列化这类
-需求由 `serde` 在编译期用过程宏生成代码，而非运行时反射。
+**Rust** 没有通用的运行时反射。`std::any::Any` 只能借助 `TypeId` 进行有限的向下转换，无法取得字段与
+方法的结构。Rust 把通用代码交给编译期的泛型与 trait 处理，序列化等需求由 `serde` 借助过程宏在编译期
+生成代码，而不依赖运行时反射。
 
-Go 落在中间偏「够用」的一侧：保留足以支撑接口、类型断言、类型 switch、反射与精确 GC 的运行时
-类型信息，但不像 Java 那样为每个对象都挂一份富元数据。它把信息集中在按类型唯一的描述符里，
-对象本身不背负类型头，普通值在内存里就是裸数据，类型信息经由接口或描述符指针间接获得。这份
-取舍呼应 Go 一贯的性格：要简单、要够用，也要为运行时几样实在的能力（精确 GC、接口分发、反射）
-留下恰好够用的元数据，不多不少。
+Go 介于二者之间：它保留了足以支撑接口、类型断言、类型 switch、反射与精确垃圾回收的类型信息，但不像
+Java 那样为每个对象附加元数据。类型信息集中在每个类型唯一的描述符中，对象本身不带类型头，普通值在内存中
+就是数据本身，类型信息只在需要时经由接口值或描述符指针取得。
 
-## 延伸阅读的文献
+## 延伸阅读
 
-1. Russ Cox. *The Laws of Reflection.* The Go Blog, 2011.
-   https://go.dev/blog/laws-of-reflection
-2. Russ Cox. *Go Data Structures: Interfaces.* 2009.
-   https://research.swtch.com/interfaces
-   （接口与类型描述符的内存布局原型）
-3. The Go Authors. *internal/abi/type.go、internal/abi/iface.go*（go1.26 类型描述符与接口布局）.
-   https://github.com/golang/go/blob/master/src/internal/abi/type.go
-4. The Go Authors. *runtime/type.go：getGCMask*（GC 指针位图与 `TFlagGCMaskOnDemand` 的按需生成）.
-   https://github.com/golang/go/blob/master/src/runtime/type.go
-5. The Go Authors. *Package reflect.* https://pkg.go.dev/reflect
-6. The Go Authors. *The Go Programming Language Specification：Types / Type identity.*
-   https://go.dev/ref/spec#Types
-7. Luca Cardelli, Peter Wegner. "On Understanding Types, Data Abstraction, and
-   Polymorphism." *ACM Computing Surveys*, 17(4), 1985.
-   https://doi.org/10.1145/6041.6042
+- <a id="ref-pike-2011"></a>[Pike, 2011] Rob Pike. "The Laws of Reflection." The Go Blog, 2011.
+  https://go.dev/blog/laws-of-reflection
+  反射三定律的出处。
+- <a id="ref-cox-2009"></a>[Cox, 2009] Russ Cox. "Go Data Structures: Interfaces." 2009.
+  https://research.swtch.com/interfaces
+  接口值与类型描述符内存布局的早期说明。
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `internal/abi/type.go`、
+  `internal/abi/iface.go`.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/internal/abi/type.go
+  https://github.com/golang/go/blob/master/src/internal/abi/type.go
+  Go 1.26 的类型描述符与接口布局，各标志位的含义见其注释。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `runtime/type.go`（`getGCMask`）.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/type.go
+  https://github.com/golang/go/blob/master/src/runtime/type.go
+  指针位图的按需生成。
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors.
+  `cmd/compile/internal/walk/switch.go`.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/walk/switch.go
+  类型 switch 的编译：按哈希值的二分查找、跳转表与 `interfaceSwitch`。
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. *Package reflect*.
+  https://pkg.go.dev/reflect
+- <a id="ref-go-authors-2026e"></a>[Go Authors, 2026e] The Go Authors. *The Go Programming Language
+  Specification*, "Types" 与 "Type identity". https://go.dev/ref/spec#Types
+  ，https://go.dev/ref/spec#Type_identity
+- <a id="ref-cardelli-wegner-1985"></a>[Cardelli and Wegner, 1985] Luca Cardelli, Peter Wegner. "On
+  Understanding Types, Data Abstraction, and Polymorphism." *ACM Computing Surveys*, 17(4): 471–523, 1985.
+  https://doi.org/10.1145/6041.6042
+  类型、数据抽象与多态的经典综述。
+
