@@ -5,179 +5,281 @@ title: "12.6 微对象分配"
 
 # 12.6 微对象分配
 
-前两节走完了分配器的两端。大对象（[12.4](./largealloc.md)）绕开缓存，直接向 mheap 按页要内存；
-小对象（[12.5](./smallalloc.md)）按尺寸类从每 P 的 mcache 里摘一个等大槽位。这一节补上最后、
-也是最不起眼的一类对象，**微对象**（tiny object）：小于 16 byte 且不含指针的那些。它们数量极多，
-单个又极小，若也按尺寸类各占一个槽位，浪费会大得惊人。Go 为它们单设了一条路径，把多个微对象
-**拼进同一个块**，用一处简单的「碰撞指针」（bump pointer）手法换来可观的内存节省。
+**微对象**（tiny object）是小于 16 字节且不含指针的对象。`mallocgc` 把它们交给 `mallocgcTiny`：
+多个微对象被合并到同一个 16 字节的块中，块内所有对象都不可达之后，整块才被回收。[12.1.4](./basic.md)
+已经说明了这样做的理由：微对象数量很多，若各占一个最小的槽位，浪费的比例很高；限定不含指针，
+则使潜在的浪费有界；在 secret 模式下分配的对象不使用这一机制。本节讨论它的实现：块与偏移如何管理，
+合并的效果如何观察，16 字节这一大小从何而来，以及多个对象共享同一块内存带来的后果。
 
-## 12.6.1 问题：把一个 `bool` 塞进 16 byte 的槽位
+微对象分配器由 Vyukov 在 2014 年加入，随 Go 1.3 发布，提交说明写道：把小于
+16 字节的不含指针的分配合并到同一个内存块中 [[Vyukov, 2014](#ref-vyukov-2014)]。此后它的基本结构没有改变，
+后来的改动主要处理它与回收器、竞争检测器以及其他运行时机制的配合。
 
-回顾小对象分配的代价。尺寸类是离散的，分配 $n$ 个字节，实际占用的是「不小于 $n$ 的最近一档
-尺寸类」（[12.1](./basic.md)）。最小的几档尺寸类是 8、16、24 byte。于是一个 1 byte 的 `bool`
-逃逸到堆上，要占满一个 8 byte 槽位，浪费 $7/8$；一个 5 byte 的字符串片段同样占 8 byte。
-对单次分配，这点内部碎片无关痛痒；可微对象在真实程序里出奇地常见：
+## 12.6.1 块与偏移
 
-- `[]byte`、`string` 在拼接、切分时产生的短片段；
-- 逃逸到堆上的标量临时量，如 `interface{}` 装箱一个小整数；
-- `for range` 取地址、闭包捕获等场合下被迫上堆的小变量。
-
-这些对象每一个都不到 8 byte，却各占一个槽位。把它们累加起来，浪费的就不再是零头。若能把若干
-微对象**并排塞进一个槽位**，让它们共享同一段内存，节省便立竿见影。这正是微对象分配器要做的事。
-
-## 12.6.2 微对象分配器：块内的指针碰撞
-
-手法本身朴素。mcache 里为微对象留了两个字段（[12.2](./component.md)）：当前正在填充的 16 byte
-块的起址 `tiny`，以及块内已用到的偏移 `tinyoffset`。
+每个 P 的本地缓存中有三个字段服务于微对象：`tiny` 指向当前块的起点，`tinyoffset` 是块内已用到的偏移，
+`tinyAllocs` 统计这个 P 完成的微对象分配次数（[12.2.2](./component.md)）。`mallocgcTiny` 的主体如下，
+开头省略了一段与 [12.5.1](./smallalloc.md) 相同的序言，结尾省略了与 [12.5.4](./smallalloc.md) 相同的发布、
+标记与采样 [[Go Authors, 2026a](#ref-go-authors-2026a)]：
 
 ```go
-type mcache struct {
-    tiny       uintptr // 当前微对象块的起址（一段 16B 内存）
-    tinyoffset uintptr // 块内下一个可用位置的偏移
-    // ... 其余字段见 12.2
-}
+	c := getMCache(mp)
+	off := c.tinyoffset
+	// Align tiny pointer for required (conservative) alignment.
+	if size&7 == 0 {
+		off = alignUp(off, 8)
+	} else if goarch.PtrSize == 4 && size == 12 {
+		// Conservatively align 12-byte objects to 8 bytes on 32-bit
+		// systems so that objects whose first field is a 64-bit
+		// value is aligned to 8 bytes and does not cause a fault on
+		// atomic access. See issue 37262.
+		// TODO(mknyszek): Remove this workaround if/when issue 36606
+		// is resolved.
+		off = alignUp(off, 8)
+	} else if size&3 == 0 {
+		off = alignUp(off, 4)
+	} else if size&1 == 0 {
+		off = alignUp(off, 2)
+	}
+	if off+size <= maxTinySize && c.tiny != 0 {
+		// The object fits into existing tiny block.
+		x := unsafe.Pointer(c.tiny + off)
+		c.tinyoffset = off + size
+		c.tinyAllocs++
+		mp.mallocing = 0
+		releasem(mp)
+		return x, 0
+	}
+	// Allocate a new maxTinySize block.
+	checkGCTrigger := false
+	span := c.alloc[tinySpanClass]
+	v := nextFreeFast(span)
+	if v == 0 {
+		v, span, checkGCTrigger = c.nextFree(tinySpanClass)
+	}
+	x := unsafe.Pointer(v)
+	(*[2]uint64)(x)[0] = 0 // Always zero
+	(*[2]uint64)(x)[1] = 0
+	// See if we need to replace the existing tiny block with the new one
+	// based on amount of remaining free space.
+	if !raceenabled && (size < c.tinyoffset || c.tiny == 0) {
+		// Note: disabled when race detector is on, see comment near end of this function.
+		c.tiny = uintptr(x)
+		c.tinyoffset = size
+	}
+	// ……
 ```
 
-一次微对象分配就是在当前块里**碰一下指针**：从 `tinyoffset` 处对齐、切出 `size` 字节、把偏移
-向前推。若当前块装不下，再去要一个新的 16 byte 块。裁剪后的速写（`runtime/malloc.go` 的
-`mallocgcTiny`）：
+偏移的对齐只取决于请求的大小：大小是 8 的倍数时对齐到 8，是 4 的倍数时对齐到 4，是 2 的倍数时对齐到 2，
+否则不对齐。一个类型的大小总是其对齐的整数倍，所以按大小推断的对齐不会小于类型实际需要的对齐，
+注释因而称之为保守的对齐。32 位平台上的 12 字节对象是例外。在这些平台上，64 位字段只按 4 字节对齐，
+而对未按 8 字节对齐的 64 位值做原子操作可能出错。惯常的做法是把需要原子访问的 64 位字段放在结构体开头，
+依靠分配器返回 8 字节对齐的地址（[11.3](../../part3concurrency/ch11sync/atomic.md)）；
+`struct { a uint64; b byte }` 在 32 位平台上的大小是 12 字节，微对象分配器按规则只会把它对齐到 4，
+使这一做法失效。Knyszek 为此单独把 12 字节的对象对齐到 8 [[Knyszek, 2020](#ref-knyszek-2020)]。
 
-```go
-// 微对象分配：在当前 16B 块里碰撞指针，装不下则换新块（速写）
-off := c.tinyoffset
-// 按所需对齐保守地对齐偏移：让块内的对象各自落在自然边界上
-if size&7 == 0 {
-    off = alignUp(off, 8)
-} else if size&3 == 0 {
-    off = alignUp(off, 4)
-} else if size&1 == 0 {
-    off = alignUp(off, 2)
-}
+当前块容得下时，分配只是返回 `c.tiny + off` 并推进偏移，不清零，不访问 span，也不检查回收的触发条件。这条
+路径返回的槽位大小为 0。`mallocgc` 在结尾按「槽位大小减请求大小」为分配者追加标记辅助的债务，槽位大小为 0
+时跳过这一步，因此合并进已有块的分配只按请求的大小计入，块中剩余的空间已由开启这个块的那次分配承担。
 
-if off+size <= maxTinySize && c.tiny != 0 { // maxTinySize = 16
-    // 当前块装得下：切一块、推进偏移，立即返回（最快路径，无清零）
-    x := unsafe.Pointer(c.tiny + off)
-    c.tinyoffset = off + size
-    c.tinyAllocs++
-    return x
-}
-
-// 当前块装不下：向小对象机制要一个新的 16B noscan 槽位
-span := c.alloc[tinySpanClass]
-v := nextFreeFast(span)
-if v == 0 {
-    v, span, _ = c.nextFree(tinySpanClass)
-}
-x := unsafe.Pointer(v)
-(*[2]uint64)(x)[0] = 0 // 整块一次性清零
-(*[2]uint64)(x)[1] = 0
-// 在新块与旧块之间，保留剩余空间更大的那个作为「当前块」
-if size < c.tinyoffset || c.tiny == 0 {
-    c.tiny = uintptr(x)
-    c.tinyoffset = size
-}
-```
-
-几处值得点出。
-
-**对齐是保守的。** 偏移按对象大小推断的对齐量向上取整：8 的倍数对齐到 8，4 的倍数对齐到 4，
-依此类推。运行时并不知道这块内存将被当成什么类型，只能按大小给出一个不会出错的对齐，让块内
-每个对象都落在它的自然边界上。代价是块内可能留下几字节对齐空洞，但这正是「不知类型」时
-唯一安全的选择（32 位平台上 12 byte 对象还要额外对齐到 8，以免其首个 64 位字在原子访问时触错，
-见 go.dev/issue/37262）。
-
-**新块来自小对象机制。** 换块这一步并不特殊，它就是去 `c.alloc[tinySpanClass]` 取一个尺寸类 2
-（16 byte）、标记为 noscan 的槽位，先 `nextFreeFast` 做一次位扫描，落空再走 `nextFree` 的慢路径
-补货。换言之，微对象分配器**架设在小对象分配器之上**：小对象机制交付一个普通的 16 byte 槽位，
-微对象分配器再把它切碎复用。`tinySpanClass` 的取值也印证了这一点，它是
-`tinySizeClass<<1 | 1`，即尺寸类 2 加上 noscan 标志位。
-
-**「换块」时保留更空的那块。** 条件 `size < c.tinyoffset` 读作：新块用掉 `size`、剩
-`16-size`，旧块剩 `16-tinyoffset`；当 `size < tinyoffset` 时新块剩得更多，便把它立为当前块，
-否则继续用旧块。这个小启发式让后续分配总在「剩余空间较大」的块里碰撞，提高拼装成功率。
-被换下的旧块并不丢失，它仍归属那个 span，只是不再是 mcache 的「当前块」。
-
-**清零的时机变了，但语义没变。** 取到新块时，那两行 `uint64` 写入把整块 16 byte **一次性
-清零**；此后块内的每次碰撞都只向前推进偏移，从不回头复用已切出的区域。因此每个微对象拿到的
-都是已清零的内存，只是清零在取块时批量完成，而非逐对象进行。这与小对象分配里「按需清零」
-是同一个目的，省去了每次微小分配各做一次 `memclr` 的开销。
-
-## 12.6.3 为什么必须不含指针
-
-微对象分配器只接收 **noscan**（不含指针）的对象，这不是优化，而是正确性的前提。
-
-一个块里并排塞着好几个逻辑对象，但垃圾回收（[13](../ch13gc)）看到的是**整个块这一个分配单位**：
-块的存活与否，取决于是否还有任何指针指向块内任意位置；只要还有一个子对象可达，整块就不会被
-回收（[13.5](../ch13gc/sweep.md)）。这带来两个约束。其一，GC 的扫描以 span 槽位为粒度，
-若块内某个子对象含指针，扫描器无法在「多个对象共用一槽」的布局里干净地辨认出哪几个字是指针、
-该从哪里继续追踪；把微对象限制为纯标量数据，扫描器对这一槽位就可以整体跳过，GC 的逻辑得以
-保持简单。其二，多个子对象共享生死，意味着只要一个还活着，其余即便已死也跟着赖在内存里。
-若允许这些「搭便车」的死对象持有指针，它们指向的对象也会被连带保活，浪费会顺着指针链
-不受控地放大。限定为标量数据，把浪费牢牢圈在「至多一个块」的范围内。
-
-正因块的生死是整体的，从微对象分配器拿到的对象**不能被显式释放**，也不能直接对它设置
-finalizer；运行时为可能来自微对象块的指针在 `SetFinalizer` 里留了特殊处理，允许对块内某个
-字节设置 finalizer（详见 [13](../ch13gc) 与 `runtime/mfinal.go`）。
-
-## 12.6.4 为什么是 16 byte：拼装与浪费的权衡
-
-块的大小 `maxTinySize` 是可调的，当前定为 16 byte。这个数字背后是一组清楚的量化权衡，
-也是这套设计里最值得推敲的一处。
-
-设块大小为 $B$。最坏情形是：一个块拼进了若干子对象，随后除一个之外全部死亡，但那一个仍存活，
-于是整块都无法回收。此时真正有用的内存可低至一个最小子对象，浪费逼近整块。以最小子对象趋于
-$0$、子对象总和趋于 $B$ 计，相对小对象方案（每个微对象本各占一档槽位），最坏放大约为
-
-$$
-W_{\text{worst}}(B) \approx \frac{B}{B/2} = 2 \quad (B = 16)
-$$
-
-即最坏多占约一倍内存。源码把这条权衡写得很直白：$B=8$ 时几乎没有浪费，但能拼到一起的机会也少；
-$B=32$ 时拼装机会更多，最坏浪费却升到约四倍；而无论块多大，**最好情形**的节省都是约 8 倍
-（多个微对象本各占一槽，如今共用一块）。16 byte 是在「拼得够多」与「最坏只翻一倍」之间取的折中。
-
-收益是实打实的。运行时注释给出一组实测：在一个 JSON 基准上，微对象分配器把分配次数减少约
-$12\%$、堆体积减少约 $20\%$。考虑到它服务的只是「小于 16 byte 的无指针对象」这一窄类，
-这样的整体收益恰恰说明了这类对象在真实负载里有多普遍。
-
-## 12.6.5 三条路径：分配器的因材施教
-
-至此，分配器对三类对象各有一条量身定制的路径，合起来正是 [12.1](./basic.md) 设计原则的落地：
+当前块容不下时，分配器从本地缓存中取一个 `tinySpanClass` 的槽位，即 2 号尺寸类、不含指针的 16 字节槽位
+[[Go Authors, 2026c](#ref-go-authors-2026c)]，取法与小对象完全相同（[12.5.2](./smallalloc.md)）。
+新块总是被整块清零，`mallocgcTiny` 也没有 `needzero` 参数。随后决定以哪个块作为当前块：新块用去 `size`
+字节，剩余 16 − `size`；旧块剩余 16 − `tinyoffset`。只有新块剩余较多，即 `size < c.tinyoffset` 时，
+才以新块替换旧块，此后的微对象继续填入剩余较多的那个块。未被选中的块并没有特殊之处，它只是一个普通的
+16 字节对象，其中的微对象存活多久，它就存活多久。
 
 ```mermaid
 flowchart TD
-    A["申请 size 字节"] --> Q{判定}
-    Q -->|"size 小于 16B 且无指针"| T["微对象：mcache.tiny 块内碰撞指针"]
-    Q -->|"16B 至 32KB"| S["小对象：按尺寸类从 mcache 取槽位（12.5）"]
-    Q -->|"大于 32KB"| L["大对象：直接向 mheap 要页（12.4）"]
-    T -->|"块满，换新块"| S
-    S -->|"本地 span 用尽"| C["mcentral / mheap 补货"]
-    L --> H["mheap 页分配器"]
+    REQ["不含指针<br/>小于 16 字节的请求"] --> AL["按大小对齐 tinyoffset"]
+    AL --> FIT["当前块容得下？"]
+    FIT -->|容得下| BUMP["返回 tiny + off<br/>推进 tinyoffset"]
+    FIT -->|容不下| NEW["取一个 2 号尺寸类的槽位<br/>nextFreeFast / nextFree"]
+    NEW --> ZERO["整块清零"]
+    ZERO --> KEEP["新旧两块中剩余空间较多者<br/>成为当前块"]
 ```
 
-三条路径并非平列。大对象与小对象分守内存尺度的两端；微对象则**寄生在**小对象路径上，它换块时
-要的就是一个普通的 16 byte noscan 槽位，只是在交付给用户之前，先由 `tiny`/`tinyoffset` 把这块
-槽位切成几份复用。判定的顺序也对应着热度：绝大多数分配是小对象与微对象，走的是 mcache 的无锁
-快路径；大对象稀少而昂贵，落到加锁的 mheap。把最热的微对象做成几次指针碰撞，把最冷的大对象
-留给系统调用，这种「按对象的大小与生命周期分配不同手法」的因材施教，是分配器全部巧思的浓缩。
+`tiny` 是一个指向堆的指针，而本地缓存不在垃圾回收的堆上，回收器不会扫描它。运行时以两种方式处理这一点。
+其一，`mcache.go` 中的注释指出，标记终止时 `releaseAll` 清空 `tiny` 与 `tinyoffset`，
+新一轮回收周期中的微对象总是从新块开始。其二，标记开始时，运行时在停止所有 goroutine 的状态下把每个 P
+的当前块标灰。Go 1.8 的混合写屏障要求新分配的对象都是黑色的，而当前块若是在标记开始之前分配的，
+此后从中切出的微对象都不会触发标黑，回收器便可能清扫一个仍然可达的块。Clements
+选择在标记开始时一次性处理所有当前块，代码中的注释说明了另一种做法为何被放弃：每次从块中分配都把块标黑，
+会拖慢微对象分配器 [[Clements, 2016](#ref-clements-2016)]（[13.2](../ch13gc/barrier.md)）。
 
-需要一提两处工程化的细节，它们不改变上述主线。其一，新版运行时在
-`sizeSpecializedMallocEnabled` 下会为各尺寸生成专门化的分配函数（`mallocgcTinySC2` 等），
-按大小直接派发以省去分支，逻辑与本节叙述的 `mallocgcTiny` 一致。其二，为修正一处安全问题
-（go.dev/issue/76356），带有「secret」标记的分配会绕开微对象分配器、强制单独清零，避免敏感
-数据与其他对象共块残留。这些都是在同一套设计上打的补丁，主干仍是「一个块、一个偏移」。
+## 12.6.2 合并的效果
 
-## 延伸阅读的文献
+下面的程序分别分配 2²⁰ 个 3 字节、4 字节、12 字节和 16 字节的不含指针的对象，并全部保持可达，
+计算每个对象平均占用的堆内存。`runtime.GC()` 在两次读取之间使统计稳定下来，
+同时也在标记终止时清空了当前块，每组分配都从新块开始。
 
-1. The Go Authors. *runtime/malloc.go*（`mallocgcTiny`、`maxTinySize`、对齐与换块逻辑、
-   JSON 基准的实测数据）. https://github.com/golang/go/blob/master/src/runtime/malloc.go
-2. The Go Authors. *runtime/mcache.go*（`tiny`/`tinyoffset` 字段与 `tinySpanClass`）.
-   https://github.com/golang/go/blob/master/src/runtime/mcache.go
-3. The Go Authors. *runtime/mheap.go*（`tinySpanClass = tinySizeClass<<1 | 1`、`makeSpanClass`）.
-   https://github.com/golang/go/blob/master/src/runtime/mheap.go
-4. Go issue 37262、76356（12 byte 对齐与 secret 分配绕开微对象分配器的两处修正）.
-   https://go.dev/issue/37262 、https://go.dev/issue/76356
-5. 本书 [12.4 大对象分配](./largealloc.md)、[12.5 小对象分配](./smallalloc.md)
-   （微对象路径所寄生其上的两端）.
-6. 本书 [12.2 组件](./component.md)（mcache、span、尺寸类）、
-   [13 垃圾回收](../ch13gc)（块的整体存活、扫描与清扫）.
+```go {run=true}
+package main
+
+import (
+	"fmt"
+	"runtime"
+)
+
+const n = 1 << 20
+
+var (
+	b3  [n]*[3]byte
+	b4  [n]*[4]byte
+	b12 [n]*[12]byte
+	b16 [n]*[16]byte
+)
+
+// perObject 返回 alloc 分配的 n 个对象平均占用的堆内存（字节）。
+func perObject(alloc func(i int)) float64 {
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	for i := range n {
+		alloc(i)
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	return float64(after.HeapAlloc-before.HeapAlloc) / n
+}
+
+func main() {
+	fmt.Printf(" 3 字节：%.1f\n", perObject(func(i int) { b3[i] = new([3]byte) }))
+	fmt.Printf(" 4 字节：%.1f\n", perObject(func(i int) { b4[i] = new([4]byte) }))
+	fmt.Printf("12 字节：%.1f\n", perObject(func(i int) { b12[i] = new([12]byte) }))
+	fmt.Printf("16 字节：%.1f\n", perObject(func(i int) { b16[i] = new([16]byte) }))
+}
+```
+
+运行结果如下：
+
+```
+ 3 字节：3.2
+ 4 字节：4.0
+12 字节：16.0
+16 字节：16.0
+```
+
+3 字节的对象不需要对齐，一个块容纳 5 个，用去 15 字节，平均每个占 3.2 字节；4 字节的对象一个块恰好容纳
+4 个。若没有微对象分配器，它们都会落入 8 字节的 1 号尺寸类，各占 8 字节。12 字节的对象对齐到 4，
+第二个对象从偏移 12 开始便超出 16 字节，于是取一个新块；此时 `size < c.tinyoffset` 即 12 < 12 不成立，
+只用了 12 字节的旧块仍是当前块，新对象独占一个块，最终每个对象都占满 16 字节，与不合并没有区别。
+旧块剩下的 4 字节留给之后更小的请求。16 字节的对象不是微对象，直接从 2 号尺寸类分配，作为对照。
+
+以 `-race` 运行同一程序，四行都是 16.0。竞争检测器启用时，替换当前块的条件中的 `!raceenabled` 使 `tiny`
+始终为空，每个微对象都独占一个块；`mallocgcTiny` 还把对象放在块的末尾，使越过对象末尾的指针运算能被
+checkptr 检查出来。这一做法由 Randall 加入，修复了 issue #38872 报告的 checkptr 对微对象的漏报
+[[Randall, 2021](#ref-randall-2021)]。
+
+## 12.6.3 为什么是 16 字节
+
+`mallocgcTiny` 开头的注释讨论了块的大小 [[Go Authors, 2026a](#ref-go-authors-2026a)]：
+
+```go
+	// Size of the memory block used for combining (maxTinySize) is tunable.
+	// Current setting is 16 bytes, which relates to 2x worst case memory
+	// wastage (when all but one subobjects are unreachable).
+	// 8 bytes would result in no wastage at all, but provides less
+	// opportunities for combining.
+	// 32 bytes provides more opportunities for combining,
+	// but can lead to 4x worst case wastage.
+	// The best case winning is 8x regardless of block size.
+```
+
+这里的倍数以不合并时的占用为基准：一个微对象若单独分配，至少占一个 8 字节的槽位。
+最坏的情形是块中只剩一个子对象存活，它使整块无法回收，占用的内存是块的大小，相对 8 字节的基准，块为
+16 字节时是 2 倍，32 字节时是 4 倍，8 字节时则与不合并相同，没有额外的浪费。最好的情形是块中全是
+1 字节的对象，每个只占 1 字节，而单独分配时各占 8 字节，占用只有不合并时的八分之一，与块的大小无关。
+块越大，合并的机会越多，最坏情形也越差；16 字节是两者之间的折中。块的大小必须是某个尺寸类的大小，
+新块才能直接从这一尺寸类中取得，`mallocinit` 在启动时检查 2 号尺寸类的大小是否等于 `maxTinySize`。
+
+Vyukov 最初的提交报告了这一取舍的实际效果：在 json 基准上，分配次数减少 11.3%，堆占用减少 19.7%；在
+garbage 基准上，分配次数减少 12.3%，堆占用减少 1.5% [[Vyukov, 2014](#ref-vyukov-2014)]。
+这与注释中「分配次数减少约 12%、堆大小减少约 20%」的数字相符。
+
+## 12.6.4 共享生死的后果
+
+块中的微对象同生共死，这一点对依赖对象生命周期的机制有直接的影响。终结器、
+清理函数与弱指针都以「对象不再可达」为触发条件，而一个已经不可达的微对象可能因同块中的其他对象存活而一直不
+被回收。`runtime.SetFinalizer`、`runtime.AddCleanup` 与 `weak.Pointer` 的文档对此都有同样的说明，
+以终结器为例 [[Go Authors, 2026d](#ref-go-authors-2026d)]：
+
+> 由于终结器可能在对象不再被引用之后的任意时刻才执行，运行时被允许进行一种节省空间的优化，把若干对象合并到同一个
+> 分配槽位中。这样的分配中一个不再被引用的对象，若总与一个被引用的对象处于同一批中，它的终结器可能永远不会执行。
+> 通常，这种合并只发生在微小的（约 16 字节或更小）、不含指针的对象上。
+
+终结器的这段说明来自 Ou 的提交，解决了 issue #46827 中提出的文档缺失 [[Ou, 2021](#ref-ou-2021)]；Go 1.24
+加入的清理函数与弱指针沿用了同样的表述。运行时在实现上也为微对象留了余地：`SetFinalizer`
+通常要求指针指向分配块的起点，但若对象的类型不含指针且小于 16 字节，便允许指向块的内部；`AddCleanup`
+为清理函数的参数分配存储时则有意绕开微对象分配器，源码注释给出的理由是避免存活性问题，
+因为这块存储会被回收器当作根（[13.10](../ch13gc/finalizer.md)）。Go 1.26 的 `runtime/secret`
+实验出于类似的原因让 secret 模式下的分配绕开微对象分配器：块中的其他对象可能使整块长期存活，而 secret
+对象须在释放时及时清零 [[Morsing, 2025](#ref-morsing-2025)]。
+
+统计也受到影响。运行时并不跟踪单个微对象的生命周期，只跟踪它们所在的块。`runtime.MemStats`
+出于历史原因把微对象的分配次数同时计入 `Mallocs` 与 `Frees`，源码注释承认这在某种意义上重复计算了内存，
+因为块本身也被计入；逐个跟踪微对象的生命周期则代价太高 [[Go Authors, 2026d](#ref-go-authors-2026d)]。
+`runtime/metrics` 把微对象的分配次数单独列为 `/gc/heap/tiny/allocs:objects`，
+按大小统计的直方图中只包含块。内存剖析也只按块采样：只有开启新块的分配会扣减 `nextSample`，扣减的是整块的
+16 字节，合并进已有块的分配不会被采样。
+
+`runtimefreegc` 实验同样避开了微对象：`reusableSize` 拒绝小于 16 字节的对象，与 `mallocgcTiny`
+注释中「从微对象分配器得到的对象不能被显式释放」的要求一致（[12.9](./history.md)）。
+在默认关闭的按尺寸专用分配函数中，微对象的函数按请求大小而非尺寸类生成，从 `mallocgcTinySize1` 到
+`mallocgcTinySize15` 共 15 个，请求大小在其中是编译期常量（[12.1.4](./basic.md)）。
+
+## 12.6.5 微对象在分配路径中的位置
+
+[12.1.4](./basic.md) 列出了 `mallocgc` 的五条路径，微对象是其中之一，但它并不自成一套：它的块就是
+2 号尺寸类的普通槽位，与 16 字节的不含指针的小对象共用同一个 span 类，
+取块时走的正是小对象的快速路径与慢速路径（[12.5](./smallalloc.md)）。`refill` 中有一处痕迹：交还 span 时，
+若 span 类是 `tinySpanClass`，就把本地缓存累计的 `tinyAllocs` 一并计入全局统计
+[[Go Authors, 2026b](#ref-go-authors-2026b)]。因此，微对象分配器可以看作在小对象分配器之上增加的一层：
+小对象分配器交付一个 16 字节的槽位，微对象分配器再按偏移把它分给多个对象。
+
+## 12.6.6 小结
+
+微对象分配器把小于 16 字节的不含指针的对象合并到 16 字节的块中，块内按大小对齐、推进偏移，块满时从 2 号
+尺寸类取一个新块，并保留剩余空间较多的块作为当前块。合并使这类对象的平均占用接近其实际大小，代价是同块的
+对象共享生死：最坏情形下占用为不合并时的 2 倍，终结器、清理函数与弱指针可能因此永不触发，统计与剖析也只能
+以块为单位。为了与回收器和竞争检测器正确配合，运行时在标记开始时把当前块标灰、在标记终止时清空当前块，并在
+竞争检测时关闭合并。
+
+## 延伸阅读
+
+- <a id="ref-clements-2016"></a>[Clements, 2016] Austin Clements. runtime: mark tiny blocks at GC start.
+  Go commit 85c22bc3a5, 2016. https://go.dev/cl/31456
+  随 Go 1.8 发布。
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/malloc.go
+  （`mallocgcTiny`、`maxTinySize`、对齐与换块逻辑、JSON 基准的实测数据）. Go 1.26 源码.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/malloc.go
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. src/runtime/mcache.go
+  （`tiny`/`tinyoffset` 字段与 `tinySpanClass`）. Go 1.26 源码.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mcache.go
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/runtime/mheap.go
+  （`tinySpanClass = tinySizeClass<<1 | 1`、`makeSpanClass`）. Go 1.26 源码.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mheap.go
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors.
+  src/runtime/mfinal.go（`SetFinalizer`）、src/runtime/mcleanup.go（`AddCleanup`）、src/weak/pointer.go、
+  src/runtime/mstats.go、src/runtime/metrics/description.go、src/runtime/mgc.go（`gcStart`）、
+  src/runtime/mgcmark.go（`gcMarkTinyAllocs`）、 src/runtime/malloc_generated.go. Go 1.26 源码.
+  https://github.com/golang/go/tree/release-branch.go1.26/src
+- <a id="ref-knyszek-2020"></a>[Knyszek, 2020] Michael Anthony Knyszek. runtime: align 12-byte objects to
+  8 bytes on 32-bit systems. Go commit 5756b35601, 2020. https://go.dev/cl/254057
+  随 Go 1.16 发布，修复 Go issue #37262：https://go.dev/issue/37262
+- <a id="ref-morsing-2025"></a>[Morsing, 2025] Daniel Morsing. Go issue #76356. *runtime: tiny allocator
+  can keep allocations alive longer than expected.* 2025. https://go.dev/issue/76356
+  secret 模式下的分配因此绕开微对象分配器。
+- <a id="ref-ou-2021"></a>[Ou, 2021] Changkun Ou. runtime: clarify finalizer semantics for tiny objects.
+  Go commit 80d487111b, 2021. https://go.dev/cl/337391
+  随 Go 1.20 发布，修复 Go issue #46827。
+- <a id="ref-randall-2021"></a>[Randall, 2021] Keith Randall. runtime: top align tinyallocs in race mode.
+  Go commit 2c05ba4ae0, 2021. https://go.dev/cl/315029
+  随 Go 1.17 发布，修复 Go issue #38872。
+- <a id="ref-vyukov-2014"></a>[Vyukov, 2014] Dmitriy Vyukov. runtime: combine small NoScan allocations. Go
+  commit 1fa7029425, 2014. https://codereview.appspot.com/38750047
+  随 Go 1.3 发布。
+- 本书 [12.4 大对象分配](./largealloc.md)、[12.5 小对象分配](./smallalloc.md)
+  （微对象路径所依托的两端）。
+- 本书 [12.2 组件](./component.md)（mcache、span、尺寸类）、
+  [第 13 章 垃圾回收器](../ch13gc)（块的整体存活、扫描与清扫）。
