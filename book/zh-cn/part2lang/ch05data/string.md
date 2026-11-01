@@ -8,7 +8,7 @@ title: "5.2 字符串与零拷贝转换"
 字符串在运行时中的表示与切片相近，都由一个头部和位于别处的一段字节组成（[5.1.1](./slice.md)），但字符串
 **不可变**。不可变性使字符串可以自由地共享而无须复制，也带来一项直接的代价：`string` 与 `[]byte` 之间的
 转换原则上必须复制字节。本节先讨论字符串的表示、不可变性的保证方式以及 Go 字符串与 UTF-8 的关系，再讨论
-这项复制的代价，以及编译器在哪些情形下能够省去它；最后介绍 Go 1.20 提供的手动零拷贝工具及其使用约定，并
+这项复制的代价，以及编译器在哪些情形下能够省去它；最后介绍 `unsafe` 包提供的手动零拷贝工具及其使用约定，并
 讨论子串导致的内存滞留与字符串驻留。
 
 ## 5.2.1 表示与不可变性
@@ -205,15 +205,16 @@ func main() {
 
 ## 5.2.4 手动零拷贝：`unsafe.String` 与相关函数
 
-编译器的优化只覆盖它能够证明安全的情形。当程序员确知某段字节此后不会再被修改时，可以使用 Go 1.20
-引入的四个函数手动完成零拷贝转换：`unsafe.String(ptr, len)` 由字节指针与长度构造字符串，
+编译器的优化只覆盖它能够证明安全的情形。当程序员确知某段字节此后不会再被修改时，可以使用 `unsafe`
+包中的四个函数手动完成零拷贝转换：`unsafe.String(ptr, len)` 由字节指针与长度构造字符串，
 `unsafe.StringData(s)` 取得字符串底层字节的指针，`unsafe.Slice` 与 `unsafe.SliceData`
-是切片一侧的对应函数 [[Go Authors, 2023](#ref-go-authors-2023)]。
+是切片一侧的对应函数。其中 `unsafe.Slice` 随 Go 1.17 加入 [[Dempsky, 2021](#ref-dempsky-2021)]，
+其余三个随 Go 1.20 加入 [[Go Authors, 2023](#ref-go-authors-2023)]。
 
 在此之前，常见的做法是借助 `reflect.StringHeader` 与 `reflect.SliceHeader` 手工构造头部。
 这种写法的问题在于这两个结构体的 `Data` 字段是 `uintptr`，垃圾回收器并不把它视为指针，
-因此仅凭这个字段无法保证所引用的内存不被回收，程序必须另外保留一个类型正确的指针。这两个类型已在 Go 1.21
-中被标记为弃用，文档建议改用上述函数。
+因此仅凭这个字段无法保证所引用的内存不被回收，程序必须另外保留一个类型正确的指针。这两个类型已在 Go 1.20
+中被标记为弃用，文档建议改用上述函数 [[hopehook, 2022](#ref-hopehook-2022)]。
 
 标准库中的 `strings.Builder` 就使用了这种手法：它在内部的 `[]byte` 中积累内容，`String` 方法直接以
 `unsafe.String(unsafe.SliceData(b.buf), len(b.buf))` 返回结果，不做复制。这是安全的，因为 `Builder` 只会在
@@ -309,6 +310,12 @@ Go 的选择介于其间：字符串不可变，内部是字节序列，约定�
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/string.go
   https://github.com/golang/go/blob/master/src/runtime/string.go
   `slicebytetostring`、`slicebytetostringtmp` 与 `stringtoslicebyte` 的实现。
+- <a id="ref-dempsky-2021"></a>[Dempsky, 2021] Matthew Dempsky. spec: add unsafe.Add and unsafe.Slice. Go
+  commit 1da05eb0ce, 2021. https://go.dev/cl/312212
+  随 Go 1.17 发布。
+- <a id="ref-hopehook-2022"></a>[hopehook, 2022] hopehook. reflect: deprecate SliceHeader and
+  StringHeader. Go commit d734203e39, 2022. https://go.dev/cl/428757
+  随 Go 1.20 发布。
 - <a id="ref-go-authors-2023"></a>[Go Authors, 2023] The Go Authors. Go 1.20 Release Notes.
   https://go.dev/doc/go1.20
   `unsafe.String`、`unsafe.StringData` 与 `unsafe.SliceData` 的引入。
