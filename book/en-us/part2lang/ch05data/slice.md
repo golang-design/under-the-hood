@@ -5,38 +5,59 @@ title: "5.1 Arrays and Slices"
 
 # 5.1 Arrays and Slices
 
-Arrays and slices are the two most basic sequence types in Go. They look similar, yet their memory models differ, and grasping this one point explains in a single stroke all the "surprises" of append and the traps of slice aliasing. Both share a single theme: a small **header** describing a stretch of contiguous backing memory. The differences lie entirely in what the header holds and who owns that memory. This section first lays out the layout clearly, then starts from the classic abstraction of the "dynamic array" to see how Go's `append` achieves amortized $O(1)$, and finally lands on aliasing and cross-language comparison, the corners we run into day to day. Strings, though they share the same origin as slices, are immutable and form a category of their own; we leave them to [5.2](./string.md) for dedicated discussion.
+Arrays and slices are the two basic sequence types in Go. They look alike in syntax but differ in
+memory model, and that difference explains both the behavior of `append` and the aliasing problems
+between slices. A slice and a string are each described by a small **header** that points to a
+contiguous region of memory [[Gerrand, 2011](#ref-gerrand-2011)]; they differ in which fields the
+header carries and in who owns that memory [[Pike, 2013](#ref-pike-2013)]. This section first
+describes the layout of all three, then starts from the classic abstraction of the **dynamic array**
+to show how `append` reaches $O(1)$ in the amortized sense, and what the runtime and compiler do to
+reduce allocations. It closes with aliasing and a comparison with other languages. A string
+resembles a slice in representation, but it is immutable and follows its own rules, which
+[5.2](./string.md) covers.
 
 ## 5.1.1 Three Memory Layouts
 
-**An array is a value.** A `[5]int` is just 5 `int`s laid out contiguously, and the length is part of the type: `[5]int` and `[6]int` are two different types. On assignment, passing as an argument, or as a struct field, an array is **copied in full**. For exactly this reason, large arrays are actually rarely used in Go; passing them around is too expensive, and when you really need to pass one you usually pass its slice or a pointer.
+**An array is a value.** `[5]int` is five `int`s laid out contiguously. The length is part of the
+type, so `[5]int` and `[6]int` are different types. An array is copied as a whole on assignment,
+when passed as an argument, and when used as a struct field. For this reason Go programs rarely pass
+large arrays directly; they pass a slice of the array or a pointer to it. In the other direction, a
+slice can be converted to an array pointer (since Go 1.17) or to an array (since Go 1.20), as in
+`(*[4]byte)(s)` and `[4]byte(s)`. If the slice is shorter than the array, the conversion panics at
+run time.
 
-**A slice is a view onto some stretch of an underlying array.** In the runtime it is a three-word header, which you can check against `runtime/slice.go`:
+**A slice is a view of a segment of an underlying array.** At run time a slice is a three-word
+header (`runtime/slice.go`):
 
 ```go
-// runtime: the runtime representation of a slice (slice.go)
 type slice struct {
-    array unsafe.Pointer // points to the first element of this slice in the underlying array
-    len   int            // length: number of visible elements
-    cap   int            // capacity: number of elements from array to the end of the underlying array
+	array unsafe.Pointer // points to the first element of the slice in the underlying array
+	len   int            // length: the number of elements that can be accessed
+	cap   int            // capacity: the number of elements from array to the end of the underlying array
 }
 ```
 
-`len` is the range you can index into, and `cap` is "how far it can still grow without reallocating." Separating the two is exactly the key to a slice being able to act as a "view": `s[1:3]` only changes the three fields in the header, without touching the underlying array.
+`len` is the range that can be indexed, and `cap` is the length the slice can grow to without
+reallocating. Keeping the two apart is what lets a slice act as a view: `s[1:3]` only computes the
+three fields of a new header and never touches the underlying array.
 
-**A string is a read-only byte sequence.** Its header is more frugal, only two words, with no `cap`:
+**A string is a read-only sequence of bytes.** Its header has only two words and no `cap`
+(`runtime/string.go`):
 
 ```go
-// runtime: the runtime representation of a string (string.go)
 type stringStruct struct {
-    str unsafe.Pointer // points to read-only bytes
-    len int            // number of bytes (not number of runes)
+	str unsafe.Pointer // points to the read-only bytes
+	len int            // number of bytes, not the number of characters (runes)
 }
 ```
 
-The missing `cap` is not an oversight but a design: a string is **immutable**, its length never grows once fixed, and so it naturally needs no capacity. Immutability buys three good things: multiple strings can safely share the same stretch of underlying bytes, the substring `s[i:j]` needs no copy, and a string can serve directly as a map key without defensive copying. The cost is that any "modification" must produce a new string. For the details of string conversion and zero-copy, see [5.2](./string.md).
+The missing `cap` field is not an oversight: a string is **immutable**, its length never grows once
+fixed, and so it needs no capacity. Immutability brings three benefits: several strings can safely
+share the same bytes, a substring `s[i:j]` needs no copy, and a string can be used directly as a map
+key without a defensive copy. The cost is that every modification must produce a new string. String
+conversion and zero-copy tricks are covered in [5.2](./string.md).
 
-Drawing the three side by side, the differences are plain at a glance:
+The three layouts compare as follows:
 
 ```mermaid
 flowchart LR
@@ -45,135 +66,352 @@ flowchart LR
       L["len = 3"]
       C["cap = 5"]
     end
-    P --> ARR["underlying array: a b c | d e (to the right of | is reserved capacity)"]
+    P --> ARR["underlying array: a b c | d e (right of | is reserved capacity)"]
     subgraph STR["string header (2 words, read-only)"]
       SP["ptr"]
       SL["len = 5"]
     end
     SP --> BYTES["read-only bytes: h e l l o"]
     subgraph ARRV["array is a value (no header)"]
-      AV["[5]int: 1 2 3 4 5 (assignment is a full copy)"]
+      AV["[5]int: 1 2 3 4 5 (assignment copies the whole array)"]
     end
 ```
 
-An array has no header; it **is** that stretch of memory. A slice and a string, by contrast, are "a header plus memory elsewhere." This one sentence is the root of all the behavior that follows.
+An array has no header; it is the memory itself. A slice or a string consists of a header plus a
+region of memory elsewhere. The behaviors discussed below all follow from this difference.
 
 ## 5.1.2 Dynamic Arrays and Amortized Analysis
 
-A slice is the Go incarnation of the **dynamic array**: a contiguous array that grows on demand. The core guarantee it gives is that, even though it occasionally has to reallocate and relocate all elements, the **amortized** cost of $n$ consecutive `append`s is still $O(1)$ per operation.
+A slice is Go's form of a **dynamic array**: a contiguous array that grows on demand. Its core
+guarantee is that, although an occasional append must allocate new memory and move every element,
+the **amortized** cost of $n$ consecutive `append` calls is still $O(1)$ each.
 
-The intuition comes from "geometric growth." Suppose that every time the capacity fills up we multiply by a constant factor $g>1$ (the simplest is $g=2$, doubling). Viewing the $n$ appends as a whole, the only truly expensive ones are the few that trigger relocation, and the relocation sizes shrink as a geometric series. From empty to $n$, the number of elements moved by each relocation is roughly $\dots, n/4, n/2, n$, and summing in reverse:
+The guarantee comes from growing by a multiplicative factor. Suppose that whenever the capacity runs
+out, the new capacity is the old one times a constant $g>1$ (the simplest case is $g=2$). Viewing
+the $n$ appends as a whole, only the few that trigger a move are expensive, and the sizes of the
+moves form a geometric series. Growing an empty slice to $n$ elements moves roughly
+$\dots, n/4, n/2, n$ elements in successive reallocations, which sums to:
 
 $$
 \sum_{i=0}^{\infty} \frac{n}{2^i} = n + \frac{n}{2} + \frac{n}{4} + \cdots < 2n
 $$
 
-The total relocation cost is bounded by $2n$, and adding the $O(n)$ of the $n$ "write the new element" operations themselves, the $n$ appends total $O(n)$, **which amortized over each one is a constant**. This is a textbook example of amortized analysis in *Introduction to Algorithms*, and both the aggregate method and the potential method give the same bound.
+The total cost of moving is at most $2n$. Adding the $O(n)$ cost of writing the $n$ new elements,
+$n$ appends cost $O(n)$ in total, a constant per append. This is the dynamic table that
+*Introduction to Algorithms* uses to teach amortized analysis, and aggregate analysis and the
+potential method both give the same bound [[Cormen et al., 2022](#ref-cormen-et-al-2022)].
 
-The key is that the factor must be **multiplicative**. If instead we "reserve only a fixed $c$ extra slots each time," the $k$-th expansion has to move about $kc$ elements, the total cost is $\sum kc = \Theta(n^2)$, and amortized each one degrades to $O(n)$. A single constant factor separates linear from quadratic. The amortized constant bought by multiplicative growth comes at the cost of about $g/2$ times the wasted space on average (when doubling, the worst-case idle space approaches half), and this is precisely the eternal space-versus-time dispute over the growth factor ([5.1.5](#515-cross-language-comparison) will show the different answers each gives).
+The essential point is that growth must be **multiplicative**. If each growth added a fixed $c$
+slots, the $k$-th growth would move about $kc$ elements, the total would be $\sum kc = \Theta(n^2)$,
+and the amortized cost per append would degrade to $O(n)$. The price of multiplicative growth is
+space: right after a growth only about $1/g$ of the capacity is in use, and with doubling up to half
+the space may sit idle. The growth factor is therefore a trade-off between time and space; 5.1.6
+shows the answers that different languages give.
 
-## 5.1.3 append's Growth Strategy
+## 5.1.3 The Growth Strategy of append
 
-In theory "multiply by a constant factor" is enough; in engineering Go does it more finely. The core is in `runtime.growslice`, which first uses `nextslicecap` to compute a target capacity, then hands it to the memory allocator for alignment. First look at the capacity computation (compare against go1.26's `runtime/slice.go`):
+In theory any constant growth factor will do, but Go's implementation is more refined. When capacity
+is insufficient, `append` calls the runtime function `growslice`, which first computes a target
+capacity with `nextslicecap` and then adjusts it according to the memory allocator's size classes.
+The code that computes the target capacity is shown below (Go 1.26 `runtime/slice.go`; the comments
+are translated by the author [[Go Authors, 2026a](#ref-go-authors-2026a)]):
 
 ```go
-// runtime: compute the new capacity (slice.go, comments abridged)
 func nextslicecap(newLen, oldCap int) int {
-    newcap := oldCap
-    doublecap := newcap + newcap
-    if newLen > doublecap {
-        return newLen          // a single append asks for too much, give it the needed length directly
-    }
-    const threshold = 256
-    if oldCap < threshold {
-        return doublecap       // small slice: double
-    }
-    for {
-        // transition smoothly from 2x to about 1.25x: large slices care more about saving memory
-        newcap += (newcap + 3*threshold) >> 2
-        if uint(newcap) >= uint(newLen) {
-            break
-        }
-    }
-    return newcap
+	newcap := oldCap
+	doublecap := newcap + newcap
+	if newLen > doublecap {
+		return newLen // too many elements appended at once: take the required length
+	}
+
+	const threshold = 256
+	if oldCap < threshold {
+		return doublecap // small slice: double the capacity
+	}
+	for {
+		// Transition from 2x growth for small slices to 1.25x growth
+		// for large slices; this formula makes the transition smooth.
+		newcap += (newcap + 3*threshold) >> 2
+
+		// Check both newcap >= newLen and whether newcap overflowed.
+		if uint(newcap) >= uint(newLen) {
+			break
+		}
+	}
+
+	// If the computation overflowed, take the required length.
+	if newcap <= 0 {
+		return newLen
+	}
+	return newcap
 }
 ```
 
-The strategy uses **256** as the boundary. When the old capacity is below 256 it doubles, so small slices grow aggressively, aiming to relocate fewer times. On reaching or exceeding 256, it switches to `newcap += (newcap + 3*256) >> 2`, that is, each round adds about $\tfrac{1}{4}(\text{newcap} + 768)$. When `newcap` is still small, the constant term $\tfrac{3}{4}\cdot256$ is a large share and the multiplier is close to 2; when `newcap` is large the constant term is negligible and the multiplier tends to $1 + \tfrac14 = 1.25$. The result is a curve that **slides continuously from 2x toward 1.25x**, rounder than the pre-Go-1.18 "hard jump from 2x to 1.25x at 1024," avoiding the capacity waste near the critical point.
+The strategy pivots at 256. When the old capacity is below 256, the capacity doubles, so small
+slices grow fast and move less often. Once the old capacity reaches 256, each round adds
+$\tfrac{1}{4}(\text{newcap} + 768)$. While `newcap` is small the constant 768 dominates and the
+growth ratio is close to 2; when `newcap` is large the constant is negligible and the ratio tends to
+$1.25$. The ratio thus moves continuously from 2 to 1.25. Keith Randall proposed this formula in
+2021 and it was adopted in Go 1.18 [[Randall, 2021](#ref-randall-2021)]. The earlier strategy
+doubled the capacity below 1024 and grew by 1.25x afterwards, so the ratio jumped at 1024.
 
-The computed `newcap` is not the end. `growslice` then hands "`newcap × element size`" to `roundupsize` to round up to the memory allocator's **size class** (see [12 The Memory Allocator](../../part4memory/ch12alloc)), then derives the number of elements back from the aligned byte count:
+The capacity computed by `nextslicecap` goes through one more adjustment. `growslice` passes the
+required number of bytes (capacity times element size) to `roundupsize`, which rounds it up to a
+**size class** of the memory allocator (see [Chapter 12](../../part4memory/ch12alloc/readme.md)),
+and then derives the capacity back from the rounded byte count. For an element of pointer size:
 
 ```go
-// runtime: align by size class in growslice (slice.go, taking pointer-sized elements as the example)
 capmem = roundupsize(uintptr(newcap)*goarch.PtrSize, noscan)
-newcap = int(capmem / goarch.PtrSize) // cap is "stretched" to the size-class boundary
+newcap = int(capmem / goarch.PtrSize) // capacity extends to the size-class boundary
 ```
 
-So a slice's actual `cap` is often slightly larger than what you compute in your head. It is the composite result of two steps, "multiplicative growth plus size-class alignment": the former guarantees amortized $O(1)$, and the latter incidentally hands back to you the bit of scrap the allocator was going to waste anyway. This explains that common puzzle, **why `cap` after append is precisely this number**: there is no need to memorize it, just understand these two steps.
+The allocator hands out a whole size-class block anyway, and `growslice` merely counts the otherwise
+idle space as capacity. The following program appends elements one by one and prints the new
+capacity whenever it changes:
 
-## 5.1.4 Aliasing and Those "Surprises"
+```go {run=true}
+package main
 
-A slice is a view, and multiple slices can share the same stretch of underlying array. This is the source of performance, and also the source of bugs.
+import "fmt"
 
-**`append` may or may not share the underlying array.** This is the trap most often stepped on. If append does not exceed `cap`, the returned slice **shares** the underlying array with the original, and a write to one side's element shows through to the other; once it exceeds `cap` and triggers a reallocation, the two **part ways** from then on:
-
-```go
-a := make([]int, 3, 5) // len=3, cap=5
-b := append(a, 1)      // did not exceed cap: b shares the underlying array with a
-b[0] = 99              // a[0] becomes 99 too
-c := append(b, 2, 3, 4) // exceeds cap=5: c is reallocated, decoupled from a/b
-c[0] = 7               // a/b are unaffected
-```
-
-"Sometimes shared, sometimes not" makes function boundaries dangerous: pass a slice into a function, have the function append to it, and whether the slice on the outside sees the change depends on the `cap` at that moment. The **full slice expression** `a[lo:hi:max]` is the tool that addresses the root cause; it explicitly caps the new slice's `cap` at `max`, so that the next append must overflow, must copy, and must sever the aliasing:
-
-```go
-// a library function returns a view of an internal buffer, but does not want the caller
-// to tamper with subsequent memory by borrowing append:
-view := buf[off : off+n : off+n] // cap == len, the caller's append triggers a copy
-```
-
-**Memory leaks caused by sub-slicing.** As long as a slice header stays alive, the **entire** underlying array it points to cannot be reclaimed, even if you only need the first ten elements:
-
-```go
-small := big[:10] // small's cap still covers the entire underlying array of big
-// as long as small is reachable, that (possibly large) block of big stays pinned
-```
-
-When you need to hold a small segment for a long time, you should `copy` out an independent copy, or use the standard library's `slices.Clone` to sever the reference. The `slices` package since Go 1.21 makes these operations explicit and readable, and even takes care of details that are easy to miss, such as "after deleting elements, zero out the tail so the GC can reclaim it":
-
-```go
-// after slices.Delete removes [i,j), it zeroes the freed tail to avoid dangling references pinning objects
-func Delete[S ~[]E, E any](s S, i, j int) S {
-    // ...
-    s = append(s[:i], s[j:]...)
-    clear(s[len(s):oldlen]) // the key: zero/clear the discarded elements, helping the GC
-    return s
+func main() {
+	var s []int
+	last := -1
+	for i := range 4000 {
+		s = append(s, i)
+		if cap(s) != last {
+			fmt.Print(cap(s), " ")
+			last = cap(s)
+		}
+	}
+	fmt.Println()
 }
 ```
 
-Deleting an element by hand with `s = append(s[:i], s[i+1:]...)`, missing this one `clear`, leaves the "deleted" pointers still in the tail of the underlying array, still seen as alive by the GC, which is another hidden leak. When you can use `slices`, don't hand-write it.
+```
+4 8 16 32 64 128 256 512 848 1280 1792 2560 3408 5120
+```
 
-## 5.1.5 Cross-Language Comparison
+Below 256 the capacity doubles each time, and 256 to 512 is also a doubling because
+$256 + (256 + 768)/4 = 512$. After 512 the formula gives $512 + (512 + 768)/4 = 832$, which is 6656
+bytes; the smallest allocator size class of at least 6656 bytes is 6784 bytes, so the capacity is
+$6784 / 8 = 848$. The next step gives 1252 by the formula, or 10016 bytes, which rounds up to the
+10240-byte size class and a capacity of 1280. The actual capacity of a slice is thus the combined
+effect of multiplicative growth and size-class rounding.
 
-The dynamic array is a universal abstraction. C++'s `std::vector`, Rust's `Vec<T>`, Python's `list`, Java's `ArrayList` are all in essence amortized $O(1)$ geometrically growing arrays. The differences concentrate on two points: the **growth factor** and the **view**.
+The sequence starts at 4 rather than 1 because of another optimization: this slice does not escape,
+so the compiler reserves a 32-byte buffer for it on the stack, exactly enough for four `int`s. With
+`-gcflags=-d=variablemakethreshold=0` the optimization is turned off and the sequence begins
+`1 2 4 8`.
 
-The growth factor is each language's different answer to that space-versus-time dispute. Most C++ standard library implementations use 2x (libstdc++) or 1.5x (MSVC; the benefit of 1.5x is that the sum of memory freed across past expansions has a chance to be reused for the next allocation); Python's `list` uses about 1.125x, growing conservatively and being more memory-frugal in steady state; Java's `ArrayList` is 1.5x. Go uses the curve from [5.1.3](#513-appends-growth-strategy) that slides from 2 toward 1.25. The smaller the factor, the more memory-frugal and the more frequent the relocations; the larger, the fewer relocations and the more memory-hungry. There is no universal optimum, only a trade-off for each one's typical workload.
+## 5.1.4 Backing Arrays on the Stack
 
-On the view dimension, Go's slice and Rust's `&[T]` (slice) are the same kind of thing: a "fat pointer" pointing to a segment of someone else's array (ptr + len, and Go carries an extra cap), referencing a sub-segment with zero copy, owning no memory of its own. Whereas `std::vector`, `Vec`, `list`, and `ArrayList` are **owning** containers; they hold and are responsible for releasing the underlying memory. C++ did not split the view out into `std::span` until C++20, while Rust from the start drew the line at the type level between "the owned `Vec`" and "the borrowed `&[T]`," using the borrow checker to block aliasing writes at compile time. Go chose another path: unifying "the owned dynamic array" (the underlying array) and the "view" (the slice) into a single slice type, gaining the language's simplicity at the cost of exactly those aliasing traps in [5.1.4](#514-aliasing-and-those-surprises). Between simplicity and safety, Go this time placed the weight on the simplicity side, and handed the discipline of aliasing back to the programmer.
+Under the strategy of 5.1.3, a slice that starts empty and is appended to one element at a time in a
+loop allocates memory at the 1st, 2nd, 4th, 8th, ... append, and every block except the last becomes
+garbage right after the next growth. For a slice that does not escape
+([15.5](../../part5toolchain/ch15compile/escape.md)), these allocations can be avoided.
+
+A `make` with a constant length that does not escape has long been allocated on the stack. Go 1.25
+extends this to `make([]T, n)` whose length is known only at run time, and to appends to a nil
+slice: as long as the result does not escape, the compiler reserves a 32-byte buffer on the stack,
+uses it directly when the required space is at most 32 bytes, and calls into the runtime to allocate
+on the heap only when it is exceeded. Go 1.26 adds a dedicated analysis
+(`cmd/compile/internal/slice`) [[Go Authors, 2026b](#ref-go-authors-2026b)]: if the backing array of
+a slice escapes only at a few places such as the final `return`, the compiler inserts `move2heap`
+before those places, so the earlier appends can still use the stack buffer and the contents are
+copied to the heap only when escaping is required. The following program measures the number of
+allocations in both situations:
+
+```go {run=true}
+package main
+
+import (
+	"fmt"
+	"os"
+	"testing"
+)
+
+//go:noinline
+func local(n int) int {
+	var s []int
+	for i := range n {
+		s = append(s, i)
+	}
+	return len(s) // s does not escape
+}
+
+//go:noinline
+func escaping(n int) []int {
+	var s []int
+	for i := range n {
+		s = append(s, i)
+	}
+	return s // s escapes on return
+}
+
+var sink []int
+
+func main() {
+	n := len(os.Args) + 3 // 4, a value known only at run time
+	fmt.Println(testing.AllocsPerRun(100, func() { local(n) }))
+	fmt.Println(testing.AllocsPerRun(100, func() { local(n * 25) }))
+	fmt.Println(testing.AllocsPerRun(100, func() { sink = escaping(n) }))
+	fmt.Println(testing.AllocsPerRun(100, func() { sink = escaping(n * 25) }))
+}
+```
+
+```
+0
+5
+1
+5
+```
+
+Under Go 1.26, `local` with four appends does not allocate at all. The same loop in `escaping`
+allocates once, on return, instead of once each at capacities 1, 2 and 4. With 100 appends the stack
+buffer is used up quickly, and from then on the behavior is the usual one: one allocation each at
+capacities 8, 16, 32, 64 and 128, five in total. With the optimization turned off, the four numbers
+are 3, 8, 3 and 8.
+
+Related to this, Go 1.26 also implements `growsliceNoAlias`: when the compiler can prove that the
+old backing array of a slice has no other references, the old array can be freed immediately after
+growth instead of waiting for garbage collection. This feature is controlled by the experiment flag
+`GOEXPERIMENT=runtimefreegc` and is off by default in Go 1.26.
+
+## 5.1.5 Aliasing and Common Pitfalls
+
+A slice is a view, and several slices can share the same backing array. That is why slices are
+efficient, and also the source of many bugs.
+
+**The result of `append` may or may not share the backing array with the original slice.** If the
+length after appending does not exceed the capacity, the returned slice shares the backing array
+with the original, and a write through one is visible through the other. Once the capacity is
+exceeded and a new array is allocated, the two are unrelated:
+
+```go {run=true}
+package main
+
+import "fmt"
+
+func main() {
+	a := make([]int, 3, 5) // len 3, cap 5
+	b := append(a, 1)      // within capacity: b shares the backing array with a
+	b[0] = 99
+	fmt.Println(a, b) // a[0] also becomes 99
+
+	c := append(b, 2, 3) // capacity exceeded: c points to a newly allocated array
+	c[0] = 7
+	fmt.Println(a, b, c) // a and b are unaffected
+
+	d := a[0:3:3]    // full slice expression: cap(d) == len(d)
+	d = append(d, 4) // always reallocates
+	d[0] = 0
+	fmt.Println(a, d)
+}
+```
+
+```
+[99 0 0] [99 0 0 1]
+[99 0 0] [99 0 0 1] [7 0 0 1 2 3]
+[99 0 0] [0 0 0 4]
+```
+
+This uncertainty is especially dangerous across function boundaries: when a slice is passed to a
+function that appends to it, whether the caller sees the change depends on the capacity at that
+moment. The **full slice expression** `a[lo:hi:max]` solves this problem
+[[Go Authors, 2026c](#ref-go-authors-2026c)]. It limits the capacity of the new slice to `max - lo`;
+when `hi == max`, the next `append` always reallocates and so cuts the link with the original array,
+as with `d` in the example. A library function that returns a piece of an internal buffer commonly
+uses this form to keep callers from overwriting the rest of the buffer through `append`:
+
+```go
+view := buf[off : off+n : off+n] // cap == len, so an append by the caller always copies
+```
+
+**Memory retention through subslices.** As long as a slice header is reachable, the whole backing
+array it points to cannot be reclaimed, even if the program uses only a small part of it:
+
+```go
+small := big[:10] // the backing array of small is still the entire backing array of big
+// as long as small is reachable, the backing array of big (possibly huge) cannot be reclaimed
+```
+
+To keep a small piece of data for a long time, use `copy` or `slices.Clone` to obtain an independent
+copy. Deleting elements has a similar problem. The hand-written `s = append(s[:i], s[i+1:]...)`
+moves the later elements forward, but the element that used to be last remains in the backing array,
+beyond `len(s)`. If the elements contain pointers, the objects they reference are still considered
+live. The `slices` package introduced in Go 1.21 behaved this way at first
+[[Go Authors, 2026d](#ref-go-authors-2026d)]; since Go 1.22, functions such as `slices.Delete`,
+`DeleteFunc`, `Compact` and `Replace` zero the elements that have been moved out
+[[Go Authors, 2024](#ref-go-authors-2024)]. The implementation of `Delete` in Go 1.26 is:
+
+```go
+func Delete[S ~[]E, E any](s S, i, j int) S {
+	_ = s[i:j:len(s)] // bounds check
+
+	if i == j {
+		return s
+	}
+
+	oldlen := len(s)
+	s = append(s[:i], s[j:]...)
+	clear(s[len(s):oldlen]) // zero the elements moved out, so the garbage collector can reclaim them
+	return s
+}
+```
+
+## 5.1.6 Comparison with Other Languages
+
+The dynamic array is a common abstraction: C++'s `std::vector`, Rust's `Vec<T>`, Python's `list` and
+Java's `ArrayList` are all, in essence, multiplicatively growing arrays with amortized $O(1)$
+appends. The implementations differ mainly in two respects: the growth factor and the view.
+
+The growth factor is each implementation's answer to the time-space trade-off. Among C++ standard
+libraries, libstdc++ grows by 2x and MSVC by 1.5x; when the factor is below the golden ratio, the
+sum of the previously freed blocks can come to hold the next allocation, which is one argument for
+choosing 1.5x. Rust's `Vec` grows by 2x; Python's `list` grows by roughly 1.125x, which is
+conservative and saves memory once the size is stable; Java's `ArrayList` grows by 1.5x. Go uses the
+strategy described in 5.1.3, which moves smoothly from 2x to 1.25x. A smaller factor saves memory
+but moves more often; a larger one moves less often but wastes more memory. There is no universally
+optimal choice, only trade-offs fitted to each language's typical workload.
+
+As for views, a Go slice belongs to the same family as Rust's `&[T]`: both are fat pointers into
+someone else's array (pointer and length, plus capacity in Go) that can refer to a subrange without
+copying and do not own the memory themselves. `std::vector`, `Vec`, `list` and `ArrayList`, by
+contrast, are **owning** containers that hold the underlying memory and are responsible for
+releasing it. C++ provided a separate view type, `std::span`, only in C++20. Rust distinguished the
+owning `Vec` from the borrowing `&[T]` at the type level from the start, and uses the borrow checker
+to forbid writes through aliases at compile time. Go chose differently: one slice type plays both
+roles, dynamic array and view, which keeps the language simpler at the cost of the aliasing problems
+discussed in 5.1.5. Between simplicity and safety, Go chose simplicity here and left the management
+of aliases to the programmer.
 
 ## Further Reading
 
-1. Thomas H. Cormen, Charles E. Leiserson, Ronald L. Rivest, Clifford Stein.
-   *Introduction to Algorithms*, 4th ed., MIT Press, 2022. Chapter 16 "Amortized Analysis" and
-   table doubling of dynamic tables, the source of this section's amortized bound.
-2. The Go Authors. *runtime/slice.go: `growslice` / `nextslicecap`* (go1.26 growth strategy).
-   https://github.com/golang/go/blob/master/src/runtime/slice.go
-3. Andrew Gerrand. *Go Slices: usage and internals.* The Go Blog, 2011.
-   https://go.dev/blog/slices-intro
-4. Rob Pike. *Arrays, slices (and strings): The mechanics of 'append'.* The Go Blog, 2013.
-   https://go.dev/blog/slices
-5. The Go Authors. *`slices` package documentation* (Go 1.21, `Clone` / `Delete` / `Insert` / `Grow`).
-   https://pkg.go.dev/slices
-6. The Go Authors. *Go specification: Slice expressions* (including the full slice expression `a[lo:hi:max]`).
-   https://go.dev/ref/spec#Slice_expressions
+- <a id="ref-cormen-et-al-2022"></a>[Cormen et al., 2022] Thomas H. Cormen, Charles E. Leiserson,
+  Ronald L. Rivest, Clifford Stein. *Introduction to Algorithms*, 4th ed. MIT Press, 2022. The
+  section on dynamic tables in Chapter 16, "Amortized Analysis", gives the amortized bound for
+  growth by a multiplicative factor.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `runtime/slice.go`.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/slice.go
+  https://github.com/golang/go/blob/master/src/runtime/slice.go
+  `growslice`, `nextslicecap`, and `growsliceBuf` and `growsliceNoAlias`, new in Go 1.26.
+- <a id="ref-randall-2021"></a>[Randall, 2021] Keith Randall. "runtime: make slice growth formula a
+  bit smoother." Go commit 2dda92ff6f, 2021. https://go.googlesource.com/go/+/2dda92ff6f The
+  smoothed growth formula in use since Go 1.18.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors.
+  `cmd/compile/internal/slice/slice.go`.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/slice/slice.go
+  Design notes on stack allocation of slice backing arrays and `move2heap` in Go 1.26.
+- <a id="ref-gerrand-2011"></a>[Gerrand, 2011] Andrew Gerrand. "Go Slices: usage and internals." The
+  Go Blog, 2011. https://go.dev/blog/slices-intro
+- <a id="ref-pike-2013"></a>[Pike, 2013] Rob Pike. "Arrays, slices (and strings): The mechanics of
+  'append'." The Go Blog, 2013. https://go.dev/blog/slices
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *The Go Programming Language
+  Specification*, "Slice expressions". https://go.dev/ref/spec#Slice_expressions
+  Includes the definition of the full slice expression `a[lo:hi:max]`.
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. *Documentation of the
+  `slices` package* (Go 1.21, `Clone` / `Delete` / `Insert` / `Grow`). https://pkg.go.dev/slices
+- <a id="ref-go-authors-2024"></a>[Go Authors, 2024] The Go Authors. *Go 1.22 Release
+  Notes*, "slices". https://go.dev/doc/go1.22 `Delete`, `DeleteFunc`, `Compact`, `CompactFunc` and
+  `Replace`, which shorten a slice, now zero the elements moved out.

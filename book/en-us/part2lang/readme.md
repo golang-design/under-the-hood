@@ -20,8 +20,15 @@ bookCollapseSection: true
 </div>
 </div>
 
-The syntax of a language is written for humans to read, but the data layout behind that syntax is what the machine actually executes.
-This part presses on exactly that gap: when we write down an interface, a slice, a defer, or a type parameter, what memory representation and execution mechanism do the compiler and runtime really prepare for us.
-We begin with the type system as the overall skeleton, then descend layer by layer into the internal representation of data structures such as strings, slices, and maps,
-and on to the control flow of function calls, deferred execution, and panic recovery, the paradigm of treating errors as ordinary values, and how generics are implemented without sacrificing performance.
-Once we understand these implementations, language features cease to be isolated syntactic sugar and become a set of engineering decisions that interlock with one another, each carrying its own cost.
+Language syntax faces the programmer; the data layout and execution machinery behind it face the
+machine. This part examines the correspondence between the two: when a program contains an
+interface, a slice, a `defer` statement or a type parameter, what memory representation and
+execution mechanism the compiler and runtime prepare for it.
+
+The discussion starts with the type system (Chapter 4), on which the other chapters rest. It
+continues with the internal representation of data structures such as strings, slices and maps
+(Chapter 5), the control flow of function calls, `defer` and `panic` (Chapter 6), the treatment of
+errors as ordinary values (Chapter 7), and how generics balance compilation speed against runtime
+performance (Chapter 8). With these implementations in view, the language features turn out not to
+be isolated syntactic conveniences but a set of interrelated engineering decisions, each with its
+own cost.

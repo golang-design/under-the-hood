@@ -5,15 +5,25 @@ title: "7.5 The Future of Error Handling"
 
 # 7.5 The Future of Error Handling
 
-In the preceding sections we saw the plainness of the `error` interface, `%w` wrapping, and the inspection of error chains. By this point the reader probably carries an unspoken question: those three lines of `if err != nil` boilerplate, spread year after year across every Go program, is there really no way to get rid of them? The question is not a lonely one. From the go2 draft of 2018 to a single conclusion in 2025, the Go team weighed it back and forth for seven years, proposing several syntaxes such as `check`/`handle`, `try`, and `?`, and then withdrawing them one by one. This section places that path of failed syntax side by side with another, quietly successful path of library evolution, and lays out the judgment the Go team finally arrived at: for the foreseeable future, error handling will not receive any dedicated syntax.
+The improvements covered in the previous sections, `%w`, `errors.Is`, `errors.As` and the like,
+address how errors are inspected and how they carry context. One question has stayed open
+throughout: can the boilerplate of `if err != nil` be made shorter with new syntax? Between 2018 and
+2025 the Go team put forward three complete proposals, `check`/`handle`, `try` and `?`, and the
+community proposed hundreds more, yet none was adopted. In June 2025 the Go team announced that it
+would no longer pursue syntactic changes for error handling for the foreseeable future
+[[Griesemer, 2025](#ref-griesemer-2025)].
 
-Understanding this outcome matters more than memorizing any of the rejected syntaxes. It is not a deferral but a well-grounded decision to "not do" it, and behind it lies Go's solemn reaffirmation of "explicit over concise".
+This section describes the three attempts and why each was abandoned, the reasoning behind the 2025
+decision, and the improvements that actually landed in the standard library during the same period.
 
-## 7.5.1 The Rejected Syntax Attempts
+## 7.5.1 check and handle: The 2018 Draft
 
-### check / handle: the 2018 go2 draft
-
-The first formal attempt to turn error handling into syntax was the `check`/`handle` draft, published in 2018 along with the "Go 2" blueprint. It introduced two keywords: `check` is an expression that evaluates a call returning `(T, error)`, extracting `T` when the error is `nil` and otherwise handing control to the nearest `handle` block; `handle` is a statement that declares the cleanup logic for a failed check in the current function. A typical file copy was written like this under the draft:
+In August 2018, along with the Go 2 draft designs, the Go team published a problem overview for
+error handling [[Cox, 2018b](#ref-cox-2018b)] and a draft design by Marcel van Lohuizen
+[[Lohuizen, 2018](#ref-lohuizen-2018)]. The draft introduced two keywords. `check` is an expression
+applied to a call that returns `(T, error)`: when the error is `nil` it yields `T`, and otherwise it
+passes the error to a handler. `handle` is a statement that declares the handler to run when a check
+fails. The `CopyFile` from the problem overview reads as follows under the draft:
 
 ```go
 func CopyFile(src, dst string) error {
@@ -21,13 +31,13 @@ func CopyFile(src, dst string) error {
 		return fmt.Errorf("copy %s %s: %v", src, dst, err)
 	}
 
-	r := check os.Open(src)     // on failure, jump to the handle above
+	r := check os.Open(src)
 	defer r.Close()
 
 	w := check os.Create(dst)
-	handle err {                 // handles stack; the later-declared one takes effect first
+	handle err {
 		w.Close()
-		os.Remove(dst)
+		os.Remove(dst) // (only if a check fails)
 	}
 
 	check io.Copy(w, r)
@@ -36,118 +46,269 @@ func CopyFile(src, dst string) error {
 }
 ```
 
-Its ambition lay in the `handle` chain: multiple `handle` blocks take effect in reverse declaration order, reminiscent of the stack semantics of `defer`, allowing "roll back on error" cleanup logic to be laid out layer by layer along the call order. The cost lay there too. To understand what happens after a given `check` line fails, the reader has to maintain a `handle` stack in their head, one that is both independent of and intertwined with the `defer` stack. The community broadly reported that it "introduced a new control flow that has to be learned separately, just to save an `if`", and its complexity was not necessarily lower than what it eliminated. The draft was ultimately judged too complex and never advanced to the proposal stage.
+According to the draft, when a `check` fails, all handlers in the lexical scope run in the reverse
+order of their declaration until one of them executes a `return`. Unlike `defer`, `handle` is
+lexically scoped, so handlers declared in a loop body do not accumulate across iterations; handlers
+always run before any deferred functions.
 
-### try(): the built-in function withdrawn in 2019
+The weakness of this design shows here: to work out what happens after a particular `check` fails,
+the reader has to maintain a chain of handlers in their head, and that chain is independent of, yet
+interleaved with, the execution order of `defer`. The Go team's later assessment was that `check`
+and `handle` were considered too complicated, and the team moved to a much simpler proposal
+[[Griesemer, 2025](#ref-griesemer-2025)].
 
-Learning from how heavy `check`/`handle` was, Robert Griesemer proposed a scheme that went to the opposite extreme in June 2019, [proposal 32437](https://github.com/golang/go/issues/32437): a built-in function named `try`. Its signature can be understood this way: it takes an expression returning `(T1, ..., Tn, error)`, returns the first $n$ values when the error is `nil`, and otherwise uses that error to **return early from the enclosing function**. So the opening of `CopyFile` shrank to:
+## 7.5.2 try: The Proposal Rejected in 2019
+
+In June 2019, following the Go 2 proposal process [[Griesemer, 2018](#ref-griesemer-2018)], Robert
+Griesemer proposed the built-in function `try` (proposal 32437)
+[[Griesemer, 2019](#ref-griesemer-2019)]. `try` applies to a call whose last result is an `error`:
+when the error is `nil` it returns the remaining results, and otherwise it returns immediately from
+the enclosing function with that error as its result. Adding context to errors is left to `defer`
+and named result parameters. The `CopyFile` in the proposal looks like this:
 
 ```go
-// before try: four lines of boilerplate, re-dressing the error and throwing it upward
-r, err := os.Open(src)
-if err != nil {
-	return fmt.Errorf("copy %s %s: %v", src, dst, err)
-}
+func CopyFile(src, dst string) (err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("copy %s %s: %v", src, dst, err)
+		}
+	}()
 
-// after try: one line, take the value when the error is nil, otherwise return
-func CopyFile(src, dst string) error {
-	r := try(os.Open(src))     // when err != nil, CopyFile returns err immediately
+	r := try(os.Open(src))
 	defer r.Close()
 
 	w := try(os.Create(dst))
-	defer w.Close()
+	defer func() {
+		w.Close()
+		if err != nil {
+			os.Remove(dst) // only if a "try" fails
+		}
+	}()
+
 	try(io.Copy(w, r))
+	try(w.Close())
 	return nil
 }
 ```
 
-`try` introduced no new keyword and no new control structure, just a built-in function, so on the syntactic surface it looked extremely restrained. Decorating the error was left to `defer` together with named return values. As soon as the proposal appeared, community discussion quickly heated up to a scale rarely seen in Go's history, and the core objection came down to a single sentence: `try` hid a `return` inside an expression that looks like an ordinary function call.
+`try` introduces neither a new keyword nor a new control structure, yet the issue drew more than
+eight hundred comments on GitHub. The core of the objection was that `try` makes the enclosing
+function return while looking like an ordinary function call: `x := try(f())` reads no differently
+from `x := len(f())`, so the return point is no longer obvious.
 
-This is precisely what Go has always shied away from, **hidden control flow**. The line `x := try(f())` might cause the function to return then and there, yet it reads no differently from `x := len(f())`. In a language that holds "you can see the direction of control flow just by reading the code" as an article of faith, this is a concession hard to accept. The proposal also brought a string of secondary problems: `try` was hard to use in tests (which expect `t.Fatal` rather than `return`), decorating the error was forced to detour through `defer`, and during debugging a breakpoint was hard to place on that implicit return. The same year, the author withdrew the proposal, citing exactly the community's strong disagreement over control-flow readability.
+On July 16, 2019, Griesemer announced on behalf of the proposal review committee that the proposal
+was declined early, and explained why. The discussion had pointed out problems the design had
+overlooked, most prominently its effect on inserting debugging output and on analyzing code
+coverage. More importantly, many people said explicitly that the proposal did not address a problem
+worth solving at all. Griesemer acknowledged that the team had described the problem in its overview
+the previous August but had not led enough discussion to confirm that it was the right problem; the
+overview may even have been overshadowed entirely by the generics draft published the same day
+[[Griesemer, 2019](#ref-griesemer-2019)].
 
-### Lighter if-err and the ? proposal
+## 7.5.3 ?: The 2025 Proposal
 
-After `try` was withdrawn, the community did not give up, turning instead to lighter forms. The most representative was the `?` operator proposal of 2024, which copied Rust's `?` almost verbatim:
+In January 2025, Ian Lance Taylor filed proposal 71203 [[Taylor, 2025](#ref-taylor-2025)], drawing
+on Rust's `?` operator (available since Rust 1.13 in 2016 [[Rust, 2016](#ref-rust-2016)]). Under the
+proposal, an assignment or expression statement may be followed by a `?`, which checks whether the
+last value is `nil`; if it is not, the block after `?` runs, in which an implicitly declared `err`
+holds the error. The block may be omitted, in which case the error is returned directly:
 
 ```go
-r := os.Open(src)?     // equivalent to if err != nil { return ..., err }
+func CopyFile(src, dst string) error {
+	r := os.Open(src) ? {
+		return fmt.Errorf("copy %s %s: %v", src, dst, err)
+	}
+	defer r.Close()
+	// ...
+}
+
+func Run() error {
+	Start() ? // if the error returned by Start is not nil, return it
+	Wait() ?  // if the error returned by Wait is not nil, return it
+	return nil
+}
 ```
 
-A trailing `?`, and a non-nil error returns carrying the error. It was lighter than `try`, dispensing even with the shell of a function call, but it also pushed the "hidden control flow" problem to its extreme: a single punctuation mark could make the function return. There were also variants such as falling back with `||` (`f() || return err`), all alike in spirit, all tugging back and forth between "writing a few fewer characters" and "making the return visible". None of them gathered enough support.
+Unlike `try`, the form with a block keeps the error-handling code explicitly visible. But this
+proposal too was quickly buried under comments and suggestions for changes to its details. Taylor
+closed the proposal and moved the discussion to GitHub Discussions (71460)
+[[Taylor, 2025](#ref-taylor-2025)]. The revised version was received somewhat better but still did
+not win broad support [[Griesemer, 2025](#ref-griesemer-2025)].
 
-The schemes taken seriously and then set aside over seven years can be laid out as a clear timeline:
+The three formal attempts are listed in the following table:
 
-| Year | Scheme | Form | Outcome |
-| --- | --- | --- | --- |
-| 2018 | `check` / `handle` | keywords + handle stack | too complex, never filed |
-| 2019 | `try(...)` | built-in function, implicit return | hidden control flow, withdrawn by the author |
-| 2024 | `expr?` | postfix operator | insufficient support |
-| 2025 | (all) | error-handling syntax | decided to stop pursuing |
+| Date | Proposal | Form | Outcome |
+| :-- | :-- | :-- | :-- |
+| August 2018 | `check` / `handle` | Keywords and a chain of handlers | Considered too complex; no formal proposal |
+| June 2019 | `try(...)` | Built-in function, implicit return | Rejected in July 2019 |
+| January 2025 | `expr ?` | Postfix operator, optionally with a block | Moved to a discussion; no broad support |
+| June 2025 | (all) | Dedicated syntax for error handling | Decided to stop pursuing it |
 
-## 7.5.2 2025: Deciding to Stop Pursuing Dedicated Syntax
+## 7.5.4 The 2025 Decision
 
-On June 3, 2025, Griesemer published an article on behalf of the Go team, putting a period at the end of this path: for the foreseeable future, Go will no longer pursue syntactic changes to error handling, and will close existing as well as newly arriving proposals whose main subject is error-handling syntax, without examining each one in depth. This was not a stalling tactic but a reasoned conclusion. The reasons given in the article are worth taking in one by one:
+On June 3, 2025, Griesemer published *[ On | No ] syntactic support for error handling* on the Go
+blog. The article announced that, for the foreseeable future, the Go team would stop pursuing
+syntactic changes for error handling, and would close all existing and new proposals that primarily
+concern error-handling syntax without examining them individually
+[[Griesemer, 2025](#ref-griesemer-2025)].
 
-- **Fifteen years, hundreds of proposals, and still no consensus.** Even within the Go team there was no agreement on which path to take. A language-level change, if even its designers cannot persuade one another, has no right to land.
-- **A language change is mandatory, a library change is optional.** This point is the most crucial. After generics ([8](../ch08generics)) landed, those who did not want to use them could go on without them; but once new syntax is added for error handling, nearly everyone is forced to read it, learn it, and choose between the two ways of writing. One of Go's design principles is "do not provide multiple ways to do the same thing", and new syntax would break exactly that.
-- **Better error handling comes from context, not from shorter syntax.** The team stressed repeatedly that the truly valuable improvement is to supplement errors with context information (what went wrong, why), not to compress `if err != nil` into one line. The latter saves typing; the former saves troubleshooting time.
-- **Implementation and maintenance are costly.** New syntax has to run through the entire toolchain: the compiler, documentation, `gofmt`, `go vet`, IDEs, and more, while the Go team is not large and its priorities are limited.
-- **An explicit `if err != nil` is better for debugging.** A standalone statement can carry a breakpoint, a log line, a single step, none of which an implicit return offers.
+The article does not hide the case for change: in Go user surveys, the lack of better error-handling
+support has consistently been the top complaint. But the reasons the Go team lists against change
+are more numerous:
 
-The alternative directions the article gives are, none of them, syntax: use helper functions to supplement error context, add small tools like `cmp.Or` to the standard library, and lean on the IDE's code completion and "fold boilerplate" features to ease the visual noise at the display layer rather than the language layer.
+- **The status quo works.** Go's way of handling errors can be verbose at times, but it is entirely
+  workable. Even within the Go team there is no shared understanding of the problem itself, let
+  alone agreement that the problem exists.
+- **A language change affects everyone.** Once new syntax is introduced, nearly everyone has to
+  start using it, or their code looks unidiomatic; this also contradicts the Go principle of not
+  offering several ways to do the same thing.
+- **When errors are actually handled, the verbosity recedes.** If an error really is handled, for
+  example by adding context, the boilerplate makes up a much smaller share of the code.
+- **Tools can ease the burden of writing.** Today's IDEs offer powerful code completion, even with
+  the assistance of large language models, so writing the basic error check is not laborious; an IDE
+  that supports Go could also provide a toggle that hides error-handling code on display.
+- **Explicit checks help debugging.** If the error-handling logic is hidden behind `check`, `try` or
+  `?`, one may first have to rewrite the code into the explicit form in order to insert a breakpoint
+  or debug output.
+- **Change is expensive.** Language changes are costly, and the Go team is small with many other
+  priorities.
+- **Every user asked was opposed.** The article mentions that every Go user the team asked, at the
+  Google Cloud Next 2025 booth and at Go meetups, firmly held that the language should not change
+  for the sake of error handling; many said the absence of dedicated error-handling syntax is felt
+  most acutely right after switching from another language.
 
-## 7.5.3 What Actually Landed Was the Library, Not the Language
+The alternatives the article offers are not syntax: helper functions that add context to errors, and
+new standard library features that reduce boilerplate. This is the approach Rob Pike advocated in
+*Errors are values* in 2015 [[Pike, 2015](#ref-pike-2015)]. For example, `cmp.Or`, added in Go 1.22,
+returns the first of its arguments that is not equal to the zero value. `error` is a comparable
+interface type, so it can be used to handle a group of errors at once:
 
-Turning the lens from "the syntax that did not work out" to "the evolution that did", we see a markedly different but consistently lively main thread. Every improvement to error handling that actually landed over these years, without exception, happened at the **library level**, leaving the language grammar untouched:
+```go {run=true}
+package main
 
-- **Go 1.13 (2019): `%w` wrapping and error chains.** The `%w` verb of `fmt.Errorf` lets one error "wrap" another, and together with `errors.Is`, `errors.As`, and `errors.Unwrap` forms an inspectable error chain. This was the fruit of years of practice with `pkg/errors` ([7.2](./inspect.md)) being absorbed into the standard library, all a matter of the two packages `errors` and `fmt`, with not a single line of the compiler touched.
-- **Go 1.20 (2023): `errors.Join` and multiple `%w`.** `Join` merges several parallel errors into one, exposing them to `Is`/`As` inspection through `Unwrap() []error`; in the same version `fmt.Errorf` also allows multiple `%w` in a single call. The error chain thus expanded from a line into a tree.
+import (
+	"cmp"
+	"fmt"
+	"strconv"
+)
+
+func printSum(a, b string) error {
+	x, err1 := strconv.Atoi(a)
+	y, err2 := strconv.Atoi(b)
+	if err := cmp.Or(err1, err2); err != nil {
+		return err
+	}
+	fmt.Println("result:", x+y)
+	return nil
+}
+
+func main() {
+	fmt.Println(printSum("1", "2"))
+	fmt.Println(printSum("1", "x"))
+	fmt.Println(printSum("y", "x")) // only the first non-nil error is returned
+}
+```
+
+```
+result: 3
+<nil>
+strconv.Atoi: parsing "x": invalid syntax
+strconv.Atoi: parsing "y": invalid syntax
+```
+
+## 7.5.5 Libraries Landed, Not Syntax
+
+In contrast to the repeated failures in syntax, the improvements to error handling that actually
+landed over these years all happened in the standard library, without touching the language grammar:
+
+- **Go 1.13 (2019): wrapping and inspection.** `%w`, `errors.Unwrap`, `errors.Is` and `errors.As`
+  [[Neil and Amsterdam, 2019](#ref-neil-amsterdam-2019)] [[Amsterdam, 2019](#ref-amsterdam-2019)];
+  see [7.2](./inspect.md).
+- **Go 1.20 (2023): multiple wrapping.** `errors.Join` and multiple `%w` verbs in `fmt.Errorf`,
+  which turned the error chain into an error tree [[Go Authors, 2023](#ref-go-authors-2023)].
 
   ```go
   err := errors.Join(errClose, errFlush) // merge two independent errors into one
-  if errors.Is(err, errFlush) { /* each can still be inspected */ }
+  if errors.Is(err, errFlush) { /* each can still be checked separately */ }
   ```
 
-- **Go 1.21 (2023): `log/slog`.** Structured logging entered the standard library, and an error can now be recorded as a keyed structured field (`slog.Any("err", err)`), emitted together with its context, echoing the team's judgment that "error handling is about context". It too is a new package, not new syntax.
-- **Go 1.26 (2025): the generic `errors.AsType`.** With the signature `func AsType[E error](err error) (E, bool)`, it borrows generics ([8](../ch08generics)) to replace the awkward interface of `As` that required passing a pointer:
+- **Go 1.21 (2023): structured logging.** `log/slog` lets an error be recorded as a keyed field
+  [[Amsterdam, 2023](#ref-amsterdam-2023)]; see [7.3](./context.md).
+- **Go 1.26 (2026): generic `errors.AsType`.** Generics replace the interface of `As`, which
+  requires passing a pointer [[Go Authors, 2026](#ref-go-authors-2026)]:
 
   ```go
   if pe, ok := errors.AsType[*fs.PathError](err); ok {
-      fmt.Println("failed path:", pe.Path)
+  	fmt.Println("failed path:", pe.Path)
   }
   ```
 
-  What makes it worth chewing over is that it neatly confirms one piece of logic in the 2025 decision: once an **optional** language capability like generics is in hand, error handling can improve at the library level along with it, without any syntax **dedicated** to error handling.
+`AsType` illustrates the logic behind the 2025 decision: once a general language capability such as
+generics is available, error handling can improve at the library level along with it, without any
+syntax designed specifically for errors. Russ Cox summarized Go's way of evolving in 2019
+as "experiment, simplify, ship", and `check` and `try` were abandoned precisely after
+experimentation [[Cox, 2019b](#ref-cox-2019b)]. Library changes are incremental: old code keeps
+working and new features are taken up as needed. Syntax changes affect every piece of code and every
+reader. Go's actual strategy for error handling is to put every improvement that can live in a
+library into the library, and to leave the grammar of the language unchanged.
 
-The conclusion this contrast yields is plain: the language layer was attacked again and again without success, while the library layer advanced step by step. The reason is not hard to grasp. A library change is addition: old code stays usable as is, new tools are taken up on demand. A syntax change is multiplication: once introduced it multiplies onto every source file and every reader. Go's real strategy for error handling is to put into the library every improvement that can go into the library, and to guard the language grammar without the slightest movement.
+## 7.5.6 Explicit over Concise
 
-The path of syntax may have ended, but room remains open, only all of it lies outside the language. A few directions named in the 2025 decision are worth watching: one is "boilerplate folding" at the toolchain layer, letting the IDE fold or fade stretches of `if err != nil` when displaying, the source unchanged while the appearance changes; the other is the standardization of error context, where the community is still discussing more structured diagnostic information above `errors.Join` (such as the fields an error carries, call stacks, machine-readable classifications), which is the extension of `pkg/errors` ([7.2](./inspect.md))'s stack approach further into the library. None of these touch the grammar, yet they may keep improving the practical experience of error handling over the next few years. In other words, the story has not ended; it is only certain not to be continued in the chapter on syntax.
+Looking back over these seven years, the Go team has not been standing still. Between explicitness
+and conciseness it has chosen the former again and again, and each time it has explained its reasons
+publicly. `check`/`handle` was abandoned because it traded complexity for brevity; `try` was
+rejected because it hid a return inside what looks like an ordinary expression. The bottom line,
+repeated throughout, is that when reading Go code, the control flow should be clear at a glance.
 
-## 7.5.4 A Stable Philosophy: Explicit over Concise
-
-Stepping back over these seven years, we find that the Go team was not being old-fashioned but, time and again, placed "explicit" before "concise", and each time explained why. `check`/`handle` failed because it traded complexity for concision; `try` and `?` failed because they traded implicit control flow for concision. The bottom line argued for repeatedly was always this: reading a piece of Go code, the control flow should be plain at a glance, and an error should not quietly change the direction of a function inside some inconspicuous expression.
-
-Putting Go back into the lineage of languages makes the contrast especially clear. Handing error handling to syntax takes roughly two paths. One is exceptions, the path C++, Java, and Python took: errors are thrown implicitly up the call stack, the normal path is written cleanly, at the cost of control flow jumping between `throw` and `catch`, hard to see from local code. Go refused exceptions from the very beginning. The other is "syntactic sugar over values", with Rust's `?` as its representative, where errors remain values (`Result`) and a trailing punctuation merely spares the hand-written dispatch. `?` is exactly what `try` wanted, and Rust chose it because Rust already accepts that "an expression may implicitly change control flow" (`?` and `match` are both expressions). Looking at the same design, Go chose not to, and this was not failing to see it but seeing it and still declining. The two languages turned in opposite directions at the same crossroads, and behind it lies a different faith about whether "control flow should always be visible". Treating errors as ordinary return values and handling them with ordinary control flow is the "errors are values" stance Go set down from its birth, and the 2025 decision merely wrote that stance down once more, clearly and plainly.
-
-Performance and concision never come for free. What Go buys with a screenful of `if err != nil` is that anyone, opening any piece of Go code, can see where errors flow without relying on language magic. Not everyone is happy with this trade, but it is a clear-eyed choice that has been weighed again and again and publicly defended, not an oversight. The future of error handling will most likely be just what it is now: the syntax unchanged, the library going on growing.
+Compared with other languages, the choice is easier to interpret. Exceptions hand errors over to
+implicit control transfer, which Go declined from the start (see [7.1.1](./value.md)). Rust's `?` is
+a different approach: errors remain values, and a postfix operator merely saves the hand-written
+branch. `?` is exactly what `try` set out to provide; Rust accepted it because Rust already lets
+expressions alter control flow, whereas Go saw the same design and did not accept it. Two languages
+made opposite choices on the same problem, reflecting different answers to the question of whether
+control flow should always be explicitly visible. Treating errors as ordinary return values and
+handling them with ordinary control flow has been Go's position since its birth, and the 2025
+decision merely wrote that position down once more.
 
 ## Further Reading
 
-1. Robert Griesemer. *Error Syntax: A Retrospective and Decision.* The Go Blog, 2025-06-03.
-   https://go.dev/blog/error-syntax (the Go team's formal statement and reasoning for no longer pursuing error-handling syntax)
-2. Robert Griesemer, et al. *Proposal: A built-in Go error check function, "try".* 2019,
-   issue 32437 (withdrawn). https://github.com/golang/go/issues/32437
-3. The Go Authors. *Go 2 Draft: Error Handling Overview (check/handle).* 2018.
-   https://go.googlesource.com/proposal/+/master/design/go2draft-error-handling-overview.md
-4. Russ Cox. *Go 2, Here We Come! (Toward Go 2 series).* The Go Blog, 2018-11-29.
-   https://go.dev/blog/go2-here-we-come
-5. The Go Authors. *Go 1.20 Release Notes (errors.Join and multiple %w).* 2023.
-   https://go.dev/doc/go1.20#errors
-6. The Go Authors. *Package errors (including the generic AsType introduced in 1.26).*
-   https://pkg.go.dev/errors
-7. The Go Authors. *Working with Errors in Go 1.13 (%w wrapping and error chains).* The Go Blog, 2019.
-   https://go.dev/blog/go1.13-errors
-8. Russ Cox. *Experiment, Simplify, Ship.* The Go Blog, 2019.
-   https://go.dev/blog/experiment (the "library before language, experiment before fixing" philosophy of evolution, exactly the footnote to this section's main thread)
-9. Jonathan Amsterdam. *proposal: Go 2 error values (#29934).* 2019.
-   https://github.com/golang/go/issues/29934 (the master proposal for error-value evolution, threading together the many rejected and adopted schemes)
+- <a id="ref-griesemer-2025"></a>[Griesemer, 2025] Robert Griesemer. *[ On | No ] syntactic support
+  for error handling.* The Go Blog, 2025-06-03. https://go.dev/blog/error-syntax (the Go team's
+  formal announcement and reasoning for no longer pursuing error-handling syntax)
+- <a id="ref-griesemer-2019"></a>[Griesemer, 2019] Robert Griesemer. *Proposal: A built-in Go error
+  check function, "try".* 2019, issue 32437 (declined). https://github.com/golang/go/issues/32437 ;
+  design document https://go.googlesource.com/proposal/+/master/design/32437-try-builtin.md ; the
+  rejection notice https://github.com/golang/go/issues/32437#issuecomment-512035919
+- <a id="ref-cox-2018b"></a>[Cox, 2018b] Russ Cox. *Error Handling, Problem Overview
+  (check/handle).*
+  2018. https://go.googlesource.com/proposal/+/master/design/go2draft-error-handling-overview.md
+- <a id="ref-griesemer-2018"></a>[Griesemer, 2018] Robert Griesemer. *Go 2, here we come!* The Go
+  Blog, 2018-11-29. https://go.dev/blog/go2-here-we-come (describes the Go 2 proposal process,
+  through which every proposal discussed in this section passed)
+- <a id="ref-go-authors-2023"></a>[Go Authors, 2023] The Go Authors. *Go 1.20 Release Notes
+  (errors.Join and multiple %w).* 2023. https://go.dev/doc/go1.20#errors
+- <a id="ref-go-authors-2026"></a>[Go Authors, 2026] The Go Authors. *Package errors (including the
+  generic AsType introduced in 1.26).* https://pkg.go.dev/errors ; *Go 1.26 Release Notes.*
+  https://go.dev/doc/go1.26
+- <a id="ref-neil-amsterdam-2019"></a>[Neil and Amsterdam, 2019] Damien Neil, Jonathan Amsterdam.
+  *Working with Errors in Go 1.13 (%w wrapping and error chains).* The Go Blog, 2019.
+  https://go.dev/blog/go1.13-errors
+- <a id="ref-cox-2019b"></a>[Cox, 2019b] Russ Cox. *Experiment, Simplify, Ship.* The Go Blog, 2019.
+  https://go.dev/blog/experiment (the evolution philosophy of "libraries before language, experiment
+  before commitment", which is the footnote to this section's main thread)
+- <a id="ref-amsterdam-2019"></a>[Amsterdam, 2019] Jonathan Amsterdam. *proposal: Go 2 error values
+  (#29934).* 2019. https://github.com/golang/go/issues/29934 (the umbrella proposal for the
+  evolution of error values, linking the many rejected and adopted designs)
+- <a id="ref-lohuizen-2018"></a>[Lohuizen, 2018] Marcel van Lohuizen. *Error Handling, Draft
+  Design.*
+  2018. https://go.googlesource.com/proposal/+/master/design/go2draft-error-handling.md
+- <a id="ref-taylor-2025"></a>[Taylor, 2025] Ian Lance Taylor. *proposal: spec: reduce error
+  handling boilerplate using ? (#71203).* 2025. https://go.dev/issue/71203 ; discussion
+  https://github.com/golang/go/discussions/71460
+- <a id="ref-rust-2016"></a>[Rust, 2016] The Rust Project. *Rust 1.13.0 Release Notes: Stabilize the
+  `?` operator.* 2016.
+  https://github.com/rust-lang/rust/blob/master/RELEASES.md#version-1130-2016-11-10
+- <a id="ref-pike-2015"></a>[Pike, 2015] Rob Pike. *Errors are values.* The Go Blog, 2015.
+  https://go.dev/blog/errors-are-values
+- <a id="ref-amsterdam-2023"></a>[Amsterdam, 2023] Jonathan Amsterdam. *Structured Logging with
+  slog.* The Go Blog, 2023. https://go.dev/blog/slog

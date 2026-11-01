@@ -19,4 +19,13 @@ bookCollapseSection: true
 </div>
 </div>
 
-Slices and hash tables are the only two generic containers Go provides, and they are also the two data structures that appear most often in everyday code. They take a seemingly plain set of questions, how a contiguous region of memory is described, shared, and grown, and turn them into a concrete runtime layout and growth strategy. As a result, the various "surprises" of `append`, the pitfalls of slice aliasing, and the random iteration and crash-on-concurrency of `map` are no longer rules to be memorized by rote, but inevitable consequences of layout and trade-offs. This chapter unfolds along four themes: we first lay out the memory model and growth strategy of arrays and slices, then look separately at the zero-copy conversion and safety contract that string immutability brings; next we work through the general principles of hash tables and the attack and defense of hash flooding, and finally arrive at Go 1.24's thorough rewrite based on the Swiss Table, seeing how it balances cache behavior, security, and incremental growth. Along the way we watch how Go hides all this complexity in places the user never sees, leaving only the plain `s[i]` and `m[k]` at the surface.
+Slices, strings and `map`s are the three data structures most used in Go programs. Their syntax is
+simple, but each rests on its own runtime layout and growth strategy. When `append` copies, when
+slices share memory, when a string conversion allocates, why a `map` iterates in random order and
+cannot be written concurrently: the answers to all of these follow from layout and implementation,
+and need not be memorized as isolated rules.
+
+The chapter has four sections. 5.1 covers the memory layout of arrays and slices, their growth
+strategy, and what the compiler does to reduce allocations. 5.2 covers string immutability, UTF-8
+and zero-copy conversion. 5.3 covers the general principles of hash tables and hash-flooding
+attacks. 5.4 covers the `map` implementation of Go 1.24, which is based on the Swiss Table.

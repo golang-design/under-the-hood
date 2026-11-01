@@ -5,162 +5,424 @@ title: "8.3 Type-Checking Techniques"
 
 # 8.3 Type-Checking Techniques
 
-Generics pose a far harder problem to the type checker than before. The old judgment had only one shape: "is this value of this type?" With type parameters, the checker now has to answer three new questions: whether a type argument satisfies a constraint, whether an operation like `a + b` is valid on an unknown type, and what that unwritten `T` actually is when you call `Max(3, 5)`. These three concerns correspond to the three topics of this section: type sets, core types, and type inference. They are where the design from [8.1](./history.md) lands as concrete compile-time technique, and they are also a prelude to the front end of [15 The Compiler](../../part5toolchain/ch15compile).
-
-The yardstick that runs through this section is a single sentence: generics sharply raise the complexity of the type system, and Go works to keep that complexity shut inside the compiler rather than letting it spill out to the user. After reading, you should be able to say clearly which techniques achieve this "shutting in." The three new questions and three techniques correspond one to one, and form the skeleton of this section:
+Generics make the type checker's job much harder. Without them, the checker answers essentially one
+kind of question: does a value belong to a type? Type parameters add three more: does a type
+argument satisfy its constraint; is an operation such as `a + b` or `range s` valid when the type is
+not yet known; and, in a call such as `Max(3, 5)`, what is the `T` that nobody wrote down? This
+section takes the corresponding techniques in turn: type sets, the rules for operations on type
+parameters, and type inference. It ends with `types2`, the type checker in the compiler that
+implements them. Together they are the compile-time realization of the design described in
+[8.1 The Evolution of Generics Design](./history.md) and
+[8.2 Contract-Based Generics](./contracts.md); the overall structure of the compiler front end is
+covered in [Chapter 15 The Compiler Pipeline](../../part5toolchain/ch15compile/readme.md).
 
 ```mermaid
 flowchart LR
-    Q1["Does the argument satisfy the constraint?"] --> T1["Type set<br/>a constraint is a set of types"]
-    Q2["Are a + b and range s valid on an unknown type?"] --> T2["Core type<br/>core / common underlying type"]
-    Q3["What is the T in Max(3, 5)?"] --> T3["Type inference<br/>function argument unification + constraint type inference"]
-    T1 --> IMPL["types2: the compiler's built-in, generics-aware type checker"]
+    Q1["Does the type argument satisfy the constraint?"] --> T1["Type sets<br/>a constraint is a set of types"]
+    Q2["Are a + b and range s valid?"] --> T2["Rules for operations on type parameters<br/>valid for each type, or one shared underlying type"]
+    Q3["What is T in Max(3, 5)?"] --> T3["Type inference<br/>type equations and unification"]
+    T1 --> IMPL["types2: the compiler's generics-aware type checker"]
     T2 --> IMPL
     T3 --> IMPL
 ```
 
+The type rules of generics have also been studied formally. In 2020, Griesemer, Taylor, Philip
+Wadler and others, using Featherweight Java as a model, proposed two core calculi for Go: FG, and
+FGG, which adds type parameters. Unlike Java, Go has structural subtyping, and its generics are
+implemented by monomorphization rather than type erasure. The paper proves type soundness for both
+calculi and formalizes the monomorphizing translation from FGG to FG, proving that it preserves
+types and forms a bisimulation; the authors describe this as one of the first formalizations of
+monomorphization [[Griesemer et al., 2020](#ref-griesemer-et-al-2020)]. The work appeared before the
+type parameters proposal was accepted in 2021, and Griesemer and Taylor are the two designers of Go
+generics.
+
 ## 8.3.1 Type Sets: A Constraint Is a Set of Types
 
-The core concept of a constraint is the **type set**. An ordinary interface describes "which methods exist"; a constraint interface goes further and describes "**which types belong to me**." Generalizing the interface from a method set to a type set ([8.1.2](./history.md)) is the key step that lets the existing interface syntax carry constraints directly.
-
-A type set is built as a union of **type terms**. The spec defines the semantics of type terms very cleanly, and the `term` struct in the compiler's `cmd/compile/internal/types2` copies this set-theoretic notation verbatim:
+The central notion of a constraint is the **type set**. An ordinary interface describes which
+methods a type has; an interface used as a constraint additionally describes which types belong to
+it ([8.2.4](./contracts.md)). A type set is built as a union of **type terms**, and the `term`
+struct in the compiler's `cmd/compile/internal/types2` package borrows set notation directly
+[[Go Authors, 2026c](#ref-go-authors-2026c)]:
 
 ```go
-// types2/typeterm.go: a type term describes one most-basic type set (sketch)
+// Go 1.26 cmd/compile/internal/types2/typeterm.go (comments translated)
 //
-//   ∅:  (*term)(nil)     == ∅                      // empty set
-//   𝓤:  &term{}          == 𝓤                      // universe (all types)
-//   T:  &term{false, T}  == {T}                    // exactly the single type T
-//  ~t:  &term{true, t}   == {t' | under(t') == t}  // all types whose underlying type is t
+// A term describes elementary type sets:
+//
+//	 ∅:  (*term)(nil)     == ∅                      // set of no types (empty set)
+//	 𝓤:  &term{}          == 𝓤                      // set of all types (𝓤niverse)
+//	 T:  &term{false, T}  == {T}                    // set containing exactly T
+//	~t:  &term{true, t}   == {t' | under(t') == t}  // set of all types with underlying type t
 type term struct {
-    tilde bool // valid only when typ != nil
-    typ   Type
+	tilde bool // valid if typ != nil
+	typ   Type
 }
 ```
 
-So the three ways of writing a term in a constraint each correspond to one kind of type set: `int` is the singleton set $\{\texttt{int}\}$; `~int` is $\{t \mid \mathrm{under}(t) = \texttt{int}\}$, that is, all types whose underlying type is `int` (`~` takes the underlying type, so `type Celsius float64` falls within `~float64`); and `A | B` is the union $S_A \cup S_B$. The spec puts two hard constraints on `~T`: the underlying type of `T` must be `T` itself (`~MyInt` is illegal), and `T` may not be an interface (`~error` is illegal). The final type set of a constraint interface is the **intersection** of the union of its type terms with the sets implied by each of its methods:
+The three forms that can appear in a constraint each correspond to one kind of set. `int` is the set
+containing only `int`; `~int` is $\{t \mid \mathrm{under}(t) = \texttt{int}\}$, all types whose
+underlying type is `int`; and `A | B` is the union $S_A \cup S_B$. The language specification places
+two restrictions on `~T`: the underlying type of `T` must be `T` itself, so `~MyInt` is invalid, and
+`T` cannot be an interface, so `~error` is invalid [[Go Authors, 2026a](#ref-go-authors-2026a)]. The
+type set of an interface is the intersection of the type sets of its interface elements: a method
+element denotes all types that have the method, and a union element denotes the union of its terms
+[[Taylor and Griesemer, 2021](#ref-taylor-griesemer-2021)]. `types2` represents it with the
+following structure:
 
 ```go
-// types2/typeset.go: the type set of an interface (sketch)
+// Go 1.26 cmd/compile/internal/types2/typeset.go (comments translated)
 type _TypeSet struct {
-    methods    []*Func  // all methods of the interface, sorted by unique ID
-    terms      termlist // list of type terms, whose union describes "which types are in the set"
-    comparable bool     // whether comparability is additionally required
+	methods    []*Func  // all methods of the interface, sorted by unique ID
+	terms      termlist // type terms of the type set
+	comparable bool     // invariant: !comparable || terms.isAll()
 }
 ```
 
-"Type $T$ satisfies constraint $C$" now has a precise definition: $T$ implements every method in `methods`, **and** $T$ falls within the set described by `terms` (and must be comparable as well if `comparable` is true). What the checker has to do is compute these sets and then decide membership.
+"Type $T$ satisfies constraint $C$" now has a precise meaning: $T$ belongs to the set described by
+`terms`, implements every method in `methods`, and, if `comparable` is true, is comparable. The
+checker's job is to compute these sets and then test membership.
 
-`comparable` deserves a separate note. It cannot be written as a union of type terms, so it is represented inside `_TypeSet` by a standalone boolean, a special built-in element in the constraint machinery. In go1.18 it strictly meant "types for which `==` is guaranteed at compile time never to panic," excluding interfaces. go1.20 relaxed the rule: ordinary interfaces may now satisfy `comparable`, at the cost that comparing two interface values whose dynamic types are not comparable will panic at **run time**. This is one place where, for the sake of expressiveness, part of the check is deferred from compile time to run time.
+`comparable` deserves separate mention. It cannot be written as a union of type terms, so `_TypeSet`
+represents it with its own boolean field. In Go 1.18, `comparable` admitted only strictly comparable
+types, those for which `==` is guaranteed not to panic at run time, which excluded interface types.
+Go 1.20 relaxed the rule: ordinary interface types, and composite types with interface fields, can
+also satisfy `comparable`, at the price that a comparison panics at run time when the dynamic types
+of two interface values are not comparable [[Go Authors, 2023a](#ref-go-authors-2023a)]. For
+expressiveness, part of the check moved from compile time to run time.
 
-## 8.3.2 Core Types: Giving Structure-Dependent Operations a Definition
+## 8.3.2 Operations on Type Parameters: Per-Type Validity and a Shared Underlying Type
 
-Type sets solve "who may be passed in," but inside a generic function body there is a second difficulty. It splits into two categories whose rules differ, and we need to keep them apart here.
+A type set answers "which types may be passed in". The body of a generic function raises a different
+question: when is an operation valid on a type parameter? The Go 1.26 specification uses two kinds
+of rules for different operations, and they are easy to confuse when first learning generics.
 
-The first category is **operators**. Write `func Sum[T Float](a, b T) T` and then `a + b`; the spec's rule is direct: when an operand's type is a type parameter, **the operator must be valid for every type in the type set**, and the operation is carried out at the precision of the concrete type argument at instantiation. So `a + b` is entirely valid on `interface{ ~float32 | ~float64 }`, since `+` is defined for both underlying types; `a < b` is likewise valid on `constraints.Ordered` (a union of a dozen-odd distinct underlying types), and it is exactly this that makes `slices.Sort` possible. Operators take the "every individual type supports it" path; they do **not** require the type set to have a single shared underlying type.
+The first kind requires the operation to be valid for **every type** in the type set. Operators
+belong here: if an operand's type is a type parameter, the operator must apply to every type in its
+type set, and the operation is carried out on the concrete type used at instantiation
+[[Go Authors, 2026a](#ref-go-authors-2026a)]. So `a + b` is valid for
+`interface{ ~float32 | ~float64 }`, and `a < b` is valid for `cmp.Ordered`, which has a dozen or so
+underlying types; this is what makes `slices.Sort` implementable. `len`, `cap` and indexing follow
+the same rule: `len(s)` only needs to be valid for each type in the type set, while the index
+expression `s[i]` additionally requires all the types to have the same element type.
 
-The second category is what needs a **core type**: those operations that can only be defined by relying on a single underlying **structure**. `range`, `append`, the slice expression `s[i:j]`, `make`, and channel send/receive when the element types differ all fall here. The intuition is: if all types in a constraint's type set share the same underlying type, that underlying type is the core type; with it, the compiler knows by what structure `range s` should iterate and what type `s[i:j]` slices out to. The spec's wording for these cases is "all types in the type set must have the same underlying type." The constraint `~[]E` has core type `[]E`, so `append`, `range`, and slicing are all valid; whereas `interface{ ~[]int | ~[2]int }` has no core type (one underlying is a slice, the other an array), so `range` and slicing are undefined on it.
+The second kind requires all types in the type set to have the **same underlying type**. It applies
+to operations that can be defined only given a uniform underlying structure: `range`, the slice
+expression `s[i:j]`, `append`, `make`, and composite literals. Only when the uniform structure is
+known can the compiler decide how `range s` iterates and what type `s[i:j]` has. The specification
+makes exceptions for some cases: channels in a type set may differ in direction, as long as their
+element types are identical and the directions do not conflict; and slice expressions and `append`
+allow `string` and types whose underlying type is `[]byte` to appear together.
 
-This line is drawn finer than intuition suggests. Although they are all "container" operations, `len`, `cap`, and **indexing** `s[0]` do not require a core type: it suffices that every type in the type set supports them individually, so all three are still valid on `~[]int | ~[2]int` (both arrays and slices have a length and can be indexed), even though it has no core type. In other words, Go sorts operations finely by "whether a shared underlying structure is needed": to iterate or slice, you need a core type; merely to take a length or an index, individual support per type is enough. Lumping the "per type" rules (operators, `len`) together with the "core type" rules (`range`, slicing) is the most common misunderstanding when first learning generics.
-
-The channel exception in `commonUnder` is exactly what shows why a core type is not the literal "underlying types are identical." Two channels with different directions (`chan T` and `<-chan T`) do not have strictly identical underlying types, but they can be merged onto the more restricted direction, so `interface{ chan T | <-chan T }` still has a usable core type. Trivial exceptions of this kind are precisely why the dedicated term "core type" was coined back then.
-
-These concepts were called "core type" in the spec from go1.18 through go1.24. Starting with go1.25, the spec dropped the term and adopted a plainer phrasing: **common underlying type**, that is, "the underlying types of all types in the type set, if they are identical to each other, that identical underlying type." The corresponding function inside the compiler is named `commonUnder`:
+The following example shows where the two kinds of rules divide:
 
 ```go
-// types2/under.go: compute the common underlying type of a group of types (sketch)
+package main
+
+type SliceOrArray interface{ ~[]int | ~[2]int }
+
+func First[T SliceOrArray](s T) (int, int) {
+	return len(s), s[0] // len and indexing: valid for each type in the type set
+}
+
+func Sum[T SliceOrArray](s T) (n int) {
+	for _, v := range s { // range: all types in the type set need the same underlying type
+		n += v
+	}
+	return
+}
+```
+
+`First` compiles, because both slices and arrays have a length, both can be indexed, and both have
+element type `int`. `Sum` does not:
+
+```
+./main.go:10:20: cannot range over s (variable of type T constrained by SliceOrArray): []int and [2]int have different underlying types
+```
+
+From Go 1.18 to Go 1.24, the specification expressed the second kind of rule through the notion of
+**core type**: the core type of a non-type-parameter is its underlying type; the core type of a type
+parameter is the single underlying type shared by all types in its type set, and it does not exist
+if the underlying types differ. Several adjustments were added to the definition to handle channel
+directions and the mixing of `[]byte` and `string`. Go 1.25 removed the concept from the
+specification and instead states an explicit, equivalent rule wherever one is needed; the behavior
+of programs did not change at all [[Go Authors, 2025](#ref-go-authors-2025)]. Griesemer explained
+the reasons in a blog post. The core type definition was too strict for some concrete operations: in
+Go 1.24, slice expressions relied on core types, so a type parameter admitting both `[]byte` and
+`string` could not be sliced, although that could have been allowed. To understand a feature
+unrelated to generics, such as slice expressions, readers also had to learn core types first. And
+the rules for indexing, `len` and `cap`, which do not depend on core types, looked like exceptions.
+Spelling out each operation separately leaves the specification with fewer concepts, keeps the rules
+for non-generic code free of generic concepts, and leaves room to relax the rules for individual
+operations later [[Griesemer, 2025](#ref-griesemer-2025)].
+
+In the compiler, the common underlying type is computed by the `commonUnder` function in
+`types2/under.go` [[Go Authors, 2026c](#ref-go-authors-2026c)]. Its body is:
+
+```go
+// Go 1.26 cmd/compile/internal/types2/under.go, abridged, comments translated
 func commonUnder(t Type, cond func(t, u Type) *typeError) (Type, *typeError) {
-    var cu Type // the common underlying type so far
-    for t, u := range typeset(t) {
-        if cu == nil {            // the first type seen; record its underlying type
-            cu = u
-            continue
-        }
-        // the underlying type of every subsequent type must match the previous one,
-        // otherwise there is no common underlying type
-        if !Identical(cu, u) {
-            return nil, typeErrorf("...have different underlying types")
-        }
-    }
-    return cu, nil
+	var ct, cu Type // type and its common underlying type seen so far
+	for t, u := range typeset(t) {
+		// ...
+		if cu == nil { // first type seen
+			ct, cu = t, u
+			continue
+		}
+		// A channel seen before and a channel now: the two must be compatible.
+		// Element types must be identical; if directions differ, keep the restricted one,
+		// and report an error if they conflict.
+		// ...
+		// Otherwise: the underlying type of the current type must be identical
+		// to that of all types seen before.
+		if !Identical(cu, u) {
+			return nil, typeErrorf("%s and %s have different underlying types", ct, t)
+		}
+	}
+	return cu, nil
 }
 ```
 
-The sketch above leaves out the channel-merging logic in the real `commonUnder` (the direction exception mentioned in §8.3.2), which is exactly where the precise semantics of core types live. After go1.25 simplified the terminology, the spec describes the same thing with "common underlying type" plus a separate clause for channels. What is interesting is that the comment on the compiler's internal `coreTerm` still reads "if tpar has a core type" to this day: the specification renamed it first, and the implementation's old terminology often lags behind. This is a common phenomenon when reading compiler source.
+The error message for `Sum` above is produced here. Although the specification no longer speaks of
+core types, the type inference code and its comments in the compiler still use the names "core
+type" and `coreTerm`; the specification being renamed first while the implementation lags behind is
+common when reading compiler source.
 
-## 8.3.3 Type Inference: Letting Callers Write Fewer Type Arguments
+## 8.3.3 Type Inference: Fewer Type Arguments at the Call Site
 
-If every call to a generic function had to spell out all type arguments in full, `Max[int](3, 5)`, `Map[string, int](...)`, generics would degenerate into verbose syntax. Go's checker implements **type inference**, so the vast majority of calls can be written as just `Max(3, 5)`, with the missing `T` worked out by the compiler from context. Inference is the heaviest part of Go generics' "do not bother the user" promise.
+If every call to a generic function had to spell out all type arguments, as in `Max[int](3, 5)`,
+generics would be verbose. Go's type checker implements **type inference**, so most calls can be
+written `Max(3, 5)` and the compiler deduces the missing type arguments.
 
-Inference proceeds in stages in `types2/infer.go`, around two sources of information:
-
-- **Function argument type inference**: it performs **unification** of the argument types against the corresponding parameter types, so from `Max(3, 5)`, where `3` and `5` are untyped constants whose default type is `int`, it derives `T = int`. Untyped constants are handled in a separate stage: first the type parameters that can be fixed are fixed using arguments with explicit types, then the constants fill in the rest, and for each type parameter still left open its "largest untyped type" is taken.
-- **Constraint type inference**: when the function arguments are not enough to fix all type parameters, it instead extracts information from **the structure of the constraint itself**. If a type parameter `P`'s constraint has only a single type term, or has a core type, `coreTerm` can give a candidate type for `P` from that, propagating known type parameters along the constraint's structure to the unknown ones.
+Griesemer describes Go's type inference as a kind of pattern matching on types: the compiler
+collects a set of **type equations** from the call and solves for the type parameters by
+**unification** [[Griesemer, 2023](#ref-griesemer-2023)]. Equations come from three sources:
+explicitly supplied type arguments, each of which forms a trivial equation; the assignment relation
+between each function argument and its parameter; and the satisfaction relation between each type
+parameter and its constraint. Unification compares the structure of two types recursively, records a
+correspondence where a type parameter meets a concrete type, and fails if the structures do not
+match or the same type parameter corresponds to two different types. Untyped constants are handled
+separately: typed arguments take priority, and only if a type parameter is still undetermined is it
+filled in with the default type of the corresponding untyped constant. In Go 1.26 this process is
+carried out by the `infer` method in `types2/infer.go`:
 
 ```go
-// the entry point to inference (signature sketch). Given some targs, complete the rest via constraint structure
-//   tparams: all type parameters      targs: arguments explicitly given or already inferred
-//   params/args: parameters and arguments    returns: all completed type arguments, or nil on failure
-func (check *Checker) infer(pos syntax.Pos, tparams []*TypeParam,
-    targs []Type, params *Tuple, args []*operand, ...) (inferred []Type)
+// Given some of the type arguments targs, infer the rest from the parameters params
+// and arguments args; reverse reports that inference runs backward from the target
+// type of an assignment. Returns nil on failure.
+func (check *Checker) infer(pos syntax.Pos, tparams []*TypeParam, targs []Type,
+	params *Tuple, args []*operand, reverse bool, err *error_) (inferred []Type)
 ```
 
-The power of constraint type inference is clearest with an example. Consider a function that scales a slice element by element:
+Sometimes the equations supplied by a constraint are the key to inference. The following `Scale`
+multiplies every element of a slice by a factor:
 
-```go
-// E does not appear in any parameter, so function argument inference alone cannot fix it
+```go {run=true}
+package main
+
+import "fmt"
+
+type Number interface {
+	~int | ~int64 | ~float64
+}
+
+// E does not appear on its own in the parameter types; it is inferred from the constraint ~[]E
 func Scale[S ~[]E, E Number](s S, c E) S {
-    r := make(S, len(s))
-    for i, v := range s {
-        r[i] = v * c
-    }
-    return r
+	r := make(S, len(s))
+	for i, v := range s {
+		r[i] = v * c
+	}
+	return r
 }
 
-var v []int
-Scale(v, 2) // the caller writes neither S nor E
+type Point []int
+
+func (p Point) String() string { return fmt.Sprint([]int(p)) }
+
+func main() {
+	p := Point{1, 2}
+	q := Scale(p, 2) // S = Point; E is inferred as int from Point's underlying type []int
+	fmt.Println(q.String())
+}
 ```
 
-In the first stage, function argument inference fixes `S = []int` from the argument `v []int`. But `E` does not appear in any parameter type, so the function arguments can do nothing about it. In the second stage, constraint type inference steps in: `S`'s constraint is `~[]E`, and unifying the already-fixed `S = []int` against the constraint structure `~[]E` immediately gives `E = int`. A type parameter that never shows up in the parameter list is thus solved back out from the structure of the constraint itself. Many "container plus element" signatures in the `constraints` package depend on this step.
+```
+[2 4]
+```
 
-Starting with go1.21, inference also supports **reverse type inference**: when an uninstantiated generic function is assigned to a variable of a named function type, the type arguments can be inferred back from that function type. Inference grows stronger with each release, but its direction stays restrained.
+The argument `p` gives `S = Point`; `2` is an untyped constant and cannot determine `E` by itself.
+The constraint `S ~[]E` then supplies an equation: the underlying type `[]int` of `S` must be
+identical to `[]E`, and unification immediately yields `E = int`. The type parameters proposal calls
+this step **constraint type inference** [[Taylor and Griesemer, 2021](#ref-taylor-griesemer-2021)].
+The result `q` has type `Point` rather than `[]int`, so its `String` method can be called; had
+`Scale` been declared as `func Scale[E Number](s []E, c E) []E`, the result would have lost the type
+`Point`.
 
-This restraint is a deliberate Go trade-off. The inference algorithm has to balance two goals: "strong enough" (write fewer annotations) and "predictable" (no surprising results inferred, with good error messages when inference fails). Go chooses to make inference a **local, call-site, staged** process, preferring to occasionally require explicit annotation over letting inference behavior become hard to anticipate. This contrasts with more aggressive neighbors: Haskell's Hindley-Milner does global inference within a binding group, often letting function signatures be omitted entirely; Rust does bidirectional inference within a block, able to back-fill types across a fairly long distance. Go's inference does not cross call boundaries and does no global solving, and in return its error messages can point precisely at "which type parameter could not be fixed, and why," which for a language that stakes its identity on readability is the more important property. The concession in expressiveness is made for clarity in diagnostics.
+Go 1.21 strengthened type inference further [[Go Authors, 2023b](#ref-go-authors-2023b)]. First,
+since a type argument must implement all methods of its constraint, inference now matches the
+methods of the type argument against those of the constraint one by one and deduces more type
+arguments from them. The figure in [8.2.4](./contracts.md) is an example: `New([]*Vertex{a, b})`
+supplies only the slice of nodes, and a Go 1.21 or later compiler deduces the edge type `*FromTo`
+from the `Edges` method of `*Vertex`, while a Go 1.20 compiler reports `cannot infer Edge`. Second,
+a generic function can be inferred backward from the target type of an assignment:
 
-## 8.3.4 types2: The Compiler's Own, Generics-Aware Type Checker
+```go
+func lessThan[T int | float64](a, b T) bool { return a < b }
 
-Underpinning all of the above is a package inside the compiler named **`types2`** (`cmd/compile/internal/types2`). It is the sibling implementation of the standard library's `go/types`: the two share an algorithm and align in behavior, but `types2` is written specifically for the compiler front end, consumes the syntax tree from `cmd/compile/internal/syntax` directly, and supports type parameters natively. When generics landed, the team chose to implement this complex machinery of type sets, core types, and unification-based inference in `types2`, then have `go/types` follow the same logic.
+var less func(int, int) bool = lessThan // since Go 1.21, T is inferred as int from the variable's type
+```
 
-Why maintain two nearly parallel type checkers? Because they serve two very different kinds of customers. `types2` serves compilation itself; it needs to mesh tightly with the compilation pipeline and is sensitive to compilation performance. `go/types`, by contrast, is a publicly available library on which `gopls`, all sorts of linters, and code generators are built ([16 Tools and Observability](../../part5toolchain/ch16tools)). Making type checking a reusable library means that go-to-definition, completion, and renaming in the editor share the same understanding of a given piece of generic code as the compiler. This design of "the compiler and the tools sharing one set of type semantics" is a cornerstone of the stability of Go's tooling ecosystem. The cost is that the two implementations have to stay in sync over the long term, a maintenance burden carried by the Go team and invisible to the user.
+A Go 1.20 compiler reports `cannot use generic function lessThan without instantiation` for this.
+Third, when one type parameter corresponds to several untyped constant arguments of different kinds,
+for example an untyped integer and an untyped floating-point constant, inference no longer fails but
+determines the type by the rules for untyped constant operations. The wording of the type inference
+section of the specification was also clarified in this release
+[[Go Authors, 2026b](#ref-go-authors-2026b)].
 
-## 8.3.5 The Boundaries Still Unsolved
+Compared with the Hindley-Milner type inference of ML and Haskell, Go's inference is deliberately
+local. A Hindley-Milner system can infer the types of function definitions themselves, so
+programmers often need not write any type annotation [[Milner, 1978](#ref-milner-1978)]. Go requires
+the signature of a function to state its types, and inference solves for the type parameters of a
+function only within the scope of a single generic function call or a single assignment. When
+inference fails, the error message can point out exactly which type parameter could not be
+determined. Go also does not infer the type arguments of generic types; a generic type is always
+instantiated explicitly. Griesemer explains that when a type is instantiated only the type arguments
+are available for inference, unlike a function call, which also has ordinary arguments, so at least
+one type argument would have to be given, and inference would help only in completing a partially
+instantiated type, which is not a common case. More importantly, type parameters make a whole new
+class of recursive types possible, for example `type T[P T[P]] interface{ … }`, where the constraint
+refers to the type being declared, and together with complex mutual references among several type
+parameters this would make inference far more complicated, with consequences the team does not yet
+fully understand [[Griesemer, 2023](#ref-griesemer-2023)].
 
-The restraint of inference is a design choice, and it also means inference deliberately stops short of certain boundaries, boundaries that remain to this day. First, inference is **incomplete**: there are cases that are in principle solvable on the type level but that Go's local staged algorithm does not solve, where you still have to write out the type arguments explicitly. The team accepts this occasional verbosity in exchange for a predictable algorithm. Second, **methods may not carry their own type parameters**: `func (r Recv) M[T any]()` is illegal; generics can only be attached to type or function declarations. This restriction keeps the semantics of interfaces and method sets simple, but it also blocks a class of expression (for example, putting a generic method inside a non-generic interface). Third, inference mainly serves **function calls**; for the instantiation of generic **types**, the type arguments must in most cases still be given explicitly. These boundaries are not bugs but to-do items left by the strategy of "first make the conservative, predictable core solid, then relax it cautiously version by version." go1.21's reverse inference was one such piece filled in this way, and later versions continue at the same pace.
+## 8.3.4 types2: The Generics-Aware Type Checker in the Compiler
 
-## 8.3.6 Trade-off: Relocating Complexity
+The rules above are implemented by the compiler's internal **`types2`** package
+(`cmd/compile/internal/types2`). To support generics, Go 1.18 replaced the compiler's original type
+checker entirely, and the release notes warned that the wording of some error messages changed as a
+result [[Go Authors, 2022](#ref-go-authors-2022)]. `types2` is a sister implementation of the
+standard library's `go/types`: the two share their algorithms and behave identically, differing in
+that `types2` works directly on the compiler's own syntax tree, `cmd/compile/internal/syntax`, while
+`go/types` works on the standard library's `go/ast` tree.
 
-Type checking for generics is a marked jump in the complexity of Go's type system. The union and intersection arithmetic of type sets, the solving of core types, the unification-driven multi-stage inference, each is far more involved than the checks before generics. The Go team accepted this complexity, but shut it almost entirely inside the **compiler**:
+Two implementations coexist because they serve different users. `types2` serves compilation itself,
+is tightly integrated into the compilation pipeline, and is sensitive to compile speed. `go/types`
+is a public library on which `gopls`, static analysis tools and code generators are built
+[[Go Authors, 2026d](#ref-go-authors-2026d)]
+([Chapter 16 Tooling and Observability](../../part5toolchain/ch16tools/readme.md)). As a result,
+jump-to-definition, completion and renaming in an editor agree with the compiler's understanding of
+the same generic code. The burden of keeping the two in sync is reduced by code generation: since
+2023, some source files in `go/types` have been generated from the corresponding `types2` files by a
+test program, and each begins with "DO NOT EDIT" and a note on its source. In Go 1.26, 46 of the 74
+non-test source files in `go/types` are generated this way.
 
-- For the user, a constraint **is just an interface**; there is no new contract syntax to learn ([8.1.2](./history.md));
-- Calling a generic function **mostly does not require writing type arguments**; inference fills them in for the user;
-- When inference and constraint checking fail, the error messages **strive to point at a specific type parameter** rather than dumping a pile of solver intermediate state.
+## 8.3.5 Unresolved Boundaries
 
-This is the other face of [8.1](./history.md)'s "cracking the generics dilemma." There the topic was run time: GC-shape stenciling plus dictionaries, striking a compromise between code bloat and run-time performance. Here the topic is compile time: type sets plus conservative inference, striking a compromise between expressiveness and cognitive load. Only the two faces together make up Go's complete answer to that thirteen-year problem. The complexity did not disappear; it was moved into the compiler, the place that bothers the user least. Good language design is often exactly this: relocating complexity time and again, rather than eliminating it.
+The restraint of inference is a deliberate choice, and it also means inference stops at several
+boundaries. First, inference is not complete: there are cases where the types can be determined but
+Go's algorithm does not solve for them, for example when a constraint lacks a uniform underlying
+type, a more elaborate method might still deduce type information; the type arguments must then be
+written explicitly. Griesemer's view is that the cases where inference fails are either rare in real
+code or do not matter [[Griesemer, 2023](#ref-griesemer-2023)]. Second, in Go 1.26 a method cannot
+declare its own type parameters, and `func (r Recv) M[T any]()` is invalid; Go 1.27 lifts this
+restriction, but generic methods do not take part in interface satisfaction, as discussed in
+[8.4.2](./future.md). Third, generic types cannot be inferred. Fourth, operations on a type
+parameter can use only the methods common to the type set, and even if every struct in the type set
+has a field of the same name, the field cannot be accessed through the type parameter:
+
+```go
+type A struct{ X int }
+type B struct{ X int }
+
+func GetX[T A | B](v T) int { return v.X } // error: v.X undefined (type T has no field or method X)
+```
+
+A proposal to allow such access (#48522) was declined in November 2023, on the grounds that the team
+should wait for the overall cleanup that removes core types (#63940) instead of patching individual
+points [[Beoran, 2021](#ref-beoran-2021)]. In explaining why core types were removed, Griesemer
+noted that without them this feature becomes a natural consequence of the ordinary field access
+rules [[Griesemer, 2025](#ref-griesemer-2025)]; but as of Go 1.27 it is still not implemented. These
+boundaries are not defects; they are the result of a strategy of first building a conservative,
+predictable core and then relaxing it cautiously, one release at a time. The strengthened inference
+in Go 1.21 and the cleanup of the specification in Go 1.25 are both relaxations of this kind. Go
+1.26 lifted the restriction that a generic type cannot refer to itself in its own type parameter
+list, so declarations like the hypothetical `type T[P T[P]]` in Griesemer's article are now valid
+[[Go Authors, 2026e](#ref-go-authors-2026e)]; this is discussed in [8.4](./future.md).
+
+## 8.3.6 Trade-offs: Relocating Complexity
+
+Type checking for generics raises the complexity of Go's type system considerably: unions and
+intersections of type sets, solving for a common underlying type, and unification-based inference
+are all much more complex than the checking that existed before generics. The Go team accepted this
+complexity but tried to confine it to the compiler:
+
+- for users, a constraint is just an interface, and no new constraint syntax has to be learned
+  ([8.2](./contracts.md));
+- when calling a generic function, type arguments mostly need not be written, because inference
+  fills them in;
+- when inference or constraint checking fails, the error message aims to name the specific type
+  parameter, or the specific type in the type set that caused the problem.
+
+This is the other face of the implementation strategy in [8.1](./history.md). That section dealt
+with run time: GC shape stenciling with dictionaries, a compromise between code bloat and run-time
+efficiency. This one deals with compile time: type sets with conservative inference, a compromise
+between expressiveness and the cognitive load on users. The complexity has not gone away; it has
+been placed in the compiler, where it disturbs users least.
 
 ## Further Reading
 
-1. Ian Lance Taylor, Robert Griesemer. *Type Parameters Proposal.* (The design rationale for type sets, core types, function argument inference, and constraint type inference.)
-   https://go.googlesource.com/proposal/+/refs/heads/master/design/43651-type-parameters.md
-2. Robert Griesemer. *Everything You Always Wanted to Know About Type Inference, And a Little
-   Bit More.* The Go Blog, 2023-10-09. https://go.dev/blog/type-inference
-3. The Go Programming Language Specification: *Interface types / Type sets / Type constraints.*
-   https://go.dev/ref/spec#Interface_types
-4. The Go Programming Language Specification: *Type inference.* (Including go1.21 reverse inference.)
-   https://go.dev/ref/spec#Type_inference
-5. The Go Authors. go1.25 spec change: "common underlying type" replaces "core type."
-   https://go.dev/doc/go1.25 ; specification definition at https://go.dev/ref/spec#Underlying_types
-6. The Go Authors. *cmd/compile/internal/types2* (the generics type checker of the compiler front end:
-   `typeset.go`, `typeterm.go`, `under.go`, `infer.go`).
-   https://github.com/golang/go/tree/master/src/cmd/compile/internal/types2
-7. The Go Authors. *go/types* package documentation (the sibling implementation that drives gopls and linters).
-   https://pkg.go.dev/go/types
+- <a id="ref-taylor-griesemer-2021"></a>[Taylor and Griesemer, 2021] Ian Lance Taylor, Robert
+  Griesemer. "Type Parameters Proposal." Go design document, 2021.
+  https://go.googlesource.com/proposal/+/refs/heads/master/design/43651-type-parameters.md The
+  design basis for type sets, core types, function argument inference and constraint type inference.
+- <a id="ref-griesemer-2023"></a>[Griesemer, 2023] Robert Griesemer. "Everything You Always Wanted
+  to Know About Type Inference - And a Little Bit More." The Go Blog, 2023-10-09.
+  https://go.dev/blog/type-inference Type equations, unification, the handling of untyped constants,
+  and the cases inference does not yet cover.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *The Go Programming Language
+  Specification*, "Interface types", "Type sets", "Type constraints".
+  https://go.dev/ref/spec#Interface_types
+  The specification's definitions of type sets, the restrictions on `~T`, and constraints.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *The Go Programming Language
+  Specification*, "Type inference". https://go.dev/ref/spec#Type_inference The specification's
+  definition of type inference, including the reverse inference added in Go 1.21.
+- <a id="ref-go-authors-2025"></a>[Go Authors, 2025] The Go Authors. Go 1.25 Release Notes: the
+  specification replaces "core type" with dedicated wording. https://go.dev/doc/go1.25 ; for the
+  specification, see https://go.dev/ref/spec#Underlying_types Go 1.25 removes the concept of core
+  types from the specification; program behavior is unchanged.
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors.
+  `cmd/compile/internal/types2`.
+  https://github.com/golang/go/tree/master/src/cmd/compile/internal/types2 The generics-aware type
+  checker in the compiler front end: `typeset.go`, `typeterm.go`, `under.go`, `infer.go`.
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. `go/types` package
+  documentation. https://pkg.go.dev/go/types The sister implementation that drives `gopls` and
+  static analysis tools.
+- <a id="ref-griesemer-2025"></a>[Griesemer, 2025] Robert Griesemer. "Goodbye core types - Hello Go
+  as we know and love it!" The Go Blog, 2025-03-26. https://go.dev/blog/coretypes The definition of
+  core types, the problems it caused, and the reasons for removing the concept in Go 1.25 (proposal
+  #70128).
+- <a id="ref-beoran-2021"></a>[Beoran, 2021] Beoran. "proposal: spec: permit referring to a field
+  shared by all elements of a type set." golang/go#48522, 2021-09-21.
+  https://github.com/golang/go/issues/48522 A proposal to access fields shared by a type set through
+  a type parameter; declined in November 2023 to wait for the overall cleanup of core types
+  (#63940).
+- <a id="ref-griesemer-et-al-2020"></a>[Griesemer et al., 2020] Robert Griesemer, Raymond Hu, Wen
+  Kokke, Julien Lange, Ian Lance Taylor, Bernardo Toninho, Philip Wadler, Nobuko
+  Yoshida. "Featherweight Go." *Proceedings of the ACM on Programming Languages* 4(OOPSLA):
+  1–29, 2020. https://doi.org/10.1145/3428217 A formalization of Go generics: the FG and FGG
+  calculi, type soundness, and the monomorphizing translation.
+- <a id="ref-milner-1978"></a>[Milner, 1978] Robin Milner. "A Theory of Type Polymorphism in
+  Programming." *Journal of Computer and System Sciences* 17(3): 348–375, 1978.
+  https://doi.org/10.1016/0022-0000(78)90014-4 One origin of Hindley-Milner type inference, for
+  comparison with Go's local inference.
+- <a id="ref-go-authors-2022"></a>[Go Authors, 2022] The Go Authors. Go 1.18 Release Notes.
+  https://go.dev/doc/go1.18
+  The release of generics, and the compiler type checker that was replaced entirely to support them.
+- <a id="ref-go-authors-2023a"></a>[Go Authors, 2023a] The Go Authors. Go 1.20 Release Notes.
+  https://go.dev/doc/go1.20
+  Ordinary interface types can also satisfy the `comparable` constraint.
+- <a id="ref-go-authors-2023b"></a>[Go Authors, 2023b] The Go Authors. Go 1.21 Release Notes.
+  https://go.dev/doc/go1.21 Improvements to type inference: method matching, reverse inference, and
+  untyped constants of different kinds.
+- <a id="ref-go-authors-2026e"></a>[Go Authors, 2026e] The Go Authors. Go 1.26 Release Notes.
+  https://go.dev/doc/go1.26
+  A generic type may refer to itself in its own type parameter list.

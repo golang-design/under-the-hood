@@ -5,168 +5,346 @@ title: "4.2 Interfaces"
 
 # 4.2 Interfaces
 
-Interfaces are the soul of Go's type system. They decouple behavior from implementation, and they do it in an unusual way: structural, implicit satisfaction, unlike most mainstream languages. This section looks at how interfaces are represented at runtime, how methods are dispatched dynamically, how type assertions are realized, and where this design sits within the broader lineage of polymorphism. Following the approach of the previous sections, the structs given below are **trimmed-down sketches**: they keep only the fields relevant to the design, with comments explaining why each one exists. For the full definitions, compare against `runtime/runtime2.go`, `internal/abi/iface.go`, and `runtime/iface.go`.
+Interfaces separate behavior from implementation. Unlike most mainstream languages, Go satisfies
+interfaces structurally and implicitly. This section covers how an interface is represented at run
+time, how methods are dispatched dynamically, how type assertions are implemented, and where this
+design stands among the various polymorphism mechanisms. The structs listed below keep only the
+fields relevant to the discussion; for the full definitions, see `runtime/runtime2.go`,
+`internal/abi/iface.go` and `runtime/iface.go` in Go 1.26.
 
 ## 4.2.1 Two Representations: iface and eface
 
-An interface value is always **two words wide** at runtime, but comes in two kinds. An interface with methods (a **non-empty interface**) uses `iface`: a pointer to an `itab` plus a pointer to the concrete data. The empty interface `interface{}` (that is, `any`) uses `eface`: a pointer to the type information `_type` plus a data pointer. The empty interface has no methods and needs no method table, so it stores the type directly, saving one level of indirection:
+An interface value always occupies two words at run time, but it comes in two forms. An interface
+with methods (a **non-empty interface**) is represented as an `iface`: a pointer to an interface
+table `itab`, plus a pointer to the concrete data. The empty interface `interface{}` (that is,
+`any`) is represented as an `eface`: a pointer to the type descriptor ([4.1](./type.md)), plus a
+data pointer. The empty interface has no methods and needs no method table, so recording the type
+directly saves a level of indirection:
 
 ```go
-// Non-empty interface: has methods, hence needs the method table itab (sketch)
+// runtime/runtime2.go
 type iface struct {
-    tab  *itab          // method table for interface type × concrete type (holds the dynamic type and the Fun table)
-    data unsafe.Pointer // points to the concrete value (a pointer to a heap/stack copy when larger than one word or when its address is needed)
+	tab  *itab          // method table for this pair of interface type and concrete type
+	data unsafe.Pointer // points to the concrete value
 }
 
-// Empty interface any: no methods, attaches type info directly (sketch)
 type eface struct {
-    _type *_type        // dynamic type of the concrete value
-    data  unsafe.Pointer
+	_type *_type // dynamic type of the concrete value
+	data  unsafe.Pointer
 }
 ```
 
-`data` holds a pointer rather than the value itself. Put an `int` into an interface, and the runtime boxes it into a piece of addressable memory, then points `data` there. This is where the performance intuition that "interfaces introduce an allocation" comes from. The two-word representation is the bedrock for understanding everything that follows: dynamic dispatch, type assertions, and even the nil trap below are all direct corollaries of it.
+`data` holds a pointer. A pointer-shaped value (a pointer, map, channel, function and so on, whose
+size is exactly one pointer and which is itself a pointer) is stored in `data` directly. Any other
+value must first be **boxed**: copied into a block of addressable memory to which `data` then
+points. Boxing usually means a heap allocation, but the runtime optimizes common cases. For example,
+an integer smaller than 256 points into a static array `staticuint64s` that the runtime
+preallocates, so nothing is allocated. The following program measures how many allocations each of
+three assignments causes:
 
-## 4.2.2 The Typed nil: A Direct Corollary of the Two-Word Representation
+```go {run=true}
+package main
 
-An interface value **equals nil** if and only if **both words, the type and the data, are nil**. As soon as the dynamic-type word is filled in, the interface is not equal to nil, even if the data pointer is nil. Stated abstractly the rule sounds simple, but in code it becomes the famous "typed nil" trap:
+import (
+	"fmt"
+	"os"
+	"testing"
+)
 
-```go
+var sink any
+
+func main() {
+	small := len(os.Args) + 6 // 7, a value known only at run time
+	large := small * 1000     // 7000
+	p := &large
+
+	fmt.Println(testing.AllocsPerRun(1000, func() { sink = small })) // small integer
+	fmt.Println(testing.AllocsPerRun(1000, func() { sink = large })) // large integer
+	fmt.Println(testing.AllocsPerRun(1000, func() { sink = p }))     // pointer
+}
+```
+
+```
+0
+1
+0
+```
+
+The value 7 points into the static array and allocates nothing; the value 7000 must be boxed and
+allocates once; the pointer is stored in `data` directly and also allocates nothing. The two-word
+representation is the basis for what follows: dynamic dispatch, type assertions and the nil problem
+below can all be derived from it.
+
+## 4.2.2 The Typed nil
+
+An interface value equals `nil` if and only if both of its words are `nil`. As soon as the word
+representing the dynamic type has been filled in, the interface value is not equal to `nil`, even if
+the data pointer is `nil`:
+
+```go {run=true}
+package main
+
+import "fmt"
+
 type MyErr struct{}
+
 func (*MyErr) Error() string { return "boom" }
 
 func do() error {
-    var p *MyErr = nil // a concrete pointer whose value is nil
-    return p           // packed into the error interface: type word = *MyErr, data word = nil
+	var p *MyErr = nil // a nil pointer of a concrete type
+	return p           // stored into an error interface
 }
 
 func main() {
-    if err := do(); err != nil {
-        // We enter here! err's type word is non-nil, so err != nil,
-        // even though the pointer it wraps is nil.
-        fmt.Println("non-nil:", err)
-    }
+	err := do()
+	fmt.Println(err == nil)
+	fmt.Printf("%T %v\n", err, err)
 }
 ```
 
-In the `error` returned by `do`, `tab` points to the itab for "`error` × `*MyErr`" (non-nil), and only `data` is that nil pointer. The interface is therefore non-nil. This pitfall is especially common when a function signature returns `error`: the correct approach is to `return nil` explicitly, rather than returning a concrete pointer that happens to be nil. Once you understand the two-word representation from 4.2.1, this pitfall is no longer mysterious. It is not a special case but an inevitable consequence of the rule.
+```
+false
+*main.MyErr boom
+```
 
-## 4.2.3 itab: The Method Table and Dynamic Dispatch
+In the `error` returned by `do`, `tab` points to the interface table for the pair `error` and
+`*MyErr` and is not `nil`; only `data` is `nil`. The interface value therefore does not equal `nil`.
+The problem is especially easy to hit in functions that return `error`. The correct approach is to
+`return nil` explicitly instead of returning a concrete-type pointer that happens to be `nil`. This
+is not a special case but a necessary consequence of the two-word representation.
 
-The `itab` (interface table) is the core of a non-empty interface. It is cached **per pair of "interface type × concrete type"**, recording the interface type, the concrete type, a type hash, and most importantly the **`Fun` method-address table**:
+## 4.2.3 itab: Method Tables and Dynamic Dispatch
+
+The `itab` (interface table) is the core of a non-empty interface. For every combination of an
+interface type and a concrete type, the runtime maintains an `itab` that records the interface type,
+the concrete type, a type hash, and, most importantly, the table of method addresses `Fun`:
 
 ```go
-// itab: the method table for a pair "interface × concrete type" (sketch, compare against internal/abi/iface.go)
+// internal/abi/iface.go
 type ITab struct {
-    Inter *InterfaceType // interface type (which methods are required, and in what order)
-    Type  *Type          // concrete type (the dynamic type)
-    Hash  uint32         // a copy of Type.Hash, used by type switch (see 4.2.5)
-    Fun   [1]uintptr     // variable length: addresses of the concrete type's implementations of each interface method; Fun[0]==0 means not implemented
+	Inter *InterfaceType // interface type: which methods it requires
+	Type  *Type          // concrete type (the dynamic type)
+	Hash  uint32         // copy of Type.Hash, used by type switches
+	Fun   [1]uintptr     // variable length: code addresses of the methods; Fun[0] == 0 means the interface is not implemented
 }
 ```
 
 ```mermaid
 flowchart LR
-    CALL["v.Method2()"] -.->|take address by method index 2, call indirectly| F2
-    subgraph IFACE["iface non-empty interface value, 2 words"]
+    CALL["v.Method2()"] -.->|fetch the address by method index 2 and call indirectly| F2
+    subgraph IFACE["iface: non-empty interface value, 2 words"]
       TAB["tab"]
       DATA["data"]
     end
-    subgraph ITAB["itab, one cached per interface×concrete-type pair"]
-      I["Inter interface type"]
-      T["Type concrete type"]
-      H["Hash for type switch"]
-      subgraph FUN["Fun method-address table, ordered by interface method index"]
-        F0["Fun[0] -> Method0"]
-        F1["Fun[1] -> Method1"]
-        F2["Fun[2] -> Method2"]
+    subgraph ITAB["itab: one per pair of interface and concrete type"]
+      I["Inter: interface type"]
+      T["Type: concrete type"]
+      H["Hash: used by type switches"]
+      subgraph FUN["Fun: address table ordered by interface method index"]
+        F0["Fun[0] → Method0"]
+        F1["Fun[1] → Method1"]
+        F2["Fun[2] → Method2"]
       end
     end
     TAB --> ITAB
-    DATA --> OBJ["concrete value"]
+    DATA --> OBJ["Concrete value"]
 ```
 
-The order of the `Fun` table is fixed by the **interface** (the lexicographic order of the interface's declared methods), independent of how the concrete type is written. This is precisely the mechanism of dynamic dispatch: the compiler knows at compile time the index of a given method within the interface, and at call time it only needs to fetch the address from `Fun` by that index and jump indirectly. Suppose the second method of interface `I` is `Method2`, then
+The order of the `Fun` table is determined by the interface: the methods of an interface are sorted
+by name, independently of how the concrete type is written. Dynamic dispatch rests on this. The
+compiler knows at compile time the index of a method within the interface, so a call only has to
+fetch the address from `Fun` by that index and call it indirectly. If `Method2` is the method with
+index 2 of interface `I`, then:
 
 ```go
 var v I = concrete{}
 v.Method2(args)
 // roughly equivalent to (pseudocode):
-//   fn := v.tab.Fun[2]          // index 2 fixed at compile time, address known only at runtime
-//   call fn(v.data, args)       // data passed in as the implicit receiver
+//   fn := v.tab.Fun[2]    // index 2 is fixed at compile time; the address is known only at run time
+//   call fn(v.data, args) // data is passed as the implicit receiver
 ```
 
-The index is static, the address is dynamic, and that is **dynamic dispatch**: at the same call site, when `v` holds a different concrete type, it jumps to different code. Constructing an `itab` (`getitab`) is not cheap: it must check one by one whether the concrete type implements every method the interface requires, and fill in the whole `Fun` table. So the runtime uses a global hash table `itabTable` to cache constructed itabs, so the same "interface × type" pair is computed only once. The fast path of `getitab` is **lock-free**: it first uses `inter.Type.Hash ^ typ.Hash` as the hash to call `itabTable.find`, and returns on a hit (the overwhelming majority of cases); only on a miss does it take a lock, construct, and `itabAdd` to write back. There is another class of itab generated statically by the compiler (the "interface × type" pairs used by the type switches that appear in the program), filled into the table in advance during `itabsinit`.
+The index is static and the address is dynamic: at the same call site, a different concrete type in
+`v` runs different code. This is **dynamic dispatch** [[Cox, 2009](#ref-cox-2009)].
 
-## 4.2.4 Structural Satisfaction: The Cost and Benefit of Decoupling
+Constructing an `itab` (`getitab`) is not cheap: the runtime must check one by one that the concrete
+type implements every method the interface requires, and fill in the whole `Fun` table. Because the
+methods of both the interface and the concrete type are sorted by name, the check can advance
+through the two lists in step, in time proportional to the sum of their method counts. A constructed
+`itab` is cached in the global hash table `itabTable`, so each pair is constructed only once. The
+fast path of `getitab` takes no lock: it looks the pair up in the table (with quadratic probing)
+using `inter.Type.Hash ^ typ.Hash` as the hash, and returns on a hit, which is the most common case.
+Only when the lookup fails does it take the lock, construct a new `itab` and insert it into the
+table, which grows when the load factor reaches 75% [[Go Authors, 2026a](#ref-go-authors-2026a)]. In
+practice, most `itab`s need not be constructed at run time. For every combination of interface and
+concrete type that can be determined at compile time (for example, assigning an `*os.File` to an
+`io.Reader`, or a type that appears in a type switch), the compiler generates the `itab` statically,
+the linker collects them into the `itablink` section, and `itabsinit` registers them in the table at
+program start.
 
-Making an indirect call through a method table is, in essence, the same mechanism as the C++ virtual function table (vtable). What truly sets Go apart is that **interface satisfaction is structural and implicit**: a type automatically satisfies an interface as long as it has the method set the interface requires, without having to declare `implements` explicitly the way Java/C# do. This is the choice of **structural typing** over **nominal typing**.
+## 4.2.4 Structural Satisfaction: Benefits and Costs of Decoupling
 
-The benefit is decoupling. You can define an interface that someone else's type, or even a standard-library type, happens to satisfy, without changing a single line of those types. The ecosystem of "small interfaces fitting everywhere" such as `io.Reader`/`io.Writer` springs from this: `bytes.Buffer`, `os.File`, and `net.Conn` none declare that they implement `io.Reader`, yet all of them can be caught by any function that accepts an `io.Reader`. Interface and implementation evolve independently at each end, aligned naturally in the middle by the method set.
+Indirect calls through a method table work the same way as C++ virtual function tables (vtables).
+What really sets Go apart is that interface satisfaction is structural and implicit: a type
+satisfies an interface automatically as long as it has the method set the interface requires, with
+no explicit `implements` declaration as in Java or C#. This is the choice of **structural typing**
+over nominal typing ([4.1](./type.md)) [[Go Authors, 2026b](#ref-go-authors-2026b)].
 
-The cost has two sides. First, implicit satisfaction makes "who implements what" no longer obvious at a glance, requiring tooling or reading to confirm (which is also why the compile-time assertion idiom `var _ io.Reader = (*T)(nil)` exists). Second, interface calls are indirect: the `Fun[n]` address fetch plus indirect jump from 4.2.3 generally cannot be inlined by the compiler across the interface boundary, so it loses the optimization that inlining could have provided. For a small method called frequently on a hot path, going through an interface versus going through the concrete type can differ in performance by a noticeable margin. Abstraction never comes for free: it buys flexibility, paid for with this bit of runtime indirection.
+The benefit is decoupling. A programmer can define an interface that types written by others, even
+types in the standard library, happen to satisfy, without modifying those types. Small interfaces
+such as `io.Reader` and `io.Writer` are widely used for exactly this reason: `bytes.Buffer`,
+`os.File` and `net.Conn` never declare that they implement `io.Reader`, yet each can be passed to
+any function that accepts an `io.Reader`. Interface and implementation can evolve independently,
+meeting through the method set.
 
-## 4.2.5 Type Assertions and Type Switch
+The cost is twofold. First, implicit satisfaction means it is no longer obvious which types
+implement which interfaces; confirming it takes tools or reading code. The idiom of the compile-time
+assertion `var _ io.Reader = (*T)(nil)` comes from this. Second, an interface call is an indirect
+call: fetch the address by index, then jump. The compiler usually cannot inline the callee across an
+interface, and so loses the further optimizations inlining enables. For a small method called
+frequently on a hot path, the performance gap between an interface call and a direct call can be
+considerable. When the compiler can determine the dynamic type of an interface value, it rewrites
+the interface call into a direct call, which is devirtualization. For hot calls that cannot be
+determined statically, profile-guided optimization can devirtualize conditionally based on profile
+data ([15.3](../../part5toolchain/ch15compile/optimize.md)), recovering part of this loss.
 
-`x.(T)` asserts the dynamic type of an interface. Its implementation depends on what `T` is:
+## 4.2.5 Type Assertions and Type Switches
 
-- When `T` is a **concrete type**, the assertion degenerates into "compare whether the dynamic-type word in the interface and `T` are the same `_type`", a single pointer comparison.
-- When `T` is **another interface** (`x.(SomeInterface)`), what is wanted is "whether `x`'s dynamic type satisfies `SomeInterface`", which requires computing or looking up an itab on the spot, exactly the `getitab` path from 4.2.3 (with the `canfail` flag, failure returns nil rather than panicking).
+The assertion `x.(T)` checks the dynamic type of an interface value, and its implementation depends
+on `T`:
 
-A **type switch** `switch v := x.(type)` uses `itab.Hash` (the copy of the dynamic type hash) for fast branching: it first roughly screens cases by hash, then precisely compares types. Two different hashes must be kept apart here: `itab.Hash` is a copy of `Type.Hash`, serving the **type switch**, carried by the itabs the compiler statically generates for the switches that appear in the program; whereas `itabTable`'s own table lookup uses a different hash, `inter.Type.Hash ^ typ.Hash`. An itab constructed dynamically at runtime has its `Hash` field set to 0, because such itabs never participate in a type switch. This explains a performance intuition: frequent interface assertions, especially the kind that asserts to an interface, and large type switches, are not zero-cost and deserve attention on hot paths.
+- When `T` is a concrete type, the assertion only has to compare the type word of the interface (the
+  `itab` pointer for a non-empty interface) with the address of the descriptor (or `itab`)
+  corresponding to `T`. One pointer comparison suffices.
+- When `T` is another interface, the runtime must decide whether the dynamic type of `x` satisfies
+  `T`, that is, obtain the corresponding `itab`. This is the `getitab` path of 4.2.3.
 
-## 4.2.6 Method Sets: Value or Pointer
+In either case, with the form `v, ok := x.(T)` a failed assertion yields the zero value and `false`
+instead of a panic.
 
-Whether an interface holds a value or a pointer is determined by the **method-set rule**, which is also an extension of the two-word representation from 4.2.1: methods with a pointer receiver are **not** in the method set of a value.
+The type switch `switch v := x.(type)` uses hash values to speed up case selection
+([4.1](./type.md)): it locates the candidate case by hash and then compares the types exactly. Two
+different hashes must be distinguished here. `itab.Hash` is a copy of the dynamic type's
+`Type.Hash`; it serves type switches and is carried by `itab`s the compiler generates statically.
+The lookup in `itabTable` uses `inter.Type.Hash ^ typ.Hash` instead. For an `itab` constructed
+dynamically at run time, the `Hash` field is set to 0, because according to a comment in the runtime
+source such `itab`s never take part in type switches.
+
+Assertions to an interface type, and the interface-type cases of a type switch, used to call into
+the runtime every time. Since Go 1.22, the compiler generates a small cache for each such call site,
+recording the concrete types seen there and their match results (the case index and the `itab`). The
+runtime (`typeAssert`, `interfaceSwitch`) consults the cache first and takes the full path only on a
+miss [[Go Authors, 2026a](#ref-go-authors-2026a)]. Even so, frequent assertions to interface types
+on a hot path, or a type switch with many cases, are still not free.
+
+## 4.2.6 Method Sets: Values and Pointers
+
+Whether an interface can hold a value or a pointer is decided by the rules for **method sets**:
+methods with pointer receivers do not belong to the method set of the value type
+[[Go Authors, 2026b](#ref-go-authors-2026b)].
 
 ```go
+package main
+
 type T struct{}
-func (t T)  Read() {}   // value receiver: both T and *T have it
-func (t *T) Write() {}  // pointer receiver: only *T has it
 
-type ReadWriter interface { Read(); Write() }
+func (t T) Read()   {}
+func (t *T) Write() {}
 
-var _ ReadWriter = &T{} // OK: *T has both Read and Write
-var _ ReadWriter = T{}  // compile error: T's method set lacks Write
+type ReadWriter interface {
+	Read()
+	Write()
+}
+
+var _ ReadWriter = &T{}
+var _ ReadWriter = T{}
+
+func main() {}
 ```
 
-The reason is not hard to see: calling a method with a pointer receiver requires obtaining the receiver's address, but if the interface holds a copy of a value, that copy may not be addressable, so the language simply excludes such methods from the value's method set. This rule is not a syntactic detail but the boundary of "what can actually be put into an interface", and like the typed nil, it is a direct corollary of the underlying representation.
+```
+./main.go:14:20: cannot use T{} (value of struct type T) as ReadWriter value in variable declaration: T does not implement ReadWriter (method Write has pointer receiver)
+```
 
-## 4.2.7 Design Trade-offs: Small Interfaces and "Accept Interfaces, Return Structs"
+`*T` has both `Read` and `Write`, while the method set of `T` has only `Read`. The Go FAQ explains
+why: if the interface holds a `*T`, a method call can obtain the value by dereferencing; if it holds
+a `T`, there is no safe way to obtain a pointer to it, since otherwise the method could modify the
+value inside the interface, which the language specification does not allow
+[[Go Authors, 2026c](#ref-go-authors-2026c)]. Like the typed nil, this rule stems from the
+underlying representation of interfaces: what an interface holds is a copy of the value.
 
-Go's interface philosophy condenses into a few community maxims, and they are not stylistic preferences but engineering conclusions of the mechanism above.
+## 4.2.7 Design Trade-offs: Small Interfaces
 
-**"The smaller the interface, the better"**: single-method interfaces (`io.Reader` and the like) are the easiest to satisfy and the easiest to compose. Rob Pike's phrasing is "The bigger the interface, the weaker the abstraction": the bigger the interface, the fewer types can satisfy it, and the thinner the decoupling benefit. **"Accept interfaces, return structs"**: use interfaces for function parameters for generality, letting the caller freely substitute implementations; use concrete types for return values, to avoid premature abstraction and to let the caller obtain the full set of capabilities rather than a view pruned by an interface. Add the typed nil of 4.2.2 and the value-versus-pointer method sets of 4.2.6, and these few points together form the common sense you cannot avoid when writing Go interfaces. Their shared undertone is: an interface is a lightweight abstraction meant for decoupling, keep it as small as you can, and abstract as late as you can.
+Several pieces of experience in the Go community about interfaces can be read as engineering
+conclusions drawn from the mechanisms above.
 
-## 4.2.8 Cross-Language Comparison
+First, interfaces should be small. A single-method interface such as `io.Reader` is the easiest to
+satisfy and the easiest to compose. One of Rob Pike's Go Proverbs is "The bigger the interface, the
+weaker the abstraction" [[Pike, 2015](#ref-pike-2015)]. The more methods an interface requires, the
+fewer types can satisfy it, and the smaller the benefit of decoupling.
 
-Polymorphism is realized in different ways across languages, and putting Go into this table makes its trade-offs clear:
+Second, "accept interfaces, return structs". Function parameters use interfaces for generality, so
+callers can substitute implementations freely; return values use concrete types, to avoid premature
+abstraction and to give callers the full capability instead of a view trimmed by an interface.
 
-| Language/Mechanism | Dispatch | Satisfaction | Runtime Representation | Notes |
-|---|---|---|---|---|
-| Go interface | dynamic (itab method table) | structural, implicit | iface = 2 words (itab pointer + data pointer) | isomorphic to vtable, but non-intrusive |
-| C++ virtual functions | dynamic (vtable) | nominal, intrusive (must inherit a base class) | object embeds a vptr pointing to the class's vtable | a close relative of the itab mechanism |
-| Rust trait | static (generic monomorphization, zero-cost) or dynamic (`dyn Trait`) | nominal, explicit `impl` | `dyn` is a fat pointer = data pointer + vtable pointer | `dyn Trait` is very much like Go's iface |
-| Haskell type class | dictionary passing | nominal, `instance` declaration | an instance = a method dictionary, passed implicitly at the call site | same origin as Go's generics implementation (see below) |
-| Java/C# interface | dynamic (interface method table) | nominal, explicit `implements` | object header + method table; the JIT optimizes with inline caches | virtual calls are sped up by runtime deoptimization/inline caches |
+What these pieces of experience share is the starting point that an interface is a lightweight
+abstraction for decoupling: better small than large, better late than early.
 
-The Haskell line is worth singling out: type classes are implemented with **dictionary passing**, where an instance is a method dictionary passed implicitly at the call site. This is precisely the "compile-time version" of the interface itab, and it is the same idea used in the implementation of Go generics ([8 Generics](../ch08generics)). Type classes and dictionaries are two ends of the same concept, one end at runtime (the interface itab) and the other at compile time (the generic dictionary). Go's distinctiveness is combining "vtable-style efficient dynamic dispatch" with "the loose coupling of structural, implicit satisfaction": it wants both a concrete runtime representation and lightweight decoupling when writing code. Once you understand iface/itab, you understand how this combination is realized.
+## 4.2.8 Comparison with Other Languages
+
+Languages implement polymorphism in different ways
+[[Cardelli and Wegner, 1985](#ref-cardelli-wegner-1985)], and placing Go among them makes its
+trade-offs clear:
+
+| Language and mechanism | Dispatch | Satisfaction | Runtime representation |
+| --- | --- | --- | --- |
+| Go interface | Dynamic (itab method table) | Structural, implicit | Two words: itab pointer and data pointer |
+| C++ virtual function | Dynamic (vtable) | Nominal, must inherit from a base class | Object embeds a vptr pointing to the class's vtable |
+| Rust trait | Static (generic monomorphization) or dynamic (`dyn Trait`) | Nominal, explicit `impl` | `dyn Trait` is a fat pointer: data pointer and vtable pointer |
+| Haskell type class | Dictionary passing | Nominal, `instance` declaration | An instance is a method dictionary, passed implicitly at the call site |
+| Java/C# interface | Dynamic (interface method table) | Nominal, explicit `implements` | Object header holds a class metadata pointer; the JIT speeds calls with inline caches |
+
+Rust's `dyn Trait` and Go's `iface` are very close in representation: both are a data pointer plus a
+method table pointer [[Rust Project, n.d.](#ref-rust-project-nd)]. The difference is that Rust
+generates its method tables at compile time for each pair of trait and type, whereas Go may
+construct an `itab` only when it is first needed at run time, because structural satisfaction cannot
+be enumerated at compile time.
+
+Haskell's type classes are implemented by **dictionary passing**, proposed by Wadler and Blott in
+1989 [[Wadler and Blott, 1989](#ref-wadler-blott-1989)]: each instance corresponds to a method
+dictionary that is passed as an implicit argument at the call site. Go's implementation of generics
+uses a similar idea ([Chapter 8](../ch08generics/readme.md)): a function body shared by GC shape
+receives a dictionary at the call, from which it obtains information and methods of the concrete
+type. The `itab` of an interface travels with the value at run time, whereas the dictionary of a
+generic function is fixed at compile time and passed in by the caller. What is distinctive about Go
+is that it combines the efficient dynamic dispatch of a vtable with the loose coupling of
+structural, implicit satisfaction.
 
 ## Further Reading
 
-1. Russ Cox. *Go Data Structures: Interfaces.* 2009.
-   https://research.swtch.com/interfaces (a classic exposition of the iface/itab representation)
-2. The Go Authors. *runtime/iface.go, internal/abi/iface.go, runtime/runtime2.go*
-   (iface/eface/itab, getitab, itabTable).
-   https://github.com/golang/go/blob/master/src/runtime/iface.go
-3. Luca Cardelli, Peter Wegner. "On Understanding Types, Data Abstraction, and
-   Polymorphism." *ACM Computing Surveys*, 17(4), 1985.
-   https://doi.org/10.1145/6041.6042 (a foundational survey of polymorphism and type abstraction)
-4. Philip Wadler, Stephen Blott. "How to Make ad-hoc Polymorphism Less ad hoc."
-   *POPL 1989*. https://doi.org/10.1145/75277.75283 (type classes and dictionary passing)
-5. Rob Pike. *Go Proverbs* ("The bigger the interface, the weaker the abstraction").
-   https://go-proverbs.github.io/
-6. The Go Authors. *The Go Programming Language Specification: Interface types.*
-   https://go.dev/ref/spec#Interface_types (the spec definition of structural satisfaction and method sets)
-7. The Rust Project. *The Rust Reference: Trait objects (`dyn Trait`).*
-   https://doc.rust-lang.org/reference/types/trait-object.html (the fat-pointer representation of dynamic dispatch)
+- <a id="ref-cox-2009"></a>[Cox, 2009] Russ Cox. "Go Data Structures: Interfaces." 2009.
+  https://research.swtch.com/interfaces
+  The classic explanation of the iface and itab representations.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `runtime/iface.go`,
+  `internal/abi/iface.go`, `runtime/runtime2.go`.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/iface.go
+  https://github.com/golang/go/blob/master/src/runtime/iface.go
+  The implementation of `getitab`, `itabTable`, `typeAssert` and `interfaceSwitch`.
+- <a id="ref-cardelli-wegner-1985"></a>[Cardelli and Wegner, 1985] Luca Cardelli, Peter Wegner. "On
+  Understanding Types, Data Abstraction, and Polymorphism." *ACM Computing Surveys*, 17(4):
+  471–523, 1985. https://doi.org/10.1145/6041.6042 A classic survey of polymorphism and type
+  abstraction.
+- <a id="ref-wadler-blott-1989"></a>[Wadler and Blott, 1989] Philip Wadler, Stephen Blott. "How to
+  Make ad-hoc Polymorphism Less ad hoc." *POPL 1989*: 60–76. https://doi.org/10.1145/75277.75283 The
+  source of type classes and dictionary passing.
+- <a id="ref-pike-2015"></a>[Pike, 2015] Rob Pike. "Go Proverbs." Gopherfest, 2015.
+  https://go-proverbs.github.io/
+  Source of sayings such as "The bigger the interface, the weaker the abstraction".
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *The Go Programming Language
+  Specification*, "Interface types" and "Method sets". https://go.dev/ref/spec#Interface_types
+  The specification's definitions of structural satisfaction and method sets.
+- <a id="ref-rust-project-nd"></a>[Rust Project, n.d.] The Rust Project. *The Rust
+  Reference*, "Trait objects". https://doc.rust-lang.org/reference/types/trait-object.html The
+  fat-pointer representation of `dyn Trait`.
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *Frequently Asked Questions:
+  Why do T and \*T have different method sets?* https://go.dev/doc/faq#different_method_sets

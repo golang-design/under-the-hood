@@ -1,193 +1,426 @@
 ---
 weight: 2403
-title: "7.3 Error Format and Context"
+title: "7.3 Error Formatting and Context"
 ---
 
-# 7.3 Error Format and Context
+# 7.3 Error Formatting and Context
 
-A good error does not merely say "something went wrong." It tells a person what was being done, on account of what, and what went wrong. The evolution of the problem ([7.1](./value.md)) and value inspection ([7.2](./inspect.md)) gave us the mechanisms for propagating and examining errors. This section discusses the engineering practice that sits on top of those mechanisms: how the text of an error should be written, how context accumulates layer by layer along the call chain, and how stack traces and structured logs can be added on demand when human-written words are not enough. Running through all of it is one overall tendency Go has regarding error information: human-written semantic context is preferable to machine-collected stack traces.
+A useful error message says what the program was doing and why it failed. [7.2](./inspect.md)
+covered how a program inspects errors; this section covers how errors are presented to people: how
+messages should be written, how context accumulates layer by layer along the call chain, and how
+call stacks and structured logs fill in when hand-written context is not enough.
 
-## 7.3.1 The `Error() string` Convention
+Go's inclination is that the programmer writes semantic context at each layer, rather than the
+runtime collecting a call stack automatically. Errors in the standard library carry no call stack by
+default; third-party libraries or user-defined types add one when needed.
 
-The `error` interface requires only one method:
+## 7.3.1 Conventions for Error Messages
 
-```go
-type error interface {
-    Error() string
-}
+Go error messages follow a widely observed convention: start with a lowercase letter and end without
+punctuation. The official Go Code Review Comments [[Go Wiki, n.d.](#ref-go-wiki-nd)] explain why:
+error messages are usually printed after other context, as in
+`log.Printf("Reading %s: %v", filename, err)`, and a capitalized message would leave a stray capital
+letter in the middle of the sentence. The guidance adds that the convention does not apply to log
+messages, which are line-oriented and are never embedded in other messages.
+
+Error messages can therefore be concatenated layer by layer. Three calls each add a fragment, and
+the result is a message separated by `: ` that runs from the high-level intent to the low-level
+cause:
+
+```
+load config: open /etc/app.conf: permission denied
 ```
 
-Around this single method, the Go community has formed an unwritten yet ubiquitous style convention: error strings begin with a lowercase letter and carry no trailing punctuation. The reason behind the convention is quite practical. Errors rarely appear on their own; they are almost always wrapped layer upon layer, joined end to end into a longer string. Imagine three layers of calls each adding a sentence of context. What the end user finally sees is:
+Effective Go also recommends [[Go Authors, 2009](#ref-go-authors-2009)] that error messages identify
+their origin, for example by prefixing the name of the operation or package that produced them: when
+the `image` package fails to decode an unknown format, the message is `image: unknown format`.
+`os.PathError` is the model for this advice. Its message contains the operation, the file path and
+the error returned by the system call, as in `open /etc/passwx: no such file or directory`, so it
+remains informative even when printed far from where the failure occurred.
 
-```
-read config: open /etc/app.conf: permission denied
-```
+This convention used to be checked by `golint`. In May 2020 Ian Lance Taylor proposed freezing and
+deprecating `golint` (go.dev/issue/38968), and its repository was subsequently archived
+[[Taylor, 2020](#ref-taylor-2020)]; the same check is now provided by Staticcheck as ST1005
+[[Honnef, n.d.](#ref-honnef-nd)]. `go vet` does not check how error messages are written.
 
-This is a causal chain of three error segments joined by `: `. If each segment were written like a sentence, with a capitalized first letter and a period at the end, joining them would produce "Read config: Open /etc/app.conf: Permission denied.", a string with uppercase letters and periods scattered through the middle of a sentence, fragmented and hard to read. Only lowercase fragments with no trailing punctuation can slot smoothly into any position and string together into a coherent chain. This convention is small, yet it is the precondition for Go error information to be joined layer by layer without losing readability.
+## 7.3.2 Adding Context at Every Boundary
 
-One common claim needs clarifying: it is not `go vet` that checks this convention. Historically it was `golint`'s job, and after `golint` was archived, this check (numbered ST1005) was taken over by third-party tools such as `staticcheck`. `go vet` does not care about the capitalization of error strings, but it does have one check related to errors, aimed at the structured logging calls of `log/slog` (see 7.3.5).
+As an error propagates upward, each meaningful boundary it crosses should add a phrase saying what
+that layer was doing. Andrew Gerrand wrote in a 2011 blog post that summarizing the context is the
+responsibility of whoever implements the error [[Gerrand, 2011](#ref-gerrand-2011)]. This is the
+main use of `%w`. The following function reads a configuration file and adds different context at
+its two failure points:
 
-## 7.3.2 Add Context at Every Boundary
+```go {run=true}
+package main
 
-As an error propagates upward from the lower layers, every time it crosses a meaningful boundary it should gain a sentence of "what I was doing at the time." This is the primary use of `%w` wrapping ([7.2](./inspect.md)), and a core practice of Go error handling. Below is a typical piece of configuration-loading code that annotates its intent at two different failure points:
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+)
 
-```go
-func loadConfig(path string) (*Config, error) {
-    data, err := os.ReadFile(path)
-    if err != nil {
-        // Annotate "which config file is being loaded", and use %w to retain the underlying error for inspection
-        return nil, fmt.Errorf("load config %q: %w", path, err)
-    }
-
-    var cfg Config
-    if err := json.Unmarshal(data, &cfg); err != nil {
-        // A parse failure is a different kind of boundary, with different semantics to annotate
-        return nil, fmt.Errorf("parse config %q: %w", path, err)
-    }
-    return &cfg, nil
-}
-```
-
-When the file does not exist, what the caller ultimately receives is `load config "a.conf": open a.conf: no such file or directory`: a complete chain from high-level intent (loading the config) to low-level cause (the file cannot be opened). While `%w` spells out this readable text, it also keeps the underlying `fs.ErrNotExist` in the error tree, so the caller can both print the whole sentence to the user and use `errors.Is(err, fs.ErrNotExist)` ([7.2](./inspect.md)) to determine the specific cause. The text is for people, the structure is for programs, and the two do not conflict.
-
-This layer-by-layer annotation is, in essence, exchanging human writing for semantics. In exception-based languages, the error is thrown all the way up, and the context along the way is automatically collected by the runtime into a stack trace. Go hands this task back to the programmer: each layer actively writes a sentence, and what is finally joined together is not a string of function names and line numbers, but a human-readable semantic chain describing "what the program was doing when it went wrong." The cost is that one must be diligent: every boundary has to remember to wrap, and missing one layer breaks a link in the chain. The benefit is that the error information often explains the problem better than a machine stack trace, because it speaks of business intent rather than implementation detail.
-
-A discipline worth remembering: the wrapping text describes what this layer is doing, and should not restate what the layer below has already said. In `fmt.Errorf("load config %q: %w", path, err)`, `load config` is this layer's intent, and what follows `%w` is left to the layer below to tell about its own failure. Each of the two layers says its own part, with no duplication and no gap.
-
-## 7.3.3 Standard Library Errors Carry No Stack
-
-Layer-by-layer annotation is good, but when tracking down hard problems, people sometimes still want a machine stack trace to know exactly which line the error emerged from. The standard library's `errors.New` and `fmt.Errorf` collect no stack by default:
-
-```go
-func New(text string) error {
-    return &errorString{text}
-}
-
-type errorString struct {
-    s string
-}
-
-func (e *errorString) Error() string { return e.s }
-```
-
-An `errorString` has only a single string field and nothing else. This is a deliberate trade-off, not an oversight. Collecting a stack trace requires `runtime.Callers` to walk back the call stack and then translate program counters into function names and line numbers, which is no small overhead on paths where errors are produced frequently (for example, using an error to express expected control flow such as "not found" or "reached the end"). Go's judgment is that the vast majority of errors have no use for a stack, and making the stack a default would make everyone pay for a minority of scenarios. So the standard library chooses the minimal error and leaves the stack for those who need it to add on demand. This is exactly the consistent stance of the Go standard library: a minimal core, extended on demand.
-
-## 7.3.4 Adding the Stack and Diagnostic Information Back In
-
-For scenarios that need a stack, the community has long had mature solutions. Dave Cheney's `github.com/pkg/errors` provides `WithStack` and `Wrap`, which record the current call stack while wrapping the error and establish the convention of printing the full diagnostics with the stack via `%+v`:
-
-```go
-import "github.com/pkg/errors"
+type Config struct{ Addr string }
 
 func loadConfig(path string) (*Config, error) {
-    data, err := os.ReadFile(path)
-    if err != nil {
-        return nil, errors.Wrap(err, "load config") // record the call stack here
-    }
-    // ...
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// The message of *fs.PathError already contains the path; do not repeat it
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		// json errors do not contain the path; add it here
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	return &cfg, nil
 }
 
-// Printed at a higher layer: fmt.Printf("%+v\n", err)
-// Ordinary %v is still a single line "load config: open a.conf: ...",
-// while %+v additionally lists, frame by frame, the function names and file line numbers.
+func main() {
+	_, err := loadConfig("a.conf")
+	fmt.Println(err)
+	fmt.Println(errors.Is(err, fs.ErrNotExist))
+}
 ```
 
-`pkg/errors` proved one thing: wrapping, stack traces, and customizable print formats can be layered on top of the `error` interface without changing the language. Many of its ideas later flowed into the standard library. `golang.org/x/xerrors` was the testing ground before Go 1.13's error features officially landed; the prototypes of `%w` wrapping and `Is`/`As`/`Unwrap` were all refined there, and eventually their core was absorbed into the standard library's `errors` and `fmt` ([7.2](./inspect.md)), while the stack trace was left outside the standard library, provided on demand by third-party libraries.
+```
+load config: open a.conf: no such file or directory
+true
+```
 
-To let a custom error type support rich output like `%+v`, the means is the `fmt.Formatter` interface:
+The message the caller receives runs from the high-level intent (loading the configuration) down to
+the low-level cause (the file does not exist), while `%w` keeps the underlying error in the error
+tree, so the caller can use `errors.Is` to identify the specific cause. The message is for people
+and the error tree is for programs; neither interferes with the other.
+
+One rule is worth following: each layer describes only its own operation and does not repeat what
+the layer below has already said. The `*fs.PathError` returned by `os.ReadFile` already contains the
+operation and the path, so writing `fmt.Errorf("load config %s: %w", path, err)` would print the
+path twice. The error from `json.Unmarshal` does not know which file the data came from, so the path
+belongs at this layer.
+
+Context written layer by layer differs from the call stack that exception-based languages collect
+automatically. A call stack records function names and line numbers, which are implementation
+details; the messages written at each layer record what the program intended to do, and often
+explain more. The cost is that the programmer must remember to wrap at every boundary, and each
+layer that is skipped leaves a gap in the message.
+
+## 7.3.3 Standard Library Errors Carry No Call Stack
+
+Neither `errors.New` nor `fmt.Errorf` records a call stack. `errorString` has a single string field,
+and `wrapError` adds only a field pointing to the underlying error (see [7.2.1](./inspect.md)).
+
+This is deliberate. Recording a call stack requires walking the stack frames with `runtime.Callers`,
+and printing it requires converting program counters to function names and line numbers. The table
+below shows measurements on Go 1.26.10 on an Apple M5 Pro. An error is created at call depths 10 and
+30, once with `errors.New` and once with `errors.New` plus `runtime.Callers` recording up to 32
+program counters (without symbolization); each entry is the median of 5 runs:
+
+| Operation | Depth 10 | Depth 30 |
+| :-- | --: | --: |
+| `errors.New` | 17.7 ns, 1 allocation | 34.1 ns, 1 allocation |
+| `errors.New` plus `runtime.Callers` | 322.0 ns, 3 allocations | 618.3 ns, 3 allocations |
+
+Recording program counters alone raises the cost by more than an order of magnitude, and it grows
+with call depth. Many errors are expected control flow, such as `io.EOF` or a "not found" result,
+and recording a call stack for all of them is not worthwhile.
+
+During the Go 1.13 development cycle, the error value implementation originally included frame
+information: `fmt.Errorf` and `errors.New` recorded the call location, and `%+v` printed it. This
+was removed before the release, for the reasons given in [7.2.5](./inspect.md)
+[[Neil and Amsterdam, 2019](#ref-neil-amsterdam-2019)]. The standard library has not added the
+feature since; call stacks are left to the programs that need them.
+
+## 7.3.4 Adding Call Stacks to Errors
+
+Where a call stack is needed, the community has long had mature solutions. `github.com/pkg/errors`,
+created by Dave Cheney in late 2015, provides `Wrap` and `WithStack`, which record the call stack as
+they wrap an error, and prints the detailed form with `%+v` by convention
+[[Cheney, 2016c](#ref-cheney-2016c)]. Many of its ideas later influenced the standard library:
+before Go 1.13, `golang.org/x/xerrors` served as a testing ground that refined `%w`, `Is`, `As` and
+`Unwrap` [[Go Authors, 2019](#ref-go-authors-2019)]; the core of it entered the standard library,
+but the call stack did not. As the Go 2 error proposals progressed, the `pkg/errors` README
+announced that the project had entered maintenance mode [[Cheney, 2016d](#ref-cheney-2016d)].
+
+For a custom error type to support a detailed format such as `%+v`, it must implement the
+`fmt.Formatter` interface [[Go Authors, 2026](#ref-go-authors-2026)]:
 
 ```go
+// src/fmt/print.go
+type State interface {
+	// Write is the function to call to emit formatted output to be printed.
+	Write(b []byte) (n int, err error)
+	// Width returns the value of the width option and whether it has been set.
+	Width() (wid int, ok bool)
+	// Precision returns the value of the precision option and whether it has been set.
+	Precision() (prec int, ok bool)
+
+	// Flag reports whether the flag c, a character, has been set.
+	Flag(c int) bool
+}
+
+// Formatter is implemented by any value that has a Format method.
+// The implementation controls how State and rune are interpreted,
+// and may call Sprint or Fprint(f) etc. to generate its output.
 type Formatter interface {
-    Format(f State, verb rune)
+	Format(f State, verb rune)
 }
 ```
 
-A type that implements `Format` can fully take over its own behavior when printed by `fmt`: through `State` it obtains the output target (`State` is also an `io.Writer`) and the format flags, then decides whether to print a brief single line or a multi-line stack based on the `verb` (`v`, `s`, and so on) and the flags (whether `f.Flag('+')` indicates `+` was set). An error type that carries a stack is roughly sketched like this:
+A type that implements `Format` takes complete control of how `fmt` prints it: it writes the result
+through `State`, queries the flags, and decides from the verb and flags (for example `f.Flag('+')`)
+whether to print a short single line or multiple lines with a call stack. The following program
+defines an error type that records the call stack:
 
-```go
-// Sketch: an error carrying a stack; ordinary printing is one line, %+v prints the stack
+```go {run=true}
+package main
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"runtime"
+	"strings"
+)
+
+// withStack records the call stack at creation and prints the function name of each frame with %+v
 type withStack struct {
-    err   error
-    stack []uintptr // collected at construction time by runtime.Callers
+	err error
+	pcs []uintptr
+}
+
+func wrapStack(err error) error {
+	var pcs [32]uintptr
+	n := runtime.Callers(2, pcs[:]) // skip runtime.Callers and wrapStack itself
+	return &withStack{err, pcs[:n]}
 }
 
 func (w *withStack) Error() string { return w.err.Error() }
-func (w *withStack) Unwrap() error { return w.err } // can still be seen through by Is/As
+func (w *withStack) Unwrap() error { return w.err }
 
 func (w *withStack) Format(s fmt.State, verb rune) {
-    switch verb {
-    case 'v':
-        if s.Flag('+') { // %+v: first print the underlying error, then print the stack frame by frame
-            fmt.Fprintf(s, "%+v", w.err)
-            for _, pc := range w.stack {
-                fn := runtime.FuncForPC(pc)
-                file, line := fn.FileLine(pc)
-                fmt.Fprintf(s, "\n\t%s\n\t\t%s:%d", fn.Name(), file, line)
-            }
-            return
-        }
-        fallthrough
-    case 's':
-        fmt.Fprint(s, w.err.Error()) // %v / %s: print only one line
-    }
+	switch verb {
+	case 'v':
+		if s.Flag('+') {
+			fmt.Fprint(s, w.err.Error())
+			frames := runtime.CallersFrames(w.pcs)
+			for {
+				f, more := frames.Next()
+				if strings.HasPrefix(f.Function, "main.") {
+					fmt.Fprintf(s, "\n\t%s", f.Function)
+				}
+				if !more {
+					break
+				}
+			}
+			return
+		}
+		fallthrough
+	case 's':
+		fmt.Fprint(s, w.err.Error())
+	}
+}
+
+func open(path string) error {
+	return wrapStack(&fs.PathError{Op: "open", Path: path, Err: fs.ErrNotExist})
+}
+
+func loadConfig(path string) error {
+	if err := open(path); err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	return nil
+}
+
+func main() {
+	err := loadConfig("a.conf")
+	fmt.Printf("%v\n", err)
+	fmt.Printf("%+v\n", err) // the outermost *fmt.wrapError does not implement Formatter
+	if ws, ok := errors.AsType[*withStack](err); ok {
+		fmt.Printf("%+v\n", ws)
+	}
+	fmt.Println(errors.Is(err, fs.ErrNotExist))
 }
 ```
 
-In this way, the same error value prints as a concise single line in ordinary use, and during troubleshooting `%+v` expands it into diagnostics with a stack. `Format` makes "how detailed to print" a decision made at output time, rather than something fixed at the moment the error is produced.
+```
+load config: open a.conf: file does not exist
+load config: open a.conf: file does not exist
+open a.conf: file does not exist
+	main.open
+	main.loadConfig
+	main.main
+true
+```
 
-## 7.3.5 Structured Logging: The Error as a Field
+The output reveals an easily overlooked problem. The call stack is recorded in the inner
+`withStack`, while the outermost error is the `*fmt.wrapError` produced by `fmt.Errorf`, which does
+not implement `Formatter`. Applying `%+v` to the whole error therefore still yields a single line of
+message. To print the call stack, `errors.AsType` must first find the `withStack`. `pkg/errors`
+handles this by having each of its own wrapper types implement `Format`, recursing layer by layer
+when printed with `%+v`; but once a standard-library `%w` wrapper sits in the middle, the chain
+breaks. It also shows that additional information such as a call stack is hard to preserve across
+wrappers from different sources unless it becomes part of the standard library's conventions.
 
-The chain of text concatenation has a ceiling: it is prose for human reading, not convenient for machine retrieval and aggregation. When the error enters a log and is to be filtered, counted, and alerted on by a monitoring system field by field, a single line of string looks clumsy. The `log/slog` introduced in Go 1.21 turns logging from a "format string" toward "structured records of key-value pairs," so an error can be recorded as a keyed field rather than stuffed into a sentence:
+## 7.3.5 Structured Logging: Errors as Fields
+
+A message concatenated with `: ` is written for people and is hard to search or aggregate by
+machine. Once an error enters a logging system and must be filtered and alerted on by field, a
+single string is not enough. `log/slog`, added in Go 1.21 (Jonathan Amsterdam, 2023)
+[[Amsterdam, 2023](#ref-amsterdam-2023)], turns logging from formatted strings into records made of
+key-value pairs, and an error can be recorded as one of the fields.
+
+When the JSON handler of `slog` outputs a value that is an error and does not implement
+`json.Marshaler`, it outputs the string returned by `Error()`:
 
 ```go
-import "log/slog"
+// src/log/slog/json_handler.go (excerpt from appendJSONValue)
+case KindAny:
+	a := v.Any()
+	_, jm := a.(json.Marshaler)
+	if err, ok := a.(error); ok && !jm {
+		s.appendString(err.Error())
+	} else {
+		return appendJSONMarshal(s.buf, a)
+	}
+```
 
-func handle(path string) {
-    cfg, err := loadConfig(path)
-    if err != nil {
-        // The error is a field named "err", and path is another field
-        slog.Error("config load failed",
-            slog.String("path", path),
-            slog.Any("err", err),
-        )
-        return
-    }
-    _ = cfg
+Before output, the handler resolves values that implement the `slog.LogValuer` interface, so an
+error type can expand itself into a group of structured fields by implementing the `LogValue`
+method:
+
+```go {run=true}
+package main
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+)
+
+// QueryError implements slog.LogValuer and expands into a group of fields when logged
+type QueryError struct {
+	Query string
+	Code  int
+	Err   error
+}
+
+func (e *QueryError) Error() string { return fmt.Sprintf("query %q: %v", e.Query, e.Err) }
+func (e *QueryError) Unwrap() error { return e.Err }
+
+func (e *QueryError) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("query", e.Query),
+		slog.Int("code", e.Code),
+		slog.String("cause", e.Err.Error()),
+	)
+}
+
+func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		// drop the time field to keep the output stable
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.TimeKey && len(groups) == 0 {
+				return slog.Attr{}
+			}
+			return a
+		},
+	}))
+
+	qe := &QueryError{Query: "select 1", Code: 1205, Err: errors.New("lock wait timeout")}
+	logger.Error("query failed", "err", qe)
+
+	wrapped := fmt.Errorf("handle request: %w", qe)
+	logger.Error("request failed", "path", "/users", "err", wrapped)
 }
 ```
 
-When output with the JSON Handler, this record looks like `{"level":"ERROR","msg":"config load failed", "path":"a.conf","err":"load config \"a.conf\": ..."}`. The `msg` is a stable, clusterable event name, while `path` and `err` are fields that can be retrieved and filtered. The semantic chain accumulated by layer-by-layer annotation now becomes the value of the `err` field, and the two practices join here: human-written context is responsible for "telling clearly what happened," and structured fields are responsible for "letting the machine find and count it." This is precisely the meeting point of error handling and observability ([16 Tooling and Observability](../../part5toolchain/ch16tools)).
+```
+{"level":"ERROR","msg":"query failed","err":{"query":"select 1","code":1205,"cause":"lock wait timeout"}}
+{"level":"ERROR","msg":"request failed","path":"/users","err":"handle request: query \"select 1\": lock wait timeout"}
+```
 
-The key-value interface of `slog` has a pitfall: it accepts alternating `key, value` variadic arguments, and missing a value or putting a non-string in a key position will not be reported at compile time, only surfacing at run time. The `slog` check of `go vet` mentioned earlier exists exactly for this; during static analysis it reports calls where keys and values do not match, for example a missing final value, or an integer placed in a key position. This section uses `slog.String` and `slog.Any` to explicitly construct `Attr`, which both avoids this pitfall and makes the field types clear at a glance.
+The second record shows the problem from the previous subsection again: once `QueryError` is wrapped
+with `%w`, the outermost `*fmt.wrapError` is not a `LogValuer`, and only a single string remains in
+the log. `slog` looks only at the value passed to it and does not traverse the error tree. To obtain
+structured fields, extract the concrete error with `errors.AsType` before logging.
 
-## 7.3.6 Design Trade-offs and Lineage
+The convenience functions of `slog` accept alternating keys and values, as in
+`slog.Info(msg, "path", p)`. Omitting a value, or placing a non-string where a key belongs, produces
+no compiler error. For this reason `go vet` gained a `slog` check in Go 1.21 (6d4d71c5ab). For the
+following two lines:
 
-To gather this section into a single sentence: Go leans toward human-written semantic context in error formatting, and makes the machine stack trace an optional item.
+```go
+slog.Info("config loaded", "path", "a.conf", "retries")
+slog.Warn("slow", 42, "ms")
+```
 
-- The standard library carries no stack by default, encouraging layer-by-layer annotation with `%w`. Common errors are therefore highly readable and speak of business intent; the cost is that the programmer must be diligent about wrapping, and gets no stack by default.
-- When a stack is needed, `fmt.Formatter` plus `runtime.Callers` suffices to layer on diagnostics with a stack. `pkg/errors` tooled this approach up, and its ideas, after being tested in `x/xerrors`, partly entered the standard library. Deep diagnostics are extended on demand, so the majority do not pay for the minority of scenarios.
-- When machine queryability is needed, `log/slog` demotes the error to a structured field and connects it to the monitoring system.
+`go vet` reports:
 
-Placed within the lineage, this stands in contrast to the route of exception-based languages. Java and Python exchange automatically collected stack traces for "zero-cost context," at the cost of stack traces that are verbose, filled with implementation detail, and unable to express business semantics. Rust's `Result` and `?` likewise carry no stack by default, and the community relies on libraries such as `anyhow` and `thiserror` to add context and (optional) backtraces, which is highly similar to Go's `pkg/errors` approach. A plain `Error() string` interface, paired with community conventions, `%w` wrapping, `fmt.Formatter`, and `log/slog`, supports the entire lineage from "one-sentence error" to "structured diagnostics with a stack." A minimal core, extended on demand, is a shape that recurs again and again in the Go standard library.
+```
+main.go:6:2: call to slog.Info missing a final value
+main.go:7:20: slog.Warn arg "42" should be a string or a slog.Attr (possible missing key or value)
+```
+
+Constructing `slog.Attr` values explicitly with functions such as `slog.String` and `slog.Int`
+avoids this class of error altogether.
+
+## 7.3.6 Comparison and Summary
+
+Exceptions in Java and Python record the call stack automatically when created or thrown, so context
+comes without extra code; the price is that every exception pays for collecting a call stack, and
+the stack is full of implementation details that carry no business meaning. Rust's `Result`, like
+Go's errors, carries no call stack by default; Rust 1.65 (2022) stabilized
+`std::backtrace::Backtrace` [[Rust, 2022](#ref-rust-2022)], and the community crates `anyhow` and
+`thiserror` provide an opaque error type and structured error types respectively, attaching context
+and call stacks on demand, much as `pkg/errors` does in Go.
+
+Go's choice can be summarized in three layers:
+
+- Standard library errors carry no call stack and encourage supplying context layer by layer with
+  `%w`. The messages describe the program's intent, but they depend on programmers wrapping
+  diligently, and no call stack is available by default.
+- When a call stack is needed, add one yourself with `runtime.Callers` and `fmt.Formatter`, or use a
+  third-party library. The costs are the overhead of each error creation and the difficulty of
+  preserving the additional information across wrappers from different sources.
+- When machine searching is needed, record the error as a structured field with `log/slog`,
+  implementing `LogValuer` where necessary.
 
 ## Further Reading
 
-1. Andrew Gerrand. *Error handling and Go.* Go Blog, 2011.
-   https://go.dev/blog/error-handling-and-go
-2. Russ Cox et al. *Working with Errors in Go 1.13.* Go Blog, 2019.
-   https://go.dev/blog/go1.13-errors (the design and trade-offs of `%w`, `Is`/`As`/`Unwrap`)
-3. Dave Cheney. *github.com/pkg/errors* (`Wrap`/`WithStack`, `%+v` printing with stack).
-   https://github.com/pkg/errors ;
-   *Stack traces and the errors package.* 2016.
-   https://dave.cheney.net/2016/06/12/stack-traces-and-the-errors-package
-   (the author's own account of the stack-trace design in `pkg/errors`)
-4. The Go Authors. *golang.org/x/xerrors* (the testing ground for Go 1.13's error features).
-   https://pkg.go.dev/golang.org/x/xerrors
-5. The Go Authors. *Package log/slog* (Go 1.21 structured logging).
-   https://pkg.go.dev/log/slog
-6. The Go Authors. *Package fmt* (the `Formatter` and `State` interfaces).
-   https://pkg.go.dev/fmt#Formatter
-7. Dominik Honnef. *staticcheck ST1005: Incorrectly formatted error string.*
-   https://staticcheck.dev/docs/checks#ST1005 (the check for capitalization and punctuation of error strings)
-8. This book: [7.1 The Evolution of the Problem](./value.md), [7.2 Error Value Inspection](./inspect.md),
-   [16 Tooling and Observability](../../part5toolchain/ch16tools).
+- <a id="ref-gerrand-2011"></a>[Gerrand, 2011] Andrew Gerrand. *Error handling and Go.* The Go
+  Blog, 2011. https://go.dev/blog/error-handling-and-go
+- <a id="ref-neil-amsterdam-2019"></a>[Neil and Amsterdam, 2019] Damien Neil, Jonathan Amsterdam.
+  *Working with Errors in Go 1.13.* The Go Blog, 2019. https://go.dev/blog/go1.13-errors (the design
+  and trade-offs of `%w` and `Is`/`As`/`Unwrap`)
+- <a id="ref-cheney-2016d"></a>[Cheney, 2016d] Dave Cheney. *github.com/pkg/errors*
+  (`Wrap`/`WithStack`, printing with the stack via `%+v`). https://github.com/pkg/errors
+  ; <a id="ref-cheney-2016c"></a>[Cheney, 2016c] Dave Cheney. *Stack traces and the errors
+  package.* 2016. https://dave.cheney.net/2016/06/12/stack-traces-and-the-errors-package (the
+  author's own account of the stack trace design in `pkg/errors`)
+- <a id="ref-go-authors-2019"></a>[Go Authors, 2019] The Go Authors. *golang.org/x/xerrors* (the
+  testing ground for the Go 1.13 error features). https://pkg.go.dev/golang.org/x/xerrors
+- <a id="ref-amsterdam-2023"></a>[Amsterdam, 2023] The Go Authors. *Package log/slog* (structured
+  logging in Go 1.21). https://pkg.go.dev/log/slog ; Jonathan Amsterdam. *Structured Logging with
+  slog.* The Go Blog,
+  2023. https://go.dev/blog/slog ; the `go vet` slog check:
+        https://go.googlesource.com/go/+/6d4d71c5ab
+- <a id="ref-go-authors-2026"></a>[Go Authors, 2026] The Go Authors. *Package fmt* (the `Formatter`
+  and `State` interfaces). https://pkg.go.dev/fmt#Formatter
+- <a id="ref-honnef-nd"></a>[Honnef, n.d.] Dominik Honnef. *staticcheck ST1005: Incorrectly
+  formatted error string.* https://staticcheck.dev/docs/checks#ST1005 (the check for capitalization
+  and punctuation of error strings)
+- <a id="ref-go-wiki-nd"></a>[Go Wiki, n.d.] The Go Authors. *Go Code Review Comments: Error
+  Strings.* https://go.dev/wiki/CodeReviewComments#error-strings
+- <a id="ref-go-authors-2009"></a>[Go Authors, 2009] The Go Authors. *Effective Go: Errors.*
+  https://go.dev/doc/effective_go#errors
+- <a id="ref-taylor-2020"></a>[Taylor, 2020] Ian Lance Taylor. *x/lint: freeze and deprecate.* 2020.
+  https://go.dev/issue/38968
+- <a id="ref-rust-2022"></a>[Rust, 2022] The Rust Release Team. *Announcing Rust 1.65.0.* 2022.
+  https://blog.rust-lang.org/2022/11/03/Rust-1.65.0/
+- This book: [7.1 The Evolution of the Problem](./value.md),
+  [7.2 Inspecting Error Values](./inspect.md),
+  [16 Tooling and Observability](../../part5toolchain/ch16tools).

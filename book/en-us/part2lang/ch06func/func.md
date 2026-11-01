@@ -5,33 +5,37 @@ title: "6.1 Function Calls"
 
 # 6.1 Function Calls
 
-Functions are first-class citizens in Go: they can be assigned, passed, returned, and they can capture
-outer variables to become closures. Behind this lie two implementation questions: how a function value
-(a closure) is represented in memory, and how a single function call passes arguments and returns values
-at the lowest level. The latter also hides a quiet but sweeping change introduced in Go 1.17: passing
-arguments in registers instead of on the stack. This section explains both thoroughly, and at the seam
-between them points out a key fact, the very fact that welds "what a closure is" and "how a call happens"
-into one and the same thing.
+Functions in Go are first-class citizens: they can be assigned to variables, passed as arguments,
+returned as results, and can capture outer variables to become closures. Implementing this raises
+two questions: how a function value (a closure in particular) is represented in memory, and how a
+callee finds the variables it has captured when a function value is called. This section answers
+both, and then covers several features that follow from them: the Go 1.22 change to loop variable
+semantics, method values and method expressions, variadic parameters, and the Go 1.23 `range` over
+functions. Argument passing and stack frame layout were covered in Chapter 2
+([2.3](../../part1overview/ch02asm/callconv.md), [2.4](../../part1overview/ch02asm/args.md)); this
+section cites their conclusions only where needed.
 
 ## 6.1.1 Function Values and Closures
 
-A value of a `func` type is, in essence, a pointer to a **closure object**. The runtime calls this object
-a `funcval`, and its definition in `runtime/runtime2.go` is surprisingly short:
+A value of `func` type is a pointer to a **closure object**. The runtime calls this object a
+`funcval`, and its definition in `runtime/runtime2.go` has a single field
+[[Go Authors, 2026c](#ref-go-authors-2026c)]:
 
 ```go
-// funcval: the runtime representation of a function value (from runtime2.go, annotated)
 type funcval struct {
-    fn uintptr
-    // variable-size, fn-specific data follows here, that is, the captured environment
+	fn uintptr
+	// variable-size, fn-specific data here
 }
 ```
 
-There is only one fixed field, `fn`, the entry address of the function code. The line in the comment,
-"variable-size, fn-specific data here," is the soul of the closure: right after `fn`, the compiler lays
-out the outer variables this closure captures. An ordinary function that captures nothing has a `funcval`
-that is just the single word `fn`, globally unique and read-only; once it captures outer variables, the
-compiler must construct, for each evaluation, a `funcval` on the heap that carries the captured data. We
-can draw it like this:
+`fn` is the entry address of the function's code. As the comment in the source says, it is followed
+by variable-size data specific to the function, namely the variables the closure captures. A
+function that captures nothing has a `funcval` consisting of the single word `fn`, generated
+statically by the compiler and placed in read-only data; all function values of the same function
+share this object. A closure that does capture variables must build a new `funcval` on each
+evaluation, with the captured variables stored after `fn`. If the closure escapes
+([15.5](../../part5toolchain/ch15compile/escape.md)), the object is allocated on the heap; otherwise
+it is allocated on the stack.
 
 ```mermaid
 flowchart LR
@@ -39,243 +43,383 @@ flowchart LR
     subgraph CO["closure object funcval"]
         direction TB
         FN["fn: entry address of the function code"]
-        CAP["captured: the captured variables<br/>(such as &x, &y, by reference)"]
+        CAP["captured variables<br/>(values or addresses of variables)"]
         FN --- CAP
     end
-    CALL["call f()"] -.->|read the fn field, jump indirectly| FN
+    CALL["call f()"] -.->|load fn and call indirectly| FN
 ```
 
-Calling a function value means reading its `fn` field and jumping there indirectly, which works much like
-method dispatch through an interface ([4.2](../ch04type/interface.md)). The key detail is that **capture is
-by reference**: a closure captures the variable itself, not its value at that moment. In the code below, the
-two closures returned by `counter` share the same `n`, because what they capture is the address of the
-variable `n`, not some snapshot:
+Semantically, a closure captures the variable itself, not its value at some moment. The two closures
+returned by `counter` below share the same `n`:
 
-```go
+```go {run=true}
+package main
+
+import "fmt"
+
 func counter() (inc, get func() int) {
-    n := 0
-    inc = func() int { n++; return n } // captures &n
-    get = func() int { return n }      // captures the same &n
-    return
+	n := 0
+	inc = func() int { n++; return n } // captures variable n
+	get = func() int { return n }      // captures the same n
+	return
 }
-// inc(); inc(); get() == 2, the two closures see the same n
-```
 
-"By reference" is both the expressive power of closures and the root of a classic pitfall. In Go 1.21 and
-earlier, the loop variable was **shared across the entire loop**, so:
-
-```go
-// Go 1.21 and earlier: all goroutines capture the same v
-for _, v := range s {
-    go func() { use(v) }() // all read the final value of v at loop end
+func main() {
+	inc, get := counter()
+	inc()
+	inc()
+	fmt.Println(get())
 }
 ```
 
-All goroutines capture the same `v`, and by the time they start the loop has usually long since ended, so
-they uniformly read the last element. For over a decade, seasoned Go programmers worked around this by
-hand-writing `v := v` to create a new variable on each iteration. Go 1.22 promoted this idiom to a language
-rule: **the loop variable of a `for` loop now gets a fresh instance per iteration**, applying both to the
-three-clause `for` and to `for range`. The focus of the fix is worth savoring: it did not change the
-**manner** of capture, which is still "by reference," but rather the **object** being captured. Since each
-iteration now has a new variable, what is captured by reference is naturally an address that is independent
-per iteration. A design flaw that had vexed Go users for over a decade was finally settled with the smallest
-possible change in semantics.
-
-This change also demonstrated a careful approach Go uses when it alters language semantics. It was, after
-all, a backward-incompatible semantic change that could silently alter the results of code that depended on
-the old behavior, so Go tied it to the language version declared in `go.mod`: the new semantics take effect
-only when a module declares `go 1.22` or higher, and the behavior of older modules is preserved as is.
-During the Go 1.21 transition period, it was first offered for preview in the form of
-`GOEXPERIMENT=loopvar`. For code whose behavior might change as a result, the project also provided the
-`bisect` tool, which can binary-search between the old and new semantics to pinpoint exactly which loop was
-affected. Tying a semantic change to a version declaration, supplemented by a preview switch and a locating
-tool, is the compromise Go found between "evolving forward" and "not breaking existing code." This mechanism
-itself reaches further than the single fix to the loop variable.
-
-## 6.1.2 The Evolution of the Calling Convention: From Stack to Registers
-
-How a single function call passes arguments and return values is governed by the **calling convention**
-(ABI). Go 1.16 and earlier used a **stack-based** convention (now called ABI0): all arguments and return
-values were passed through stack memory. The caller wrote each actual argument to an agreed location on the
-stack, and the callee read them back from the stack, with return values handled the same way. This approach
-was simple, portable, and easy to interface between the compiler and hand-written assembly, at the cost of
-one memory write plus one memory read per argument, which is considerable in call-heavy programs.
-
-Go 1.17 introduced a **register-based** internal calling convention, ABIInternal. Its core rule is "prefer
-registers, fall back to the stack when they do not fit": each architecture defines a set of integer
-registers and a set of floating-point registers, and arguments and return values occupy them in declaration
-order, with a single argument going either entirely into registers or entirely onto the stack. On amd64,
-the 9 registers available for passing integer arguments and return values are:
-
 ```
-RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11   // amd64: 9 integer argument/return registers
+2
 ```
 
-arm64 uses `R0`-`R15`, 16 in total. The allocation rule can be made clear with a small example: for the
-function `func(a, b int, x float64)` on amd64, `a` takes `RAX`, `b` takes `RBX`, and `x` takes the first
-floating-point register, so all three arguments are in registers with not a single memory access; whereas
-if the arguments are numerous enough to fill the integer registers, the tenth integer argument falls onto
-the stack. Aggregate types (structs, arrays) are expanded recursively by their fields to participate in
-allocation, going into registers as a whole if they fit and falling onto the stack entirely otherwise. This
-"all in or all out" rule avoids the complicated bookkeeping of a value split into a register half and a
-stack half. Let us draw this allocation of "occupy registers in order, fall back to the stack when they do
-not fit," together with the spill space for register arguments in the caller's stack frame:
+Because `n` is still used by both closures after `counter` returns, escape analysis allocates it on
+the heap, and both closure objects hold the address of `n`. Capture by reference, however, is only a
+semantic rule. If a variable is never reassigned after being captured, never has its address taken,
+and is no larger than 128 bytes, the compiler copies its value directly into the closure object
+(`cmd/compile/internal/escape` [[Go Authors, 2026d](#ref-go-authors-2026d)]). This does not change
+the program's behavior, since the variable can no longer change, and it saves a heap allocation and
+a level of indirection.
 
-```mermaid
-flowchart LR
-    ARGS["actual arguments in declaration order<br/>a, b int, x float64"] --> ALLOC{"integer/float registers<br/>still have room?"}
-    ALLOC -- yes --> REG
-    ALLOC -- full --> ST["fall onto stack: write to the<br/>argument area of the caller's frame"]
-    subgraph REG["registers (amd64)"]
-        direction TB
-        RAX["RAX ← a"]
-        RBX["RBX ← b"]
-        XMM["X0 ← x (float)"]
-    end
-    subgraph FRAME["caller's stack frame"]
-        direction TB
-        SPILL["spill space<br/>at safe points / when taking addresses,<br/>register arguments are stored back here"]
-    end
-    REG -.->|"write back before GC or stack growth"| SPILL
-```
+## 6.1.2 Calling a Closure: The Context Register
 
-With a large amount of stack memory reads and writes removed, this change brought roughly a 5% overall
-performance gain and a smaller binary, and it was **completely transparent** to users: not a single line of
-code changed, recompiling simply made it faster. It is worth tracing why the register convention only
-landed in Go 1.17: early Go chose the stack-based ABI0 because it was simple to implement, consistent across
-architectures, and naturally aligned with the GC's precise stack scanning, since arguments all have fixed
-locations on the stack and the scanner can find the pointers among them as usual. For a register convention
-to land, the prerequisite was that the compiler first have a mature SSA backend to perform register
-allocation, and that it solve a problem that came with it: when GC or stack unwinding happens, how are the
-pointer arguments living in registers to be found. Go's answer is not to scan the registers but to rely on
-the spill space mentioned above: at safe points where GC or stack growth may be triggered, the arguments in
-registers are stored back to the fixed spill space in the caller's stack frame, so the scanner still need
-only scan the stack. The register convention is not entirely free of the stack either: the caller must still
-reserve a block of **spill space** in its own frame for each register argument, so that on stack growth
-([6.1.3](#613-stack-frames-and-growable-stacks)) or when the argument's address must be taken, the value in
-the register can be stored back to memory. Placing the spill space in the caller's frame rather than the
-callee's is meant to give the stack-growth code path a fixed location to write to, simplifying the
-implementation.
+To read a captured variable, the callee first needs the address of the closure object. For this
+purpose Go's internal calling convention designates a **closure context register**, in addition to
+the registers that carry ordinary arguments. Before calling a function value, the caller places the
+address of the `funcval` in that register, and the callee reads its captured variables through it.
+On amd64 the register is `RDX`; on arm64 it is `R26` [[Go Authors, 2026a](#ref-go-authors-2026a)].
+`RDX` is not among the nine registers amd64 uses for integer arguments
+([2.3](../../part1overview/ch02asm/callconv.md)); it is reserved for this purpose.
 
-Here we pick up the thread left dangling by [6.1.1](#611-function-values-and-closures). A closure object is
-a pointer, and the callee must first obtain this pointer before it can find the variables it captured. The
-ABI specifies a dedicated **closure context register** for this: before calling a closure, the caller places
-the address of the `funcval` into this register, and the callee reads the captured environment from it. On
-amd64 it is `RDX`, and on arm64 it is `R26`. The reader may already have noticed that `RDX` is precisely not
-among the 9 integer argument registers above: it is reserved for context, exactly the slot set aside for
-closures. In a word: the reason a closure can be "called together with its environment" is precisely this
-one register that the ABI agrees upon beyond ordinary argument passing.
-
-ABI0 has not disappeared. It is still used at the boundary between Go and assembly: hand-written assembly
-([2.2](../../part1overview/ch02asm/callconv.md)) follows ABI0, because assembly authors need a stable,
-explicit set of argument-passing rules that does not drift across versions. The two ABIs call into each
-other through a compiler-generated "bridge wrapper" (ABI wrapper): for an ABIInternal function to call an
-ABI0 assembly routine, a wrapper in between moves the arguments from registers to the stack, and vice versa.
-Go separates the internal ABI from the external (assembly) ABI precisely so that it can freely evolve the
-former without disturbing the latter. The reason the change from stack to registers could be made
-transparent to users is rooted in this very dividing line.
-
-## 6.1.3 Stack Frames and Growable Stacks
-
-Each function call pushes a **stack frame** onto the goroutine's stack, holding local variables, arguments
-spilled to the stack and the spill space, the return address, and so on. Go's stack is a **growable
-contiguous stack**: the function prologue contains a stack check that compares the current stack pointer
-against the stack boundary, and when it finds insufficient remaining space it jumps to `morestack`, which
-allocates a larger stack, copies the old stack contents over as one block, and then adjusts all pointers
-that point into the old stack. This stack check is also where preemption
-([9.7](../../part3concurrency/ch09sched/preemption.md)) hitches a ride. For the concrete management of the
-stack, see [14 Execution Stack Management](../../part4memory/ch14stack).
-
-Growable stacks have a consequence for closures that cannot be avoided. Since the stack can **move**, and
-since [6.1.1](#611-function-values-and-closures) said closures capture **by reference**, then once the
-address of some local variable is captured by a closure and that closure may **outlive the stack frame that
-created it** (for instance, because it is returned, stored into a global, or handed to a goroutine), this
-variable can no longer live on a stack that may be reclaimed or relocated. The solution is **escape
-analysis** ([15.5](../../part5toolchain/ch15compile/escape.md)): the compiler determines at compile time
-whether a variable's address "escapes" the lifetime of the current function, and if so, moves it from the
-stack to the heap so that the address captured by the closure remains valid after the stack is relocated.
-The reason `n` in the earlier `counter` could continue to be read and written by `inc`/`get` after
-`counter` returned is precisely that it escaped to the heap. In other words, the two designs of "capture by
-reference" for closures and "growable, relocatable" for the stack coexist only thanks to the third-party
-arbitration of escape analysis.
-
-## 6.1.4 Method Values, Method Expressions, and Variadics
-
-A few features derived from functions' first-class status are nothing mysterious once they land on
-`funcval`.
-
-A **method value** `t.M` binds the receiver `t` into a closure, yielding a `func` that can be passed around
-on its own. It is in essence the closure of [6.1.1](#611-function-values-and-closures), with the captured
-variable being the receiver `t`. A **method expression** `T.M`, by contrast, binds no receiver, yielding an
-ordinary function that takes the receiver as its first explicit argument:
+Consider the following program:
 
 ```go
+package main
+
+//go:noinline
+func adder(base int) func(int) int {
+	return func(x int) int { return base + x }
+}
+
+func main() {
+	f := adder(40)
+	println(f(2))
+}
+```
+
+Compiled with `GOOS=linux GOARCH=amd64 go build -gcflags=-S`, the part of `adder` that builds the
+closure object is as follows (stack check and similar code omitted):
+
+```asm
+LEAQ  type:noalg.struct { F uintptr; X0 int }(SB), AX
+CALL  runtime.newobject(SB)           // allocate the closure object on the heap
+LEAQ  main.adder.func1(SB), CX
+MOVQ  CX, (AX)                        // first word: function entry address fn
+MOVQ  main.base+32(SP), CX
+MOVQ  CX, 8(AX)                       // second word: captured base
+```
+
+The closure object's type is the compiler-synthesized `struct { F uintptr; X0 int }`: `F` is `fn`
+and `X0` is the captured `base`. Since `base` is never reassigned, it is captured by value and
+stored directly in the object. The code in `main` that calls `f(2)` is:
+
+```asm
+MOVQ  (AX), CX     // AX is the closure object returned by adder; load its fn
+MOVQ  AX, DX       // put the closure object address in the context register DX
+MOVL  $2, AX       // argument x
+CALL  CX           // indirect call
+```
+
+The closure body takes only two instructions:
+
+```asm
+TEXT  main.adder.func1(SB), NOSPLIT|NEEDCTXT|NOFRAME|ABIInternal, $0-8
+ADDQ  8(DX), AX    // read base from the closure object DX points to, add it to argument x
+RET
+```
+
+The `NEEDCTXT` flag marks a function that needs the context register. Calling a function value
+resembles the dynamic dispatch of interfaces ([4.2](../ch04type/interface.md)): both load a code
+address from an object and call it indirectly. The difference is that an interface finds the address
+through the method table in its `itab`, whereas a function value stores the address directly in the
+first word of the closure object.
+
+## 6.1.3 Loop Variables and Go 1.22
+
+Capture by reference, combined with the scoping of `for` loop variables, caused one of the most
+common bugs in Go. In Go 1.21 and earlier, a variable declared by a `for` loop had a single instance
+for the whole loop, and each iteration merely assigned it a new value:
+
+```go {run=true}
+package main
+
+import "fmt"
+
+func main() {
+	var fs []func()
+	for i := 0; i < 3; i++ {
+		fs = append(fs, func() { fmt.Print(i, " ") })
+	}
+	for _, f := range fs {
+		f()
+	}
+	fmt.Println()
+}
+```
+
+If the module's `go.mod` declares `go 1.21`, this program prints `3 3 3`: the three closures capture
+the same `i`, and by the time they are called the loop has long finished. In a module that declares
+`go 1.22` or later, it prints:
+
+```
+0 1 2
+```
+
+Go 1.22 gives each iteration its own instance of the loop variable, for both the three-clause `for`
+and `for range` [[Go Authors, 2024a](#ref-go-authors-2024a)]. The change does not alter how
+variables are captured; it alters which object is captured. Since every iteration now has a fresh
+variable, a closure that captures by reference naturally captures its own. Before this, Go
+programmers usually wrote `i := i` in the loop body to create a new variable per iteration; Go 1.22
+turns that idiom into a language rule [[Cox, 2022](#ref-cox-2022)].
+
+The change also shows a careful way of altering language semantics. It is not backward compatible
+and could silently change the results of code that relied on the old behavior, so the new semantics
+are tied to the language version declared in `go.mod`: only modules that declare `go 1.22` or later
+get them, and older modules behave as before [[Chase and Cox, 2023b](#ref-chase-cox-2023b)]. Go 1.21
+first offered a preview as `GOEXPERIMENT=loopvar`. For code whose behavior might change, the
+`bisect` tool can also search between the old and new semantics to locate the specific loops
+affected [[Chase and Cox, 2023a](#ref-chase-cox-2023a)]. Tying a semantic change to a version
+declaration, backed by a preview switch and a locating tool, is Go's compromise between evolving the
+language and preserving compatibility, and the significance of this mechanism extends beyond the
+loop variable change itself.
+
+## 6.1.4 Method Values, Method Expressions, and Variadic Functions
+
+A **method value** `t.M` binds the receiver `t` to the method and yields a function value that can
+be passed around on its own. It is in essence a closure that captures a copy of the receiver (a copy
+of the pointer, if the receiver is a pointer). A **method expression** `T.M` binds no receiver and
+yields an ordinary function that takes the receiver as its first parameter:
+
+```go {run=true}
+package main
+
+import (
+	"fmt"
+	"testing"
+)
+
 type T struct{ x int }
+
 func (t T) Add(d int) int { return t.x + d }
 
-f := t.Add        // method value: func(int) int, t is captured into a closure
-g := T.Add        // method expression: func(T, int) int, the receiver becomes the explicit first argument
-f(1)  == t.x+1
-g(t, 1) == t.x+1
+var sink func(int) int
+
+func main() {
+	t := T{x: 1}
+	f := t.Add // method value: func(int) int, receiver t is copied into the closure
+	g := T.Add // method expression: func(T, int) int, the receiver becomes the first parameter
+	fmt.Println(f(1), g(t, 1))
+
+	fmt.Println(testing.AllocsPerRun(100, func() { sink = t.Add }))     // the method value escapes
+	fmt.Println(testing.AllocsPerRun(100, func() { f := t.Add; f(1) })) // the method value does not escape
+}
 ```
 
-The two have different shapes: `f` is a `funcval` carrying a captured environment (so writing `t.Add` like
-this triggers a closure allocation, with the receiver copied into the closure object; if the receiver is a
-pointer type, what is copied is the pointer), whereas `g` is an ordinary function value that captures
-nothing and has one extra parameter in its signature. This explains a frequently asked phenomenon:
-repeatedly taking a method value with `t.M` on a hot path brings hidden heap allocations, while `T.M` does
-not. The compiler's handling of a method value can be seen as an "automatic closure conversion": it
-synthesizes a `funcval` whose only captured variable is the receiver, in essence no different from the
-hand-written closure in [6.1.1](#611-function-values-and-closures).
+```
+2 2
+1
+0
+```
 
-A **variadic** `f(args ...int)` is packed into a slice at the call site:
+For a method value the compiler synthesizes a wrapper function (such as `main.T.Add-fm`) that takes
+the receiver from the closure object and then calls the real method. As with any closure, the
+closure object of a method value is allocated on the heap only if it escapes: in the example above,
+the method value assigned to a global variable causes one allocation, while the one used only
+locally causes none. A method expression captures nothing; it is a static function value and never
+needs an allocation.
+
+A **variadic parameter** `f(xs ...int)` is packed into a slice by the caller: for `sum(1, 2, 3)` the
+compiler builds an underlying array and a slice header, whereas `sum(s...)` passes the existing
+slice directly. The constructed array follows the rules described in [5.1](../ch05data/slice.md)
+and, if it does not escape, is allocated on the stack.
+
+## 6.1.5 Range over Functions: Turning the Loop Body into a Closure
+
+Go 1.23 allows `range` over functions: if `f` has type `func(yield func(T) bool)`, then
+`for x := range f { ... }` executes the loop body repeatedly, with each `x` supplied by `f` calling
+`yield` [[Cox, 2023](#ref-cox-2023)] [[Go Authors, 2024b](#ref-go-authors-2024b)]. The standard
+library's `iter.Seq` and `iter.Seq2` are such function types, and functions such as `maps.Keys` and
+`slices.Values` return such iterators [[Taylor, 2024](#ref-taylor-2024)].
+
+The feature is implemented entirely by the compiler through rewriting; the runtime provides no
+dedicated mechanism for it. The comment of the `cmd/compile/internal/rangefunc` package
+[[Go Authors, 2026b](#ref-go-authors-2026b)] explains that the basic idea is to rewrite
 
 ```go
-func sum(xs ...int) (s int) { for _, x := range xs { s += x }; return }
-
-sum(1, 2, 3)        // the compiler constructs []int{1,2,3} and passes it in
-sum(s...)           // already a slice, passed directly, no further construction
+for x := range f {
+	...
+}
 ```
 
-A variadic is in essence "syntactic sugar plus a slice." Once you understand [5.1 Slices](../ch05data/slice.md),
-you understand where the cost of variadics lies: calling a variadic function with scattered arguments
-requires the caller to construct an underlying array and generate a slice header from it; if the argument is
-already a slice and is passed in `s...` form, there is zero extra construction.
+as
 
-## 6.1.5 Cross-Language Comparison
+```go
+f(func(x T) bool {
+	...
+	return true
+})
+```
 
-Closures are by now almost standard equipment in modern languages (C++ lambdas, Java, Python, Rust's
-`Fn`/`FnMut`/`FnOnce`), and the difference lies in **capture semantics**. Go captures by reference uniformly,
-which is concise but hands the judgment of "when to copy" to escape analysis and the programmer's vigilance;
-C++ lets you explicitly choose value capture `[=]` or reference capture `[&]` in the capture list, which is
-powerful but easy to write into a dangling reference; Rust uses the `move` keyword together with the three
-traits `Fn`/`FnMut`/`FnOnce` to distinguish both the manner of capture and the number of times it can be
-called, moving ownership and mutability checks forward to compile time. Conciseness, control, safety: each
-language stands at a different position in this triangle.
+That is, the loop body becomes a closure passed to `f` as `yield`. A `continue` in the body is
+rewritten as `return true`, telling `f` to continue, and a `break` as `return false`, telling `f` to
+stop. A `return`, a labeled `break`, a `continue`, or a `goto` in the body is more involved: the
+compiler introduces a hidden variable `#next` that records the control flow to perform after the
+closure returns. The closure sets the variable and returns `false`, and once `f` has returned, the
+code performs the corresponding jump or return according to `#next`.
 
-On the calling convention, C/C++ follow the platform's standard ABI (such as System V AMD64), so as to
-interoperate directly with system libraries and others' object files; once this contract is public it is
-hard to change. Go, by contrast, **defines its own** internal ABI, sacrificing direct interoperability with
-external object files (a cgo call has to cross the ABI boundary, at a cost, see
-[15 Compiler](../../part5toolchain/ch15compile)) in exchange for the freedom to evolve the calling
-convention to its own needs. The smooth switch from stack to registers benefits precisely from this. Once
-again, Go trades a bit of interoperability for control over its own implementation.
+Because the loop body is now a function that anyone may call, the compiler must also guard against
+misbehaving iterators, for example one that keeps calling `yield` after it has returned `false`.
+Each rewritten loop has a state variable recording whether the body has exited, and checks it on
+every call:
+
+```go {run=true}
+package main
+
+import "fmt"
+
+// An iterator that violates the contract: it keeps calling yield after yield returns false
+func bad(yield func(int) bool) {
+	for i := range 3 {
+		yield(i)
+	}
+}
+
+func main() {
+	for x := range bad {
+		fmt.Println(x)
+		break
+	}
+}
+```
+
+```
+0
+panic: runtime error: range function continued iteration after function for loop body returned false
+```
+
+In the panic's call stack, the function containing the loop body is named `main.main-range1`, which
+is exactly the closure the compiler generated for the body. The rewrite happens in the compiler
+front end, so the generated closure can be inlined like any ordinary function; when both the
+iterator function and the loop body are inlined, the indirect call disappears.
+
+## 6.1.6 Stack Frames, Growable Stacks, and Escape
+
+Each function call occupies a stack frame on the goroutine's stack. Go's stack is a **growable
+contiguous stack**: when the stack check at the beginning of a function finds too little space left,
+it calls `morestack`, which allocates a larger stack, copies the contents of the old one, and
+adjusts every pointer into the old stack ([2.4](../../part1overview/ch02asm/args.md),
+[Chapter 14](../../part4memory/ch14stack/readme.md)).
+
+Growable stacks and closures are related in an unavoidable way. The stack can move, while closures
+capture variables by reference. If the address of a local variable is held by a closure that may
+outlive the current stack frame (for example one that is returned, stored in a global variable, or
+handed to another goroutine), the variable cannot stay on the stack. Escape analysis
+([15.5](../../part5toolchain/ch15compile/escape.md)) determines at compile time whether a variable's
+address can escape the current function, and if so allocates the variable on the heap. The `n` in
+`counter` in 6.1.1 remains usable after `counter` returns precisely because it was allocated on the
+heap. Escape analysis is what allows closures that capture by reference to coexist with a movable
+stack.
+
+## 6.1.7 Comparison with Other Languages
+
+The term "closure" comes from Peter Landin. In 1964, describing how to evaluate expressions
+mechanically, Landin used it for the combination of a lambda expression and the environment in which
+it is evaluated [[Landin, 1964](#ref-landin-1964)]. Closures are now a common feature of modern
+languages, and languages differ mainly in their capture semantics. Go captures by reference
+semantically in every case, which is simple; whether to copy is decided by the compiler without
+changing behavior, and lifetimes are handled by escape analysis and garbage collection. C++ lambdas
+require the capture list to choose explicitly between capture by value (`[=]`) and by reference
+(`[&]`), which gives finer control, but a local variable captured by reference leaves a dangling
+reference once it goes out of scope. Rust distinguishes capture by value from capture by reference
+with the `move` keyword, and uses the three traits `Fn`, `FnMut`, and `FnOnce` to distinguish
+whether a closure may modify the variables it captures and whether it may be called more than once,
+so that checks on ownership and mutability are done at compile time
+[[Rust Project, n.d.](#ref-rust-project-nd)]. Languages strike different balances among simplicity,
+control, and safety.
+
+As for calling conventions, C and C++ follow the platform's standard ABI (such as the System V AMD64
+psABI) so that they interoperate directly with system libraries and object files produced by other
+compilers, and once published such a convention is hard to change. Go instead defines its own ABI
+for internal calls, giving up direct interoperability with external object files (a cgo call must
+cross the ABI boundary; for the cost see [15.6](../../part5toolchain/ch15compile/cgo.md)) in
+exchange for the freedom to evolve the calling convention as it needs. The Go 1.17 switch from
+stack-based to register-based argument passing [[Clements, 2020](#ref-clements-2020)]
+[[Go Authors, 2021](#ref-go-authors-2021)] ([2.3](../../part1overview/ch02asm/callconv.md))
+benefited from exactly this freedom.
 
 ## Further Reading
 
-1. The Go Authors. *Go internal ABI (ABIInternal) specification.*
-   https://github.com/golang/go/blob/master/src/cmd/compile/abi-internal.md
-   (the 9 integer registers on amd64, the closure context register RDX/R26, and the design and rationale of
-   the spill space)
-2. Austin Clements et al. *Proposal: Register-based Go calling convention* (Go 1.17).
-   https://go.googlesource.com/proposal/+/master/design/40724-register-calling.md
-3. The Go Authors. *Go 1.17 Release Notes (the new register calling convention, roughly 5% performance gain).*
-   https://go.dev/doc/go1.17
-4. Go 1.22 Release Notes (per-iteration scoping of the loop variable). https://go.dev/doc/go1.22 ;
-   David Chase, Russ Cox. *Fixing for loops in Go 1.22.* https://go.dev/blog/loopvar-preview
-5. Russ Cox et al. *Proposal: Less error-prone loop variable scoping* (discussion #56010).
-   https://github.com/golang/go/discussions/56010
-6. The Go Authors. *runtime/runtime2.go: funcval* (the runtime representation of a closure).
-   https://github.com/golang/go/blob/master/src/runtime/runtime2.go
-7. This book: [4.2 Interfaces](../ch04type/interface.md), [5.1 Slices](../ch05data/slice.md),
-   [14 Execution Stack Management](../../part4memory/ch14stack), [15.5 Escape Analysis](../../part5toolchain/ch15compile/escape.md).
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. "Go internal ABI
+  specification." https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/abi-internal.md
+  (Development version: <https://github.com/golang/go/blob/master/src/cmd/compile/abi-internal.md>)
+  The closure context register (RDX on amd64, R26 on arm64) and the rules for register-based
+  argument passing.
+- <a id="ref-chase-cox-2023a"></a>[Chase and Cox, 2023a] David Chase, Russ Cox. "Fixing For Loops in
+  Go 1.22." The Go Blog, 2023. https://go.dev/blog/loopvar-preview The reasons for the loop variable
+  change, the compatibility strategy, and the `bisect` tool.
+- <a id="ref-cox-2022"></a>[Cox, 2022] Russ Cox. "redefining for loop variable semantics." golang/go
+  discussion #56010, 2022. https://github.com/golang/go/discussions/56010
+  The original discussion of changing loop variable semantics.
+- <a id="ref-taylor-2024"></a>[Taylor, 2024] Ian Lance Taylor. "Range Over Function Types." The Go
+  Blog,
+  2024. https://go.dev/blog/range-functions
+  The design and use of `range` over functions.
+- <a id="ref-cox-2023"></a>[Cox, 2023] Russ Cox. "spec: add range over int, range over func."
+  golang/go#61405, 2023. https://github.com/golang/go/issues/61405
+  The proposal for `range` over integers and functions.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors.
+  `cmd/compile/internal/rangefunc/rewrite.go`.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/rangefunc/rewrite.go
+  The package comment explains in detail the rewrite rules for `range` loops and the iterator
+  checks.
+- <a id="ref-clements-2020"></a>[Clements, 2020] Austin Clements. "Proposal: Register-based Go
+  calling convention." Go design document, 2020.
+  https://go.googlesource.com/proposal/+/master/design/40724-register-calling.md The design document
+  for the Go 1.17 register calling convention; Cherry Zhang, Michael Knyszek, David Chase, and
+  others took part in the discussion.
+- <a id="ref-go-authors-2021"></a>[Go Authors, 2021] The Go Authors. Go 1.17 Release Notes.
+  https://go.dev/doc/go1.17 The new register calling convention: about 5% better performance on
+  representative benchmarks and about 2% smaller binaries.
+- <a id="ref-go-authors-2024a"></a>[Go Authors, 2024a] The Go Authors. Go 1.22 Release Notes.
+  https://go.dev/doc/go1.22
+  Each iteration of a loop gets a new instance of the loop variable.
+- <a id="ref-go-authors-2024b"></a>[Go Authors, 2024b] The Go Authors. Go 1.23 Release Notes.
+  https://go.dev/doc/go1.23
+  `for range` accepts iterator functions.
+- <a id="ref-chase-cox-2023b"></a>[Chase and Cox, 2023b] David Chase, Russ Cox. "Proposal: Less
+  Error-Prone Loop Variable Scoping." Go design document, 2023.
+  https://go.googlesource.com/proposal/+/master/design/60078-loopvar.md The formal design of the
+  loop variable change: a compatibility strategy tied to the `go.mod` language version, and its
+  justification.
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. `runtime/runtime2.go`:
+  `funcval`. https://github.com/golang/go/blob/master/src/runtime/runtime2.go The runtime
+  representation of closures.
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors.
+  `cmd/compile/internal/escape/escape.go`.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/escape/escape.go
+  The conditions for capturing a closure variable by value: never reassigned, never address-taken,
+  and no larger than 128 bytes.
+- <a id="ref-landin-1964"></a>[Landin, 1964] Peter J. Landin. "The Mechanical Evaluation of
+  Expressions." The Computer Journal 6(4):308–320, 1964. https://doi.org/10.1093/comjnl/6.4.308 The
+  source of the SECD machine, and the paper that coined the term "closure": the combination of a
+  lambda expression with its evaluation environment.
+- <a id="ref-rust-project-nd"></a>[Rust Project, n.d.] The Rust Project. *The Rust
+  Reference*, "Closure types". https://doc.rust-lang.org/reference/types/closure.html The capture
+  modes of Rust closures and the three traits `Fn`, `FnMut`, and `FnOnce`.
+- This book: [4.2 Interfaces](../ch04type/interface.md),
+  [5.1 Arrays and Slices](../ch05data/slice.md),
+  [Chapter 14 Execution Stack Management](../../part4memory/ch14stack),
+  [15.5 Escape Analysis](../../part5toolchain/ch15compile/escape.md).

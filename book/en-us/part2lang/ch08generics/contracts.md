@@ -5,278 +5,344 @@ title: "8.2 Contract-Based Generics"
 
 # 8.2 Contract-Based Generics
 
-> This section has a companion online talk: [on YouTube](https://www.youtube.com/watch?v=E16Y6bI2S08),
-> [Google Slides deck](https://changkun.de/s/go2generics/). The deck was recorded in 2019, while the contracts
-> proposal was still under discussion, and it corroborates this section.
+> A talk accompanies this section: [YouTube recording](https://www.youtube.com/watch?v=E16Y6bI2S08),
+> [Google Slides](https://changkun.de/s/go2generics/). The talk was recorded in 2019, while the
+> contracts draft was still under discussion, and can be read alongside this section.
 
-[8.1](./history.md) glossed over the evolution "contracts came first, then a turn toward interfaces as constraints"
-in a single sentence. This section unfolds that sentence: what contracts actually looked like, how much expressive
-power they had, and why they were ultimately abandoned. This rejected design is not historical waste; it explains
-where today's `[T Ordered]` syntax came from, and it illustrates a move that recurs throughout Go's design: first
-produce a highly expressive but somewhat complex scheme, then turn back and ask "can this be expressed with concepts
-we already have", forcing complexity to earn its right to exist.
+[8.1](./history.md) mentioned in a single sentence how the design of constraints moved from
+contracts to interfaces. This section expands on that move: what contracts looked like, how
+expressive they were, and why they were eventually abandoned. The rejected design explains where
+today's `[T Ordered]` syntax comes from, and it illustrates a pattern that recurs in Go's design:
+first propose a powerful but fairly complex mechanism, then ask whether what it does can be
+expressed with existing concepts.
 
-All of the `contract` syntax shown in this section is obsolete. It appears only in the go2draft drafts from 2018 to
-2020, and **no Go compiler ever accepted it**. Wherever contract notation appears below, it is presented as it
-originally stood in the drafts and is explicitly marked "obsolete", to avoid confusion with the syntax usable today.
+The `contract` syntax shown in this section appears only in design drafts from 2018 to 2020 and was
+never accepted by any released Go compiler. Every contract notation below is given as it appeared in
+the draft and is marked "deprecated" in a comment, to avoid confusion with today's syntax.
 
-## 8.2.1 What Constraints Are Meant to Solve
+## 8.2.1 The Problem Constraints Solve
 
-A generic function sooner or later has to answer one question: which operations can the type parameter `T` perform?
-Write a `Max` that computes the larger value, and the function body needs the comparison operator `<`; yet if `T`
-is instantiated to a type that does not support comparison (a struct or a slice, say), the code falls apart. So a
-generic mechanism must provide a way for the author to **declare** which operations `T` must support, and let the
-compiler check this at the instantiation site. This is the "constraint".
+A generic function must answer one question: which operations may be performed on values of the type
+parameter `T`? `Max`, which finds the larger of two values, needs the comparison operator `<`; if
+`T` is instantiated with a type that cannot be compared, such as some struct or a slice, the
+function body is no longer valid. A generics mechanism therefore needs a way for the function's
+author to **declare** which operations `T` must support, and for the compiler to check this at the
+point of instantiation. This is the **constraint**.
 
-A constraint is not an optional ornament. Without it, generics are left with only two fallbacks: either leave the
-type **entirely unconstrained**, as early C++ templates did, where type errors are deferred to instantiation time
-and surface as a long, hard-to-read error message; or **give up static information** like `interface{}` does,
-relying on runtime assertions to paper over the gap and throwing away type safety and performance together (the
-dilemma in [8.1](./history.md)). The value of a constraint is to state up front, at the declaration, what "T must
-be able to do", so that errors are caught at the call site and the compiler has a basis for generating correct code.
-Only one question remains: what syntax should express this set of requirements.
+Without constraints, generics has only two fallbacks. One is to leave type parameters entirely
+unconstrained, as C++ templates do, so that type errors are deferred until instantiation and surface
+as long, hard-to-read error messages. The other is to give up static type information as
+`interface{}` does and rely on run-time assertions, sacrificing both type safety and performance
+([8.1](./history.md)) [[Cox, 2009](#ref-cox-2009)]. A constraint moves "what `T` must be able to
+do" to the declaration, so errors are found at the call site and the compiler has what it needs to
+generate correct code. What remains is the question of which syntax to use to write down these
+requirements.
 
-## 8.2.2 Contracts: a Piece of Code That Never Runs
+## 8.2.2 Contracts: A Piece of Code That Never Runs
 
-The first answer, given by the 2018 go2draft, was to introduce a new keyword `contract`. A contract takes the shape
-of a function: it carries a set of type parameters, and the function body **lists** the conditions those types must
-satisfy. Take `Max`: the most naive idea is to write the operators to be used directly in the body (this is an earlier
-form the draft explored):
+In August 2018 Ian Lance Taylor and Robert Griesemer published the contracts design draft and
+presented it at that year's GopherCon [[Taylor and Griesemer, 2018](#ref-taylor-griesemer-2018)].
+The draft introduced a new keyword, `contract`. A contract looks like a function: it has a list of
+type parameters, and its body contains code that uses those types. Any type that makes this code
+type-check satisfies the contract. For example, to require that a type support `<`:
 
 ```go
-// Obsolete: an early 2018 draft idea, operators written directly into the contract body
-contract Ordered(t T) {
-    t < t
-}
-func Max(type T Ordered)(a, b T) T {
-    if a < b {
-        return b
-    }
-    return a
+// Deprecated: syntax of the 2018 draft; the contract body is code that is only type-checked
+contract ordered(e Ele) { e < e }
+
+func Max(type T ordered)(a, b T) T {
+	if a < b {
+		return b
+	}
+	return a
 }
 ```
 
-The `t < t` in the contract body is not a statement to be executed; it means "every type `T` that satisfies
-`Ordered` must support `<`". Note how the type parameters are declared: the draft uses **parentheses**:
-`func Max(type T Ordered)(a, b T) T`, with a `type` keyword prefixing the type parameter list. This is a different
-syntax from today's brackets `[T Ordered]`, and the switch of brackets from round to square is itself part of the
-evolution the rest of this section will recount.
+The `e < e` in the contract body is never executed. It means "a type satisfying `ordered` must
+support `<`"; likewise `x == x` means comparable, and `var x bool = v.Equal(v)` means there must be
+an `Equal` method returning `bool`. Another difference from today is how type parameters are
+declared: the draft used parentheses and began with the keyword `type`, as in
+`func Max(type T ordered)(a, b T) T`. The change from parentheses to square brackets is part of the
+evolution described below.
 
-Writing operators into the function body looks natural, but it quickly runs into trouble: an operator requirement
-written as `+(T, T) T` is both repetitive and ambiguous, and it gets tangled up with the automatic semicolon
-insertion rules. The draft therefore turned to a clearer form, the **type list**: directly enumerate which concrete
-types belong to the contract. This is the canonical form of contracts in go2draft:
+Expressing constraints as code seems natural, but there is almost no limit on what that code can
+look like. The reader must infer what requirements an arbitrary piece of code places on the type,
+and the compiler must answer the same question. In July 2019, introducing the revised draft, Taylor
+wrote that they had received a great deal of feedback that the earlier contracts were too
+complicated; the new contracts were much simpler to write, read and understand, and could specify
+the underlying type of a type parameter, list the methods of a type parameter, and describe
+relationships between different type parameters [[Taylor, 2019](#ref-taylor-2019)]. The revised
+contracts were no longer arbitrary code but a list
+[[Taylor and Griesemer, 2019](#ref-taylor-griesemer-2019)]. The permitted types were enumerated in a
+**type list**:
 
 ```go
-// Obsolete: the canonical 2018 draft form, a type list enumerating the allowed underlying types
+// Deprecated: syntax of the 2019 draft; a type list enumerates the permitted types
 contract Ordered(T) {
-    T int, int8, int16, int32, int64,
-        uint, uint8, uint16, uint32, uint64, uintptr,
-        float32, float64,
-        string
+	T int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64, uintptr,
+		float32, float64,
+		string
 }
+
 func Max(type T Ordered)(a, b T) T {
-    if a < b {
-        return b
-    }
-    return a
+	if a < b {
+		return b
+	}
+	return a
 }
 ```
 
-The types `Ordered` lists all happen to support `<`, so the compiler need only confirm that `T` is instantiated to
-one of the types in the list, and it knows `a < b` is legal. A method requirement is written on a separate line,
-the type name followed by the method signature:
+Every type in the list supports `<`, so the compiler only needs to confirm that the underlying type
+of `T` is one of them to know that `a < b` is valid. A method requirement is written as a type name
+followed by a method signature, and contracts can be composed by embedding, with the conditions of
+the embedded contract expanded in place:
 
 ```go
-// Obsolete: requires T to implement String() string
-contract Stringer(T) {
-    T String() string
+// Deprecated: requires X to have both String and Print methods
+contract stringer(X) {
+	X String() string
 }
-```
 
-Contracts can also be **composed**: embedding the name of another contract in the body is equivalent to expanding
-the embedded contract's conditions in place.
-
-```go
-// Obsolete: embeds Stringer, then adds a Print method requirement
 contract PrintStringer(X) {
-    Stringer(X)
-    X Print()
+	stringer(X)
+	X Print()
 }
 ```
 
-What best demonstrates a contract's expressive power is its ability to constrain **the relationship between several
-type parameters**. A contract can carry two type parameters `(P1, P2)` and write cross-parameter method signatures
-in the body, requiring `P1` to have a method that takes a `P1` and returns a `P2`, while also bounding the
-underlying type of `P2`:
+Where contracts showed their expressive power most was in describing **relationships among several
+type parameters**. One example in the draft is a graph: the node type must have a method returning
+all of its edges, the edge type must have a method returning its two endpoint nodes, and the two
+type parameters refer to each other:
 
 ```go
-// Obsolete: constrains the two type parameters P1, P2 and their mutual relationship
-contract C(P1, P2) {
-    P1 m1(x P1)
-    P2 m2(x P1) P2
-    P2 int, float64
+// Deprecated: one contract constrains both type parameters Node and Edge
+contract G(Node, Edge) {
+	Node Edges() []Edge
+	Edge Nodes() (from Node, to Node)
 }
-func F(type P1, P2 C)(x P1, y P2) P2 { /* ... */ }
+
+type Graph(type Node, Edge G) struct { ... }
 ```
 
-The line `m2(x P1) P2` engages two type parameters at once: it requires `P2` to have a method whose parameter type
-is `P1` and whose return type is `P2`. This kind of cross-parameter relationship constraint is something an ordinary
-interface (which describes a single type) cannot naturally express; it is precisely the source of the contract's
-"like a second language" expressiveness, and it is the hard part that the later interface-based replacement had to
-work out how to carry over. At this point the contract's full repertoire is laid out: enumerate underlying types,
-require methods, compose existing contracts, constrain multi-parameter relationships. It is indeed powerful, able to
-describe nearly any imaginable inter-type constraint; and this "almost omnipotent" quality is exactly where its
-hazard lies.
+The draft points out that `Node` and `Edge` here are not interface types but concrete types with
+particular methods, such as `*Vertex` and `*FromTo`. An interface describes only a single type, so
+this kind of relationship across type parameters was for a time regarded as something only contracts
+could do, and it was the hard part that had to be solved when interfaces later replaced contracts.
+That completes the picture of what contracts could do: enumerate underlying types, require methods,
+compose existing contracts, and constrain relationships among several type parameters.
 
-## 8.2.3 Why It Was Abandoned
+## 8.2.3 Why They Were Abandoned
 
-The problem lies precisely in being "powerful". A contract writes a constraint as a piece of code that resembles a
-function body yet never executes, and this "seeming-but-not" imposes two layers of cognitive burden. First, what one
-can write inside a contract body follows its own set of rules: which statements are legal, that `t < t` denotes an
-operator requirement rather than an evaluation, that the type list is comma-separated, that method requirements take
-yet another form. These rules hold only inside a contract body, and they look like real Go code without being it.
-The reader has to keep a switch in mind: "this is a contract context, not an ordinary function." Second, it erects a
-**second declaration mechanism** in the language: to describe "which methods a value has" you use `interface`, but to
-describe "which conditions a type parameter must satisfy" you have to use `contract`, two facilities with heavily
-overlapping responsibilities yet each with its own syntax.
+The revised contracts were much simpler, but they still created a second declaration mechanism in
+the language. To describe which methods a value has, you use `interface`; to describe which
+conditions a type parameter must satisfy, you use `contract`. The two have heavily overlapping roles
+and entirely different syntax. In June 2020 Taylor and Griesemer published a new design draft and
+wrote on the blog: "The biggest change is that we are dropping the idea of contracts. The difference
+between contracts and interface types was confusing, so we've eliminated that
+difference." [[Taylor and Griesemer, 2020a](#ref-taylor-griesemer-2020a)]
 
-"The Next Step for Generics" of June 2020 stated this concern plainly: "The biggest change is that we are dropping
-the idea of contracts. The difference between contracts and interface types was confusing, so we're eliminating that
-difference." This is Go's consistent taste: it is extremely wary of "adding a small language to the language", and it
-would rather generalize an existing abstraction than lightly introduce a new mechanism that has to be learned
-separately. The contract was rejected not because it could not do the job, but because it asked users to learn a new
-thing, and what that new thing did, another concept everyone already understood could carry just as well.
+The new draft gives two reasons for the decision: many people found it hard to understand the
+difference between contracts and interface types, and contracts turned out to be expressible as a
+corresponding set of interfaces, so dropping them lost no expressive power
+[[Taylor and Griesemer, 2020b](#ref-taylor-griesemer-2020b)]. Contracts were abandoned not because
+of anything they could not do, but because they required users to learn a new mechanism for
+something that a concept everyone already knew could do.
 
-## 8.2.4 The Simplifying Insight: From Method Set to Type Set
+The draft also answered another natural question: why not allow operators as method names, such as
+`+(T) T`, so that methods alone describe every constraint? The draft's answer is that this is not
+enough. Shift `<<` and indexing `[]` accept operands of any integer type, which needs a way to
+say "any integer type"; the result of `==` is an untyped boolean; conversions, `range` and the value
+range of untyped constants all need new notation; and one must decide whether supporting `<` implies
+supporting `<=`, and whether supporting `+` implies supporting `++`. By comparison, type lists need
+only one new syntactic construct plus one new name, `comparable`
+[[Taylor and Griesemer, 2020b](#ref-taylor-griesemer-2020b)].
 
-The old concept that could carry the constraint's job is the interface. An interface originally describes "which
-**methods** a type must have", its **method set** semantics. The "which operations a type must support" that a
-constraint wants to express overlaps heavily with this: a method is an operation, and an operator is an operation too.
-The only gap is that an interface originally could not say a requirement like "the underlying type of `T` must be
-`int`".
+## 8.2.4 From Method Sets to Type Sets
 
-The key to simplification is to generalize the interface's semantics from "method set" to **type set**: an interface
-no longer describes only "the types that implement this set of methods", but directly describes "**which types**
-satisfy it". A method set is a special case of a type set (all the types implementing a given set of methods form a
-set), and a type set can be delineated in other ways too: enumerating underlying types, taking unions, the built-in
-`comparable`. A constraint therefore need not invent `contract`; reusing the interface suffices. `Ordered` turns
-from a piece of contract code into an ordinary (constraint) interface:
+The existing concept that could take over the job of constraints is the interface. An interface
+originally describes which methods a type must have, that is, its **method set**. What a constraint
+needs to express is which operations a type must support, and the two overlap heavily: methods are
+operations, and operators are operations too. All that is missing is a way for an interface to
+say "the underlying type of `T` must be `int`". The 2020 draft therefore allowed interfaces used as
+constraints to contain type lists, written by listing types after the keyword `type` inside the
+interface:
 
 ```go
-// Final design: a constraint is just an interface described by a type set
+// Deprecated: syntax of the June 2020 draft; a type list introduced by type inside an interface
 type Ordered interface {
-    ~int | ~int8 | ~int16 | ~int32 | ~int64 |
-        ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr |
-        ~float32 | ~float64 |
-        ~string
-}
-func Max[T Ordered](a, b T) T {
-    if a < b {
-        return b
-    }
-    return a
+	type int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64, uintptr,
+		float32, float64,
+		string
 }
 ```
 
-The same `Max`, read side by side, makes the gains of this trade-off clearest. Two notations serving the type set
-appear in the new form: `|` is **union**, merging several types into the same set; `~T` denotes "all types whose
-underlying type is `T`". With `~`, a custom type like `type Celsius float64`, whose underlying type is `float64`,
-also falls within `Ordered`, without having to be listed one by one. Method requirements directly reuse the
-interface's existing notation (`String() string`), with no separate rules. A contract that embeds another contract
-also reverts to interface embedding. A small language is dismantled and lands back on `interface`, a concept that
-already existed.
-
-As for the hard part at the end of 8.2.2, the "ordinary interfaces cannot express it" of a contract constraining the
-relationship among several type parameters, the interface approach picks it up via **parameterized interfaces**. The
-cross-parameter requirement that the old contract `C(P1, P2)` described can be split into two interfaces each carrying
-type parameters, and then `F`'s type parameter list aligns their parameters:
+In April 2021 Taylor proposed restating the semantics of interfaces in terms of **type sets**
+(#45346), and the proposal was accepted in July of that year [[Taylor, 2021](#ref-taylor-2021)].
+Under this formulation, an interface no longer describes only "the types that implement this set of
+methods" but directly describes a set of types, namely which types satisfy it. A method set is just
+one way to delimit a type set (all types that implement a given set of methods form a set); type
+sets can also be delimited with unions, underlying types and the predeclared `comparable`. `Ordered`
+then becomes an ordinary interface:
 
 ```go
-// Final design: parameterized interfaces carry the old contract's multi-parameter relationship constraint
-type I1[P1 any] interface {
-    m1(x P1)
+// Final design: a constraint is an interface described by a type set
+type Ordered interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 |
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr |
+		~float32 | ~float64 |
+		~string
 }
-type I2[P1, P2 any] interface {
-    m2(x P1) P2
-    ~int | ~float64
+
+func Max[T Ordered](a, b T) T {
+	if a < b {
+		return b
+	}
+	return a
 }
-func F[P1 I1[P1], P2 I2[P1, P2]](x P1, y P2) P2 { /* ... */ }
 ```
 
-The line `F[P1 I1[P1], P2 I2[P1, P2]]` binds the `P1` inside `I2` to the `P1` of `I1` as the same type at
-instantiation; the relationship the contract once expressed with dedicated syntax thus falls into the existing
-combination rules of interfaces and type parameters, without inventing one more concept. For a common kind of
-constraint that the contract had to express awkwardly through enumeration, "this type must support `==`", the type
-set approach also has a built-in `comparable`, taking "comparable" directly into the language as a type set and
-sparing the clumsiness of listing every comparable type the way `Ordered` does. In other words, the simplification
-did not lose the contract's core expressive power; it gave a more convenient notation at exactly the tightest spots.
+The new notation has two symbols that serve type sets: `|` denotes a **union**, merging several
+types into one set, and `~T` denotes **all types whose underlying type is `T`**. With `~`, a defined
+type such as `type Celsius float64`, whose underlying type is `float64`, also belongs to `Ordered`,
+so `Max(Celsius(21.5), 19)` can be called directly without listing such types in the constraint one
+by one. The type lists in the 2020 draft also matched by underlying type; type sets simply write
+this rule as explicit notation and drop the `type` keyword. Method requirements keep the interface's
+existing syntax, and composition of contracts returns to embedding of interfaces.
 
-## 8.2.5 The Timeline of the Evolution
+The hard part left at the end of 8.2.2, relationships among several type parameters, is solved by
+**parameterized interfaces**: an interface can itself take type parameters. The graph described by
+contract `G` can be split into two interfaces with type parameters, whose arguments are then lined
+up in the type parameter list of `Graph` [[Taylor and Griesemer, 2021](#ref-taylor-griesemer-2021)]:
 
-Going from contracts to type sets did not happen in one step; it shed weight in two successive stages, each one
-throwing off some mechanism. Straightened out, the timeline is:
+```go
+// Final design: parameterized interfaces express relationships among several type parameters
+type NodeConstraint[Edge any] interface {
+	Edges() []Edge
+}
+
+type EdgeConstraint[Node any] interface {
+	Nodes() (from, to Node)
+}
+
+type Graph[Node NodeConstraint[Edge], Edge EdgeConstraint[Node]] struct { ... }
+```
+
+When `Graph[Node NodeConstraint[Edge], Edge EdgeConstraint[Node]]` is instantiated, `Node` and
+`Edge` in the two constraints are bound to the same pair of types. The relationship that contracts
+expressed with dedicated syntax thus falls under the combination rules that interfaces and type
+parameters already have, with no new concept introduced. When instantiating with `*Vertex` and
+`*FromTo`, compilers from Go 1.21 on can even infer the edge type from the node slice alone (see
+[8.3](./checker.md)). For the common constraint "the type must support `==`", the type set design
+provides the predeclared `comparable`, so there is no need to list all comparable types as a
+contract would. The simplification did not cost contracts' core expressive power.
+
+## 8.2.5 A Timeline of the Evolution
+
+The move from contracts to type sets did not happen in one step. In chronological order:
 
 ```mermaid
 flowchart LR
-    A["2018 go2draft<br/>contract keyword<br/>type list + parentheses<br/>(type T C)"]
-    B["2020.6 draft revision<br/>drop contract<br/>interfaces carry constraints<br/>still called 'type list' inside the interface"]
-    C["2021.8 proposal 43651<br/>brackets [T C]<br/>'type set' semantics<br/>~T approximation + | union"]
-    A -->|"remove the second syntax"| B
-    B -->|"semantics unified as type set"| C
+    A["2018.8 contracts draft<br/>contract body is code<br/>parentheses (type T C)"]
+    B["2019.7 revised draft<br/>contracts become type lists<br/>and method lists"]
+    C["2020.6 type parameters draft<br/>contracts dropped<br/>interfaces carry constraints"]
+    D["2020.8<br/>square brackets [T C]"]
+    E["2021.2 proposal #43651<br/>accepted"]
+    F["2021.7 type sets #45346<br/>~T and | replace type lists"]
+    A --> B --> C --> D --> E --> F
 ```
 
-The first step was in June 2020: the contract was removed wholesale, the constraint's job handed to the interface,
-while the interface still used the term "type list" internally (there was as yet no `~` or "type set" terminology).
-The second step landed in the final proposal 43651 of August 2021: the syntax settled on the brackets
-`[T Constraint]`, and the interface's semantics were formally stated as "type set", introducing the `~T` approximation
-element and the `|` union operator. It was in this revision that "type set" became the canonical term, and `Ordered`
-took the form it has today. Worth mentioning is that the type parameter brackets also went from round to square along
-this line: round parentheses `(type T C)` were hard to tell apart from an ordinary parameter list mixed in together,
-while square brackets `[T C]` are recognizable at a glance, the same drive to "lower the reader's burden" carried into
-a syntactic detail.
+The August 2018 draft described constraints with a piece of code
+[[Taylor and Griesemer, 2018](#ref-taylor-griesemer-2018)]. The July 2019 revision turned contracts
+into type lists and method lists [[Taylor and Griesemer, 2019](#ref-taylor-griesemer-2019)]. The
+June 2020 draft dropped contracts and let interfaces carry constraints
+[[Taylor and Griesemer, 2020b](#ref-taylor-griesemer-2020b)], and in August of that year type
+parameters moved to square brackets. In January 2021 the draft became the formal proposal #43651,
+which was accepted in February [[Taylor and Griesemer, 2021](#ref-taylor-griesemer-2021)]. In July
+2021 the type set proposal #45346 was accepted, and `~T` and `|` replaced type lists introduced by
+`type` [[Taylor, 2021](#ref-taylor-2021)]. In March 2022 the design shipped with Go 1.18.
 
-Each step does subtraction: first remove the `contract` keyword, then fold "type list" into the single unified
-semantics of "type set". Complexity does not vanish out of thin air; it is repeatedly asked "can this be expressed
-with existing concepts", squeezed down until only one thing remains, the natural extension of the single old
-abstraction that is the interface.
+The change of brackets had concrete reasons. The final proposal explains that the parenthesized
+syntax could work but caused several parsing ambiguities. In `var f func(x(T))`, one cannot tell
+whether this is a function whose parameter type is the instantiated type `x(T)`, or a parameter
+named `x` of parenthesized type `(T)`. For `[]T(v1)` and `[]T(v2){}`, a parser reading the opening
+parenthesis cannot tell a conversion from a composite literal. In `interface { M(T) }`, `M(T)` could
+be a method or an embedded instantiated interface. The ambiguities can be resolved by adding
+parentheses, but the result is awkward; moreover, a run of parentheses as in
+`func F(T any)(v T)(r1, r2 T)` and `F(int)(1)` bothered many people
+[[Taylor and Griesemer, 2021](#ref-taylor-griesemer-2021)].
 
-## 8.2.6 What This Trade-off Tells Us
+Every step subtracted something: first the contract body was narrowed from arbitrary code to a list,
+then the `contract` keyword was removed, and finally type lists were absorbed into the unified
+semantics of type sets. Complexity was compressed by repeatedly asking "can this be expressed with
+existing concepts?", and what remained is a natural generalization of the existing abstraction, the
+interface.
 
-The rise and fall of contracts is a specimen of Go's design process. What it confirms is not an empty slogan like
-"simple is always better than complex", but a more concrete working method: **first allow a highly expressive but
-somewhat complex scheme to exist, then repeatedly ask whether an existing concept can replace it, and let complexity
-prove that it is indispensable**. The contract did not pass this test: it asked users to learn a small language used
-only for constraints, and everything it did, the generalized interface could do. The complexity did not earn its
-place, so it was cut.
+## 8.2.6 What This Trade-off Shows
 
-Widen the view beyond Go, and this arc is not alone. C++'s **Concepts** is almost the same story: it was a mechanism
-for describing constraints on template parameters, was deemed too complex and **removed** from the C++0x draft in 2009,
-then went through years of rework and only landed officially, in a streamlined form, in C++20 (it is exactly Concepts
-that Stroustrup discusses in this chapter's epigraph). A constraint mechanism shelved for being complex, then
-returning after simplification: Go's contract walked the same path, except it completed this self-streamlining before
-landing, without pushing the complexity onto users to bear one round and then recover. The comparison shows that "how
-to express constraints" is a recognized thorny problem in generics design, one that every camp has paid tuition on.
+The rise and fall of contracts illustrates a concrete working method: first let a powerful but
+complex design exist, then repeatedly ask whether an existing concept can replace it, making the
+complexity prove that it is indispensable. Contracts failed that test: they required users to learn
+a mechanism used only for constraints, and everything they did could be done by generalized
+interfaces.
 
-Once this abandoned history is understood, the "just-right plainness" of today's `[T Constraint]` is no longer to be
-taken for granted; it is the result of a powerful scheme being rejected and then simplified. Next, [8.3](./checker.md)
-will enter type checking, to see how the compiler uses the type set semantics to genuinely verify, at the instantiation
-site, whether `T` satisfies the constraint.
+C++ **Concepts** went through a similar process with a different outcome. Concepts are a mechanism
+for describing the requirements on template parameters, intended to address the lack of explicit
+specification of template interfaces and the unreadable error messages. The Concepts designed for
+C++0x were removed from the draft standard in 2009. In the same year Stroustrup, with Gabriel Dos
+Reis and Andrew Sutton, started a redesign from scratch, which produced a technical specification in
+2015 [[Stroustrup, 2017](#ref-stroustrup-2017)] and finally entered the standard in C++20. Notably,
+the C++20 `requires` expression describes requirements with a piece of code that is never executed,
+for example `requires(T x) { { x == x } -> std::convertible_to<bool>; }`
+[[Smith, 2020](#ref-smith-2020)], which is very close to the contract bodies in Go's 2018 draft. Go
+abandoned this form and chose to describe constraints with type sets; C++ kept it and organized it
+with named concepts. The two languages gave different answers to the same problem, which also shows
+that how constraints should be expressed is a widely acknowledged hard problem in generics design.
+
+Once this abandoned history is understood, the plainness of today's `[T Constraint]` is no longer
+taken for granted: it is the result of a powerful design being rejected and then simplified.
+[8.3](./checker.md) discusses how the compiler uses type sets to check, at instantiation, whether
+`T` satisfies its constraint.
 
 ## Further Reading
 
-1. Russ Cox. *The Generic Dilemma.* 2009. https://research.swtch.com/generic
-   (The dilemma of generics; the constraint problem contracts set out to solve springs from the trade-off pressure here)
-2. Ian Lance Taylor, Robert Griesemer. *Contracts — Draft Design* (2018, superseded).
-   https://go.googlesource.com/proposal/+/master/design/go2draft-contracts.md
-3. The Go Authors. *The Next Step for Generics.* 2020-06.
-   https://go.dev/blog/generics-next-step (the turning point announcing the abandonment of contracts in favor of interfaces carrying constraints)
-4. Ian Lance Taylor, Robert Griesemer. *Type Parameters — Draft Design* (2020, interfaces-as-constraints,
-   type-list stage).
-   https://go.googlesource.com/proposal/+/master/design/go2draft-type-parameters.md
-5. Ian Lance Taylor, Robert Griesemer. *Type Parameters Proposal* (final design, 2021-08,
-   type sets / `~T` / `|`).
-   https://go.googlesource.com/proposal/+/refs/heads/master/design/43651-type-parameters.md
-6. The Go Authors. *Why Generics?* Go blog, 2019. https://go.dev/blog/why-generics
-7. Bjarne Stroustrup. *Concepts: The Future of Generic Programming.* 2017.
-   (The rise and fall of C++ Concepts, another history of constraint-mechanism simplification isomorphic to Go's contracts)
+- <a id="ref-cox-2009"></a>[Cox, 2009] Russ Cox. "The Generic Dilemma." 2009.
+  https://research.swtch.com/generic The generic dilemma; the constraint problem that contracts set
+  out to solve comes from the trade-off described there.
+- <a id="ref-taylor-griesemer-2019"></a>[Taylor and Griesemer, 2019] Ian Lance Taylor, Robert
+  Griesemer. "Contracts — Draft Design." Go design document, 2019-07-31 (superseded).
+  https://go.googlesource.com/proposal/+/master/design/go2draft-contracts.md The revised contracts
+  draft: type lists, method lists, and contracts over several type parameters.
+- <a id="ref-taylor-griesemer-2020a"></a>[Taylor and Griesemer, 2020a] Ian Lance Taylor, Robert
+  Griesemer. "The Next Step for Generics." The Go Blog, 2020-06-16.
+  https://go.dev/blog/generics-next-step The turning point that announced dropping contracts and
+  letting interfaces carry constraints.
+- <a id="ref-taylor-griesemer-2020b"></a>[Taylor and Griesemer, 2020b] Ian Lance Taylor, Robert
+  Griesemer. "Type Parameters — Draft Design." Go design document, 2020.
+  https://go.googlesource.com/proposal/+/master/design/go2draft-type-parameters.md The stage where
+  constraints are interfaces and interfaces contain type lists; the section "What happened to
+  contracts?" gives the reasons for dropping contracts.
+- <a id="ref-taylor-griesemer-2021"></a>[Taylor and Griesemer, 2021] Ian Lance Taylor, Robert
+  Griesemer. "Type Parameters Proposal." Go design document, 2021-08-20.
+  https://go.googlesource.com/proposal/+/refs/heads/master/design/43651-type-parameters.md The final
+  design: square brackets, type sets, `~T` and `|`, and the reasons for choosing square brackets.
+- <a id="ref-taylor-2019"></a>[Taylor, 2019] Ian Lance Taylor. "Why Generics?" The Go Blog,
+  2019-07-31. https://go.dev/blog/why-generics Why generics are needed, and how the revised
+  contracts simplify the 2018 draft.
+- <a id="ref-stroustrup-2017"></a>[Stroustrup, 2017] Bjarne Stroustrup. "Concepts: The Future of
+  Generic Programming, or How to Design Good Concepts and Use Them Well." WG21 P0557R1, 2017-01-31.
+  https://www.stroustrup.com/good_concepts.pdf The design and history of C++ Concepts, another
+  evolution of a constraint mechanism to set against Go contracts.
+- <a id="ref-taylor-griesemer-2018"></a>[Taylor and Griesemer, 2018] Ian Lance Taylor, Robert
+  Griesemer. "Contracts — Draft Design." Go design document, 2018-08-27.
+  https://github.com/golang/proposal/blob/00fd2f6529/design/go2draft-contracts.md The original
+  contracts draft: the contract body is code that is only type-checked.
+- <a id="ref-taylor-2021"></a>[Taylor, 2021] Ian Lance Taylor. "spec: generics: use type sets to
+  remove type keyword in constraints." golang/go#45346, 2021.
+  https://github.com/golang/go/issues/45346 Restates the semantics of interfaces in terms of type
+  sets and introduces `~T` and `|`.
+- <a id="ref-smith-2020"></a>[Smith, 2020] Richard Smith, ed. "Working Draft, Standard for
+  Programming Language C++." WG21 N4861, 2020.
+  https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2020/n4861.pdf The final working draft of
+  C++20; §13.7.8 [temp.concept] defines concepts.
