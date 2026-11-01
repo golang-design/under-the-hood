@@ -533,7 +533,8 @@ PGO 把更激进的预算只给剖面证明值得的调用点，这与编译速�
   随 Go 1.11 发布。
 - <a id="ref-barik-and-lin-2022"></a>[Barik and Lin, 2022] Raj Barik, Jin Lin. *Proposal: Design and
   Implementation of Profile-Guided Optimization (PGO) for Go.* Go design document, 2022.
-  https://go.dev/design/55025-pgo-implementation
+  https://go.dev/design/55022-pgo-implementation
+  讨论见 https://go.dev/issue/55025
 - <a id="ref-chase-2018"></a>[Chase, 2018] David Chase. cmd/compile: decrease inlining call cost from 60
   to 57. Go commit 624e197c71, 2018. https://go.dev/cl/151977
   随 Go 1.12 发布。
