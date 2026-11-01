@@ -5,136 +5,262 @@ title: "1.2 Go 语言综述"
 
 # 1.2 Go 语言综述
 
-这一节为全书搭一个骨架。它不是语法手册，Go 的语法在任何入门书里都讲得清楚，重复它没有意义。
-我们要做的，是先建立一个**俯瞰全局的视角**：Go 由哪几层构成、它有哪些**与众不同**的设计决定、
-以及这些决定分别在本书的哪一章展开。读完这一节，再钻进后面任何一章，都不会迷路。
+先编译一个只打印一行文字的程序，考察生成的可执行文件中包含哪些内容（Go 1.26.10，darwin/arm64）：
 
-## 1.2.1 三层视角与厚重的运行时
+```go
+package main
 
-理解 Go，可以分三层来看，本书也大致按这三层加上历史铺陈来组织。
+import "fmt"
 
-**语言层**，你直接书写的东西：语法、类型系统、并发原语、错误处理。它刻意小而正交，25 个关键字
-就是全部。
-
-**运行时层**，与你的程序一起被编译进同一个二进制、在背后默默支撑的「小操作系统」：goroutine
-调度器、内存分配器、垃圾回收器、栈管理。这是 Go 最厚重、也最值得剖析的部分。
-
-**工具链层**，把源码变成可运行、可诊断、可维护程序的机器：编译器、链接器、模块系统、测试与
-可观测性工具。
-
-```mermaid
-flowchart TD
-    SRC["你的 Go 源码"] -->|"编译器 / 链接器<br/>（工具链层，第 3、15、16、17 章）"| BIN
-    BIN["单个自包含的二进制<br/>内含 runtime（运行时层，第 9–14 章）"] -->|"运行时：调度 goroutine、分配内存、回收垃圾、管理栈"| RUN
-    RUN["在操作系统线程上并发执行<br/>（语言层语义，第 4–8、10、11 章）"]
-    style BIN fill:#e8f0fe
+func main() { fmt.Println("hello") }
 ```
 
-Go 的一个鲜明特征，是它的**运行时层异常厚重**。一门 C 程序几乎不带运行时，一门 Java 程序把
-运行时放进一个独立的虚拟机；Go 走的是第三条路，它把调度、垃圾回收、栈管理这些本属操作系统
-范畴的复杂度，**接管进与你的代码一同编译、一同链接的运行时里**，换取上层的简洁：一个 `go`
-关键字就能起一个并发执行、自动内存管理、可在任意深度阻塞的 goroutine。这就是为什么一个 Go
-二进制即便 `FROM scratch` 也能独立运行，它自带了一个微型操作系统（这条「自带运行时」的线，
-从 [3.5 启动引导](../ch03life/boot.md) 一直贯穿到 [14 执行栈](../../part4memory/ch14stack)）。
-代价是二进制更大、运行时本身的复杂度可观，但收益是部署极简、并发与内存管理对用户透明。本书
-大半篇幅，正是在剖析这个「藏在二进制里的微型操作系统」。
+```
+$ go build -o hello main.go
+$ wc -c < hello
+ 2508994
+$ go tool nm hello | grep -c ' T '
+2024
+$ go tool nm hello | grep -c ' T runtime\.'
+1400
+$ go tool nm hello | grep ' T main\.'
+10009f630 T main.main
+```
 
-## 1.2.2 几个与众不同的设计决定
+`go tool nm` 列出文件中带有名称的函数与变量，`T` 一列表示函数。源码中只有一个函数 `main.main`，可执行
+文件中却有 2024 个函数，其中 1400 个属于 `runtime` 包。它们构成了 Go **运行时**（runtime）的主体，每个
+Go 程序都包含运行时。链接器如何决定保留哪些函数，见 [3.4](../ch03life/link.md)。
 
-Go 的气质，集中体现在几个和主流语言不一样的决定上。下面各用一小段代码点出它的样子、指向它在
-本书的归属，并点明它换来了什么、付出了什么。
+本节为全书建立一个总体框架：Go 由哪几个部分组成，做出了哪些与主流语言不同的设计决定，以及这些决定
+分别在本书的哪一部分展开。
 
-**并发是语言的一等公民（CSP）。** 启动一个并发执行只需 `go`，协调用 channel，不必碰线程库与锁。
+## 1.2.1 三个组成部分
+
+**语言**是程序员直接书写的部分：语法、类型、并发与错误处理。它被有意设计得很小，一共只有 25 个关键字
+[[Go Authors, 2026a](#ref-go-authors-2026a)]。语言本身的系统介绍可参阅 Donovan 与 Kernighan 的教材
+[[Donovan and Kernighan, 2015](#ref-donovan-kernighan-2015)]，本书讨论的是它的实现。
+
+**运行时**是链接进每个程序的那部分代码。它把大量 goroutine 分配到少数操作系统线程上轮流执行，为对象
+分配内存，回收不再使用的内存，并为每个 goroutine 提供一个按需增长的栈。这些工作原本大多由操作系统
+承担，Go 在自身的进程中又实现了一遍，因此运行时常被比作一个小型操作系统。
+
+**工具链**负责把源码变为可运行、可诊断、可维护的程序，包括 `go` 命令、编译器、链接器、模块系统，
+以及测试与性能分析工具。Go 的设计者在 2022 年的回顾中指出，语言本身只是 Go 取得成功的一小部分原因，库、
+工具、惯例以及整体的软件工程方法同样重要 [[Cox et al., 2022](#ref-cox-et-al-2022)]。
+
+不妨与 C 和 Java 作一比较。C 程序也有运行时，但非常精简，只包括启动代码与 C 标准库，线程与内存基本
+直接交由操作系统管理。Java 的运行时是一个通常需要单独安装的虚拟机，程序在虚拟机上运行。Go 则把运行时
+直接链接进可执行文件：把一个文件复制到目标机器上即可运行，goroutine 的调度与垃圾回收对程序员几乎不可见。
+其代价是可执行文件更大，运行时本身也相当复杂，本书的大部分篇幅都在讨论它。
+
+## 1.2.2 几项不同寻常的设计决定
+
+**并发是语言的一部分。** 启动一个并发执行的函数只需一个 `go` 关键字，goroutine 之间通过 channel 传递
+数据：
 
 ```go
 ch := make(chan int)
-go func() { ch <- compute() }() // 启动一个 goroutine，算完把结果送进 channel
-result := <-ch                  // 在此等待并接收，通信即同步
+go func() { ch <- compute() }() // 在新的 goroutine 中计算，并发送结果
+result := <-ch                  // 在此等待结果
 ```
 
-这背后是 CSP 思想（[1.3](./csp.md)）、廉价的有栈协程与 M:N 调度器
-（[9](../../part3concurrency/ch09sched)）、以及 channel 的实现（[10](../../part3concurrency/ch10chan)）。
-取舍是：换来「为每件并发的事开一个 goroutine」的书写顺手，代价是运行时要背一个复杂的调度器。
+这种写法之所以可行，是因为 goroutine 的开销很小。下面的程序启动一万个 goroutine，使它们全部阻塞在
+同一个 channel 上，再测量内存的增长：
 
-**接口是结构化、隐式满足的。** 一个类型只要拥有接口要求的方法，就**自动**满足它，无需 `implements`
-声明。
+```go {run=true}
+package main
 
-```go
-type Reader interface { Read(p []byte) (int, error) }
+import (
+	"fmt"
+	"runtime"
+)
 
-// 任何拥有 Read([]byte)(int,error) 方法的类型，自动就是 Reader，
-// 哪怕它的作者从没听说过 Reader。这让接口可以「事后」为别人的类型定义。
+func main() {
+	const n = 10000
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+
+	block := make(chan struct{})
+	for range n {
+		go func() { <-block }() // 启动后立即阻塞，始终保持存活
+	}
+	runtime.ReadMemStats(&after)
+
+	stack := after.StackInuse - before.StackInuse
+	heap := after.HeapInuse - before.HeapInuse
+	fmt.Println("goroutine 数:", runtime.NumGoroutine())
+	fmt.Println("平均每个：栈", stack/n, "字节，堆上的记录", heap/n, "字节")
+	close(block)
+}
 ```
 
-这是组合优于继承、结构化优于名义类型的体现（[4.2](../../part2lang/ch04type/interface.md)）。取舍是：
-换来极松的解耦（小接口遍地适配），代价是接口调用是间接的、难以跨接口内联。
+在 darwin/arm64 上的一次运行结果如下（每次运行的结果会相差几个字节）：
 
-**错误是值，不是异常。** 错误经普通返回值显式传递、显式处理，没有 `try/catch` 的隐式跳转。
+```
+goroutine 数: 10001
+平均每个：栈 2097 字节，堆上的记录 684 字节
+```
+
+在浏览器中（js/wasm）运行，结果为栈 2048 字节、堆上 516 字节，具体数值随平台略有差异。每个 goroutine
+的栈最小为 2 KB（`runtime/stack.go` 中的 `stackMin`），不足时再增长
+（[第 14 章](../../part4memory/ch14stack/readme.md)）；运行时还会根据垃圾回收时测得的平均栈大小，调整新
+goroutine 的初始栈大小。堆上的部分是运行时为每个 goroutine 记录的状态，以及它在 channel 上等待时留下
+的记录。作为对比，操作系统线程的栈通常以 MB 计。其代价是运行时需要实现一个复杂的调度器
+（[第 9 章](../../part3concurrency/ch09sched/readme.md)）。这一并发思想的来源见 [1.3](./csp.md)。
+
+**接口无须显式声明。** 一个类型只要具有接口所要求的方法，就自动满足该接口，无须书写 `implements`
+[[Pike, 2012](#ref-pike-2012)]：
+
+```go {run=true}
+package main
+
+import (
+	"fmt"
+	"os"
+	"strings"
+)
+
+// upper 从未声明自己实现了 io.Writer，
+// 但它具有签名相符的 Write 方法，因此满足该接口。
+type upper struct{ n int }
+
+func (u *upper) Write(p []byte) (int, error) {
+	u.n += len(p)
+	return os.Stdout.Write([]byte(strings.ToUpper(string(p))))
+}
+
+func main() {
+	u := &upper{}
+	fmt.Fprintf(u, "hello, %s\n", "gopher") // Fprintf 只要求参数实现 io.Writer
+	fmt.Println("写出字节数:", u.n)
+}
+```
+
+```
+HELLO, GOPHER
+写出字节数: 14
+```
+
+其好处是可以在事后为他人定义的类型设计接口，`io.Reader`、`io.Writer` 这类只有一个方法的小接口因而得到广泛
+使用 [[Go Authors, 2026b](#ref-go-authors-2026b)]。其代价是经由接口的调用需要先查表才能找到实际的方法，
+编译器通常无法将其内联（[4.2](../../part2lang/ch04type/interface.md)）。
+
+**错误是普通的值。** 函数把错误作为一个返回值交给调用方，由调用方就地检查，不存在 `try`/`catch` 式的
+控制转移：
 
 ```go
 f, err := os.Open(name)
 if err != nil {
-    return fmt.Errorf("open %s: %w", name, err) // 包装上下文，显式上抛
+	return fmt.Errorf("open %s: %w", name, err) // 附加上下文信息，返回给上一层
 }
-defer f.Close() // defer 把清理写在获取旁边
+defer f.Close() // 清理代码紧邻打开操作，在函数返回时执行
 ```
 
-`error`、`%w` 包装、`defer` 分别见 [7](../../part2lang/ch07errors) 与
-[6.2](../../part2lang/ch06func/defer.md)。取舍是：换来错误路径处处可见、无处可藏，代价是满屏的
-`if err != nil`。
+其好处是出错路径清晰可见，代价是代码中大量重复的 `if err != nil`
+（[第 7 章](../../part2lang/ch07errors/readme.md)；`defer` 见 [6.2](../../part2lang/ch06func/defer.md)）。
 
-**值语义与少数核心容器。** Go 没有庞大的容器库，几乎一切都建立在三样东西上：数组/切片、map、
-channel。切片是「指向底层数组一段的视图」，赋值传的是这个轻量视图而非整份拷贝。
+**切片是底层数组的视图。** Go 内建了三种容器：切片、map 与 channel，其中最常用的是切片。切片记录了一个
+底层数组、起始位置、可访问的元素个数（长度）以及最多可扩展到的元素个数（容量）。赋值与传参复制的只是
+切片本身，而不是底层数组：
+
+```go {run=true}
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 3, 4) // 长度 3，底层数组容量 4
+	t := append(s, 4)      // 容量足够：t 与 s 共享同一个底层数组
+	t[0] = 99
+	fmt.Println(s, t) // s 同样观察到 99
+
+	u := append(t, 5) // 容量不足：分配新数组，u 与 t 从此互不影响
+	u[1] = 77
+	fmt.Println(t, u)
+}
+```
+
+```
+[99 0 0] [99 0 0 4]
+[99 0 0 4] [99 77 0 4 5]
+```
+
+传递切片的开销很小，代价是两个切片可能在不知不觉中共用同一个数组；`append` 之后二者是否仍然共用，取决于
+容量是否足够（[5.1](../../part2lang/ch05data/slice.md)）。
+
+**不做隐式的处理。** Go 没有运算符重载，数值类型之间不会自动转换，导入而未使用的包、声明而未使用的
+变量都会导致编译错误 [[Pike, 2012](#ref-pike-2012)]：
 
 ```go
-s := []int{1, 2, 3}
-t := append(s, 4) // 可能与 s 共享底层数组，也可能另分配，取决于 cap
+package main
+
+import "os"
+
+func main() {
+	var a int32 = 1
+	var b int64 = a
+	_ = b
+}
 ```
 
-这套「值语义为主、少数内建容器」的设计（[5 数据结构](../../part2lang/ch05data)）让数据流清楚，
-代价是切片别名等少数陷阱需要理解。
+```
+./main.go:3:8: "os" imported and not used
+./main.go:7:16: cannot use a (variable of type int32) as int64 value in variable declaration
+```
 
-**显式优于隐式。** 没有运算符重载、没有隐式数值转换、未使用的导入与变量直接编译报错。看一行
-Go 代码，几乎总能猜出它在做什么，这份「无魔法」是刻意的设计纪律（[1.1](./history.md)）。
+书写时多付出几个字符，换来的是仅凭一行代码就能判断它做了什么。
 
-## 1.2.3 本书地图
+## 1.2.3 本书结构
 
-把这些线索铺开，全书的结构就清楚了，每一章背后都站着一处具体的取舍：
+- **第一部分 全景与历史**：Go 的设计缘由（第 1 章），Go 的汇编语言与调用约定
+  （[第 2 章](../ch02asm/readme.md)），一个程序从构建到退出的全过程（[第 3 章](../ch03life/readme.md)）。
+- **第二部分 语言特性的实现**：类型与接口（[第 4 章](../../part2lang/ch04type/readme.md)）、切片、
+  字符串与 map（[第 5 章](../../part2lang/ch05data/readme.md)）、函数、defer 与 panic
+  （[第 6 章](../../part2lang/ch06func/readme.md)）、错误处理
+  （[第 7 章](../../part2lang/ch07errors/readme.md)）、泛型
+  （[第 8 章](../../part2lang/ch08generics/readme.md)）。
+- **第三部分 并发**：goroutine 调度器（[第 9 章](../../part3concurrency/ch09sched/readme.md)）、channel
+  与 select（[第 10 章](../../part3concurrency/ch10chan/readme.md)）、锁、原子操作与内存模型
+  （[第 11 章](../../part3concurrency/ch11sync/readme.md)）。
+- **第四部分 内存**：内存分配器（[第 12 章](../../part4memory/ch12alloc/readme.md)）、垃圾回收器
+  （[第 13 章](../../part4memory/ch13gc/readme.md)）、goroutine 的栈
+  （[第 14 章](../../part4memory/ch14stack/readme.md)）。
+- **第五部分 编译器与工具链**：编译器（[第 15 章](../../part5toolchain/ch15compile/readme.md)）、
+  调试与性能分析工具（[第 16 章](../../part5toolchain/ch16tools/readme.md)）、模块与依赖
+  （[第 17 章](../../part5toolchain/ch17modules/readme.md)）。
+- **第六部分 异构计算与 AI 时代的 Go**：GPU、图形、AI 推理与 Agent 运行时
+  （[第 18 章](../../part6hetero/ch18gpu/readme.md) 至
+  [第 21 章](../../part6hetero/ch21agent/readme.md)）。
 
-- **第一部分 全景与历史**（本部分）：设计哲学与历史（[1](.)）、汇编与调用约定
-  （[2](../ch02asm)，为掌控而自造工具链）、程序的生命周期（[3](../ch03life)，从 `go` 命令到
-  `main` 的生与死）。
-- **第二部分 语言特性**：类型系统与接口（[4](../../part2lang/ch04type)，结构化对名义）、数据结构
-  （[5](../../part2lang/ch05data)，切片与 map 的内存布局）、函数/延迟/恐慌
-  （[6](../../part2lang/ch06func)）、错误处理（[7](../../part2lang/ch07errors)，值对异常）、泛型
-  （[8](../../part2lang/ch08generics)，十三年的克制）。
-- **第三部分 并发**：调度器（[9](../../part3concurrency/ch09sched)，协作加信号抢占）、通道与
-  select（[10](../../part3concurrency/ch10chan)）、同步原语与内存模型
-  （[11](../../part3concurrency/ch11sync)，只给顺序一致原子）。
-- **第四部分 内存**：内存分配器（[12](../../part4memory/ch12alloc)，tcmalloc 加 GC 元数据）、
-  垃圾回收（[13](../../part4memory/ch13gc)，死磕低延迟）、执行栈管理
-  （[14](../../part4memory/ch14stack)，可增长的连续栈）。
-- **第五部分 编译器与工具链**：编译器流水线（[15](../../part5toolchain/ch15compile)，编译速度这条
-  红线）、工具与可观测性（[16](../../part5toolchain/ch16tools)）、模块与依赖
-  （[17](../../part5toolchain/ch17modules)，最小版本选择对约束求解）。
+## 1.2.4 贯穿全书的线索
 
-## 1.2.4 一以贯之的取向
+2015 年，Rob Pike 把 Go 社区的若干共识归纳为 19 条「Go 格言」（Go
+Proverbs）[[Pike, 2015](#ref-pike-2015)]，其中几条恰好概括了上述设计决定：「清晰好过聪明」（Clear is
+better than clever），「少量复制好过少量依赖」（A little copying is better than a little dependency），
+以及「不要通过共享内存来通信，而应通过通信来共享内存」（Don't communicate by sharing memory, share memory
+by communicating）。
 
-把这些支柱放在一起看，会发现它们并非互不相干的特性堆砌，而服从同一组价值观，这组价值观在
-[1.1](./history.md) 已经点明：**简单优于复杂、显式优于隐式、组合优于继承、可读可维护优于聪明、
-编译速度与工程规模优于语言的极致表达力。** 正因如此，理解 Go 的任何一个局部，最好都回到这组
-取向去对照。为什么调度器是协作加信号抢占（[9.7](../../part3concurrency/ch09sched/preemption.md)）、
-为什么内存模型只暴露顺序一致原子（[11.9](../../part3concurrency/ch11sync/mem.md)）、为什么泛型
-等了十三年又做得如此克制（[8.1](../../part2lang/ch08generics/history.md)），答案最终都指回这里。
+后续各章讨论每一处实现时，都可以追问两个问题：这样做换来了什么，又付出了什么代价。答案往往可以追溯到
+[1.1](./history.md) 所讨论的那些问题。
 
-本书的剖析，既是在讲「Go 是怎么实现的」，更是在反复印证「Go 为何如此选择」。带着这张地图与
-这组取向往下读，每一处实现细节，都会从孤立的知识点，变成同一种设计哲学的又一次具体展开。
+## 延伸阅读
 
-## 延伸阅读的文献
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *The Go Programming Language
+  Specification*. https://go.dev/ref/spec
+  语言规范，全书讨论语言规则时的依据。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *Effective Go*.
+  https://go.dev/doc/effective_go
+  官方的编程风格指南，解释了许多惯用法背后的考虑。
+- <a id="ref-pike-2012"></a>[Pike, 2012] Rob Pike. "Go at Google: Language Design in the Service of
+  Software Engineering." 2012. https://go.dev/talks/2012/splash.article
+  本节所述各项设计决定的动机。
+- <a id="ref-cox-et-al-2022"></a>[Cox et al., 2022] Russ Cox, Robert Griesemer, Rob Pike, Ian Lance
+  Taylor, Ken Thompson. "The Go Programming Language and Environment." *Communications of the ACM*, 65(5):
+  70–78, 2022. https://doi.org/10.1145/3488716
+  设计者的回顾：语言只是 Go 取得成功的一小部分原因，库、工具、惯例与软件工程方法同样重要。
+- <a id="ref-donovan-kernighan-2015"></a>[Donovan and Kernighan, 2015] Alan A. A. Donovan, Brian W.
+  Kernighan. *The Go Programming Language*. Addison-Wesley, 2015. 系统介绍 Go 语言的教材。
+- <a id="ref-pike-2015"></a>[Pike, 2015] Rob Pike. "Go Proverbs." Gopherfest, 2015.
+  https://go-proverbs.github.io/
+  Go 格言的全文。
 
-1. The Go Authors. *The Go Programming Language Specification.* https://go.dev/ref/spec
-2. Rob Pike. *Go at Google: Language Design in the Service of Software Engineering.* 2012.
-   https://go.dev/talks/2012/splash.article
-3. The Go Authors. *Effective Go.* https://go.dev/doc/effective_go
-4. Alan A. A. Donovan, Brian W. Kernighan. *The Go Programming Language.* 2015.
-5. Rob Pike. *Go Proverbs.* https://go-proverbs.github.io/

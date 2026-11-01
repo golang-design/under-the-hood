@@ -1,260 +1,419 @@
 ---
 weight: 1103
-title: "1.3 顺序进程通讯"
+title: "1.3 通信顺序进程"
 ---
 
-# 1.3 顺序进程通讯
+# 1.3 通信顺序进程
 
 > 本节内容提供一个线上演讲：[YouTube 在线](https://www.youtube.com/watch?v=Z8ZpWVuEx8c)，[Google Slides 讲稿](https://changkun.de/s/csp/)。
 
-Go 并发模型的思想源头，是 Hoare 于 1978 年在 CACM 上提出的**顺序进程通讯**（Communicating
-Sequential Processes, CSP）。这一节从思想史的角度交代这份血脉，它解释了 goroutine 与
-channel 为何是今天这个样子。channel 与 select 的实现细节（hchan 的环形缓冲、`gopark` 与
-`goready` 的配对、`selectgo` 的两轮加锁），留待 [第 10 章](../../part3concurrency/ch10chan/readme.md)
-展开；这里关心的是「为什么是 CSP」，以及这份选择如何塑造了 Go 程序的样貌。
+五位哲学家围坐在一张圆桌旁用餐，每两人之间放一把叉子，共五把，每人进餐时须同时使用左右两把叉子。在下面
+的程序中，每位哲学家是一个 goroutine，每把叉子是一个容量为 1 的 channel：从 channel 中取出值表示拿起
+叉子，把值放回表示放下叉子。每位哲学家先拿起左手的叉子，思考片刻，再拿起右手的叉子。
 
-## 1.3.1 CSP 的核心主张
+```go {run=true}
+package main
 
-上个世纪七十年代，多核处理器还是科研主题，尚未进入普通程序员的视野。彼时协调并发实体的手段
-已经不少：信号量（Dijkstra, 1965）、监控（Hoare, 1974）、锁与互斥、消息传递。Lauer 与
-Needham 1979 年还证明了「消息传递」与「共享内存加锁」在表达力上彼此等价，二者只是同一件事的
-两副面孔。Hoare 在这片图景里做出的选择，是把通信（即输入输出）当作编程语言的基本要素，并以
-此为唯一的协调手段。
+import (
+	"fmt"
+	"sync"
+	"time"
+)
 
-CSP 的核心是一句反直觉的主张：**进程之间不共享状态，只通过传递消息来协调。** 在共享内存的
-世界里，多个线程读写同一块内存，靠锁来防止彼此踩踏，这既危险（数据竞争、死锁），又难以推理。
-CSP 反其道而行：每个顺序进程守着自己的状态，要协作就**发消息**，通过一次同步的通信动作来交接
-数据与控制权。Go 把这条主张凝成那句广为人知的格言：「**不要以共享内存的方式通信，而要以通信的
-方式共享内存。**」
+const footman = false // 改为 true：桌旁只留四把椅子
 
-这里有一处需要澄清的史实，它常被一笔带过，却恰恰是理解 Go 与 CSP 关系的关键。
+func main() {
+	const n = 5
+	forks := make([]chan struct{}, n) // 叉子：channel 中有一个值，表示叉子在桌上
+	for i := range forks {
+		forks[i] = make(chan struct{}, 1)
+		forks[i] <- struct{}{}
+	}
+	seats := make(chan struct{}, n-1) // 椅子：最多 n-1 人同时入座
 
-## 1.3.2 1978 年的 CSP：按进程名通信，没有 channel
-
-读者若翻开 Hoare 1978 年的原始论文，会发现一件出乎意料的事：那门语言里**没有第一类的
-channel**。通信不是把数据投进某条匿名管道，而是**直接指名某个进程**。两个基本算符是：
-
-- `p!value`：向名为 `p` 的进程**发送**一个值；
-- `q?var`：从名为 `q` 的进程**接收**一个值，存入 `var`。
-
-发送方写下接收方的名字，接收方也写下发送方的名字，只有当双方在对应的语句上**会合**
-（rendezvous）时，这次通信才发生，值被复制过去，两边各自继续。整门语言由几个算符撑起：顺序
-`;`、并行 `||`、赋值 `:=`、输入 `?`、输出 `!`、守卫 `→`、选择 `□`、重复 `*`。比如
-
-```
-[west::DISASSEMBLE || X::COPY || east::ASSEMBLE]
-```
-
-就启动了三个并行进程，进程间用名字互相寻址。这种「按进程名通信」的设计有一个朴素的优点：
-语言里不必引入 channel 这种额外概念。但它的代价也很直接，子过程必须知道使用它的过程的名字，
-难以封装成可复用的库；而并行组合 `[a::P || b::Q]` 是一个参数个数可变的运算，无法进一步代数化
-约简。Hoare 本人在 1985 年的专著里就修正了这两处。
-
-把通信实体**抽象成一条可独立命名、可作为值传递的 channel**，是后来才发生的事：它在 1980 年代
-初的 **occam** 语言（运行于 transputer 处理器）中确立，并由 **1985 年的 CSP 专著**配上一套
-修订后的进程代数。Go 继承的，正是这条后期的、以 channel 为中心的脉络，而非 1978 年的进程名
-寻址。所以当我们在 Go 里写下 `make(chan int)`，把它存进变量、塞进结构体、甚至从一个 channel
-里收到另一个 channel 时，依据的是 occam 与 1985 年专著的传统，不是那篇萌芽论文。
-
-## 1.3.3 进程代数的谱系：从 CCS 到 π-演算
-
-CSP 不是孤峰。在它周围，Robin Milner 几乎同时发展出另一支**进程代数**，**CCS**（Calculus of
-Communicating Systems, Milner 1980）。CCS 与 CSP 关心同一个问题（如何形式化地描述并刻画并发
-进程的行为与等价），手法各有侧重，CCS 把「双方在一个动作上同步」作为代数的原子，并发展出
-**互模拟**（bisimulation）这一刻画进程等价的工具。
-
-CCS 真正与 Go 血脉相关的一步，是它的后继 **π-演算**（Milner, Parrow, Walker 1992）。π-演算
-给进程代数加进了**移动性**（mobility）：通道的名字本身可以作为消息在通道上传递。一个进程把某条
-通道的名字发给另一个进程，后者于是获得了在那条通道上通信的能力，通信的**拓扑结构因此能在
-运行时改变**。这正是 Go 里 `chan chan T`（通道的通道）所表达的东西，也是「channel 是第一类值」
-这一设计在理论上的对应物。下面这段把一个「回信通道」随请求一起发出去，就是 π-演算式移动性最
-常见的 Go 形态：
-
-```go
-type request struct {
-    arg   int
-    reply chan int // 把回信的通道一并发过去
-}
-
-func server(reqs <-chan request) {
-    for r := range reqs {
-        r.reply <- r.arg * r.arg // 沿对方给的通道回送结果
-    }
+	var wg sync.WaitGroup
+	for i := range n {
+		left, right := forks[i], forks[(i+1)%n]
+		wg.Go(func() {
+			if footman {
+				seats <- struct{}{} // 入座（没有空椅子时等待）
+			}
+			<-left                            // 拿起左手的叉子
+			time.Sleep(10 * time.Millisecond) // 思考片刻
+			<-right                           // 拿起右手的叉子
+			fmt.Println("哲学家", i, "开始用餐")
+			left <- struct{}{} // 放回两把叉子
+			right <- struct{}{}
+			if footman {
+				<-seats // 离座
+			}
+		})
+	}
+	wg.Wait()
+	fmt.Println("五位哲学家均已用餐")
 }
 ```
 
-把整条谱系画在一起，Go 的位置便清楚了：
+输出如下（省略了大部分调用栈；goroutine 编号与文件路径因机器而异）：
+
+```
+fatal error: all goroutines are asleep - deadlock!
+
+goroutine 1 [sync.WaitGroup.Wait]:
+...
+goroutine 19 [chan receive]:
+main.main.func1()
+	.../main.go:29 +0x4c
+...
+```
+
+其后共列出五个处于 `chan receive` 状态的 goroutine，第 29 行正是 `<-right`。五位哲学家都已拿起左手的
+叉子，等待右手的那一把，而那一把握在邻座手中；没有人能等到，也没有人会先放下。一组参与者相互等待、
+全都无法继续执行，这种状态称为**死锁**（deadlock）。Go 运行时发现所有 goroutine 都在等待、不再有任何
+goroutine 能够改变这一局面，便报错退出。
+
+把第一行改为 `const footman = true` 后再运行，程序正常结束（进餐的先后次序每次运行都可能不同）：
+
+```
+哲学家 2 开始用餐
+哲学家 1 开始用餐
+哲学家 0 开始用餐
+哲学家 4 开始用餐
+哲学家 3 开始用餐
+五位哲学家均已用餐
+```
+
+改动只有一处：桌旁只留四把椅子，以容量为 4 的 channel `seats` 表示，第五位哲学家须等有人用餐完毕离座后
+才能入座。四人分用五把叉子，至少有一人能拿到两把；他用餐完毕放下叉子之后，其他人便能继续。
+
+这一问题最早由 Dijkstra 提出。1978 年，Tony Hoare 在提出 CSP 的论文中以它为例，并指出这样的写法可能使五位
+哲学家同时饿死；论文给出的提示正是不允许五人同时入座（Hoare 注明这一解法出自
+Dijkstra）[[Hoare, 1978](#ref-hoare-1978)]。这篇论文的主张是：并发程序由一组各自顺序执行的进程组成，
+进程之间不共享变量，只通过收发消息相互协作。goroutine 与 channel 都源于此。本节讨论这一思路如何逐步演变为
+Go 的设计，以及 Go 采纳了其中哪些部分、舍弃了哪些部分。
+
+## 1.3.1 两种协作方式
+
+若干同时运行的线程要合作完成一项任务，就必须约定执行的先后次序与数据的交接方式。20 世纪 60、70 年代，
+这类方法主要有两类。
+
+一类是共享内存加锁：各线程读写同一块数据，用锁保证同一时刻只有一个线程在修改。Dijkstra 于 1965 年提出的
+**信号量**（semaphore）是最早的这类工具。1973 至 1974 年，Per Brinch Hansen 与 Hoare
+又提出了**管程**（monitor）[[Hoare, 1974](#ref-hoare-1974)]：把共享数据与操作它的过程封装在一起，
+保证同一时刻只有一个线程在其中执行。Go 中一个 `sync.Mutex` 连同它所保护的若干字段，
+就相当于一个手工构造的管程。
+
+另一类是消息传递：每个线程只管理自己的数据，需要其他线程的数据时，就请对方发送过来。
+
+这两类方法并无强弱之分。1979 年，Hugh Lauer 与 Roger Needham 比较了分别按这两种方式设计的操作系统，
+论证二者可以相互转换：一种设计中的每一个成分，在另一种设计中都有对应物，转换后系统的行为相同，
+性能也可以相同 [[Lauer and Needham, 1979](#ref-lauer-needham-1979)]。因此，选择哪一种方式，
+取决于哪一种写法更清晰、底层机器更适合哪一种，而不在于哪一种的表达能力更强。
+
+Hoare 选择了消息传递，而且只采用消息传递。Go 同时提供这两种方式，但更提倡消息传递。这一取向被概括为
+一句广为流传的格言：「不要通过共享内存来通信，而应通过通信来共享内存」（Do not communicate by sharing
+memory; instead, share memory by communicating）[[Gerrand, 2010](#ref-gerrand-2010)]。
+
+## 1.3.2 1978 年的 CSP：按名称指定通信对象
+
+Hoare 1978 年的论文题为《Communicating Sequential Processes》，简称 **CSP**，中文通常译作
+**通信顺序进程**。「顺序进程」指每个进程内部按语句的次序依次执行；「通信」指进程之间只通过收发消息协作。
+
+论文中的进程直接以名称指定通信的对象。`lineprinter!lineimage` 把 `lineimage` 发送给名为 `lineprinter`
+的进程，`cardreader?cardimage` 从名为 `cardreader` 的进程接收一个值，存入 `cardimage`。收发双方都须等待
+对方：先到达的一方暂停，直到双方都执行到相应的语句，值才从一方复制到另一方，随后双方各自继续执行。这种
+双方同时到场才完成交接的通信称为**会合**（rendezvous）。Go 中无缓冲的 channel 正是以这种方式工作的。
+
+以名称指定对方带来一个直接的问题：每个进程都必须知道自己与谁通信。若要编写一个通用的缓冲进程，就必须在
+代码中写明从哪个进程接收、向哪个进程发送，换一个使用场合就要修改代码。
+
+论文还从 Dijkstra 1975 年提出的**守卫命令**（guarded command）[[Dijkstra, 1975](#ref-dijkstra-1975)]中借
+用了「选择」：一条选择命令由若干分支组成，每个分支前有一个条件，称为守卫，执行时从守卫成立的分支中选择一
+个。Hoare 允许守卫是一次接收，含义是「若从 A 收到值则执行此分支，若从 B 收到值则执行彼分支」，
+哪一方的消息先到达就执行哪一个分支。这就是 Go 中 `select` 的前身。多个分支同时满足时选择哪一个，
+论文明确不作规定：Hoare 认为高效的实现应优先选择等待最久的输出，但由于进程的相对执行速度没有定义，
+语言本身无法规定这一点 [[Hoare, 1978](#ref-hoare-1978)]。程序因此不能依赖任何一种选择方式。
+
+## 1.3.3 1985 年的专著：channel 与死锁
+
+1985 年，Hoare 出版了同名专著 [[Hoare, 1985](#ref-hoare-1985)]，做出了两处改动。
+
+第一处是通信的对象。进程不再以名称指定对方，而是在具名的 **channel** 上收发：`c!v` 向 channel `c` 发送
+`v`，`c?x` 从 `c` 接收。进程只需知道 channel，无须知道另一端是谁，上述问题由此消除。INMOS 公司于
+1983 年为其 transputer 处理器设计的 occam 语言也采用了这种方式 [[INMOS, 1984](#ref-inmos-1984)]。
+
+不过，这里的 channel 还不是 Go 中那种可以传递的值。CSP 的 channel 只是写在程序中的名称；occam 的 channel
+可以作为参数传给过程，但不能赋给变量，不能经由另一个 channel 发送，也不能在运行时创建。哪些进程相互连接，
+在编写程序时就已确定。
+
+第二处改动更为重要：专著为「进程的行为」给出了精确的数学定义。其思路是只考察从外部能够观察到的内容，即
+进程可能依次完成哪些通信，以及在某一步之后它可能拒绝哪些通信。举例而言，一台售货机在投币后由顾客选择茶
+或咖啡；另一台在投币后由机器自行决定这一次只提供茶或只提供咖啡。若只记录「可能售出过什么」，两台机器无法
+区分；但一位只要咖啡的顾客遇到第二台机器，就可能陷入僵局。二者的区别在于「可能拒绝什么」。按照这一定义，
+死锁就是进程在某一步之后拒绝一切通信，此后再不会发生任何事件。
+
+Go 程序中也存在这两种机器。`select` 同时等待多个 channel，哪一个先就绪就执行哪一个，对应第一台机器。一个
+goroutine 先认定「只从 `a` 接收」，再在 `<-a` 处等待，对应第二台机器。哲学家们的死锁正是这样产生的：每个
+人都事先认定了右手的那把叉子。
+
+定义精确之后，便可以交由计算机检查。20 世纪 90 年代，Bill Roscoe 等人在牛津开发了 FDR 工具
+[[Roscoe, 1997](#ref-roscoe-1997)]，它遍历以 CSP 描述的系统模型的所有可能执行次序，回答「是否会死锁」
+「是否符合规约」等问题。最著名的一个案例是：1995 年，Gavin Lowe 借助 FDR，在 1978 年发表、
+十余年来被认为正确的 Needham–Schroeder 公钥认证协议中找到了漏洞 [[Lowe, 1996](#ref-lowe-1996)]。
+
+Go 没有走这条路。Go 程序在运行时创建 channel、改变连接关系，事先遍历所有执行次序并不现实。运行时只能发现
+最极端的一种情况：所有 goroutine 都在等待，正如上面的哲学家（判定方法见
+[16.1](../../part5toolchain/ch16tools/deadlock.md)）。若只有一部分 goroutine 相互阻塞、其余 goroutine
+照常运行，程序不会报错，被阻塞的 goroutine 及其占用的内存将一直保留。Go 1.26 为此提供了一项实验性功能：
+构建时设置 `GOEXPERIMENT=goroutineleakprofile`，垃圾回收器便会找出那些阻塞在 channel 或锁上、而这些
+channel 或锁已无法被任何可运行的 goroutine 访问的 goroutine，并通过 `runtime/pprof` 中名为
+`goroutineleak` 的剖析数据报告出来 [[Go Authors, 2026c](#ref-go-authors-2026c)]。
+
+## 1.3.4 Newsqueak：channel 成为值
+
+使 channel 成为可以自由传递的值，是在 Rob Pike 设计的几门语言中完成的。
+
+1985 年，Luca Cardelli 与 Pike 在贝尔实验室设计了 Squeak
+[[Cardelli and Pike, 1985](#ref-cardelli-pike-1985)]，用于编写图形界面：鼠标、键盘、屏幕各由一个进程负责，
+进程之间以 channel 相连。不过在 Squeak 中，有哪些进程、哪些 channel，在编译时就已确定。
+
+20 世纪 80 年代末，Pike 设计了 Newsqueak [[Pike, 1990](#ref-pike-1990)]。在 Newsqueak 中，channel
+是普通的值：可以在运行时创建、存入变量、传给函数，也可以经由另一个 channel 发送；进程也可以在运行时随时启
+动。程序的连接结构从此可以在运行过程中动态生成和改变。1990 年，Doug McIlroy 用 Newsqueak
+实现了幂级数的计算 [[McIlroy, 1990](#ref-mcilroy-1990)]，级数的每一种运算都由一串相互连接的进程完成。
+
+此后，这一做法进入了 Plan 9 上的 Alef（Phil Winterbottom 设
+计）[[Winterbottom, n.d.](#ref-winterbottom-nd)]与 Inferno 上的 Limbo
+[[Dorward et al., 1997](#ref-dorward-et-al-1997)]，从界面编程扩展到系统编程，最终进入 Go
+[[Cox, n.d.](#ref-cox-nd)]。Go 的 FAQ 在介绍 Go 的渊源时，关于并发一项写的正是「受 Hoare 的 CSP
+启发的语言，如 Newsqueak 与 Limbo」[[Go Authors, 2026a](#ref-go-authors-2026a)]。
+
+在理论方面也有同样的推进。Robin Milner 于 1980 年提出的 CCS 与 CSP 同属进程代数，
+通信的端口在进程定义中写定，不能作为消息传递 [[Milner, 1980](#ref-milner-1980)]。Milner 与 Joachim
+Parrow、David Walker 于 1992 年发表的 π-演算允许把 channel 的名称本身作为消息发送，
+从而能够描述连接结构在运行中改变的系统 [[Milner et al., 1992](#ref-milner-et-al-1992)]，在理论上对应于
+Newsqueak 中「channel 是值」的做法。
 
 ```mermaid
-flowchart LR
-    GC["Dijkstra 守卫指令<br/>(1975)"] --> CSP78["CSP 1978<br/>按进程名通信"]
-    CSP78 --> CCS["CCS<br/>Milner 1980"]
-    CSP78 --> OCCAM["occam + transputer<br/>ALT 守卫选择"]
-    CSP78 --> CSP85["CSP 专著 1985<br/>channel 成为第一类"]
-    CCS --> PI["π-演算<br/>Milner-Parrow-Walker 1992<br/>通道名可传递"]
-    OCCAM --> NSQ["Newsqueak / Alef / Limbo<br/>channel 第一类化"]
-    CSP85 --> NSQ
-    PI --> GO["Go<br/>goroutine + channel + select"]
-    NSQ --> GO
+flowchart TD
+    GC["Dijkstra 守卫命令<br/>1975"] --> CSP78["Hoare CSP 论文 1978<br/>按进程名会合"]
+    CSP78 --> CSP85["Hoare CSP 专著 1985<br/>有名字的 channel<br/>死锁的定义"]
+    CSP78 --> OCCAM["occam 1983<br/>channel 在编译时固定"]
+    CSP78 --> SQ["Squeak 1985<br/>用进程写图形界面"]
+    SQ --> NSQ["Newsqueak 1980 年代末<br/>channel 成为值"]
+    NSQ --> AL["Alef（Plan 9）<br/>Limbo（Inferno）"]
+    AL --> GO["Go 2009<br/>goroutine、channel、select"]
 ```
 
-中间这条 Newsqueak / Alef / Limbo，是 Rob Pike 等人在贝尔实验室二十年间一脉相承的实验语言，
-它们把 occam 的 channel 与守卫选择逐步「第一类化」，Go 的 `<-` 通信算符、`select` 语句都从
-这里继承而来（[1.1](./history.md)）。Go 因此不是凭空套用一篇论文，而是站在这条工程谱系的末端。
+## 1.3.5 Go 的做法
 
-## 1.3.4 occam 的 ALT 与 Go 的 select
+### 会合与缓冲
 
-CSP 还有一件遗产值得单独点出：**守卫选择**。它源自 Dijkstra 的守卫指令，到 occam 里成了
-`ALT`，在 Go 里就是 `select`。它要解决的问题是：一个进程同时面对多路通信，哪一路先就绪就先
-处理哪一路，而不必预先规定顺序。在 1978 年的 CSP 里，它写作
+`make(chan int)` 创建的是无缓冲 channel，发送须等待接收方取走，即会合。`make(chan int, 4)` 创建的
+channel 带有一个可容纳 4 个值的缓冲区：缓冲区未满时发送立即返回，已满时才等待；接收则在缓冲区为空时
+等待。Hoare 1978 年的 CSP 只有会合，需要缓冲时，便在双方之间插入一个专门存放数据的进程。
 
-```
-*[X?V() → val := val+1 □ val > 0; Y?P() → val := val-1]
-```
+下图模拟一对 goroutine：发送方生产一个值需要 1 拍，接收方处理一个值需要 3 拍，共传递 4 个值。可以单步
+回放，也可以调整容量与场景。
 
-`□` 分隔几个守卫分支，每个分支以一次输入为守卫；若多个守卫同时就绪，则**随机**择一执行。这个
-「随机」不是偷懒，而是为了提供**公平性**，避免某一路通信被长期饿死。Go 的 `select` 原封不动地
-继承了这条语义：多个 case 同时就绪时，运行时伪随机地选一个（[第 10 章](../../part3concurrency/ch10chan/readme.md)）。
+<div class="viz" data-viz="csp-rendezvous"></div>
 
-## 1.3.5 Go 的并发模型：用代码说话
+容量为 0 时，发送方每发送一个值都须等待接收方处理完上一个值，前 10 拍中有 6 拍处于等待状态。容量改为 2
+后，发送方无须任何等待，第 4 拍即发送完毕。但在两种情况下，接收方都在第 13 拍才处理完毕。缓冲区减少了
+较快一方的等待，却不会使较慢的一方变快。若把场景改为「发送慢、接收快」，缓冲区始终为空，容量大小便
+无关紧要。
 
-谱系讲清了，落到 Go 本身，模型只有两件东西：**goroutine**（顺序进程）与 **channel**（通信）。
-一个 `go` 关键字起一个 goroutine，一个 `<-` 完成一次通信。
+### channel 是值：素数筛
 
-最基本的形态是一次发送与一次接收：
+下面是 Go 的一个经典示例，Hoare 1978 年的论文中已有它的 CSP 版本。它用一串 goroutine 求素数：
 
-```go
-ch := make(chan int)
-go func() { ch <- 42 }() // 一个 goroutine 发送
-v := <-ch                // 另一个 goroutine 接收，得到 42
-```
+```go {run=true}
+package main
 
-channel 是否带缓冲，决定了这次通信是**同步会合**还是**异步投递**，这正对应 CSP 1978 的两种
-形态。无缓冲 channel 是纯粹的 rendezvous，发送方会一直阻塞，直到某个接收方就位，两者在通信点
-上严格会合；带缓冲 channel 则允许发送方在缓冲未满时先走一步，把一次同步松弛成一个有界队列
-（1978 年的 CSP 并未把带缓冲通信作为原语，Hoare 是用一个无缓冲进程**模拟**出缓冲来的，
-「以有界队列松弛同步」这一**概念**，正是带缓冲 channel 的思想先声）：
+import "fmt"
 
-```go
-unbuffered := make(chan int)    // 容量 0：发送阻塞到接收就位（会合）
-buffered := make(chan int, 4)   // 容量 4：未满即可发送，无需等待接收
-```
+// generate 依次向 out 发送 2, 3, 4, …。
+func generate(out chan<- int) {
+	for i := 2; ; i++ {
+		out <- i
+	}
+}
 
-`select` 让一个 goroutine 在多路通信间择一而动，并可借 `default` 做非阻塞尝试、借 `time.After`
-做超时：
+// filter 从 in 读取数值，只把不能被 p 整除的数转发给 out。
+func filter(in <-chan int, out chan<- int, p int) {
+	for {
+		if n := <-in; n%p != 0 {
+			out <- n
+		}
+	}
+}
 
-```go
-select {
-case v := <-in:
-    handle(v)
-case out <- result:
-    // 成功发出
-case <-time.After(time.Second):
-    // 超时退出，避免永久阻塞
+func main() {
+	ch := make(chan int)
+	go generate(ch)
+	for range 10 {
+		p := <-ch // 通过现有全部过滤器的第一个数必为素数
+		fmt.Print(p, " ")
+		next := make(chan int)
+		go filter(ch, next, p) // 在流水线末端接入一个新的过滤器
+		ch = next
+	}
+	fmt.Println()
 }
 ```
 
-有了这三样，CSP 的经典模式就是顺理成章的写法。Hoare 1978 年论文里那个 DISASSEMBLE →
-COPY → ASSEMBLE 的例子（从 80 列卡片读入、逐字符流转、再排成 125 列打印），本质上是一条
-**流水线**（pipeline）：每个进程顺序地做一件小事，用 channel 把上下游接起来，数据沿 channel
-流动。翻成 Go，它就是几个 goroutine 串成一串：
+```
+2 3 5 7 11 13 17 19 23 29
+```
 
-```go
-// COPY：把上游字符原样转给下游，读到尽头就关闭下游
-func copyStage(west <-chan rune, east chan<- rune) {
-    for c := range west {
-        east <- c
-    }
-    close(east) // 关闭即「我说完了」，下游的 range 随之结束
-}
+`generate` 依次向 channel 送入 2、3、4……。`main` 从流水线末端收到的数一定是素数：比它小的每个素数都对应
+一个过滤器，而它未被其中任何一个滤除。收到素数 `p` 后，`main` 新建一个 channel，启动 `filter` 把原来的
+末端连接到新 channel 上，再令 `ch` 指向新 channel。流水线的长度在编写程序时并不确定，而是在运行时逐节
+接上的。在 occam 中，这需要事先写定进程的数目；Hoare 论文中的版本使用的正是一个大小固定的进程数组。
 
-// 把三段接成流水线：上游关闭逐级传播，整条管线自然收束
-func reformat(cardfile <-chan []rune, lines chan<- string) {
-    west, east := make(chan rune), make(chan rune)
-    go disassemble(cardfile, west)
-    go copyStage(west, east)
-    assemble(east, lines) // 末段在当前 goroutine 同步执行
+<div class="viz" data-viz="csp-sieve"></div>
+
+图中送完 2 至 30 时共有 10 个过滤器，连同生成器与 `main` 共 12 个 goroutine、11 个 channel。
+每个素数都要依次经过所有比它小的素数所对应的过滤器，因此这个程序实际上是在逐一试除
+[[O'Neill, 2009](#ref-oneill-2009)]，求素数的效率并不高，其价值在于结构清晰。此外，`main` 打印完
+10 个素数便返回，生成器与过滤器仍阻塞在 channel 上，进程退出时它们随之消失（[3.6](../ch03life/main.md)）。
+
+### select：多个分支就绪时随机选择
+
+```go {run=true}
+package main
+
+import "fmt"
+
+func main() {
+	a := make(chan int, 1)
+	b := make(chan int, 1)
+	count := map[string]int{}
+	for range 10000 {
+		a <- 1 // 两个 channel 中各放入一个值，
+		b <- 2 // 下面两个 case 因此都能立即执行
+		select {
+		case <-a:
+			count["a"]++
+			<-b // 清空另一个 channel，准备下一轮
+		case <-b:
+			count["b"]++
+			<-a
+		}
+	}
+	fmt.Println("选中 a:", count["a"], " 选中 b:", count["b"])
 }
 ```
 
-这里有一个 Go 化的关键约定：用 `close` 表达「数据流结束」，下游的 `for range` 会在 channel
-关闭且取空后自然退出，关闭信号于是沿流水线逐级传播。同一手法的另一面，是用一个专门的
-**done channel** 来广播取消，一旦关闭，所有监听它的 goroutine 都会在 `<-done` 上立刻解除阻塞：
+两个计数之和为 10000，各自在 5000 上下浮动，每次运行的结果都不相同。某一次运行的结果如下：
 
-```go
-func worker(in <-chan int, done <-chan struct{}) {
-    for {
-        select {
-        case v := <-in:
-            process(v)
-        case <-done: // 上游一关闭 done，这里立即返回
-            return
-        }
-    }
-}
+```
+选中 a: 5094  选中 b: 4906
 ```
 
-这套「以 channel 流转数据、以 close 传播信号」的写法，是 Go 并发代码反复出现的骨架，也是
-`context` 包取消机制的底层形态。
+Go 语言规范规定，多个分支都能执行时，以均匀的伪随机方式选择其中一个
+[[Go Authors, 2026b](#ref-go-authors-2026b)]。运行时的做法是在每次执行 `select` 时随机打乱各分支的检查次序
+（`runtime/select.go`）。若总是选择书写次序中第一个可执行的分支，那么当排在前面的 channel 始终有数据时，
+后面的分支将永远得不到执行。随机打乱使每个就绪的分支获得相同的机会。实现细节见
+[10.5](../../part3concurrency/ch10chan/select.md)。
 
-## 1.3.6 CSP 与 Actor 模型
+## 1.3.6 与 Actor 模型的比较
 
-与 CSP 同代、却走向另一条路的，是 Hewitt 等人 1973 年提出的 **Actor 模型**，它在 Erlang
-（Armstrong 等，1980 年代）里得到了最完整的工程化。两者都主张「不共享状态、靠消息协作」，
-分野在于**消息寄给谁、何时送达、实体有没有身份**：
+常与 CSP 相提并论的，是 Carl Hewitt 等人于 1973 年提出的 **Actor 模型**
+[[Hewitt et al., 1973](#ref-hewitt-et-al-1973)]。它同样不共享状态、只传递消息。1986 年，Gul Agha
+将其整理为一个完整的计算模型 [[Agha, 1986](#ref-agha-1986)]。Actor 模型最常被引用的实例是 Erlang。
+二者的区别在于消息的去向：
 
-| 维度 | CSP / Go | Actor / Erlang |
+| | Go（CSP 一脉） | Actor（如 Erlang） |
 | --- | --- | --- |
-| 通信媒介 | 匿名的 channel，是「值」 | 有身份的 actor，靠地址（PID）寻址 |
-| 发送方指名什么 | 一条 channel | 一个接收者 |
-| 实体身份 | goroutine 无对外暴露的身份 | 每个 actor 有唯一地址，可被引用、监督 |
-| 默认时序 | 无缓冲即同步会合（rendezvous） | 异步投递，落入接收方的 mailbox |
-| 缓冲 | channel 容量显式有界 | mailbox 概念上无界 |
-| 多路选择 | `select` 在多个 channel 间择一 | 接收端按模式匹配从 mailbox 取信 |
-| 失败模型 | 无内建语义，靠惯例（panic/done） | 监督树、「let it crash」、链接与监控 |
+| 发送消息时指定 | 一个 channel | 一个接收者的地址 |
+| 是否具有名称 | goroutine 没有对外可见的名称或编号 | 每个 actor 都有地址，可被引用和监视 |
+| 发送是否等待 | 无缓冲时等待对方取走 | 不等待，消息放入对方的信箱 |
+| 出错之后 | 语言不作规定，依靠约定 | 进程之间可以建立关联，崩溃后由监督者重启 |
 
-一句话概括：CSP 让你**给通信的管道命名**，Actor 让你**给通信的对端命名**。Go 选了前者，于是
-goroutine 彼此不知道对方是谁，只共同持有一条 channel；channel 在谁手里，谁就能参与这场通信。
-Erlang 选了后者，于是每个进程有地址、有 mailbox，并在此之上长出了 CSP 没有对应物的**容错
-体系**：进程可以互相链接、监督，一个崩溃可以让监督者按策略重启它。两条路各有所长，Go 没有
-照搬任何一条到底。
+Go 为通信的管道命名：goroutine 彼此不知道对方是谁，持有 channel 的一方即可参与通信。Erlang
+为通信的对方命名，因此每个进程都有地址与信箱，并在此基础上建立了「崩溃后重启」的容错机制
+[[Armstrong, 2003](#ref-armstrong-2003)]。在 Go 中实现类似的功能，需要借助 `context`、`errgroup`
+等工具自行组合。
 
-## 1.3.7 Go 对 CSP 的取舍，与这份血脉为何重要
+## 1.3.7 Go 采纳与舍弃的部分
 
-Go 没有把 CSP 当教条，每一处改动都体现它的工程口味：
+- **顺序进程与会合。** goroutine 内部按顺序执行，无缓冲 channel 即是会合。Pike 把这种写法概括为「独立执行
+  的进程的组合」，并指出并发关乎程序的结构，并行关乎程序的执行，二者不是一回事
+  [[Pike, 2012](#ref-pike-2012)]。
+- **选择。** `select` 源自守卫命令，选择方式规定为均匀随机。
+- **Newsqueak 的 channel。** channel 是值，可以在运行时创建和传递。其代价是连接关系无法事先确定，不能像
+  FDR 那样在运行之前检查出死锁。
+- **不限于消息传递。** Go 保留了共享内存、`sync.Mutex` 与原子操作
+  （[第 11 章](../../part3concurrency/ch11sync/readme.md)）。按照 Lauer 与 Needham 的结论，两种方式的
+  表达能力相同，Go 让程序员选择写法更清晰的一种。保护一个计数器，一把锁远比一个 goroutine 加一个 channel
+  简单。
+- **开销很小的进程。** 一个新 goroutine 只占用约 2 KB 的栈（[1.2](./go.md) 中有测量），「为每一项并发任务
+  启动一个 goroutine」的写法因此切实可行。调度器如何把它们分配到线程上，见
+  [第 9 章](../../part3concurrency/ch09sched/readme.md)。
 
-- **不是纯 CSP。** Go **保留**了共享内存与锁（[11 同步](../../part3concurrency/ch11sync)）。
-  它把 CSP 作为**首选**而非**唯一**，该用 channel 表达流转时用 channel，该用一把锁护住一小块
-  状态时就用锁。这种不教条，正是 Go 的风格。
-- **channel 是第一类值。** 可传递、可存储、可经 channel 发送 channel，让通信拓扑能在运行时
-  变化（即 1.3.3 的 π-演算式移动性）。
-- **goroutine 极廉价。** CSP 的「进程」在 Go 里是 goroutine
-  （[9.3](../../part3concurrency/ch09sched/mpg.md)），起步仅 2KB 栈，可同时存在百万计，让
-  「为每件并发的事开一个进程」从理论上的优雅变成实践中的可行。
-- **`select` 即守卫选择。** occam 的 `ALT` 在 Go 里成了 `select`。
+## 延伸阅读
 
-选择 CSP 这条血脉，深刻塑造了 Go 程序的样貌。它鼓励我们把并发程序想象成「一组各自顺序执行、
-彼此用 channel 连接的小进程」：数据沿 channel 流动，所有权随之转移，于是「同一块数据同一时刻
-只被一个 goroutine 持有」成了自然结果，竞争与锁的心智负担因此大为减轻。这与 Go 整体「显式、
-简单」的哲学（[1.2](./go.md)）一脉相承，通信是显式的（你看得见每一条 channel），并发单元是
-廉价而独立的。理解了这份从 1978 年的进程名、经 occam 与 π-演算、到贝尔实验室实验语言的思想
-血脉，再去读 [9 调度器](../../part3concurrency/ch09sched/readme.md) 与
-[10 通道与 select](../../part3concurrency/ch10chan/readme.md)，就能既见树木（实现细节），
-又见森林（为何如此设计）。
-
-## 延伸阅读的文献
-
-1. C. A. R. Hoare. "Communicating Sequential Processes." *Communications of the ACM*,
-   21(8): 666-677, 1978. https://doi.org/10.1145/359576.359585 （CSP 萌芽论文，按进程名通信）；
-   专著：*Communicating Sequential Processes.* Prentice-Hall, 1985.（channel 第一类化、代数修订）
-2. Robin Milner. *A Calculus of Communicating Systems.* LNCS 92, Springer, 1980.（CCS）
-3. Robin Milner, Joachim Parrow, David Walker. "A Calculus of Mobile Processes, I & II."
-   *Information and Computation*, 100(1): 1-77, 1992.（π-演算，通道名可传递的移动性）
-4. Carl Hewitt, Peter Bishop, Richard Steiger. "A Universal Modular ACTOR Formalism for
-   Artificial Intelligence." *IJCAI*, 1973.（Actor 模型）
-5. Joe Armstrong. *Making Reliable Distributed Systems in the Presence of Software Errors.*
-   PhD thesis, KTH, 2003. https://erlang.org/download/armstrong_thesis_2003.pdf（Erlang 与监督树）
-6. INMOS Ltd. *occam Programming Manual.* Prentice-Hall, 1984.（occam 的 channel 与 ALT）
-7. Rob Pike. *Concurrency Is Not Parallelism.* 2012. https://go.dev/blog/waza-talk
-8. The Go Authors. *Share Memory By Communicating.* https://go.dev/blog/codelab-share ；
-   本书 [10 通道与 select](../../part3concurrency/ch10chan/readme.md)（hchan/select 的实现）。
+- <a id="ref-dijkstra-1975"></a>[Dijkstra, 1975] Edsger W. Dijkstra. "Guarded Commands, Nondeterminacy and
+  Formal Derivation of Programs." *Communications of the ACM*, 18(8): 453–457, 1975.
+  https://doi.org/10.1145/360933.360975
+  守卫命令的出处，`select` 的源头。
+- <a id="ref-hoare-1978"></a>[Hoare, 1978] C. A. R. Hoare. "Communicating Sequential Processes."
+  *Communications of the ACM*, 21(8): 666–677, 1978. https://doi.org/10.1145/359576.359585
+  CSP 的第一篇论文。进程按名称会合，尚无 channel；哲学家就餐与素数筛都是文中的例子。
+- <a id="ref-hoare-1985"></a>[Hoare, 1985] C. A. R. Hoare. *Communicating Sequential Processes*. Prentice
+  Hall International, 1985. CSP 的专著，改用具名的 channel 通信，并给出了死锁等概念的精确定义。
+- <a id="ref-lauer-needham-1979"></a>[Lauer and Needham, 1979] Hugh C. Lauer, Roger M. Needham. "On the
+  Duality of Operating System Structures." *ACM SIGOPS Operating Systems Review*, 13(2): 3–19, 1979.
+  论证消息传递与过程调用加锁两种系统设计可以相互转换。
+- <a id="ref-hoare-1974"></a>[Hoare, 1974] C. A. R. Hoare. "Monitors: An Operating System Structuring
+  Concept." *Communications of the ACM*, 17(10): 549–557, 1974. 管程的经典论文。
+- <a id="ref-roscoe-1997"></a>[Roscoe, 1997] A. W. Roscoe. *The Theory and Practice of Concurrency*.
+  Prentice Hall, 1997. CSP 理论的系统阐述，也介绍了 FDR 的用法。
+- <a id="ref-lowe-1996"></a>[Lowe, 1996] Gavin Lowe. "Breaking and Fixing the Needham-Schroeder
+  Public-Key Protocol Using FDR." *TACAS 1996*, LNCS 1055, Springer, 1996: 147–166. 借助 FDR
+  发现协议漏洞的论文。
+- <a id="ref-cardelli-pike-1985"></a>[Cardelli and Pike, 1985] Luca Cardelli, Rob Pike. "Squeak: a
+  Language for Communicating with Mice." *Computer Graphics (SIGGRAPH '85)*, 19(3): 199–204, 1985.
+  以进程与 channel 编写图形界面的最初尝试。
+- <a id="ref-pike-1990"></a>[Pike, 1990] Rob Pike. "The Implementation of Newsqueak." *Software: Practice
+  and Experience*, 20(7): 649–659, 1990. Newsqueak 的实现，channel 在此成为可以传递的值。
+- <a id="ref-mcilroy-1990"></a>[McIlroy, 1990] M. Douglas McIlroy. "Squinting at Power Series."
+  *Software: Practice and Experience*, 20(7): 661–683, 1990. 以 Newsqueak 的进程串计算幂级数，与 Pike
+  的论文刊于同一期。
+- <a id="ref-winterbottom-nd"></a>[Winterbottom, n.d.] Phil Winterbottom. *Alef Language Reference
+  Manual*. Plan 9 Programmer's Manual, AT&T Bell Laboratories. Alef 的语言手册。
+- <a id="ref-dorward-et-al-1997"></a>[Dorward et al., 1997] Sean Dorward, Rob Pike, David Leo Presotto,
+  Dennis M. Ritchie, Howard Trickey, Phil Winterbottom. "The Inferno Operating System." *Bell Labs
+  Technical Journal*, 2(1): 5–18, 1997. Inferno 与 Limbo 的介绍。
+- <a id="ref-cox-nd"></a>[Cox, n.d.] Russ Cox. "Bell Labs and CSP Threads." https://swtch.com/~rsc/thread/
+  从 CSP 到 Go 这一脉络中各门语言的简史与示例。
+- <a id="ref-hewitt-et-al-1973"></a>[Hewitt et al., 1973] Carl Hewitt, Peter Bishop, Richard Steiger. "A
+  Universal Modular ACTOR Formalism for Artificial Intelligence." *IJCAI*, 1973. Actor 模型的出处。
+- <a id="ref-agha-1986"></a>[Agha, 1986] Gul Agha. *Actors: A Model of Concurrent Computation in
+  Distributed Systems*. MIT Press, 1986. Actor 模型的系统整理。
+- <a id="ref-armstrong-2003"></a>[Armstrong, 2003] Joe Armstrong. *Making Reliable Distributed Systems in
+  the Presence of Software Errors*. PhD thesis, Royal Institute of Technology (KTH), Stockholm, 2003.
+  https://erlang.org/download/armstrong_thesis_2003.pdf
+  Erlang 的设计与「崩溃后重启」的容错方法。
+- <a id="ref-oneill-2009"></a>[O'Neill, 2009] Melissa E. O'Neill. "The Genuine Sieve of Eratosthenes."
+  *Journal of Functional Programming*, 19(1): 95–106, 2009. 说明这类流水线式「筛法」实为试除，
+  并与真正的筛法作了比较。
+- <a id="ref-gerrand-2010"></a>[Gerrand, 2010] Andrew Gerrand. "Share Memory By Communicating." The Go
+  Blog, 2010. https://go.dev/blog/codelab-share
+  Go 官方对上述格言的解释。
+- <a id="ref-milner-1980"></a>[Milner, 1980] Robin Milner. *A Calculus of Communicating Systems.* LNCS
+  92, Springer, 1980.（CCS）
+- <a id="ref-milner-et-al-1992"></a>[Milner et al., 1992] Robin Milner, Joachim Parrow, David Walker. "A
+  Calculus of Mobile Processes, I & II." *Information and Computation*, 100(1): 1-77, 1992.（π-演算，
+  通道名可传递的移动性）
+- <a id="ref-inmos-1984"></a>[INMOS, 1984] INMOS Ltd. *occam Programming Manual.* Prentice-Hall, 1984.
+  （occam 的 channel 与 ALT）
+- <a id="ref-pike-2012"></a>[Pike, 2012] Rob Pike. *Concurrency Is Not Parallelism.* Heroku Waza, 2012;
+  The Go Blog, 2013-01-16. https://go.dev/blog/waza-talk
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *Frequently Asked Questions: What
+  are Go's ancestors?* https://go.dev/doc/faq#ancestors
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *The Go Programming Language
+  Specification: Select statements.* https://go.dev/ref/spec#Select_statements
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *Go 1.26 Release Notes: Goroutine
+  leak profiles.* https://go.dev/doc/go1.26#goroutineleak-profiles
