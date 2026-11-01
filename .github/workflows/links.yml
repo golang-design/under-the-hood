@@ -8,7 +8,8 @@ name: Links
 # fails: doi.org answers it with 404 before any redirect happens.
 #
 # A few hosts are excluded. mail.mozilla.org and sdboyer.io are gone,
-# blog.labix.org answers 404/500 and www.uclibc.org times out; the book keeps
+# blog.labix.org answers 404/500, and www.uclibc.org and the OpenGL Wiki on
+# www.khronos.org time out for automated clients; the book keeps
 # those URLs as cited and adds a web.archive.org copy beside them. 9p.io serves
 # fine but fails the TLS handshake with lychee's client.
 
@@ -46,5 +47,6 @@ jobs:
             --exclude '^https?://www\.uclibc\.org/'
             --exclude '^https?://9p\.io/'
             --exclude '^https?://sdboyer\.io/'
+            --exclude '^https?://www\.khronos\.org/opengl/wiki/'
             'book/**/*.md'
           fail: true
