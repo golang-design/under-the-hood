@@ -5,106 +5,226 @@ title: "15.7 Past, Present, and Future"
 
 # 15.7 Past, Present, and Future
 
-The compiler is the part of the Go toolchain that changes most often, yet remains the most transparent to users. Take the same source code, change nothing, recompile it with a new version, and it often comes out faster, smaller, and better, without you ever knowing what happened in between. This section pulls the camera back to look at the road the compiler itself has traveled, then at what it is doing now and where it is heading next. Running through all of it is one unchanging order of priorities: **compilation speed comes first, quality of generated code second, and both are traded off under the constraint of being engineerable** ([1.1](../../part1overview/ch01intro/history.md)).
+The previous six sections followed the compilation pipeline through the Go 1.26 compiler: lexing and
+grammar ([15.1 Lexing and Grammar](./parse.md)), the intermediate representation
+([15.2 Intermediate Representation](./ssa.md)), the optimizer ([15.3 The Optimizer](./optimize.md)),
+the pointer checker ([15.4 The Pointer Checker](./unsafe.md)), escape analysis
+([15.5 Escape Analysis](./escape.md)) and cgo ([15.6 cgo](./cgo.md)). This section puts them back on
+a timeline. The compiler's evolution falls into three stages. Through Go 1.4 it was a C compiler
+inherited from Plan 9. From Go 1.5 to Go 1.8 it was translated into Go and given an SSA-based back
+end. Since then, improvements have concentrated on the calling convention, generics and optimization
+guided by profile data. A note on naming: the compiler is called gc, short for "Go compiler", and
+the `cmd/compile` documentation takes care to point out that it has almost nothing to do with the
+capitalized GC, garbage collection [[Go Authors, 2026a](#ref-go-authors-2026a)].
 
-Let us be clear up front that the "change" this section talks about all happens under the hood. Go's compatibility promise for the language and its tools means that these refactorings should not disturb a single line of user code. The two major rewrites we are about to discuss were carried out under exactly this constraint.
+## 15.7.1 Inherited from Plan 9: Go 1.4 and Earlier
 
-## 15.7.1 Past: From C to Go, From Plan 9 to SSA
+Ken Thompson committed the first compiler in March 2008 [[Thompson, 2008](#ref-thompson-2008)]. It
+was written in C, its grammar was described by the yacc file `go.y`, and its structure and naming
+followed the Plan 9 C compilers: each target architecture had its own program, `6g` for amd64 and
+`8g` for 386, and so did the accompanying assemblers and linkers
+([2.1 The Plan 9 Assembly Language](../../part1overview/ch02asm/asm.md)). The compiler used the
+syntax tree as its intermediate representation.
 
-The compiler itself has gone through two bone-deep changes, in two very different directions: one swapped out the implementation language, the other swapped out the backend architecture.
+Before Go 1 (March 2012), the compiler had already gained escape analysis
+([15.5 Escape Analysis](./escape.md)) and inlining; inlining was implemented in December 2011 and
+enabled by default in January 2012 [[van Dijk, 2011](#ref-van-dijk-2011)]
+[[Cox, 2012](#ref-cox-2012)]. A syntax tree, however, is ill suited to data-flow analysis, and many
+optimizations were hard to implement. In his 2015 proposal for an SSA back end, Keith Randall noted
+that an SSA-based intermediate representation would make possible many optimizations that were
+difficult in the compiler of the time [[Randall, 2015](#ref-randall-2015)].
 
-**First, the implementation language: C to Go.** The earliest `gc` compiler (up through Go 1.4) was written in C, inheriting the code style and build conventions of the Plan 9 toolchain. Go 1.5 completed **bootstrapping**: the compiler was machine-translated into Go, and from then on it was "a Go compiler written in Go." The details of this are in [3.3](../../part1overview/ch03life/bootstrap.md); here we only stress its significance. Changing languages was not for the sake of fashion: the C version could not take advantage of Go's own concurrency, memory safety, and rich standard library, nor could it let the Go community read and modify the compiler in a familiar language. Only after bootstrapping did the compiler truly become "a Go program the community can maintain," which paved the way for everything that followed. The price was the introduction of a **bootstrap chain**: to compile the current version of Go you first need a working older version of Go, so the toolchain has to carefully maintain this backward dependency.
+## 15.7.2 From C to Go: Go 1.5
 
-In passing, let us clear up a frequently confused name: the compiler is called `gc`, short for "Go compiler," and has nothing to do with garbage collection (the capitalized GC). The opening of `cmd/compile/README` makes a point of this.
+In Go 1.5 (August 2015) the compiler and linker were automatically translated from their C source
+into Go, and programs such as `6g` and `8g` were merged into a single `go tool compile` whose target
+is selected by `GOOS` and `GOARCH` [[Go Authors, 2015](#ref-go-authors-2015)]. The translator was
+written specifically for this code base and is not a general-purpose C-to-Go tool
+[[Pike, 2015](#ref-pike-2015)]. The release notes stress that this was a true translation and not a
+rewrite: the new program was essentially the old one, so the translation introduced almost no new
+bugs and in fact found and fixed some previously unknown ones. The motivation for the conversion and
+the consequences of bootstrapping are covered in
+[3.3 Bootstrapping the Language](../../part1overview/ch03life/bootstrap.md).
 
-**Second, the backend architecture: Plan 9 style to SSA.** Bootstrapping only swapped the pen, not the skeleton. The backend of Go 1.5/1.6 still largely followed the traditional design of the Plan 9 compiler: based on a lower-level instruction representation, it did limited optimization and assignment directly. This backend worked, but it was hard for it to carry modern optimizations; its intermediate representation was inconvenient for dataflow analysis, and adding a new optimization often meant special-casing in several places, with poor extensibility.
+The price of the translation was speed. The automatically translated code kept C idioms and
+performed worse than hand-written Go, so Go 1.5 builds were about twice as slow
+[[Go Authors, 2015](#ref-go-authors-2015)]. For several releases afterward, a continuing effort was
+to rewrite this code gradually into idiomatic Go. The front end was rewritten as well: Go 1.6
+replaced the yacc-generated parser with a hand-written recursive-descent parser
+([15.1 Lexing and Grammar](./parse.md)), and Go 1.8 switched to a new front end
+[[Go Authors, 2017](#ref-go-authors-2017)].
 
-Go 1.7 introduced the **SSA backend** ([15.2](./ssa.md)), the most pivotal architectural upgrade in the compiler's history. SSA (Static Single Assignment) requires that each variable be assigned exactly once, so "where this value comes from and where it goes" becomes an explicit graph structure, and optimizations such as dead code elimination, constant propagation, redundancy elimination, and bounds-check elimination can all be written as **rewrite rules** over the graph, independent of one another, composable, and customizable per architecture. An intuitive example is bounds-check elimination:
+## 15.7.3 The SSA Back End: Go 1.7 and 1.8
 
-```go
-// On each access to the slice in the loop, the compiler would insert an i < len(s) check
-for i := 0; i < len(s); i++ {
-    s[i] = 0      // SSA can prove 0 <= i < len(s) always holds, so this check is removed
-}
-```
+Even before the translation was complete, Randall had proposed the next step: to "convert from the
+current syntax-tree-based IR to a more modern SSA-based IR", converting in stages and replacing the
+back end first [[Randall, 2015](#ref-randall-2015)]. The new back end takes over from the
+intermediate representation after walk, which by then is quite low-level but largely
+machine-independent; everything after that, namely lowering to machine-specific operations,
+instruction scheduling, register allocation and code generation, operates on SSA form. The proposal
+originally targeted Go 1.6.
 
-Such "rules" take a very concrete form in the SSA backend. Go's machine-independent and machine-dependent optimizations are written in large numbers as rewrite entries of the form `(source pattern) -> (replacement)`, for example rewriting a multiplication whose right operand is known to be a power of two into a shift:
+The new back end was first used for 64-bit x86 in Go 1.7 (August 2016), reducing the CPU time of
+benchmark programs by 5% to 35%, and the release notes specifically mention that it provides a
+better platform for optimizations such as bounds-check elimination
+[[Go Authors, 2016](#ref-go-authors-2016)]. Go 1.8 (February 2017) extended it to all architectures:
+benchmark programs sped up by 20% to 30% on 32-bit ARM and by 0 to 10% on 64-bit x86, which already
+used the new back end; the temporary `-ssa=0` option from Go 1.7 for turning the new back end off
+was removed [[Go Authors, 2017](#ref-go-authors-2017)]. The structure of the SSA back end, its
+rewrite rules and its passes are covered in [15.2 Intermediate Representation](./ssa.md).
 
-```text
-// Pseudo-rule sketch: multiplying by a constant 2^k, replaced by a left shift of k bits (a shift is usually faster)
-(Mul64 x (Const64 [c])) && isPowerOfTwo(c) => (Lsh64x64 x (Const64 [log2(c)]))
-```
+## 15.7.4 Calling Convention and Generics: Go 1.17 to 1.20
 
-At build time the compiler compiles hundreds or thousands of such rules into the optimizer, sweeping over the SSA graph pass after pass and applying them repeatedly until no rule can fire anymore. Adding an optimization, most of the time, just means adding a few rules, without having to touch the framework itself; this is exactly what "extensible" means for the SSA backend.
+Go 1.17 (August 2021) switched to passing function arguments and results in registers on 64-bit x86
+for Linux, macOS and Windows, improving the performance of representative programs and packages by
+about 5% and typically shrinking binaries by about 2% [[Go Authors, 2021](#ref-go-authors-2021)]. Go
+1.18 extended this to 64-bit ARM, 64-bit PowerPC and 64-bit x86 on all operating systems, with
+typical gains of more than 10% on 64-bit ARM and PowerPC [[Go Authors, 2022](#ref-go-authors-2022)].
+The difficulty of the change lay in compatibility: it could not alter the behavior of any safe Go
+code, and it had to disturb existing assembly code as little as possible. The design is in
+[[Clements, 2020](#ref-clements-2020)], and the two conventions and the conversion between them are
+covered in [2.3 Calling Convention and the Register ABI](../../part1overview/ch02asm/callconv.md).
 
-In a Plan 9 style backend, reliably carrying out proofs like bounds-check elimination is not easy; under the SSA framework, it is just "running a few rules over the value-relation graph." This refactoring was equally transparent to users: nobody changed a line of code, they just found that programs compiled by the new version ran faster and the binaries were smaller. The SSA backend was at first only enabled on amd64, then rolled out architecture by architecture, and to this day it remains the trunk of Go code generation, the stage on which later work such as PGO and the register ABI could land.
+The same release added generics. Type checking in the front end moved to `types2`
+([8.3 Type-Checking Techniques](../../part2lang/ch08generics/checker.md)), and generic code is
+implemented by shape-based stenciling with dictionaries
+([8.1 The Evolution of Generics Design](../../part2lang/ch08generics/history.md)). The release notes
+admit that the changes supporting generics made Go 1.18 compile about 15% slower than Go 1.17, with
+no effect on the execution time of the generated code [[Go Authors, 2022](#ref-go-authors-2022)]. Go
+1.20 enabled the unified IR by default, which had by then reached feature parity with the old front
+end [[Dempsky, 2022](#ref-dempsky-2022)]; the release notes describe it as the front end using a new
+way of handling the compiler's internal data, which fixed several generics issues and allowed type
+declarations inside generic functions and methods [[Go Authors, 2023a](#ref-go-authors-2023a)].
+Today the unified IR handles construction of the intermediate representation, package import and
+export, and inlining [[Go Authors, 2026a](#ref-go-authors-2026a)].
 
-Placing these two rewrites in the coordinate system of Go's peers makes its trade-offs clearer. The industrial-grade compilers of most mainstream languages (such as LLVM and GCC, written in C++) have, from the very beginning, put an SSA or SSA-like intermediate representation at their core, placing code-generation quality very high, at the cost of compilation speed and implementation complexity. Go went the other way: first stand up the language and ecosystem with a simple, blazing-fast Plan 9 style backend, then, once the community and the demand had matured, fill in the "code quality" gap with SSA. In other words, others go "good first, then tune for speed," while Go goes "fast first, then fill in good"; this is precisely the historical projection of its "compilation speed first" order of priorities.
+## 15.7.5 Profile-Guided Optimization: Go 1.20 Onward
 
-Looking at the two big changes together, they convey the same engineering posture: **when the old foundation cannot hold up the future, be willing to tear it down and rewrite, but keep every rewrite faithful to the promise of transparency to users.** A rough-grained timeline:
+Until then, the compiler's inlining and devirtualization relied only on static heuristics.
+Profile-guided optimization (PGO) feeds the compiler CPU profile data collected from the running
+program so that it can make different decisions at hot spots
+[[Go Authors, n.d.a](#ref-go-authors-nda)]. Go 1.20 added PGO as a preview, using profiles to inline
+more aggressively at hot call sites, which sped up representative programs by about 3% to 4%
+[[Go Authors, 2023a](#ref-go-authors-2023a)]. Go 1.21 declared PGO ready for general use: a
+`default.pgo` in the main package directory is enabled by default, and most programs speed up by 2%
+to 7%; PGO also began to devirtualize some interface method calls, adding a direct call for the most
+common callee. The compiler itself was built with PGO in the same release, which cut build times by
+up to 6% [[Go Authors, 2023b](#ref-go-authors-2023b)]. Go 1.22 let devirtualization cover more calls
+and interleaved devirtualization with inlining, raising the gains for most programs to 2% to 14%
+[[Go Authors, 2024](#ref-go-authors-2024)]. The implementation in the compiler is covered in
+[15.3 The Optimizer](./optimize.md).
 
-```text
-Go 1.4   gc compiler written in C (traditional Plan 9 backend)
-Go 1.5   bootstrap: compiler translated to Go; first form of concurrent GC
-Go 1.7   SSA backend lands (amd64 first), then rolled out architecture by architecture
-Go 1.17  stack-based ABI to register calling convention, about +5% overall
-Go 1.18  generics: types2 frontend + GC-shape stenciling backend
-Go 1.21  PGO official release: compiler optimization shifts from static guessing to data-driven
-```
+Optimizations that do not depend on profile data have advanced too. After escape analysis was
+rewritten in Go 1.13, Go 1.25 and 1.26 successively moved the backing storage of variable-size
+`make` and `append` onto the stack ([15.5 Escape Analysis](./escape.md)). Go 1.22 also added new
+inlining heuristics as a preview: inline more aggressively at "important" call sites such as those
+in loops, and suppress inlining at "unimportant" ones such as those on panic paths; they are enabled
+with `GOEXPERIMENT=newinliner` [[Go Authors, 2024](#ref-go-authors-2024)]. As of Go 1.26 it remains
+an experiment that is off by default.
 
-## 15.7.2 Present: The Register ABI and PGO
+## 15.7.6 Outlook
 
-If the past was "swapping the foundation," then the two current advances are two buildings raised on the new foundation. Their common theme is pushing the compiler from "guessing statically" toward "deciding based on real information."
+This book follows Go 1.26. At the time of writing, Go 1.27 had been released in August 2026
+[[Go Authors, 2026c](#ref-go-authors-2026c)]. Its compiler-related changes include: the language
+allows methods to declare their own type parameters, that is, generic methods
+([8.4 The Future of Generics](../../part2lang/ch08generics/future.md)); for some allocations smaller
+than 80 bytes, the compiler now emits calls to size-specialized allocation functions, which lowers
+the cost of such allocations by up to 30% at the price of about 60 KB of extra binary size; and the
+new experimental `simd` package provides portable, vector-width-independent SIMD support, while the
+`simd/archsimd` package introduced in Go 1.26 gains 128-bit SIMD for arm64 and WebAssembly in
+addition to amd64. The Go 1.26 release notes had already announced this portable high-level SIMD
+package [[Go Authors, 2026b](#ref-go-authors-2026b)].
 
-**The register calling convention (Go 1.17).** For a long time, Go's function calls passed arguments and return values via the **stack**: the caller wrote the actual arguments into agreed-upon positions on the stack, and the callee read them back off the stack. This convention was simple, consistent across architectures, and friendly to stack scanning, but every call required a string of memory reads and writes, with non-trivial overhead. Go 1.17 changed it to passing arguments via **registers** ([2.2](../../part1overview/ch02asm/callconv.md), [6.1](../../part2lang/ch06func/func.md)): the first several arguments and return values go directly through registers, and the fast path that hits them never touches memory at all.
+The next release on the main branch, Go 1.28, is expected in February 2027. As of November 2026, the
+compiler section of its release-notes draft is still empty; for bootstrapping, Go 1.28 requires Go
+1.26.0 or later to build [[Go Authors, 2026d](#ref-go-authors-2026d)]. Compiler-related experiments
+on the main branch include `NewInliner`, `SIMD`, `RuntimeFreegc`, which needs cooperation from the
+compiler, and `CgoBindings`, added in October 2026, which describes cgo bindings in terms of Go
+types [[Go Authors, 2026e](#ref-go-authors-2026e)]. Whether an experiment becomes the default
+behavior is a question for later releases to answer.
 
-```text
-// Stack-based ABI (old)         // Register ABI (new, on amd64 the first several integers go through AX, BX, CX, ...)
-caller:  MOV arg, 0(SP)          caller:  MOV arg, AX
-         CALL f                           CALL f
-f:       MOV 0(SP), reg          f:       (arg is already in AX, use it directly)
-```
+## 15.7.7 Summary
 
-The overall speedup is about 5%, and it is **transparent to users and to all code outside of assembly**; the design deliberately keeps backup slots on the stack, so mechanisms like stack scanning, `recover`, and `go:nosplit` need no rewriting. The engineering difficulty of this change is not in "thinking of using registers" (that is common sense), but in "making register argument passing work without breaking any existing invariant in a runtime that has GC, preemption, and cross-architecture assembly." Its design document (proposal 40724) is worth reading, a model of "doing a low-level optimization under compatibility constraints."
-
-**Profile-guided optimization, PGO (Go 1.21).** When the compiler makes decisions such as inlining and devirtualization, it traditionally can only **guess statically**: inline if the function is small, devirtualize if the type can be pinned down at compile time. But information like "which path is hot" is simply unobtainable by static analysis. The idea of PGO (Profile-Guided Optimization) is to feed a **profile** of the actual run back into the compiler ([15.3](./optimize.md)):
-
-```bash
-# 1) collect a CPU profile in production or under load testing
-go test -cpuprofile cpu.prof -bench .
-# 2) name it default.pgo and place it in the main package directory; go build enables it automatically
-cp cpu.prof ./cmd/myapp/default.pgo
-go build ./cmd/myapp
-```
-
-Mechanically, the compiler reads a weighted call graph out of the profile: each call edge has a sampled hotness. The inliner uses this to relax the budget for hot edges; normally, once a function body exceeds the budget it is not inlined, but if it sits on a hot path that is frequently traversed, it is worth making an exception and expanding it. Devirtualization is similar: at a hot spot, if the profile shows that an interface call goes overwhelmingly to the same concrete type, the compiler can generate a fast path straight to that type, falling back only when the type does not match. In other words, PGO does not invent new optimizations; it merely **gives existing optimizations a more accurate ruler**, so that the limited "code-bloat budget" is spent where it is truly worth it. In practice it often brings a single-digit-percentage improvement. The key significance of PGO is not those few percentage points, but that it establishes a new paradigm: **from now on the compiler's optimization decisions can be driven by data, rather than only by static heuristic guessing.**
-
-**The ongoing polishing of generics support.** In parallel there is generics. The frontend switched to the `types2` type checker in Go 1.18 ([8.3](../../part2lang/ch08generics/checker.md)), and the backend adopts **GC-shape stenciling**: it generates code grouped by memory layout, so a group of types with the same layout shares one copy of machine code, and type-specific information is passed in at call time through a **runtime dictionary**. This route avoids the code explosion of monomorphizing every type, at the cost of introducing a layer of dictionary indirection ([8.4](../../part2lang/ch08generics/future.md)). Cutting down the overhead of this indirection is homework the compiler is still doing to this day, which leads right into the future we discuss next.
-
-## 15.7.3 Future: Continuing to Walk the Tightrope Between Speed and Optimization
-
-The compiler's future is still that tension running through the whole book: the balance between **compilation speed** and **quality of generated code** ([1.1](../../part1overview/ch01intro/history.md)). Go's answer to this question has always been clear-cut, and several foreseeable directions all unfold under the constraint of that answer.
-
-**Pushing PGO further.** Inlining and devirtualization are only the first batch of scenarios where PGO can use a profile. Profile-guided stack allocation and escape analysis, basic-block layout (placing hot paths together to improve instruction fetch and branch prediction), and profile-based specialization are all natural extensions. The difficulty is preserving the optionality of "compile very fast even with no profile, trade for better code only when a profile is present"; PGO should never become a precondition for compilation.
-
-**The performance of generic code.** That layer of GC-shape dictionary indirection is currently the main performance tax on generics. Inlining dictionary access at hot spots, and doing more thorough devirtualization and specialization for a single instantiation, so that generic code gradually approaches the speed of a hand-written monomorphic version, is a front that has no "done" date but will keep being advanced ([8.4](../../part2lang/ch08generics/future.md)).
-
-**Code generation in concert with the new GC.** Code generation is never isolated. The next-generation GC (Green Tea, [13.11](../../part4memory/ch13gc/greentea.md)) changes the form of scanning and write barriers, and the way the compiler inserts barriers and arranges pointer liveness information also has to evolve along with it; only by co-evolving can the GC's throughput improvements be made to actually land in the generated code.
-
-**Exploiting new hardware.** Vector instructions (SIMD), wider registers, and new atomic and memory-ordering primitives: how these hardware capabilities can be put to use automatically by the compiler without breaking Go's simple mental model is a long-standing open question. Go tends to introduce them in a controlled way inside the standard library and runtime, rather than throwing the complexity onto users.
-
-But there is one thing that almost certainly will not change: **Go will not sacrifice the compilation speed it takes pride in just to squeeze out a few more percent of runtime performance.** Fast compilation is the cornerstone of Go's productivity narrative, and any optimization that significantly slows compilation will most likely be kept out the door, or degraded into an option (as PGO is). This invariant is itself the most important design parameter of this machine.
-
-Looking back at the line of the compiler, it perfectly illustrates how the Go toolchain works: **getting better continuously and transparently to users; making trade-offs at every step under the established order of priorities (fast, simple, engineerable); daring to tear down and rewrite (C to Go, Plan 9 to SSA), and daring to introduce a new paradigm (PGO's data-driven approach).** This machine that turns source code into blazing-fast binaries is itself the most precise embodiment of Go's engineering philosophy.
+The compiler's two major refactorings went in different directions: Go 1.5 changed the
+implementation language, and Go 1.7 and 1.8 changed the back end's intermediate representation. The
+former relied on mechanical translation to guarantee that the old and new programs were equivalent,
+at the price of slower builds for a while; the latter proceeded in stages, first enabled on one
+architecture and then extended to all of them. The register calling convention, the unified IR and
+PGO that followed all build on these two refactorings. Every change was required to leave program
+behavior unchanged, and its costs and benefits are recorded in the release notes of each version
+[[Go Authors, n.d.b](#ref-go-authors-ndb)]: Go 1.5 builds were about twice as slow, Go 1.18 compiled
+about 15% slower, and PGO brings most programs that supply profile data a gain of 2% to 14% (Go
+1.22).
 
 ## Further Reading
 
-1. The Go Authors. *cmd/compile/README: Introduction to the Go compiler.* The compiler's four-stage architecture, the `gc` name, and the evolution of types2 and the Unified IR.
-   https://github.com/golang/go/blob/master/src/cmd/compile/README.md
-2. Keith Randall. *Generating Better Machine Code with SSA.* GopherCon / the design motivation of the Go 1.7 SSA backend and its rewrite-rule framework. https://go.dev/talks/2015/gogo.slide
-3. The Go Authors. *Profile-guided optimization (PGO user documentation).* Collecting a profile, the `default.pgo` convention, and the optimizations that can currently use a profile. https://go.dev/doc/pgo
-4. Austin Clements, Cherry Mui, et al. *Proposal 40724: Register-based Go calling convention.* The compatibility constraints and design of the stack ABI to register ABI change.
-   https://go.googlesource.com/proposal/+/master/design/40724-register-calling.md
-5. The Go Authors. *Go 1.5 / 1.7 / 1.17 / 1.21 Release Notes.* The per-version landing record of bootstrapping, the SSA backend, the register ABI, and PGO. https://go.dev/doc/devel/release
-6. This book, [15.2 Intermediate Representation and SSA](./ssa.md), [15.3 The Optimizer and PGO](./optimize.md).
-7. This book, [8 Generics](../../part2lang/ch08generics) ([8.3](../../part2lang/ch08generics/checker.md) types2, [8.4](../../part2lang/ch08generics/future.md) dictionary indirection), [3.3 Bootstrapping](../../part1overview/ch03life/bootstrap.md).
+- <a id="ref-clements-2020"></a>[Clements, 2020] Austin Clements. "Proposal: Register-based Go
+  calling convention." Go proposal 40724, 2020.
+  https://go.googlesource.com/proposal/+/master/design/40724-register-calling.md The compatibility
+  constraints and design for moving from the stack ABI to a register ABI.
+- <a id="ref-cox-2012"></a>[Cox, 2012] Russ Cox. gc: enable inlining by default. Go commit
+  4a6b07f235,
+  2012. https://golang.org/cl/5531058
+  Shipped in Go 1.
+- <a id="ref-dempsky-2022"></a>[Dempsky, 2022] Matthew Dempsky. internal/buildcfg: enable unified IR
+  by default. Go commit 833367e98a, 2022. https://go.dev/cl/422235 Shipped in Go 1.20.
+- <a id="ref-go-authors-nda"></a>[Go Authors, n.d.a] The Go Authors. *Profile-guided optimization.*
+  https://go.dev/doc/pgo The PGO user documentation: collecting profiles, the `default.pgo`
+  convention and the optimizations that can currently use profile data.
+- <a id="ref-go-authors-ndb"></a>[Go Authors, n.d.b] The Go Authors. *Release History.*
+  https://go.dev/doc/devel/release An index of the release notes of every version, recording version
+  by version how bootstrapping, the SSA back end, the register ABI and PGO landed.
+- <a id="ref-go-authors-2015"></a>[Go Authors, 2015] The Go Authors. *Go 1.5 Release Notes.* 2015.
+  https://go.dev/doc/go1.5
+- <a id="ref-go-authors-2016"></a>[Go Authors, 2016] The Go Authors. *Go 1.7 Release Notes: Compiler
+  Toolchain.* 2016. https://go.dev/doc/go1.7
+- <a id="ref-go-authors-2017"></a>[Go Authors, 2017] The Go Authors. *Go 1.8 Release Notes: Compiler
+  Toolchain.* 2017. https://go.dev/doc/go1.8
+- <a id="ref-go-authors-2021"></a>[Go Authors, 2021] The Go Authors. *Go 1.17 Release Notes:
+  Compiler.*
+  2021. https://go.dev/doc/go1.17
+- <a id="ref-go-authors-2022"></a>[Go Authors, 2022] The Go Authors. *Go 1.18 Release Notes.* 2022.
+  https://go.dev/doc/go1.18
+- <a id="ref-go-authors-2023a"></a>[Go Authors, 2023a] The Go Authors. *Go 1.20 Release Notes:
+  Compiler.*
+  2023. https://go.dev/doc/go1.20
+- <a id="ref-go-authors-2023b"></a>[Go Authors, 2023b] The Go Authors. *Go 1.21 Release Notes:
+  Compiler.*
+  2023. https://go.dev/doc/go1.21
+- <a id="ref-go-authors-2024"></a>[Go Authors, 2024] The Go Authors. *Go 1.22 Release Notes:
+  Compiler.*
+  2024. https://go.dev/doc/go1.22
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. cmd/compile/README.md:
+  Introduction to the Go compiler. Go 1.26 source.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/README.md The division of
+  the compiler into phases, the meaning of the name `gc`, and the unified IR.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *Go 1.26 Release
+  Notes.* 2026. https://go.dev/doc/go1.26 See the section on the experimental `simd/archsimd`
+  package.
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *Go 1.27 Release
+  Notes.* 2026. https://go.dev/doc/go1.27
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. doc/next. Go main-branch
+  source. https://github.com/golang/go/tree/master/doc/next The Go 1.28 release-notes draft, as of
+  the main branch on 1 November 2026.
+- <a id="ref-go-authors-2026e"></a>[Go Authors, 2026e] The Go Authors.
+  internal/goexperiment/flags.go. Go main-branch source.
+  https://github.com/golang/go/blob/master/src/internal/goexperiment/flags.go The list and
+  descriptions of `GOEXPERIMENT` experiments, as of the main branch on 1 November 2026.
+- <a id="ref-pike-2015"></a>[Pike, 2015] Rob Pike. "Go in Go." Gopherfest, 2015.
+  https://go.dev/talks/2015/gogo.slide
+  The motivation for and process of translating the compiler automatically from C to Go.
+- <a id="ref-randall-2015"></a>[Randall, 2015] Keith Randall. "New SSA Backend for the Go
+  Compiler." 2015. https://go.dev/s/go17ssa The SSA back-end proposal: convert in stages, replacing
+  the back end first.
+- <a id="ref-thompson-2008"></a>[Thompson, 2008] Ken Thompson. SVN=114202. Go commit
+  cb87526ce3, 2008. https://github.com/golang/go/commit/cb87526ce3 The source of the original gc
+  compiler, under `src/c`.
+- <a id="ref-van-dijk-2011"></a>[van Dijk, 2011] Luuk van Dijk. gc: inlining (disabled without -l).
+  Go commit a62722bba4, 2011. https://golang.org/cl/5400043 Shipped in Go 1.
+- This book: [2.3 Calling Convention and the Register ABI](../../part1overview/ch02asm/callconv.md),
+  [3.3 Bootstrapping the Language](../../part1overview/ch03life/bootstrap.md),
+  [Chapter 8 Generics](../../part2lang/ch08generics/readme.md)
+  ([8.1 The Evolution of Generics Design](../../part2lang/ch08generics/history.md),
+  [8.3 Type-Checking Techniques](../../part2lang/ch08generics/checker.md),
+  [8.4 The Future of Generics](../../part2lang/ch08generics/future.md)),
+  [15.2 Intermediate Representation](./ssa.md), [15.3 The Optimizer](./optimize.md).

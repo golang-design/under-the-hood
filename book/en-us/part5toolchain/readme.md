@@ -1,10 +1,10 @@
 ---
 weight: 5000
-title: "Part Five: Compiler and Toolchain"
+title: "Part V Compiler and Toolchain"
 bookCollapseSection: true
 ---
 
-# Part Five: Compiler and Toolchain
+# Part V Compiler and Toolchain
 
 - [Chapter 15 The Compiler Pipeline](./ch15compile)
 - [Chapter 16 Tooling and Observability](./ch16tools)
@@ -14,13 +14,26 @@ bookCollapseSection: true
 <i class="quote-mark fas fa-thumbtack"></i>
 <I>You can't trust code that you did not totally create yourself.</I></br>
 <div class="quote-right">
--- Ken Thompson, "Reflections on Trusting Trust"
+-- Ken Thompson, "Reflections on Trusting Trust", 1984
 </div>
 </div>
 
-The source we write must pass through an entire toolchain before it becomes a runnable program,
-and every link in that chain, the compiler, the linker, the build system, and even the transitive closure of dependencies, quietly shapes the behavior and trustworthiness of the program.
-The question Thompson posed in his Turing Award lecture remains thought-provoking to this day: when trust is passed along the toolchain layer by layer, what exactly are we trusting.
-This part takes that as its entry point into the full picture of Go's toolchain: we first walk through the compiler's multi-pass pipeline from source to machine code,
-then survey the tooling ecosystem built around building, testing, profiling, and observability,
-and finally arrive at module and dependency management, to see how Go uses minimal version selection and verifiable checksums to make "trust" something that can be reasoned about and reproduced.
+This sentence comes from Thompson's Turing Award lecture. He went on to point out that no amount of
+source-level verification or scrutiny protects against using untrusted code, because programmers
+inspect the source but run the compiler's output. Source code becomes a runnable program only after
+passing through an entire toolchain; the compiler, the linker, the build system and the transitive
+closure of dependencies each influence the program's behavior, and whether it can be trusted. One of
+Go's responses to this problem is that, since Go 1.21, the toolchain is fully reproducible, so an
+officially released toolchain can be rebuilt from source and compared
+([3.3](../part1overview/ch03life/bootstrap.md)).
+
+This part discusses Go's toolchain in three chapters. [Chapter 15](./ch15compile/readme.md) follows
+the compiler pipeline and examines how source code becomes machine code through lexical and
+syntactic analysis, intermediate representations and optimization, along with mechanisms at the
+boundary between compiler and runtime such as escape analysis and cgo.
+[Chapter 16](./ch16tools/readme.md) covers tools for correctness and performance: deadlock
+detection, race detection, execution tracing, testing, benchmarking and profiling, runtime
+statistics, and gopls, which provides language services to editors.
+[Chapter 17](./ch17modules/readme.md) covers modules and dependency management: how Go uses minimal
+version selection to obtain reproducible builds, and how `go.sum` and the checksum database ensure
+that everyone downloads the same code.

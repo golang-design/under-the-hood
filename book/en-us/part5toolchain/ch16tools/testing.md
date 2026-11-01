@@ -5,135 +5,403 @@ title: "16.4 Testing Code"
 
 # 16.4 Testing Code
 
-Testing in Go is not a bolt-on, it is a first-class citizen of the language toolchain. `go test` is built in, the `testing` package is standard, and convention replaces configuration. This set of design choices has deeply shaped Go's engineering culture: in other languages, "whether to write tests at all, and which framework to use" is a decision that requires weighing trade-offs; in Go it is the default action. This section explains how this machinery runs, why it was designed this way, and how it grew from unit testing all the way to Go 1.18 fuzzing.
+In many languages the test framework comes from the community, and different projects may use
+different frameworks, assertion libraries and runners; before running the tests of an unfamiliar
+project, one often has to work out which set it uses. Go puts testing in the toolchain: `go test` is
+a subcommand of the `go` command, `testing` is a package in the standard library, and only a few
+naming conventions connect the two. This section first explains how `go test` organizes tests into
+an executable program according to those conventions. It then discusses the design choices of the
+`testing` package: why the reporting primitives are so plain, how subtests solve parameterization
+and parallelism together, and how fuzzing brings coverage-guided input generation under the same
+conventions. Finally it outlines the additions made to the `testing` package in recent releases.
 
-## 16.4.1 A First-Class Citizen: Convention over Configuration
+## 16.4.1 From Conventions to an Executable Program
 
-Go's testing runs on convention, with almost zero configuration. Three rules are all there is: test files end in `_test.go`, test functions take the form `func TestXxx(t *testing.T)`, and they live in the same package as the code under test. `go test` discovers and runs them automatically, with no XML configuration, no external runner, and no annotations. No matter how large a project is, a single line `go test ./...` runs every test:
+`go test` discovers tests from file names and function signatures: a file ending in `_test.go` is
+compiled only when testing, and within it a function of the form `func TestXxx(*testing.T)` is a
+test, `func BenchmarkXxx(*testing.B)` a benchmark, `func FuzzXxx(*testing.F)` a fuzz test, and
+`func ExampleXxx()` an example; if an example function ends with a comment beginning with `Output:`,
+the function's standard output is compared against it at run time
+[[Go Authors, n.d.a](#ref-go-authors-nda)]. There is no configuration file and no annotation
+[[Go Authors, n.d.d](#ref-go-authors-ndd)]. Below is a function that reverses a string byte by byte,
+together with its tests; the examples in this section all use it as the subject. A byte-wise
+`Reverse` is also the example used by the official fuzzing tutorial
+[[Go Authors, n.d.e](#ref-go-authors-nde)]:
 
 ```go
-// strings_test.go, same directory and same package as the strings package under test
-package strings
+package strutil
 
-import "testing"
-
-func TestIndex(t *testing.T) {
-    got := Index("chicken", "ken")
-    if got != 4 {
-        t.Errorf("Index = %d, want 4", got) // report the failure, but do not abort
-    }
+// Reverse reverses a string byte by byte.
+func Reverse(s string) string {
+	b := []byte(s)
+	for i, j := 0, len(b)-1; i < j; i, j = i+1, j-1 {
+		b[i], b[j] = b[j], b[i]
+	}
+	return string(b)
 }
 ```
 
-"Convention over configuration" brings two layers of benefit. The first is a zero barrier to entry: writing a test does not require learning a framework first, get the function signature right and it runs. The second, and the more far-reaching layer, is the unification of the whole ecosystem. Every Go project tests in exactly the same way, so CI, coverage tools, IDEs, and `go vet` all face just one convention, without having to write a separate adapter for each different framework. This stands in sharp contrast to others: the Java world has JUnit 4 versus JUnit 5 versus TestNG, with different annotations and runners; Python has `unittest`, `pytest`, and `nose` coexisting, with incompatible discovery rules and fixture mechanisms. The diversity of frameworks turns "run this project's tests" into something that requires reading the docs first. Go flattens that to zero with one built-in convention.
-
-A distinction worth drawing: `go test` is a subcommand of the `go` command, responsible for compiling and running the test binary and parsing flags such as `-run`, `-bench`, and `-fuzz`; the `testing` package is the standard library that test code imports, providing the `*T`, `*B`, and `*F` types. The tool and the library have a clear division of labor, but from the user's vantage point they are one.
-
-## 16.4.2 The Deliberately Minimal testing Package
-
-The `testing` package has no assertion library. It gives you only a few plain reporting primitives: `t.Error` / `t.Errorf` record one failure but keep running, while `t.Fatal` / `t.Fatalf` record a failure and immediately abort the current test (implemented internally via `runtime.Goexit`, so they can only be called from the test goroutine). There is no `assertEqual`, no `assertThat(x).isGreaterThan(y)`, none of that whole suite of chained assertions.
-
-This is deliberate, and the reasoning is written down in the official Go Test Comments. The Go team holds that an assertion library tempts people to think "which assertion do I write on this line" rather than "what do I want to see when it fails, so I can locate the problem directly." Using plain `if` paired with `t.Errorf` forces the author to write an informative failure message by hand:
-
 ```go
-if got != want {
-    t.Errorf("Sqrt(%v) = %v, want %v", in, got, want)
+package strutil
+
+import (
+	"testing"
+	"unicode/utf8"
+)
+
+func TestReverse(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		{"empty", "", ""},
+		{"single", "a", "a"},
+		{"ascii", "abc", "cba"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := Reverse(tt.in); got != tt.want {
+				t.Errorf("Reverse(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func FuzzReverse(f *testing.F) {
+	f.Add("hello")
+	f.Fuzz(func(t *testing.T, s string) {
+		rev := Reverse(s)
+		if utf8.ValidString(s) && !utf8.ValidString(rev) {
+			t.Errorf("Reverse(%q) = %q, not valid UTF-8", s, rev)
+		}
+	})
 }
 ```
 
-The `got` / `want` naming pair has nearly become a dialect of Go testing, and failure output reads at a glance as "what was the input, what came out, what was expected." The cost is that there is indeed more boilerplate than a one-line assertion. The community has argued over this for a long time, and third-party assertion libraries like `testify` do have a large user base. But the stance taken by the standard library reflects Go's consistent preference: explicit beats magic, less is more, and leave the control and the responsibility for expressing failure with the author, rather than handing it to a framework that assembles messages on its own.
+How do the conventions become a runnable program? `go test` generates a `main` package for the
+package under test, registers the test functions it found in tables, and links it together with the
+package under test and the test files into a test binary, which it then runs. The template for the
+generated code is in `cmd/go/internal/load/test.go` [[Go Authors, 2026a](#ref-go-authors-2026a)];
+running `go test -work` with Go 1.26.10 shows the files generated for the package above in the work
+directory, here with the blank lines left by the template removed:
+
+```go
+// Code generated by 'go test'. DO NOT EDIT.
+
+package main
+
+import (
+	"os"
+	"testing"
+	"testing/internal/testdeps"
+	_test "example.com/strutil"
+)
+
+var tests = []testing.InternalTest{
+	{"TestReverse", _test.TestReverse},
+}
+
+var benchmarks = []testing.InternalBenchmark{
+}
+
+var fuzzTargets = []testing.InternalFuzzTarget{
+	{"FuzzReverse", _test.FuzzReverse},
+}
+
+var examples = []testing.InternalExample{
+}
+
+func init() {
+	testdeps.ModulePath = "example.com/strutil"
+	testdeps.ImportPath = "example.com/strutil"
+}
+
+func main() {
+	m := testing.MainStart(testdeps.TestDeps{}, tests, benchmarks, fuzzTargets, examples)
+	os.Exit(m.Run())
+}
+```
+
+If the test package defines `func TestMain(m *testing.M)`, the generated `main` calls it instead,
+and it performs global setup and teardown before and after `m.Run()`
+[[Go Authors, n.d.a](#ref-go-authors-nda)]. When building the test binary, `go test` also runs a
+subset of the higher-confidence `go vet` checks on the package under test and does not run the tests
+if they report a problem. In package-list mode it caches successful test results: when the test
+binary, the command line, and the files and environment variables read by the test are all
+unchanged, it prints the previous result directly and marks it `(cached)`. Both behaviors date from
+Go 1.10 [[Go Authors, 2018](#ref-go-authors-2018); [Go Authors, 2026b](#ref-go-authors-2026b)].
+
+## 16.4.2 Plain Reporting Primitives
+
+The `testing` package has no assertion functions, only a few reporting primitives: `t.Error` and
+`t.Errorf` record a failure and let the test continue; `t.Fatal` and `t.Fatalf` record a failure and
+then call `FailNow`, which ends the current goroutine through `runtime.Goexit`, runs all its
+deferred calls, and moves on to the next test. For this reason `FailNow` must be called in the
+goroutine that runs the test function, not in other goroutines the test creates, and it does not
+stop those goroutines [[Go Authors, 2026c](#ref-go-authors-2026c)].
+
+Omitting assertions is a deliberate choice. The reasoning in the Go FAQ is that good error handling
+means that when one check fails the others keep running, so the person debugging sees the full
+picture of the failure, for example that `isPrime` gives wrong answers for 2, 3, 5 and 7 rather than
+only that it fails on 2; and test frameworks tend to grow into small languages with their own
+conditionals, control flow and printing, which Go already has
+[[Go Authors, n.d.f](#ref-go-authors-ndf)]. The Go test review comments advise against assertion
+libraries more bluntly: assertions either abort the test early or discard the information about what
+the test did right, and they force the assertion package to invent a sub-language instead of reusing
+Go itself [[Go Authors, n.d.c](#ref-go-authors-ndc)]. The same document recommends that failure
+messages give the actual value before the expected one, usually in the format
+`YourFunc(%v) = %v, want %v`; the pair of names `got` and `want` has thus become an idiom of Go
+tests. The failure message in `TestReverse` above uses this format. The price is more boilerplate
+than a one-line assertion, which is why third-party assertion libraries such as `testify` have many
+users.
+
+Helper functions raise a concrete problem: when a helper calls `t.Error`, the line number in the
+failure report points inside the helper rather than at the test that called it, which is of almost
+no help in locating the failure. `t.Helper`, added in Go 1.9, marks the caller as a helper function,
+and the reporting of positions skips these frames and gives the position in the first non-helper
+function [[Spare, 2016](#ref-spare-2016)].
 
 ## 16.4.3 Table-Driven Tests and Subtests
 
-The most representative paradigm in the Go community is the table-driven test: write several groups of "input and expectation" as a table (a slice of structs), and verify each group with a single loop. Adding a case is just adding one row to the table, which makes covering many boundary situations both compact and clear. Combined with subtests `t.Run`, introduced in Go 1.7, each group can become an independently named subtest that can be run on its own (`go test -run TestSplit/empty`) and run in parallel:
+When failure messages have to be written by hand one at a time, writing the inputs and expectations
+as a table and checking row by row in a loop spreads the cost of writing a good message over all the
+cases, which is what the Go FAQ recommends [[Go Authors, n.d.f](#ref-go-authors-ndf)]. This style is
+known in the Go community as table-driven testing [[Cheney, 2019](#ref-cheney-2019)]. Early
+table-driven tests had two inconveniences: a single row of the table could not be run on its own,
+and the failure message had to carry the name of the case itself. Subtests, proposed by van Lohuizen
+in 2015, solved these problems; the motivations listed include selecting a single table case from
+the command line, using methods such as `Fail` within a subtest, controlling the scope of setup and
+teardown at a finer granularity than `TestMain`, and better control over parallelism
+[[van Lohuizen, 2015](#ref-van-lohuizen-2015)]. Subtests shipped with Go 1.7
+[[Go Authors, 2016](#ref-go-authors-2016)]. `t.Run` runs the subtest in a new goroutine and returns
+only when the subtest returns or calls `t.Parallel`; the name of a subtest is appended to its
+parent's after a slash, and the patterns of `-run` are likewise matched slash-separated segment by
+segment [[Go Authors, 2026c](#ref-go-authors-2026c)]. Run with Go 1.26.10, with the durations
+removed:
 
-```go
-func TestSplit(t *testing.T) {
-    tests := []struct {
-        name  string
-        input string
-        sep   string
-        want  []string
-    }{
-        {"simple", "a,b,c", ",", []string{"a", "b", "c"}},
-        {"empty", "", ",", []string{""}},
-        {"no-sep", "abc", ",", []string{"abc"}},
-    }
-    for _, tt := range tests {
-        t.Run(tt.name, func(t *testing.T) {
-            tt := tt            // required before Go 1.22; can be deleted afterward
-            t.Parallel()        // run the subtests in parallel
-            got := Split(tt.input, tt.sep)
-            if !reflect.DeepEqual(got, tt.want) {
-                t.Errorf("Split(%q, %q) = %v, want %v",
-                    tt.input, tt.sep, got, tt.want)
-            }
-        })
-    }
-}
+```shell
+$ go test -v -run TestReverse
+=== RUN   TestReverse
+=== RUN   TestReverse/empty
+=== PAUSE TestReverse/empty
+=== RUN   TestReverse/single
+=== PAUSE TestReverse/single
+=== RUN   TestReverse/ascii
+=== PAUSE TestReverse/ascii
+=== CONT  TestReverse/empty
+=== CONT  TestReverse/ascii
+=== CONT  TestReverse/single
+--- PASS: TestReverse
+    --- PASS: TestReverse/empty
+    --- PASS: TestReverse/ascii
+    --- PASS: TestReverse/single
+PASS
 ```
 
-Hidden here is a once-classic trap. Before Go 1.22, the iteration variable `tt` of a `for` loop had only one instance across the whole loop, and the closure captured this repeatedly overwritten variable; when the subtests were deferred past the end of the loop by `t.Parallel` before actually running, the `tt` they saw was all the value of the last iteration. The fix of the day was to write one line `tt := tt` in the loop body to copy the current value into a new variable. Go 1.22 changed the language specification so that each iteration of a `for` loop has its own independent iteration variable (the spec: "each iteration has its own new variables"), and this trap was eliminated at the language level, so that line `tt := tt` can be deleted from then on. This is a rare example of changing language semantics to fix a long-standing footgun.
+The output shows how parallel subtests are scheduled: each subtest pauses (`PAUSE`) after calling
+`t.Parallel`, `t.Run` returns at once, and the loop goes on to create the next subtest; only after
+the body of the parent test finishes do the paused subtests resume together (`CONT`). The parent
+test is not complete until all its subtests finish, so a group of parallel subtests runs in parallel
+only with one another [[Go Authors, n.d.a](#ref-go-authors-nda)]. To run just one row, use
+`go test -run TestReverse/ascii`.
 
-Table-driven testing is so common that it has nearly become synonymous with Go testing. It again bears out Go's orientation: solve problems like "parameterized testing" with plain data plus a loop, rather than a dedicated framework mechanism.
+This scheduling, together with the semantics of the `for` loop, once formed a common trap. Before Go
+1.22, a variable declared by a `for` statement was created once and updated on each iteration
+[[Go Authors, 2024](#ref-go-authors-2024)]; the parallel subtests ran only after the loop ended, the
+`tt` captured by the closure was already the last row, and all the subtests actually checked the
+same case, which passed anyway. The idiom of the time was to add the line `tt := tt` before the
+closure. Go 1.22 creates a new variable for each iteration. The change takes effect per file by
+language version: the new semantics apply only when the version determined by the `go` directive in
+`go.mod` or by build constraints is Go 1.22 or later [[Go Authors, 2026d](#ref-go-authors-2026d)].
+The module above declares `go 1.26`, so that line is not needed.
+
+Beyond subtests, `*testing.T` has gradually gained methods for managing test resources: `t.Cleanup`
+registers a cleanup function that runs after the test and its subtests finish (Go 1.14); `t.TempDir`
+returns a temporary directory that is deleted automatically after the test (Go 1.15); `t.Setenv`
+sets an environment variable for the duration of the test (Go 1.17); `t.Context` returns a context
+that is canceled before the cleanup functions run, and `t.Chdir` changes the working directory for
+the duration of the test (Go 1.24) [[Go Authors, 2026c](#ref-go-authors-2026c);
+[Go Authors, 2025a](#ref-go-authors-2025a)]. What they have in common is that they bind the lifetime
+of a resource to the test. `t.Setenv` and `t.Chdir`, which modify process-wide state, cannot be used
+together with `t.Parallel` [[Go Authors, 2026c](#ref-go-authors-2026c)].
 
 ## 16.4.4 Fuzzing
 
-Go 1.18 (March 2022) brought fuzzing into the standard toolchain. The idea of fuzzing is: rather than have a person enumerate cases, let a tool keep generating large amounts of random or mutated input to bombard a function, specifically hunting for the one that triggers a panic or violates an invariant. In Go, it reuses the same set of conventions, with functions of the form `func FuzzXxx(f *testing.F)`:
+Table-driven tests can only check inputs the author thought of. All of `TestReverse` above passes,
+but its three cases are ASCII strings, for which byte-wise reversal happens to be correct.
+**Fuzzing** takes a different approach: the author writes only a property that should hold for all
+inputs, and the tool generates large numbers of inputs to look for a counterexample. The property
+checked by `FuzzReverse` is that reversing a valid UTF-8 string should yield a valid UTF-8 string.
+Without `-fuzz`, `go test` just runs the seeds supplied by `f.Add` and the existing corpus under the
+`testdata/fuzz/FuzzReverse` directory as ordinary cases; only with `-fuzz` does it enter fuzzing
+mode [[Go Authors, n.d.b](#ref-go-authors-ndb)]. One run with Go 1.26.10:
 
-```go
-func FuzzReverse(f *testing.F) {
-    f.Add("hello")          // seed corpus: give the mutation engine a starting point
-    f.Add("世界")
-    f.Fuzz(func(t *testing.T, s string) {
-        rev := Reverse(s)
-        doubleRev := Reverse(rev)
-        if s != doubleRev {                 // invariant: reversing twice should restore the original
-            t.Errorf("Reverse(Reverse(%q)) = %q", s, doubleRev)
-        }
-        if utf8.ValidString(s) && !utf8.ValidString(rev) {
-            t.Errorf("Reverse(%q) produced invalid UTF-8: %q", s, rev)
-        }
-    })
-}
+```shell
+$ go test -fuzz=FuzzReverse
+fuzz: elapsed: 0s, gathering baseline coverage: 0/1 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 1/1 completed, now fuzzing with 18 workers
+fuzz: elapsed: 0s, execs: 643 (6499/sec), new interesting: 6 (total: 7)
+--- FAIL: FuzzReverse (0.11s)
+    --- FAIL: FuzzReverse (0.00s)
+        reverse_test.go:31: Reverse("Δ0") = "0\x94\xce", not valid UTF-8
+    
+    Failing input written to testdata/fuzz/FuzzReverse/022c99056fac7c47
+    To re-run:
+    go test -run=FuzzReverse/022c99056fac7c47
+FAIL
+exit status 1
+FAIL	example.com/strutil	0.665s
+$ cat testdata/fuzz/FuzzReverse/022c99056fac7c47
+go test fuzz v1
+string("Δ0")
 ```
 
-By default, `go test` only runs the seeds sown by `f.Add` and the corpus already in the `testdata/fuzz/FuzzReverse/` directory as ordinary cases once; adding `go test -fuzz=FuzzReverse` is what enters true fuzzing mode, where the engine keeps mutating input based on coverage feedback. Once it finds an input that makes the assertion fail, it writes this minimized counterexample into `testdata/fuzz/FuzzReverse/`, and this corpus is committed along with the code, so the bug is "frozen" into a permanent regression case. The example above is the classic one from the official tutorial: against a naive "reverse byte by byte" implementation, the fuzzing engine quickly finds a multi-byte UTF-8 character and proves that it breaks the encoding, a malformed-input boundary that is nearly impossible to think through fully with hand-written cases.
+After less than a second and a little over six hundred executions, the engine found a
+counterexample: `Δ` takes two bytes in UTF-8, and byte-wise reversal splits it. The exact input
+found differs from run to run. The engine first measures baseline coverage with the seed corpus,
+then mutates inputs in several worker processes and keeps those that increase coverage
+(`new interesting` in the output). This generated corpus is stored in `$GOCACHE/fuzz`; the input
+that caused the failure is written to `testdata/fuzz/FuzzReverse`, and once it is committed with the
+code, every later ordinary `go test` runs it, so the bug becomes a permanent regression case
+[[Go Authors, n.d.b](#ref-go-authors-ndb); [Go Authors, 2022](#ref-go-authors-2022)]. Coverage
+guidance depends on compiler instrumentation, and the documentation recommends running fuzz tests on
+platforms that support instrumentation, currently amd64 and arm64
+[[Go Authors, n.d.b](#ref-go-authors-ndb)].
 
-Placed in its lineage, this capability is the confluence of two clear sources. One is coverage-guided fuzzing, from AFL to LLVM's libFuzzer, and on to Dmitry Vyukov's `go-fuzz` (the direct predecessor of Go's native fuzzing, which proved this path was viable on Go). The other is property-based random testing, originating from Claessen and Hughes's QuickCheck (ICFP 2000), whose idea is "do not write concrete cases, write the properties that should always hold, and let the tool sample randomly to falsify them." The long-frozen `testing/quick` package in the standard library is an early remnant of this line (its documentation states of itself that it is "frozen and is not accepting new features"). Go 1.18's fuzzing can be seen as the merger of the two lines: use the QuickCheck style of "writing invariants" for assertions, and the libFuzzer style of "coverage-guided mutation" for input generation.
+Go's fuzzing combines two streams. One is coverage-guided fuzzing: Hockman's design draft takes AFL
+and libFuzzer as references and notes that tools already in the Go community, such as `go-fuzz`, had
+successfully found a large number of bugs but lacked native integration with the toolchain
+[[Hockman, 2020](#ref-hockman-2020)]. The other is property-based random testing, which originates
+with Claessen and Hughes's QuickCheck: instead of writing concrete cases, one writes properties that
+should always hold, and the tool generates random inputs to try to refute them
+[[Claessen and Hughes, 2000](#ref-claessen-and-hughes-2000)]. The standard library's `testing/quick`
+belongs to this line, and its documentation states that the package is frozen and accepts no new
+features [[Go Authors, 2026e](#ref-go-authors-2026e)]. `FuzzReverse` combines both: it asserts a
+property, and coverage feedback drives the generation of inputs. The draft was finalized as proposal
+#44551, and fuzzing shipped with Go 1.18 [[Go Authors, 2022](#ref-go-authors-2022)].
 
-## 16.4.5 Benchmarks
+## 16.4.5 Benchmarks and Concurrent Tests
 
-Benchmarks too are gathered under this set of conventions, with functions of the form `func BenchmarkXxx(b *testing.B)`. Go 1.24 introduced `b.Loop()`, replacing the traditional `for i := 0; i < b.N; i++` form: it manages the timer automatically (resetting on the first call and stopping on exit, so that setup and cleanup outside the loop are not counted in the measurement), and it prevents the compiler from optimizing the loop body away, and each benchmark function runs only once within a single measurement:
+Benchmarks use the same conventions, with functions of the form `func BenchmarkXxx(b *testing.B)`.
+`b.Loop`, introduced in Go 1.24, replaces the traditional `b.N` loop: the benchmark function runs
+only once per `-count`, and costly setup and teardown also run only once; the arguments and results
+of function calls are kept alive, so the compiler cannot optimize the whole loop body away
+[[Go Authors, 2025a](#ref-go-authors-2025a)]. How `b.N` converges, how `b.Loop` is implemented, and
+memory measurement are covered in [16.5](./perf.md).
 
-```go
-func BenchmarkIndex(b *testing.B) {
-    for b.Loop() {
-        Index("chicken caesar salad", "salad")
-    }
-}
-```
+Testing concurrent code has two dedicated tools. When tests are run with `-race`, the race detector
+reports the data races the tests actually exercise ([16.2](./race.md)). `testing/synctest`, which
+became a regular feature in Go 1.25, runs a test in an isolated "bubble"; time inside the bubble is
+virtual, and the clock advances immediately when all goroutines are durably blocked, so tests that
+depend on timeouts and timers are both fast and deterministic
+[[Go Authors, 2025b](#ref-go-authors-2025b)]. Its detection of deadlocks inside a bubble is covered
+in [16.1.4](./deadlock.md).
 
-At this point, unit tests, table-driven tests, subtests, fuzzing, and benchmarks are all gathered under the same `testing` package and the same `go test` command. The internal mechanics of benchmarking (how `b.N` converges, the compiler transformation of `b.Loop`, and `-benchmem` and memory measurement) are detailed in [16.5](./perf.md).
+## 16.4.6 Recent Additions
 
-## 16.4.6 Cultural Impact and Trade-offs
+The interfaces added to the `testing` package in the last few releases mostly serve to connect tests
+with external systems [[Go Authors, 2025a](#ref-go-authors-2025a);
+[Go Authors, 2025b](#ref-go-authors-2025b); [Go Authors, 2026f](#ref-go-authors-2026f)]:
 
-Making testing a first-class citizen of the toolchain has an impact at the cultural level. When `go test` is built in, when the convention is unified, and when the barrier is zero, "writing tests" goes from extra work that needs a formal go-ahead to a default habit of Go projects. The standard library itself and nearly every mainstream open-source Go library carry a systematic set of `_test.go` files, and newcomers can contribute tests by following the same convention. A language's attitude toward testing settles, through tens of millions of tiny "write it or not" decisions, into the quality culture of the software written in it. This is the place where Go's "engineering-friendly" philosophy ([1.1](../../part1overview/ch01intro/history.md)) lands most thoroughly.
+| Version | Added | Purpose |
+| --- | --- | --- |
+| Go 1.24 | `T.Context`, `T.Chdir`, `B.Loop` | A context and working directory bound to the test lifecycle; the new benchmark loop |
+| Go 1.25 | `T.Attr`, `T.Output`, `testing/synctest` | Emit key-value attributes to the test log, with their meaning left to continuous integration systems and test frameworks; an `io.Writer` on the same output stream as `t.Log`; virtual time for concurrent tests |
+| Go 1.26 | `T.ArtifactDir`, `testing/cryptotest.SetGlobalRandom` | A directory for saving test artifacts; a deterministic random source for cryptographic functions |
 
-This design of course gives up some things. The minimal `testing` package leaves the conveniences of assertions, mocking, and parameterization to third parties (`testify`, `gomock`) or to boilerplate, in exchange for the stability of the standard library and the unification of the ecosystem. Convention over configuration sacrifices flexibility (you cannot redefine the discovery rules of tests) in exchange for zero adaptation cost. This is the same trade-off Go makes again and again: use a plain convention that everyone understands and every tool recognizes, in exchange for low friction across the whole ecosystem in collaboration. Performance and convenience never come for free, and here Go chooses to press the cost onto "the few who need fancy assertions writing a few more lines," so that "everyone can run tests at zero cost."
+When `go test -artifacts` is given, the directory returned by `ArtifactDir` is under the output
+directory and can be inspected afterwards; otherwise it is a temporary directory deleted after the
+test [[Go Authors, 2026f](#ref-go-authors-2026f)]. `SetGlobalRandom` appeared because of another Go
+1.26 change: functions in the `crypto` packages, such as key generation, no longer use a random
+source passed in by the caller but always use secure random bytes, so tests that need determinism
+use this function instead [[Go Authors, 2026f](#ref-go-authors-2026f)]. The versions in which the
+interfaces in the table were introduced agree with the records in `api/go1.24.txt` through
+`api/go1.26.txt`.
+
+## 16.4.7 Summary
+
+Go's testing rests on a few naming conventions: `go test` discovers tests by the conventions and
+generates a `main` package that organizes them into a test binary. The `testing` package is
+deliberately plain. It provides only reporting primitives, leaves the responsibility of expressing
+failures to the test author, and spreads that cost with table-driven tests; subtests let each row of
+the table be run on its own and in parallel; fuzzing brings coverage-guided input generation under
+the same conventions, and the counterexamples it finds become regression cases in the form of corpus
+files.
+
+This design also gives something up. Conveniences such as assertions and mock objects are left to
+third-party libraries or boilerplate, and the rules for discovering tests cannot be redefined; in
+return, all Go projects organize and run tests the same way, and continuous integration, coverage
+tools and editors need to face only one set of conventions. This is consistent with Go's trade-offs
+elsewhere ([1.1](../../part1overview/ch01intro/history.md)): a simple convention that everyone
+understands and tools can recognize buys low friction in collaboration across the whole ecosystem.
 
 ## Further Reading
 
-1. The Go Authors. *Package testing.* https://pkg.go.dev/testing
-   (the complete API and documentation for `T` / `B` / `F`)
-2. The Go Authors. *Go Fuzzing.* https://go.dev/doc/security/fuzz/ ; Go 1.18 Release Notes.
-   https://go.dev/doc/go1.18#fuzzing (the design of native fuzzing and the corpus directory convention)
-3. The Go Authors. *Go Test Comments (wiki).* https://go.dev/wiki/TestComments
-   (the `if got != want` style and the official rationale for "not providing an assertion library")
-4. Dave Cheney. *Prefer table driven tests.* 2019.
-   https://dave.cheney.net/2019/05/07/prefer-table-driven-tests
-5. Koen Claessen, John Hughes. *QuickCheck: A Lightweight Tool for Random Testing of Haskell
-   Programs.* ICFP 2000. https://doi.org/10.1145/351240.351266 (the origin of property-based random testing)
-6. The Go Authors. *Add a test / Fuzzing (tutorial).* https://go.dev/doc/tutorial/add-a-test ;
-   https://go.dev/doc/tutorial/fuzz
-7. This book, [16.5 Performance Testing](./perf.md) (the mechanics of `b.Loop`, `b.N` convergence, and memory measurement).
+- <a id="ref-cheney-2019"></a>[Cheney, 2019] Dave Cheney. *Prefer table driven tests.* 2019.
+  https://dave.cheney.net/2019/05/07/prefer-table-driven-tests
+- <a id="ref-claessen-and-hughes-2000"></a>[Claessen and Hughes, 2000] Koen Claessen and John
+  Hughes. QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs. In *Proceedings of
+  the Fifth ACM SIGPLAN International Conference on Functional Programming (ICFP '00)*, 2000.
+  https://doi.org/10.1145/351240.351266 The origin of property-based random testing.
+- <a id="ref-go-authors-nda"></a>[Go Authors, n.d.a] The Go Authors. *Package testing.*
+  https://pkg.go.dev/testing
+  The complete API and documentation of `T`, `B` and `F`.
+- <a id="ref-go-authors-ndb"></a>[Go Authors, n.d.b] The Go Authors. *Go Fuzzing.*
+  https://go.dev/doc/security/fuzz/
+  Usage of native fuzzing, the corpus directory convention and platform requirements.
+- <a id="ref-go-authors-ndc"></a>[Go Authors, n.d.c] The Go Authors. *Go Test Comments (wiki).*
+  https://go.dev/wiki/TestComments The `YourFunc(%v) = %v, want %v` failure message format and the
+  rationale for avoiding assertion libraries.
+- <a id="ref-go-authors-ndd"></a>[Go Authors, n.d.d] The Go Authors. *Tutorial: Add a test.*
+  https://go.dev/doc/tutorial/add-a-test
+- <a id="ref-go-authors-nde"></a>[Go Authors, n.d.e] The Go Authors. *Tutorial: Getting started with
+  fuzzing.* https://go.dev/doc/tutorial/fuzz
+  A fuzzing tutorial that uses `Reverse` as its example.
+- <a id="ref-go-authors-ndf"></a>[Go Authors, n.d.f] The Go Authors. *Frequently Asked Questions
+  (FAQ): Where is my favorite helper function for testing?* https://go.dev/doc/faq#testing_framework
+- <a id="ref-go-authors-2016"></a>[Go Authors, 2016] The Go Authors. *Go 1.7 Release Notes.* 2016.
+  https://go.dev/doc/go1.7
+  Subtests and sub-benchmarks.
+- <a id="ref-go-authors-2018"></a>[Go Authors, 2018] The Go Authors. *Go 1.10 Release Notes.* 2018.
+  https://go.dev/doc/go1.10
+  Test result caching; `go test` runs `go vet` automatically.
+- <a id="ref-go-authors-2022"></a>[Go Authors, 2022] The Go Authors. *Go 1.18 Release Notes.* 2022.
+  https://go.dev/doc/go1.18#fuzzing
+  Native fuzzing; the generated corpus is written to `$GOCACHE/fuzz`.
+- <a id="ref-go-authors-2024"></a>[Go Authors, 2024] The Go Authors. *Go 1.22 Release Notes.* 2024.
+  https://go.dev/doc/go1.22
+  Each iteration of a `for` loop creates new variables.
+- <a id="ref-go-authors-2025a"></a>[Go Authors, 2025a] The Go Authors. *Go 1.24 Release
+  Notes.* 2025. https://go.dev/doc/go1.24 `T.Context`, `T.Chdir`, `B.Loop`.
+- <a id="ref-go-authors-2025b"></a>[Go Authors, 2025b] The Go Authors. *Go 1.25 Release
+  Notes.* 2025. https://go.dev/doc/go1.25 `T.Attr`, `T.Output`; `testing/synctest` becomes a regular
+  feature.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors.
+  src/cmd/go/internal/load/test.go: `testmainTmpl`. Go 1.26 source.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/go/internal/load/test.go
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors.
+  src/cmd/go/internal/test/test.go. Go 1.26 source.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/go/internal/test/test.go The
+  subset of `go vet` checks that `go test` runs automatically.
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/testing/testing.go. Go
+  1.26 source. https://github.com/golang/go/blob/release-branch.go1.26/src/testing/testing.go
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors.
+  src/cmd/compile/internal/noder/writer.go. Go 1.26 source.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/noder/writer.go
+  The semantics of `for` loop variables are decided by the per-file language version.
+- <a id="ref-go-authors-2026e"></a>[Go Authors, 2026e] The Go Authors. src/testing/quick/quick.go.
+  Go 1.26 source. https://github.com/golang/go/blob/release-branch.go1.26/src/testing/quick/quick.go
+- <a id="ref-go-authors-2026f"></a>[Go Authors, 2026f] The Go Authors. *Go 1.26 Release
+  Notes.* 2026. https://go.dev/doc/go1.26 `T.ArtifactDir` and `go test -artifacts`;
+  `testing/cryptotest.SetGlobalRandom`.
+- <a id="ref-hockman-2020"></a>[Hockman, 2020] Katie Hockman. *Design Draft: First Class Fuzzing.*
+  Go design draft, 2020. https://go.dev/design/draft-fuzzing Finalized as proposal #44551.
+- <a id="ref-spare-2016"></a>[Spare, 2016] Caleb Spare. *Proposal: testing: better support test
+  helper functions with TB.Helper.* Go design document, 2016-12-27.
+  https://go.dev/design/4899-testing-helper Shipped with Go 1.9.
+- <a id="ref-van-lohuizen-2015"></a>[van Lohuizen, 2015] Marcel van Lohuizen. *Proposal: testing:
+  programmatic sub-test and sub-benchmark support.* Go design document, 2015-09-02.
+  https://go.dev/design/12166-subtests
+- This book: [16.5 Benchmarking and Performance Profiling](./perf.md) (the mechanics of `b.Loop`,
+  `b.N` convergence and memory measurement), [16.1 Runtime Deadlock Detection](./deadlock.md),
+  [16.2 Race Detection](./race.md).

@@ -5,223 +5,493 @@ title: "16.6 Runtime Metrics"
 
 # 16.6 Runtime Metrics
 
-Profiling ([16.5](./perf.md)) and tracing ([16.3](./trace.md)) belong to the family of "pull it in to diagnose when something goes wrong" tools: they cost a fair amount, produce a lot of output, and suit the case where you already suspect a problem somewhere and want to capture a window of time or a single request to look at closely. But in production the more common question is not "profile this for me right now"; it is "has this service been healthy over the past week, when did it start degrading, and should we page someone at midnight?" Answering questions like these does not rely on a one-off deep dive. It relies on **continuous, low-cost, long-retainable numbers**: how big the heap is, how often GC runs, whether the goroutine count is climbing, whether the tail of scheduling latency is rising. These numbers are **runtime metrics**.
+Profiling ([16.5 Benchmarking and Performance Profiling](./perf.md)) and execution tracing
+([16.3 Execution Tracing](./trace.md)) suit the case where something is suspected to be wrong and a
+period of time or a single request needs close examination. A long-running service has to answer
+another kind of question: whether the heap has kept growing over the past week, whether collections
+are becoming more frequent, since when the high percentiles of scheduling latency have been rising.
+The answers come from runtime **metrics**: aggregate values and distributions that are cheap enough
+to read every few seconds, which a monitoring system stores for the long term, plots as charts and
+alerts on.
 
-The difference between metrics and profiles is at heart "aggregate vs. detail" and "always-on vs. on-demand." A profile attributes every allocation, every slice of CPU, to a specific call stack; it carries a lot of information and is expensive to collect. A metric keeps only an aggregated scalar or distribution; a single read is nearly free, so you can sample it every few seconds and keep sampling for months. This section explains the two interfaces Go exposes for metrics, how they evolved, and how metrics plug into a complete observability stack.
+Go has two interfaces for reading runtime statistics: `runtime.ReadMemStats`, available since Go 1,
+and `runtime/metrics`, introduced in Go 1.16 [[Go Authors, 2026c](#ref-go-authors-2026c)]. The
+differences between them, the motivation for `runtime/metrics` [[Knyszek, 2020](#ref-knyszek-2020)]
+and why it does not need to stop the world are discussed in
+[12.8.3 A Consistent Snapshot Without Stopping the World](../../part4memory/ch12alloc/mstats.md) and
+[12.8.4 Two Read Interfaces](../../part4memory/ch12alloc/mstats.md). This section covers the use of
+`runtime/metrics`: how the metric catalog is organized, how histograms represent distributions, how
+several metrics are measured, and how metrics reach a monitoring system.
 
-## 16.6.1 From MemStats to runtime/metrics
+## 16.6.1 The Metric Catalog
 
-Historically, the only entry point for a program to read runtime memory metrics was `runtime.ReadMemStats`, which fills a `MemStats` struct ([12.8](../../part4memory/ch12alloc/mstats.md)):
+`runtime/metrics` does not expose metrics as struct fields. They are named by strings, and the
+complete list is returned by `metrics.All`. The package documentation accordingly advises programs
+to read the metrics listed by `All`, to stay compatible across Go versions; if a specific metric
+must be read, build tags can distinguish versions. A metric may be deprecated and removed, but this
+is considered a rare exception that accompanies only a major change in the runtime
+[[Go Authors, 2026a](#ref-go-authors-2026a)]. The documentation makes two further guarantees: the
+type of a metric's value (`ValueKind`) never changes, and when it must, a new name is used;
+floating-point values are never NaN or infinity. The following program counts the metrics and their
+kinds by the first segment of the name:
 
-```go
-// runtime.MemStats: fields are hard-wired into the struct (excerpt)
-type MemStats struct {
-    Alloc      uint64 // heap bytes currently occupied by live objects
-    HeapInuse  uint64 // heap bytes including in-use spans
-    NumGC      uint32 // number of completed GC cycles
-    PauseTotalNs uint64       // cumulative STW pause (nanoseconds)
-    PauseNs    [256]uint64    // ring buffer of the most recent 256 pauses
-    // ... plus about thirty more fields
-}
+```go {run=true}
+package main
 
-var m runtime.MemStats
-runtime.ReadMemStats(&m) // reading requires a brief stop-the-world
-```
-
-This interface has three hard limitations. First, the fields are **hard-wired** into the struct: for the runtime to expose a new metric, it has to add a field to `MemStats` and change a public API, which is bound by Go's compatibility promise and so is done cautiously, leaving many internal states with no way out at all. Second, to obtain a self-consistent snapshot, `ReadMemStats` briefly **stops the world** on every read, a cost that is not negligible under high-frequency collection. Third, the pause information amounts to a single `PauseNs` ring array plus cumulative totals; to know "what is the P99 of the pauses" you have to compute it yourself from the raw array, and that array only holds the most recent 256 entries, having long since dropped the long-term distribution.
-
-Go 1.16 introduced the **`runtime/metrics`** package to address these problems systematically. It changes metrics from "struct fields" into **"name + value"** key-value pairs: each metric is identified by a string key of the form `/gc/heap/allocs:bytes`, where the key is a **path** and a **unit** separated by a colon (encoding the unit into the key is deliberate: if the unit changes, the semantics most likely change too, and that should be a new key). Adding a metric is just adding a row to the runtime's metric table, touching no existing API, which lets the metric set **evolve freely** along with the runtime, and even allows different Go implementations to expose different metric sets.
-
-The reading interface is built around three types. `Sample` is a "name + value" slot for one sampling; `Value` is a type-tagged union; `ValueKind` records whether the value is a `uint64`, a `float64`, or a **histogram**:
-
-```go
-// runtime/metrics: a key-value, extensible metric interface (sketch)
-type Sample struct {
-    Name  string // metric name, must be one of the names listed by metrics.All()
-    Value Value  // filled in by Read
-}
-
-type Value struct {
-    kind   ValueKind // KindUint64 / KindFloat64 / KindFloat64Histogram / KindBad
-    scalar uint64    // scalar value, interpreted by kind
-    // non-scalar values such as histograms are stored separately via a pointer
-}
-
-func (v Value) Kind() ValueKind            { return v.kind }
-func (v Value) Uint64() uint64             { /* panics if kind does not match */ }
-func (v Value) Float64() float64           { /* ... */ }
-func (v Value) Float64Histogram() *Float64Histogram { /* ... */ }
-```
-
-Reading means first filling in the names you want to read, then handing them to `metrics.Read` to fill the values in batch. The runtime promises that the `Kind` of a given metric is **guaranteed not to change**, so the caller can safely assert the type of a known metric directly; only when a specified name does not exist will the corresponding `Value` be `KindBad`:
-
-```go
-import "runtime/metrics"
-
-// a few metrics worth monitoring continuously: heap, GC frequency, goroutine count, scheduling latency distribution
-var samples = []metrics.Sample{
-    {Name: "/memory/classes/heap/objects:bytes"}, // heap occupied by live objects
-    {Name: "/gc/cycles/total:gc-cycles"},          // cumulative GC cycles, frequency derivable from it
-    {Name: "/sched/goroutines:goroutines"},        // number of live goroutines
-    {Name: "/sched/latencies:seconds"},            // scheduling latency distribution (histogram)
-}
-
-func collect() {
-    metrics.Read(samples) // reuse the same slice to avoid allocating each time
-    heap := samples[0].Value.Uint64()
-    gcCount := samples[1].Value.Uint64()
-    goroutines := samples[2].Value.Uint64()
-    latency := samples[3].Value.Float64Histogram()
-    _ = heap; _ = gcCount; _ = goroutines; _ = latency
-}
-```
-
-Unlike `MemStats`, `Read` does not need a global stop-the-world to fetch scalars; a single collection is light enough to put inside a goroutine that fires every second and runs indefinitely.
-
-## 16.6.2 Distribution Over Average: Histograms and Tail Latency
-
-The most valuable step `runtime/metrics` takes over `MemStats` is turning a class of metrics into **distributions** rather than scalars. Scheduling latency `/sched/latencies:seconds`, the various STW pauses `/sched/pauses/total/gc:seconds`, and heap allocation sizes `/gc/heap/allocs-by-size:bytes` all have values that are a `Float64Histogram`:
-
-```go
-// runtime/metrics.Float64Histogram: the distribution of a set of values (sketch)
-type Float64Histogram struct {
-    Counts  []uint64  // count per bucket; Counts[n] falls in [Buckets[n], Buckets[n+1])
-    Buckets []float64 // bucket boundaries, monotonically increasing; len(Buckets) == len(Counts)+1
-}
-```
-
-Why a distribution? Because for metrics like latency, **the average lies**. A service with an average scheduling latency of 50 microseconds sounds fine, but if 1% of goroutines wait 10 milliseconds before being scheduled onto a CPU, the average flattens this long tail completely, and it is precisely that 1% that determines the stutter the user feels. Monitoring latency means watching **quantiles** (P50, P99, P999), and a quantile can only be estimated from a distribution, never derived back from an average. The histogram exists for exactly this: it preserves the shape of the entire distribution at bucket granularity.
-
-Estimating a quantile from a histogram means accumulating counts along the buckets and finding the bucket where the cumulative fraction first crosses the target quantile:
-
-```go
-// estimate the q-th quantile (0<q<1) from a Float64Histogram, returning the bucket's lower bound
-func quantile(h *metrics.Float64Histogram, q float64) float64 {
-    var total uint64
-    for _, c := range h.Counts {
-        total += c
-    }
-    if total == 0 {
-        return 0
-    }
-    thresh := uint64(float64(total) * q)
-    var cum uint64
-    for i, c := range h.Counts {
-        cum += c
-        if cum >= thresh {
-            return h.Buckets[i] // it falls in this bucket; take its lower bound as the estimate
-        }
-    }
-    return h.Buckets[len(h.Buckets)-1]
-}
-```
-
-Bucket boundary granularity determines estimation accuracy. The runtime chose a **log-linear** bucket distribution for latency metrics: the high bits split into "super-buckets" of different magnitudes by exponent, and each super-bucket is then linearly subdivided into several sub-buckets, so that across latencies spanning several orders of magnitude it keeps a roughly constant relative resolution. This contrasts with `MemStats.PauseNs`, that ring array which only stores the most recent 256 raw values: the histogram loses no history, has no count limit, and naturally supports merging across processes and across time windows (just add two histograms together), exactly the form a monitoring system is happy to consume.
-
-## 16.6.3 Metrics Are Each Subsystem's Window to the Outside
-
-The metrics `runtime/metrics` exposes cover nearly every subsystem this book has dissected, and reading these keys is reading the runtime's situation at this very moment. By path prefix they fall roughly into a few families:
-
-- `/gc/*` and `/memory/classes/*`: the panorama of garbage collection and memory ([12](../../part4memory/ch12alloc),
-  [13](../../part4memory/ch13gc)). `/gc/heap/live:bytes` is the live heap marked by the previous GC,
-  `/gc/heap/goal:bytes` is the target heap size for the current cycle, and their ratio is exactly the quantity the GC pacer ([13.4](../../part4memory/ch13gc/pacing.md))
-  is regulating; differencing `/gc/cycles/total:gc-cycles` over time gives the GC frequency; `/memory/classes/total:bytes`
-  is all the memory the runtime maps from the system, and it is the number the `GOMEMLIMIT` soft cap actually watches.
-- `/sched/*`: the scheduler's state ([9](../../part3concurrency/ch09sched)). `/sched/goroutines:goroutines`
-  is the number of live goroutines, and a continuous rise is often a sign of a goroutine leak; `/sched/latencies:seconds` is
-  the scheduling latency distribution discussed above; `/sched/gomaxprocs:threads` is the current `GOMAXPROCS`.
-- `/sched/pauses/*` and `/cpu/classes/*`: quantifying GC's interference with the application. `/sched/pauses/total/gc:seconds`
-  is the distribution of STW pauses caused by GC (the old key `/gc/pauses:seconds` is deprecated and points to it); `/cpu/classes/gc/total:cpu-seconds`
-  estimates the CPU consumed by GC, and comparing it with `/cpu/classes/total:cpu-seconds` tells you GC's CPU tax rate.
-- `/sync/mutex/wait/total:seconds`: the cumulative time goroutines have spent blocked on `sync.Mutex`/`sync.RWMutex` and the runtime's
-  internal locks; taking its rate gives a rough view of whether global lock contention is worsening, and for a closer look you switch to mutex profiling ([16.5](./perf.md)).
-
-None of these metrics is a side channel tailored for some particular tool; they are the standard outlets through which the runtime opens up its internal counters. `metrics.All()`
-returns at any time the complete list of `Description` entries supported by the current version (with name, English description, `Kind`, and whether the metric is cumulative),
-from which you can discover the metric set dynamically at runtime rather than hard-coding it, which is exactly how an interface designed for version compatibility ought to be used.
-
-## 16.6.4 Plugging Into the Observability Stack
-
-Reading the metrics out is not enough on its own; you have to **collect them continuously, store them remotely, visualize them, and alert on them** to form an operable pipeline. Go provides two layers of entry points along this pipeline.
-
-The lightest layer is the standard library's `expvar`. It hangs variables in JSON form on an HTTP endpoint (default `/debug/vars`),
-and at package initialization it has already `Publish`ed `memstats` (a JSON rendering of a `runtime.MemStats`) and `cmdline`.
-Simply importing it anonymously in your program gets you a memory metrics endpoint for free:
-
-```go
 import (
-    _ "expvar" // auto-registers /debug/vars and publishes memstats, cmdline
-    "expvar"
-    "net/http"
-)
-
-// you can also publish custom metrics, e.g. write the sampled heap size into an exported integer variable
-var heapLive = expvar.NewInt("heap_live_bytes")
-
-func init() {
-    go http.ListenAndServe(":6060", nil) // /debug/vars is already hung on the default mux
-}
-```
-
-`expvar` wins on zero dependencies and being available at a moment's notice, suiting debugging and lightweight introspection; but its JSON format is not the common language of monitoring systems, and it does not directly support histograms and labels. The layer more commonly used in production is the **Prometheus client library**: the official
-`client_golang` includes a built-in collector that translates `runtime/metrics` metrics (histograms included) into Prometheus's
-text format, hung on the conventional `/metrics` endpoint:
-
-```go
-import (
-    "net/http"
-    "github.com/prometheus/client_golang/prometheus/promhttp"
+	"fmt"
+	"runtime/metrics"
+	"strings"
 )
 
 func main() {
-    // promhttp.Handler() collects Go runtime metrics (go_* / process_*) by default
-    http.Handle("/metrics", promhttp.Handler())
-    http.ListenAndServe(":2112", nil)
+	var order []string
+	count := map[string]int{}
+	kinds := map[metrics.ValueKind]int{}
+	for _, d := range metrics.All() {
+		family, _, _ := strings.Cut(d.Name[1:], "/")
+		if count[family] == 0 {
+			order = append(order, family)
+		}
+		count[family]++
+		kinds[d.Kind]++
+	}
+	fmt.Println("total metrics:", len(metrics.All()))
+	for _, f := range order {
+		fmt.Printf("  /%-8s %2d\n", f, count[f])
+	}
+	fmt.Println("uint64:", kinds[metrics.KindUint64],
+		"float64:", kinds[metrics.KindFloat64],
+		"histogram:", kinds[metrics.KindFloat64Histogram])
 }
 ```
 
-Downstream the pipeline is standardized: Prometheus scrapes `/metrics` on a schedule and stores the time series in its own database; Grafana connects to Prometheus
-to draw dashboards; alerting rules (such as "`/sched/goroutines` doubles within five minutes" or "GC pause P99 exceeds 10ms") are
-triggered by Prometheus's Alertmanager. In the cloud-native era, "the Go service exposes `/metrics`, Prometheus scrapes,
-Grafana displays" is almost the default assembly. Go's position in it is clear: provide a **lightweight, extensible, whole-runtime-covering**
-metrics source, and leave the storage, querying, and alerting, which are language-agnostic, to mature external systems.
+The output with Go 1.26.10 is:
 
-## 16.6.5 The Three Pillars of Observability, and Logs
+```
+total metrics: 114
+  /cgo       1
+  /cpu      11
+  /gc       26
+  /godebug  48
+  /memory   14
+  /sched    13
+  /sync      1
+uint64: 94 float64: 12 histogram: 8
+```
 
-Sorting this chapter's diagnostic tools by the industry's "three pillars of observability" makes the whole diagnostic map clear:
+The 66 metrics other than `/godebug` fall into six families by subsystem; the following introduces
+`/gc` and `/memory` together [[Go Authors, 2026a](#ref-go-authors-2026a)]:
 
-| Pillar | Question answered | Form | Implementation in Go |
+- `/gc` and `/memory`: garbage collection and memory. The metrics under `/memory/classes` classify
+  all memory mapped by the runtime without overlap or omission
+  ([12.8.1 Categories of Memory](../../part4memory/ch12alloc/mstats.md)). `/gc/heap/live:bytes` is
+  the live heap marked by the previous collection, and `/gc/heap/goal:bytes` is the target heap size
+  at the end of the current collection, computed by the pacer from the former together with settings
+  such as `GOGC` and the memory limit
+  ([13.3 Trigger Frequency and the Pacing Algorithm](../../part4memory/ch13gc/pacing.md));
+  `/gc/gogc:percent` and `/gc/gomemlimit:bytes` are the current values of those two settings.
+- `/sched`: the scheduler ([Chapter 9 The goroutine Scheduler](../../part3concurrency/ch09sched)),
+  including the numbers of goroutines and threads, `GOMAXPROCS`, scheduling latency and
+  stop-the-world pause durations.
+- `/cpu/classes`: added in Go 1.20; it estimates how CPU time is divided among user code, garbage
+  collection, scavenging and idle time [[Knyszek, 2022c](#ref-knyszek-2022c)]. The metric
+  descriptions point out that these estimates run high and cannot be compared directly with the CPU
+  time measured by the operating system, only with each other within the family.
+- `/sync/mutex/wait/total:seconds`: the cumulative time goroutines have spent blocked on locks,
+  added in Go 1.20 [[Knyszek, 2022b](#ref-knyszek-2022b)]. At first it counted only `sync.Mutex` and
+  `sync.RWMutex`; since Go 1.22 it also includes locks inside the runtime
+  [[Go Authors, 2024](#ref-go-authors-2024)]. The description recommends using it to observe overall
+  changes in lock contention, and collecting a mutex or blocking profile when details are needed
+  ([16.5.5 How the Runtime Collects Profiles](./perf.md)).
+- `/cgo/go-to-c-calls:calls`: the number of calls from Go to C functions.
+
+The number of metrics in the `/godebug` family depends on how many GODEBUG settings the runtime
+supports; their use is discussed below.
+
+## 16.6.2 Histograms
+
+Quantities such as latency should not be judged by the mean alone. A service with a mean scheduling
+latency of 50 µs may have 1% of goroutines waiting 10 ms before they run, and that 1% is exactly the
+stutter users feel; the mean flattens this tail completely. Monitoring latency means looking at high
+percentiles (such as P99), which can only be estimated from a distribution and cannot be derived
+from the mean. `runtime/metrics` represents distributions with `Float64Histogram`
+[[Go Authors, 2026a](#ref-go-authors-2026a)]:
+
+```go
+// Float64Histogram represents a distribution of float64 values.
+type Float64Histogram struct {
+	// Counts contains the weights for each histogram bucket.
+	//
+	// Given N buckets, Count[n] is the weight of the range
+	// [bucket[n], bucket[n+1]), for 0 <= n < N.
+	Counts []uint64
+
+	// Buckets contains the boundaries of the histogram buckets, in increasing order.
+	// ...
+	// Buckets[0] is permitted to have value -Inf and Buckets[len(Buckets)-1] is
+	// permitted to have value Inf.
+	//
+	// For a given metric name, the value of Buckets is guaranteed not to change
+	// between calls until program exit.
+	// ...
+	Buckets []float64
+}
+```
+
+N buckets have N + 1 boundaries, and the first and last boundaries may be negative and positive
+infinity, to hold values outside the range. The boundaries of a metric do not change until the
+program exits, so a monitoring system needs to read them only once. All 8 current histograms are
+cumulative: the bucket counts only grow from program start
+[[Go Authors, 2026a](#ref-go-authors-2026a)]. To get the distribution over the last minute, subtract
+two readings of `Counts` bucket by bucket rather than using a single reading, which reflects the
+entire history since the program started.
+
+Inside the runtime, time histograms are recorded by `timeHistogram`. It is an **HDR histogram**
+(high dynamic range histogram), a structure made widely known by the open-source library of the same
+name, HdrHistogram [[HdrHistogram Authors, n.d.](#ref-hdrhistogram-authors-nd)]. Its design goal is
+to keep a roughly constant relative precision over a value range that spans many orders of
+magnitude. The comment in the runtime explains its construction
+[[Go Authors, 2026e](#ref-go-authors-2026e)]:
+
+```go
+	// For the time histogram type, we use an HDR histogram.
+	// Values are placed in buckets based solely on the most
+	// significant set bit. Thus, buckets are power-of-2 sized.
+	// Values are then placed into sub-buckets based on the value of
+	// the next timeHistSubBucketBits most significant bits. Thus,
+	// sub-buckets are linear within a bucket.
+	//
+	// Therefore, the number of sub-buckets (timeHistNumSubBuckets)
+	// defines the error. This error may be computed as
+	// 1/timeHistNumSubBuckets*100%. For example, for 16 sub-buckets
+	// per bucket the error is approximately 6%.
+	// ...
+	timeHistMinBucketBits = 9
+	timeHistMaxBucketBits = 48 // Note that this is exclusive; 1 higher than the actual range.
+	timeHistSubBucketBits = 2
+	timeHistNumSubBuckets = 1 << timeHistSubBucketBits
+	timeHistNumBuckets    = timeHistMaxBucketBits - timeHistMinBucketBits + 1
+	// Two extra buckets, one for underflow, one for overflow.
+	timeHistTotalBuckets = timeHistNumBuckets*timeHistNumSubBuckets + 2
+```
+
+A duration in nanoseconds is first placed in a bucket by the position of its most significant bit,
+so each bucket covers a power-of-2 interval; the next two bits then place it in one of four
+equal-width sub-buckets. The relative error is therefore at most about 1/4, or 25%. Recording a
+value takes only finding the position of the top bit and one atomic add on the corresponding
+counter, cheap enough to sit on the scheduler's paths. The comment's example of "16 sub-buckets,
+error about 6%" is an earlier configuration: in Go 1.20 Michael Knyszek raised the lower limit of
+the smallest bucket and reduced the sub-buckets to 4, which shrank the histogram by about two
+thirds; the commit message gives as its reason "we don't need 6%
+precision" [[Knyszek, 2022a](#ref-knyszek-2022a)]. The following program reads out the boundaries of
+the scheduling latency histogram:
+
+```go {run=true}
+package main
+
+import (
+	"fmt"
+	"runtime/metrics"
+)
+
+func main() {
+	s := []metrics.Sample{{Name: "/sched/latencies:seconds"}}
+	metrics.Read(s)
+	b := s[0].Value.Float64Histogram().Buckets
+	ns := func(sec float64) float64 { return sec * 1e9 }
+	fmt.Println("boundaries:", len(b), "buckets:", len(b)-1)
+	fmt.Printf("lowest boundaries (ns): %v %.0f %.0f %.0f %.0f\n", b[0], ns(b[1]), ns(b[2]), ns(b[3]), ns(b[4]))
+	for i := range b {
+		if ns(b[i]) == 1<<20 { // about 1.05 ms
+			fmt.Printf("boundaries between 2^20 and 2^21 ns: %.0f %.0f %.0f %.0f %.0f\n",
+				ns(b[i]), ns(b[i+1]), ns(b[i+2]), ns(b[i+3]), ns(b[i+4]))
+		}
+	}
+	fmt.Printf("last two boundaries: %.0f ns, %v\n", ns(b[len(b)-2]), b[len(b)-1])
+}
+```
+
+The output is:
+
+```
+boundaries: 163 buckets: 162
+lowest boundaries (ns): -Inf 0 64 128 192
+boundaries between 2^20 and 2^21 ns: 1048576 1310720 1572864 1835008 2097152
+last two boundaries: 140737488355328 ns, +Inf
+```
+
+40 buckets with 4 sub-buckets each, plus the underflow and overflow buckets, make 162 in total. The
+lowest sub-bucket is 64 ns wide; near 1 ms, the interval from 2^20 to 2^21 ns is divided into four
+equal parts, each 262144 ns wide, about 25% of the start of the interval. The last finite boundary
+is 2^47 ns, about 1.6 days, and longer durations fall into the overflow bucket. It also follows that
+a high percentile estimated from such a histogram is accurate only to the bucket: if the reported
+P99 is 1.31 ms, the true value may lie anywhere between 1.31 ms and 1.57 ms.
+
+## 16.6.3 How Several Metrics Are Measured
+
+### Scheduling Latency and Lock Wait
+
+`/sched/latencies:seconds` records how long a goroutine waits between becoming runnable and actually
+starting to run. Michael Pratt added it in Go 1.17, and the commit message points out that the
+metric is approximate: it samples instead of recording every scheduling delay
+[[Pratt, 2021](#ref-pratt-2021)]. The sampling happens in goroutine state transitions
+[[Go Authors, 2026e](#ref-go-authors-2026e)]:
+
+```go
+	if (oldval == _Grunning || oldval == _Gsyscall) && (newval != _Grunning && newval != _Gsyscall) {
+		// Track every gTrackingPeriod time a goroutine transitions out of _Grunning or _Gsyscall.
+		// Do not track _Grunning <-> _Gsyscall transitions, since they're two very similar states.
+		if casgstatusAlwaysTrack || gp.trackingSeq%gTrackingPeriod == 0 {
+			gp.tracking = true
+		}
+		gp.trackingSeq++
+	}
+```
+
+`gTrackingPeriod` is 8: of every 8 times a goroutine leaves the running state, only one is tracked,
+and state transitions during tracking have to call `nanotime` to read the time. State transitions
+lie on the hot path of scheduling, and sampling cuts this cost to one eighth. The price is that the
+counts in the histogram are only about one eighth of all scheduling events: the shape of the
+distribution is representative, but the counts are not the total number of schedulings.
+`/sync/mutex/wait/total:seconds` reuses the same tracking; it is a total, so it is multiplied by 8
+when accumulated, and the comment reads: "because we're sampling, we have to multiply by our
+sampling period to get a more representative estimate of the absolute value".
+
+### The Memory Limit
+
+A service with a memory limit (`GOMEMLIMIT`) often needs to monitor how far it is from the limit.
+The documentation of `runtime/debug.SetMemoryLimit` gives the quantity that the runtime actually
+controls [[Go Authors, 2026f](#ref-go-authors-2026f)]:
+
+```go
+// More specifically, the following expression accurately reflects
+// the value the runtime attempts to maintain as the limit:
+//
+//	runtime.MemStats.Sys - runtime.MemStats.HeapReleased
+//
+// or in terms of the runtime/metrics package:
+//
+//	/memory/classes/total:bytes - /memory/classes/heap/released:bytes
+```
+
+Of all the memory mapped by the runtime, the part already returned to the operating system does not
+count toward the limit. Monitoring should compare this difference with `/gc/gomemlimit:bytes` rather
+than look only at `/memory/classes/total:bytes`.
+
+### Goroutine States
+
+Go 1.26 adds a group of new scheduler metrics: the number of goroutines by state,
+`/sched/goroutines/not-in-go:goroutines`, `/sched/goroutines/runnable:goroutines`,
+`/sched/goroutines/running:goroutines` and `/sched/goroutines/waiting:goroutines`; the total number
+of goroutines created since program start, `/sched/goroutines-created:goroutines`; and the number of
+threads owned by the runtime, `/sched/threads/total:threads` [[Knyszek, 2025](#ref-knyszek-2025);
+[Go Authors, 2026g](#ref-go-authors-2026g)]. The need for such metrics was raised as early as 2016
+(Go issue #15490). The descriptions stress that these counts are approximate, and that the sum over
+the states is not guaranteed to equal `/sched/goroutines:goroutines`
+[[Go Authors, 2026a](#ref-go-authors-2026a)]. A persistently high number of runnable goroutines
+means the available processors cannot run them in time; a number of waiting goroutines that grows
+monotonically over time hints at a possible goroutine leak
+([16.1 Runtime Deadlock Detection](./deadlock.md)).
+
+### Non-Default GODEBUG Behavior
+
+Go 1.21 established GODEBUG as a compatibility mechanism: a fix that changes existing behavior
+usually comes with a GODEBUG setting through which a program can temporarily keep the old behavior.
+In the design document describing this mechanism, Russ Cox proposed that the runtime provide, for
+each setting, a counter `/godebug/non-default-behavior/<name>:events` that records how many times
+the program executed the old behavior because of a non-default setting [[Cox, 2022](#ref-cox-2022);
+[Cox, 2023](#ref-cox-2023)]. The reasoning is that developers need to know when a setting can be
+removed safely: testing is only a first step, and production metrics can confirm the conclusion of
+the tests; if a production system keeps reporting a count of zero, there is strong evidence for
+removing the setting.
+
+Take `panicnil` as an example. Since Go 1.21, `panic(nil)` is turned into a panic with
+`*runtime.PanicNilError`, and the result of `recover` is no longer `nil`; setting
+`GODEBUG=panicnil=1` restores the old behavior. The following program runs under this setting:
+
+```go {run=true env="GODEBUG=panicnil=1"}
+package main
+
+import (
+	"fmt"
+	"runtime/metrics"
+)
+
+func main() {
+	defer func() {
+		fmt.Printf("result of recover(): %v\n", recover())
+		s := []metrics.Sample{{Name: "/godebug/non-default-behavior/panicnil:events"}}
+		metrics.Read(s)
+		fmt.Println("panicnil:events =", s[0].Value.Uint64())
+	}()
+	panic(nil)
+}
+```
+
+The output is:
+
+```
+result of recover(): <nil>
+panicnil:events = 1
+```
+
+Without this setting, `recover` returns `panic called with nil argument` and the count is 0. Only
+executing the old behavior is counted; merely setting GODEBUG is not, which is exactly the
+information needed to judge whether the old behavior is still used.
+
+## 16.6.4 Connecting to a Monitoring System
+
+The standard library's `expvar` is the simplest outlet. When the package is imported, it registers
+`GET /debug/vars` on the default `ServeMux` and publishes two variables, `cmdline` and `memstats`,
+in JSON format [[Go Authors, 2026b](#ref-go-authors-2026b)]:
+
+```go
+func init() {
+	if godebug.New("httpmuxgo121").Value() == "1" {
+		http.HandleFunc("/debug/vars", expvarHandler)
+	} else {
+		http.HandleFunc("GET /debug/vars", expvarHandler)
+	}
+	Publish("cmdline", Func(cmdline))
+	Publish("memstats", Func(memstats))
+}
+```
+
+`memstats` calls `runtime.ReadMemStats` on every evaluation, so each request to `/debug/vars` stops
+the world once ([12.8.4 Two Read Interfaces](../../part4memory/ch12alloc/mstats.md)). The output of
+`expvar` also cannot express histograms or labels; it suits debugging, not high-frequency production
+monitoring.
+
+In production the more common approach is for Prometheus to scrape the `/metrics` endpoint that a
+service exposes periodically [[Prometheus Authors, n.d.a](#ref-prometheus-authors-nda)]. In version
+1.12.0 (January 2022) of the official client library `client_golang`, the Go collector switched to
+`runtime/metrics` on Go 1.17 and above and exported about 80 new metrics by default; version 1.12.2
+(May 2022) withdrew this default and restored a set of metrics equivalent to `MemStats`, with the
+new metrics requiring explicit opt-in. Version 1.20.0 (August 2024) added three metrics to the
+default set, `go_gc_gogc_percent`, `go_gc_gomemlimit_bytes` and `go_sched_gomaxprocs_threads`, on
+the grounds that the Go team recommends them
+[[Prometheus Authors, n.d.b](#ref-prometheus-authors-ndb)]. The changelog does not explain why the
+default was withdrawn. In my view, this back and forth reflects the trade-offs in choosing a default
+metric set: in Prometheus each histogram expands by bucket into many time series, so the more
+metrics are exported, the higher the cost of storage and queries, while a change of the default
+affects every service that upgrades the client library. When all metrics are needed, they can be
+enabled explicitly:
+
+```go
+import (
+	"net/http"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+func main() {
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(collectors.NewGoCollector(
+		collectors.WithGoCollectorRuntimeMetrics(collectors.MetricsAll), // export all runtime/metrics metrics
+	))
+	http.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+	http.ListenAndServe(":2112", nil)
+}
+```
+
+The monitoring system scrapes these cumulative counters and histograms at a fixed interval, takes
+the difference between adjacent readings to get the rate and distribution within each time window,
+and then draws charts and raises alerts from them, for example "the P99 of scheduling latency over
+the last five minutes exceeds 10 ms". This differencing is the same thing as reading a histogram
+twice and subtracting bucket by bucket, as described above.
+
+## 16.6.5 Metrics, Profiles and Traces
+
+The data produced by the diagnostic tools of this chapter can be distinguished by the question each
+answers:
+
+| Data | Question answered | Form | Implementation in Go |
 | --- | --- | --- | --- |
-| Metrics | how is the system overall, what is the trend | continuous aggregated numbers / distributions | `runtime/metrics`, `expvar` (this section) |
-| Traces | what exactly happened this one time, where is it slow | a timeline of events | execution tracing ([16.3](./trace.md)), distributed tracing |
-| Profiles | which code the resources went into | aggregation of where resources go | `pprof` ([16.5](./perf.md)) |
+| Metrics | Is the system healthy overall, and what is the trend | Continuous aggregate values and distributions | `runtime/metrics`, `expvar` (this section) |
+| Profiles | Which code consumes the resources | Samples aggregated by call stack | `runtime/pprof` ([16.5 Benchmarking and Performance Profiling](./perf.md)) |
+| Traces | What exactly happened during a period of time | Events in time order | `runtime/trace` ([16.3 Execution Tracing](./trace.md)) |
+| Logs | The context of a discrete event when it happened | Structured records | `log/slog` ([7.3 Error Formatting and Context](../../part2lang/ch07errors/context.md)) |
 
-Each does its own job, yet they connect to one another: metrics handle **continuous monitoring** and alert when a trend goes abnormal; traces answer **where one specific request is slow**; profiles handle **attributing some resource consumption to code**. Monitoring alerts find the heap is growing, you switch to an allocation profile to
-locate which code is allocating, then use a trace to see where GC stalls within one specific request, a typical "from surface to point"
-diagnostic path.
-
-Beyond the three pillars there is usually a fourth category, **logs**. Since Go 1.21 the standard library's `log/slog`
-([7.3](../../part2lang/ch07errors/context.md)) provides structured logging, turning a log from a single string line into a key-value record that can be filtered, aggregated, and alerted on by
-field, filling in exactly the piece of "recording the context of discrete events." Worth pointing out: Go provides
-all four of these infrastructures **either built in or via official packages**: metrics in `runtime/metrics` and `expvar`, tracing in
-`runtime/trace`, profiling in `runtime/pprof`, and logging in `log/slog`. A Go service has fairly deep
-self-observation ability out of the box, with no heavy dependence on external APM probes. This also explains why Go is especially suited to writing server programs that need to run for a long time and need
-to be watched continuously by operators: observability is not bolted on after the fact, but a capability the runtime and standard library prepared from the start.
+OpenTelemetry currently supports the signals traces, metrics and logs (plus baggage for propagating
+context), while profiles are still being defined
+[[OpenTelemetry Authors, n.d.](#ref-opentelemetry-authors-nd)]. Overhead and information content
+both increase across the four, so they are often used in order from the broad to the specific:
+metrics run continuously and raise an alert when a trend looks abnormal; profiles attribute the
+abnormal resource consumption to code; traces and logs then reconstruct what individual requests
+went through. For example, if monitoring finds the live heap growing steadily, collect a heap
+profile to find the call stacks that allocate the most; if the problem is occasional tail latency,
+collect an execution trace and look at the scheduling and garbage collection events in that period.
+All four kinds of data are provided by the Go standard library: `runtime/metrics` and `expvar`,
+`runtime/pprof`, `runtime/trace`, and `log/slog`, added in Go 1.21
+[[Go Authors, 2026d](#ref-go-authors-2026d)].
 
 ## Further Reading
 
-1. The Go Authors. *Package runtime/metrics.* https://pkg.go.dev/runtime/metrics
-   (the key-value metric interface, `Sample`/`Value`/`Float64Histogram`, `All` and the complete metric list)
-2. Michael Knyszek. *Proposal: API for unstable runtime metrics (#37112).* 2020.
-   https://github.com/golang/go/issues/37112 (the design motivation for `runtime/metrics` and the case for replacing `MemStats`)
-3. The Go Authors. *Package expvar.* https://pkg.go.dev/expvar
-   (the `/debug/vars` JSON endpoint, publishing `memstats` and `cmdline` by default)
-4. The Go Authors. *Package runtime, type MemStats.* https://pkg.go.dev/runtime#MemStats
-   (the old fixed-field memory statistics and its stop-the-world read semantics)
-5. Prometheus Authors. *Instrumenting a Go application / client_golang.*
-   https://prometheus.io/docs/guides/go-application/ ,
-   https://github.com/prometheus/client_golang (the `/metrics` endpoint and the runtime metrics collector)
-6. The Go Authors. *Package log/slog.* https://pkg.go.dev/log/slog (structured logging)
-7. This book: [12.8 Memory Statistics](../../part4memory/ch12alloc/mstats.md),
-   [13.4 GC Pacing](../../part4memory/ch13gc/pacing.md), [16.3 Performance Tracing](./trace.md),
-   [16.5 Benchmarking and Profiling](./perf.md), [7.3 Error Formatting and Context](../../part2lang/ch07errors/context.md).
+- <a id="ref-cox-2022"></a>[Cox, 2022] Russ Cox. *Proposal: Extended backwards compatibility for
+  Go.* Go design document, 2022.
+  https://go.googlesource.com/proposal/+/master/design/56986-godebug.md The design of the GODEBUG
+  compatibility mechanism, which proposes the non-default-behavior counters.
+- <a id="ref-cox-2023"></a>[Cox, 2023] Russ Cox. internal/godebug: export non-default-behavior
+  counters in runtime/metrics. Go commit 213495a4a6, 2023. https://go.dev/cl/453618 Shipped in Go
+  1.21.
+- <a id="ref-go-authors-2024"></a>[Go Authors, 2024] The Go Authors. *Go 1.22 Release Notes.* 2024.
+  https://go.dev/doc/go1.22
+  `/sync/mutex/wait/total:seconds` starts counting locks inside the runtime.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *Package runtime/metrics.*
+  https://pkg.go.dev/runtime/metrics The key-value metric interface, `Sample`, `Value`,
+  `Float64Histogram`, `All` and the complete metric list; this section follows
+  src/runtime/metrics/doc.go, description.go and histogram.go of Go 1.26.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *Package expvar.*
+  https://pkg.go.dev/expvar The `/debug/vars` JSON endpoint, which publishes `memstats` and
+  `cmdline` by default; this section follows src/expvar/expvar.go of Go 1.26.
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *Package runtime, type
+  MemStats.* https://pkg.go.dev/runtime#MemStats The legacy fixed-field memory statistics and their
+  stop-the-world read semantics.
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. *Package log/slog.*
+  https://pkg.go.dev/log/slog
+  Structured logging.
+- <a id="ref-go-authors-2026e"></a>[Go Authors, 2026e] The Go Authors. src/runtime/histogram.go
+  (`timeHistogram`), src/runtime/proc.go (`casgstatus`), src/runtime/runtime2.go
+  (`gTrackingPeriod`). Go 1.26 source.
+  https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
+- <a id="ref-go-authors-2026f"></a>[Go Authors, 2026f] The Go Authors. *Package runtime/debug, func
+  SetMemoryLimit.* https://pkg.go.dev/runtime/debug#SetMemoryLimit
+- <a id="ref-go-authors-2026g"></a>[Go Authors, 2026g] The Go Authors. *Go 1.26 Release
+  Notes.* 2026. https://go.dev/doc/go1.26 Adds the scheduler metrics that count goroutines by state.
+- <a id="ref-hdrhistogram-authors-nd"></a>[HdrHistogram Authors, n.d.] *HdrHistogram: A High Dynamic
+  Range (HDR) Histogram.* http://hdrhistogram.org/
+- <a id="ref-knyszek-2020"></a>[Knyszek, 2020] Michael Knyszek. Go issue #37112. *runtime: API for
+  unstable metrics.* 2020. https://github.com/golang/go/issues/37112
+  The motivation for `runtime/metrics` and the argument for replacing `MemStats`;
+  see [12.8.4 Two Read Interfaces](../../part4memory/ch12alloc/mstats.md) for details.
+- <a id="ref-knyszek-2022a"></a>[Knyszek, 2022a] Michael Anthony Knyszek. runtime: shrink time
+  histogram buckets. Go commit 87eda2a782, 2022. https://go.dev/cl/427615 Shipped in Go 1.20.
+- <a id="ref-knyszek-2022b"></a>[Knyszek, 2022b] Michael Anthony Knyszek. runtime/metrics: add
+  /sync/mutex/wait/total:seconds metric. Go commit 63ceff95fa, 2022. https://go.dev/cl/427618
+  Shipped in Go 1.20; fixes Go issue #49881.
+- <a id="ref-knyszek-2022c"></a>[Knyszek, 2022c] Michael Anthony Knyszek. runtime/metrics: add CPU
+  stats. Go commit b7c28f484d, 2022. https://go.dev/cl/404307 Shipped in Go 1.20; fixes Go issue
+  #47216.
+- <a id="ref-knyszek-2025"></a>[Knyszek, 2025] Michael Anthony Knyszek. runtime/metrics: add metrics
+  for goroutine sched states. Go commit 13df972f68, 2025. https://go.dev/cl/690397 Shipped in Go
+  1.26; corresponds to Go issue #15490.
+- <a id="ref-opentelemetry-authors-nd"></a>[OpenTelemetry Authors, n.d.] *Signals.* OpenTelemetry
+  documentation. https://opentelemetry.io/docs/concepts/signals/
+- <a id="ref-pratt-2021"></a>[Pratt, 2021] Michael Pratt. runtime,runtime/metrics: add metric to
+  track scheduling latencies. Go commit bedfeed54a, 2021. https://go.dev/cl/308933 Shipped in Go
+  1.17. The commit message notes that it was mainly written by Michael Knyszek.
+- <a id="ref-prometheus-authors-nda"></a>[Prometheus Authors, n.d.a] Prometheus Authors.
+  *Instrumenting a Go application / client_golang.*
+  https://prometheus.io/docs/guides/go-application/ ; https://github.com/prometheus/client_golang
+  The `/metrics` endpoint and the runtime metrics collector.
+- <a id="ref-prometheus-authors-ndb"></a>[Prometheus Authors, n.d.b] Prometheus Authors.
+  *client_golang CHANGELOG.* https://github.com/prometheus/client_golang/blob/main/CHANGELOG.md
+  Changes to the default metrics of the Go collector in versions 1.12.0, 1.12.2 and 1.20.0.
+- This book: [12.8 Memory Statistics](../../part4memory/ch12alloc/mstats.md),
+  [13.3 Trigger Frequency and the Pacing Algorithm](../../part4memory/ch13gc/pacing.md),
+  [16.3 Execution Tracing](./trace.md), [16.5 Benchmarking and Performance Profiling](./perf.md),
+  [7.3 Error Formatting and Context](../../part2lang/ch07errors/context.md),
+  [16.1 Runtime Deadlock Detection](./deadlock.md).

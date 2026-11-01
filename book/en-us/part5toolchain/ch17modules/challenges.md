@@ -5,146 +5,272 @@ title: "17.1 The Hard Parts of Dependency Management"
 
 # 17.1 The Hard Parts of Dependency Management
 
-Modern software is almost never written from scratch. For an ordinary server program, one level down the `import` list you find a logging library, an HTTP router, a serializer; one level further down are the cryptography, compression, and network primitives that each of those depends on. The code that is actually yours may be less than one percent of the whole dependency graph. This brings the dividend of reuse, and it also brings a question that is not yours by rights yet must be answered by you: **for every package in this graph, which version should you use?** This section is in no hurry to give Go's answer; first we want to make the difficulty of the problem itself clear. There are two main threads to it: one is **how to choose a version** (diamond dependencies and constraint solving), the other is **how to keep it from drifting once chosen** (reproducible builds). Only once these two are understood can you see why the "minimum version selection" scheme of [17.3](./minimum.md) deserves its own design, and what price Go paid to get there.
+Cox borrows Titus Winters's definition of software engineering as "programming integrated over time
+and other programmers" [[Cox, 2019](#ref-cox-2019)]. Dependencies bring in both at once: the
+depended-on code is written by someone else and releases new versions on its own schedule. Whether a
+program that builds today builds the same way next year, and whether two users of the same
+dependency can coexist in one program, are not entirely up to the program's author. Winters likewise
+stresses that the compatibility problems dependencies bring are software engineering problems rather
+than programming problems: the trouble is not making a dependency work today but how it changes over
+time [[Winters et al., 2020](#ref-winters-et-al-2020)]. This section examines the problem at three
+levels: why `go get` in the GOPATH era failed on versions, why version selection is NP-complete in
+general, and why the policy of taking the latest version conflicts with reproducible builds. The
+answer of Go modules is covered in [17.2](./semantics.md) through [17.4](./fight.md).
 
-## 17.1.1 The Diamond Dependency: A Constraint Solving Problem
+## 17.1.1 `go get` Without Versions
 
-The core difficulty of dependency management is concentrated in a topology called the **diamond dependency**. Your program depends on both A and B, and A and B both depend on the same C. The dependency graph splits into two branches from the apex and converges again at C; drawn out, this is exactly a diamond. The trouble is that the two branches place **different version requirements** on C:
+The first Go package installation tool was `goinstall`, added to the repository by Cox in March
+2010; the commit title calls it "an experiment in (external) package
+installation" [[Cox, 2010](#ref-cox-2010)]. Before Go 1 it was replaced by `go get`
+[[Niemeyer, 2012](#ref-niemeyer-2012)]. Both follow the same model: an import path is at once the
+address of a code repository and a directory under `$GOPATH/src`, so `import "github.com/foo/bar"`
+corresponds to `$GOPATH/src/github.com/foo/bar` on disk. An import path has exactly one copy of code
+on disk, and nothing records which version that copy is.
+
+This was not an oversight. In 2013 the Go 1.2 FAQ gained an entry on versioning explaining that
+`go get` deliberately does not handle versions [[Cox, 2013](#ref-cox-2013)]:
+
+```text
+"Go get" does not have any explicit concept of package versions.
+Versioning is a source of significant complexity, especially in large code bases,
+and we are unaware of any approach that works well at scale in a large enough
+variety of situations to be appropriate to force on all Go users.
+```
+
+The FAQ instead gives two pieces of advice. Package authors should stay backward compatible, add new
+names for different functionality rather than changing old ones, and switch to a new import path
+when compatibility must be broken completely. Package users who worry about a dependency changing in
+unexpected ways should copy it into their own repository under a new import path, which the FAQ
+notes is what Google does internally. The former was later named the import compatibility rule
+([17.2](./semantics.md)); the latter is the precursor of the `vendor` directory.
+
+Boyer observes that `go get` behaves correctly only under two premises: code is always backward
+compatible, and there are no fixed releases [[Boyer, 2016b](#ref-boyer-2016b)]. Because `go get`
+fetches only the latest code on a repository's default branch, tagging a release has no effect on
+ordinary users, and most developers stopped tagging versions. When the premises fail, `go get` goes
+wrong in two opposite ways. Cox illustrates both failures with the following example
+[[Cox, 2019](#ref-cox-2019)]:
+
+```text
+$ go get D       # downloads the latest D, D 1.0
+$ go get C       # downloads C 1.8; C needs D 1.4, but D 1.0 is already on disk and is reused: D is too old
+$ go get -u C    # updates every dependency to the latest; D has just released the buggy D 1.6: D is too new
+```
+
+C's author developed and tested against D 1.4, so D 1.4 is what the build really needs. `go get`
+does not know versions exist and can only choose between what is already on disk and what is newest
+in the repository; neither is D 1.4.
+
+The community wrote many tools in response; the Go team's own answer was the `vendor` directory: Go
+1.5 offered experimental support through the environment variable `GO15VENDOREXPERIMENT`, Go 1.6
+enabled it by default, and from Go 1.7 it is a standard feature
+[[Go Authors, 2016a](#ref-go-authors-2016a); [Go Authors, 2016b](#ref-go-authors-2016b)]. `vendor`
+lets each project keep copies of its dependencies in its own directory tree. It solves the isolation
+of dependencies but does not answer which version a dependency should be, and it provides no uniform
+way to record that choice. Tools built on top of it each recorded versions in mutually incompatible
+formats. In 2016 the community formed a committee to design a unified tool, which became `dep`
+([17.4](./fight.md)).
+
+## 17.1.2 Diamond Dependencies
+
+Suppose program A depends on B and C, B needs version 1 of D, C needs version 2 of D, and the two
+versions are incompatible. The dependency graph splits at A and rejoins at D, forming a diamond, so
+the situation is called a **diamond dependency** [[Cox, 2016](#ref-cox-2016)]:
 
 ```mermaid
 flowchart TD
-    APP["your program main"] --> A["A v1.0"]
-    APP --> B["B v1.0"]
-    A -->|"require C v1.2"| C12["C v1.2"]
-    B -->|"require C v1.5"| C15["C v1.5"]
-    C12 -.->|"the two must merge into one"| PICK{"link in which C?"}
-    C15 -.-> PICK
+    A["A"] --> B["B"]
+    A --> C["C"]
+    B -->|"needs D 1"| D1["D 1"]
+    C -->|"needs D 2"| D2["D 2"]
 ```
 
-Why not let A use C v1.2 and B use C v1.5, each taking what it needs? Most languages cannot do this. The two versions of C usually export the same package path and the same set of type names, so linking both into one program makes the linker collide on duplicate symbols. Even if the linker allowed it, C v1.2's `Token` and C v1.5's `Token` are two mutually incompatible types in the type system. The moment A passes the `Token` it holds to B, the two would blow up at the boundary. This crack is clearer with a sketch of code:
+If a program can contain only one version of D, this graph cannot be built. In Go the restriction
+comes from the build system itself: an import path can denote only one package
+[[Cox, 2019](#ref-cox-2019)]. Even if the build system allowed two copies to coexist, the problem
+would not disappear. A type of the same name in the two versions is a different type, so a value B
+obtains from D 1 cannot be handed to C, which expects D 2. Package-level state is also duplicated:
+if D registers a command-line flag or an HTTP handler at initialization, the two versions conflict
+when both are present unless they coordinate explicitly [[Cox, 2019](#ref-cox-2019)].
 
-```go
-// A uses C v1.2 internally, and exposes C's type on its own API
-package a
-import c "example.com/c" // assume this resolves to v1.2
-func NewClient() *c.Token { ... }
+The introduction to the Semantic Versioning specification calls this predicament "dependency
+hell" and notes that it has two directions: if dependency specifications are too tight, upgrading
+one package forces new releases of every package that depends on it, which is version lock; if they
+are too loose, they assume compatibility with too many future versions, which is version promiscuity
+[[Preston-Werner, 2013](#ref-preston-werner-2013)]. The former makes upgrades impossible, and the
+latter lets a new version break a build at any moment. The whole design of dependency management
+tools can be seen as a search for a position between these two directions.
 
-// B uses C v1.5 internally; its signature also has c.Token
-package b
-import c "example.com/c" // assume this resolves to v1.5
-func Use(t *c.Token) { ... }
+## 17.1.3 Version Selection Is NP-Complete
 
-// your program wants to hand the Token from A to B
-b.Use(a.NewClient())
-// if v1.2 and v1.5 are "two different c.Token types", this line fails to compile:
-// cannot use a.NewClient() (*c@v1.2.Token) as *c@v1.5.Token
-```
+Diamond dependencies show that version selection may have no solution; the deeper problem is that
+deciding whether a solution exists is itself hard. In a 2016 article Cox gave a proof: as long as a
+package manager satisfies the following four assumptions, deciding whether a set of dependencies can
+be satisfied is NP-complete [[Cox, 2016](#ref-cox-2016)]:
 
-Russ Cox traced this crack in detail in "Go & Versioning" using the OAuth2 example: an application depends on OAuth2 v1 indirectly through an Azure library, and on OAuth2 v2 indirectly through an AWS library. When an intermediate library exposes the type of an underlying dependency in its own API, coexistence of multiple versions turns from "can it be linked in" into "will the types fail to match at the seam". Reality therefore degenerates into a hard constraint: **for any given C, only one version can exist in the entire program.**
+1. A package can list zero or more packages, or specific versions of packages, as dependencies.
+2. Installing a package requires installing all of its dependencies.
+3. Different versions of a package can have different dependencies.
+4. Two different versions of the same package cannot be installed at the same time.
 
-Once you accept "one version per package", the diamond dependency becomes a multiple-choice question: pick one from v1.2 and v1.5, and the one you pick must let both A and B work correctly. With two nodes this is still simple. But a real dependency graph has hundreds or thousands of nodes, each placing its own interval constraint on versions (C wants `>=1.2`, D wants `<2.0`, E wants `!=1.4`, and so on), and finding a combination of versions that satisfies **all** constraints at once is, fully and properly, a **constraint solving** problem.
-
-How hard it is depends on what kinds of constraints you allow it to express. If the constraints can express **conditional dependencies**, implications with negation such as "if some version of X is chosen, then Y cannot be chosen", the solving problem immediately slides into the realm of **boolean satisfiability** (SAT). Cox's observation is rather pointed: "with just a little conditional constraint, version search falls into SAT", and SAT is an NP-complete problem with no known general efficient solution. Formally, given a set of variables $V$ (which version each package picks) and a set of constraints $\Phi$, deciding whether there exists an assignment making $\bigwedge_{\phi \in \Phi}\phi$ true is equivalent to 3-SAT when $\Phi$ contains arbitrary boolean clauses. This is exactly why package managers like Cargo, npm, and apt often carry a SAT solver inside them:
+The proof reduces 3-SAT to version selection. Each Boolean variable $x_j$ corresponds to a package
+$X_j$ with two mutually exclusive versions $X_j{:}0$ and $X_j{:}1$; installing $X_j{:}1$ means $x_j$
+is true. Each clause $C_i$ corresponds to a package with three versions, where version $k$ depends
+on the variable version that makes the $k$-th literal of the clause true. Finally, a package $F$
+depends on all the $C_i$. Take the clause $C_5 = (x_1 \lor \lnot x_2 \lor x_4)$ as an example:
 
 ```text
-# a constraint system that triggers SAT (sketch)
-program  depends on A, B
-A v1.0   depends on C >= 1.2
-B v1.0   depends on C  < 1.5,  and  if C >= 1.3 then needs D >= 2.0
-D v2.0   depends on C  < 1.3            <- negates the line above, creating combinatorial blowup
-...      (thousands of packages, each with its own intervals and conditions)
-the solver must find an assignment satisfying all constraints within an exponential space of version combinations
+C5:0 depends on X1:1      the first literal x1 of the clause is true
+C5:1 depends on X2:0      the second literal ¬x2 of the clause is true
+C5:2 depends on X4:1      the third literal x4 of the clause is true
+F    depends on C1, C2, ..., Cn
 ```
 
-Bringing in a solver costs two things. One is **slowness**: in the worst case the search space grows exponentially with the number of packages, and a single dependency resolution in a large project can take a noticeable amount of time. The other is **surprise**: a SAT solver returns "some feasible solution", not necessarily the one that human intuition would consider "the one that should be chosen". A slight adjustment to the solver's internal search order or heuristic strategy can make the same set of constraints resolve to a different version combination. You merely upgraded an unrelated package, only to find that another package was "incidentally" swapped to a different major version. **Slowness and unpredictability are the inherent cost of treating version selection as general constraint solving.** Keep this in mind, and in [17.3](./minimum.md) Go's deliberate restriction of the problem to a polynomially solvable subclass (the constraints corresponding to MVS are simultaneously 2-SAT, Horn-SAT, and Dual-Horn-SAT) is no longer a flourish but a direct answer to this difficulty.
+$F$ can be installed if and only if every $C_i$ has a version that can be installed, that is, every
+clause has a true literal, which means the original formula is satisfiable. A package with several
+versions, each with different dependencies, plays the role of disjunction here. Cox explains that
+the EDOS project's 2005 report had already proved package installation for Debian and RedHat
+NP-complete, but that proof relied on the "one of several" dependency syntax in those systems,
+whereas Cox's construction uses only the four assumptions that nearly every package manager
+satisfies, so it applies equally to language-level package managers such as Cargo and npm
+[[Cox, 2016](#ref-cox-2016)]. The article also thanks Boyer for pointing out the EDOS report;
+Boyer's own survey of the package manager design space is in [[Boyer, 2016a](#ref-boyer-2016a)].
 
-## 17.1.2 Reproducible Builds: The Me of Today Equals Next Month's CI
+The result has two implications. First, in the worst case a package manager may either take
+extremely long to solve or report an installable package as uninstallable. Cox's survey shows that
+many package managers therefore turned to SAT solvers or backtracking search
+[[Cox, 2016](#ref-cox-2016)]. The EDOS project itself encoded Debian installability as a Boolean
+formula and handed it to a SAT solver [[Mancinelli et al., 2006](#ref-mancinelli-et-al-2006)].
+Second, the solver's answer is not necessarily unique. When both "newest B with older C" and "older
+B with newest C" satisfy the constraints, there is no clear criterion for choosing between them, and
+users find the result hard to predict [[Cox, 2019](#ref-cox-2019)]. Moreover, the constraints
+themselves are often incomplete: a solver can only rule out incompatibilities that have been
+declared, and a combination "not yet found to be broken" is not the same as a combination that
+works.
 
-The second main thread is how to keep a chosen version from **drifting** after it is chosen. The requirement of a reproducible build can be stated in one sentence: the binary I build on my machine today must be compiled from the **same set of dependency versions** as the one built next month on the CI pipeline, on your laptop, or in some security rollback three years from now. Otherwise you fall into the defense every engineer knows so well: "works on my machine".
+The same article also points out the directions that avoid NP-completeness, which drop one of the
+four assumptions [[Cox, 2016](#ref-cox-2016)]. If dependencies can declare only minimum versions,
+not specific versions or exclusions of some versions (dropping the first assumption), selection no
+longer needs search. If different versions of the same package may coexist (dropping the fourth),
+conflicts do not arise. If packages follow semantic versioning, the two can be combined: take one
+version within a major version, and treat different major versions as different packages. Go
+modules, two years later, were designed along exactly these two directions
+[[Cox, 2018a](#ref-cox-2018a)] ([17.2](./semantics.md), [17.3](./minimum.md)).
 
-The reason this is a difficulty is that the act of "building" naturally carries a hidden dimension of time. If the rule for dependency resolution is "take the **latest** version that satisfies the constraints", the default in many ecosystems, then the resolution result becomes a function of the moment of building:
+## 17.1.4 Reproducible Builds and Lock Files
+
+The second difficulty is time. If the rule for resolving dependencies is "take the newest version
+that satisfies the constraints", the result of resolution becomes a function of the moment of the
+build. C declares that it needs D 1.4 or later: yesterday the newest satisfying version was D 1.5;
+today D 1.6 has been released, and the same declaration resolves to D 1.6
+[[Cox, 2019](#ref-cox-2019)]. Nobody changed a line of code or a line of dependency declaration, yet
+the build output changed. Once D 1.6 introduces a defect, a problem in production may not reproduce
+locally, because the two builds quietly used different versions of D.
+
+Tools such as `dep`, Bundler and Cargo respond with **lock files**: the manifest declares acceptable
+version ranges, the lock file records the exact version of every dependency from one resolution, and
+later builds follow the lock file. A lock file guarantees a reproducible build of a whole program,
+but only of a whole program. When C is a library built as part of a larger program, C's own lock
+file cannot constrain the outer program's resolution; these tools have to ignore it and fall back to
+the time-dependent default [[Cox, 2019](#ref-cox-2019)]. The same library then uses one set of
+versions at its author's and another at its user's. Cox calls a build that deviates from the
+author's without justification a **low-fidelity build** [[Cox, 2018b](#ref-cox-2018b)].
+
+Reproducibility also requires that a version number always correspond to the same content. The
+Semantic Versioning specification states that once a version has been released, its contents must
+not be modified [[Preston-Werner, 2013](#ref-preston-werner-2013)], but tags in a version control
+system can be moved, and the servers hosting code can be tampered with. This problem is addressed by
+`go.sum` and the checksum database ([17.4](./fight.md)).
+
+## 17.1.5 Go's Answer: Three Principles
+
+In 2019, Cox summarized the reasons Go modules did not follow the design of `dep` as three
+principles [[Cox, 2019](#ref-cox-2019)]:
 
 ```text
-# the same "take latest" rule gives different results at different times
-January: require C >= 1.2  ->  the latest C then is v1.4  ->  link in v1.4
-March:   require C >= 1.2  ->  C has since released v1.6   ->  link in v1.6  <- no one changed a line of code, yet the build changed
+Compatibility. The meaning of a name in a program should not change over time.
+Repeatability. The result of a build of a given version of a package should not change over time.
+Cooperation. To maintain the Go package ecosystem, we must all work together.
+Tools cannot work around a lack of cooperation.
 ```
 
-No one touched a line of source code or a line of dependency declaration; just because upstream released a new version between two builds, the artifact changed. Once the new version introduces a regression, the production bug cannot be reproduced on your machine, because you and production are quietly running different C's. Reproducibility therefore requires that version selection be **deterministic** (the same input always gives the same output), **recordable** (able to write down which versions were chosen this time), and **verifiable** (able to confirm that the bytes downloaded are the same bytes as before, untampered and unreplaced).
+The first two remove the influence of time on the meaning of a program and on the result of a build,
+respectively. The third admits that however advanced the tools, incompatibilities can in the end
+only be fixed by the authors involved working together. The correspondence between the three
+principles and the difficulties in this section is shown below; the normative definition of each
+mechanism is in the Go modules reference [[Go Authors, n.d.](#ref-go-authors-nd)]:
 
-The mainstream ecosystems have two answers to this question. One is "**take latest plus a lock file**": resolution still takes the latest feasible version, but the whole set of resolved versions is pinned into a lock file (`package-lock.json`, `Cargo.lock`, `Gemfile.lock`), and the next build reproduces it from the lock file. This preserves reproducibility, yet as Cox notes, for a **library** it is "low fidelity": what the library author actually develops and tests against is mostly not the version that happens to be latest in some user's lock file, and the gap between the two is gratuitously introduced risk. The other answer is to make the resolution rule itself deterministic, so that the "lock file" is no longer a necessity. Go chose the latter, which foreshadows [17.3](./minimum.md).
+| Difficulty | Principle | Go modules mechanism | See |
+|:----|:----|:-------------|:----|
+| Incompatible major versions in a diamond dependency | Compatibility | Semantic import versioning: different major versions use different import paths | [17.2](./semantics.md) |
+| NP-completeness of version selection | Compatibility | Dependencies declare only minimum versions, never incompatibilities | [17.3](./minimum.md) |
+| Resolution results change over time | Repeatability | Minimal version selection, no lock file needed | [17.3](./minimum.md) |
+| Version content may be replaced | Repeatability | `go.sum` and the checksum database | [17.4](./fight.md) |
+| A new version breaks an existing combination | Cooperation | Builds never adopt new versions automatically, leaving time for a fix | [17.3](./minimum.md) |
 
-Placing these two answers against other ecosystems makes the contours of the difficulty more vivid. npm allows multiple versions of the same package to coexist in the `node_modules` tree (nested installation), which amounts to dodging the diamond conflict of 17.1.1 by "giving up the single version", at the cost of a bloated dependency tree and the same type failing to recognize itself across different subtrees. Cargo takes "latest feasible plus `Cargo.lock`", which is good for applications but, as noted, leans toward low fidelity for libraries. Maven goes with "nearest-wins" proximity override, a simple rule that often gives surprising versions. Each makes a different choice, but all answer the same two questions: whom to choose on conflict, and how to keep from drifting once chosen. This is exactly what shows the difficulty to be ecosystem-independent rather than an accident of one particular language.
+## 17.1.6 Summary
 
-## 17.1.3 Go's Detour: The GOPATH Era
-
-With these two difficulties laid out, looking back at Go's early dependency management lets us pinpoint exactly where it fell short. Before modules, Go used the **GOPATH mode**: all third-party code was spread across one global `$GOPATH/src` directory, the import path was directly the directory path, and `import "github.com/foo/bar"` corresponded to `$GOPATH/src/github.com/foo/bar`. The structure was plain, but against the difficulties of the previous two sections it was an almost total rout:
-
-```text
-$GOPATH/src/
-  github.com/foo/bar/   <- one import path, only one copy of code, one version, on disk
-  golang.org/x/net/     <- nowhere records "which version this is"
-```
-
-- **No notion of version.** `go get` pulled the **latest main branch** of the dependency repository. Pulling today and pulling next month might be different commits. The kind of drift from 17.1.2, "the code didn't change yet the build did", was the norm rather than the exception under GOPATH.
-- **No way to express version constraints.** Under GOPATH there was simply nowhere to write down "I want C's v1.2". With no constraints expressible, the constraint solving of 17.1.1 was naturally out of the question too.
-- **The diamond dependency was simply unsolvable.** One import path corresponded to one directory and one copy of code under `$GOPATH/src`. A wanted C v1.2, B wanted C v1.5, yet the disk could only hold one C. The conflict was forcibly flattened at the filesystem level, and the price of flattening was that one party silently ran on a version it had never tested against.
-
-The community would not sit and wait. In the vacuum of GOPATH a batch of third-party tools sprang up; `godep`, `glide`, and `dep` are among the best known (this contest of tools and how it converged on the official solution is the subject of [17.4](./fight.md)). Their moves were much alike: **copy** a dependency's source code, together with a definite version, into a project-local `vendor/` directory, and at build time prefer this snapshot in `vendor/`, thereby circumventing GOPATH's "always latest"; then add a lock file (such as `Gopkg.lock`) recording which commit each dependency was pinned to, buying a little reproducibility. These patches did relieve the pain, yet they remained patches: formats varied and were mutually incompatible, and with no version model natively recognized by the toolchain, problems that need global solving, such as diamond dependencies, could still only be arbitrated by hand when one `vendor`ed manually.
-
-This detour is itself the most forceful footnote to the difficulty of dependency management. Even Go, known for being engineering-friendly and for counting every grain of build speed, spent nearly a decade groping at the matter of versions before it settled. It is worth recording that GOPATH was not without merit: it forced every import path to be globally unique and addressable, a constraint later inherited by modules and made the foundation of "the module path is the import prefix". The parts trodden solid on a detour often remain in the correct solution.
-
-## 17.1.4 Toward Go Modules
-
-From 2018, **Go Modules** became the official answer, responding directly to every difficulty of the previous three sections. Its several cornerstones are taken apart one by one later in this chapter; here we first give the reader a global map:
-
-- **`go.mod`** writes dependencies and version constraints **explicitly into** the repository. The "constraints with no way to express them" from 17.1.1 now have a vessel. Each `require` is an edge on the module graph, marking "at least some version of some dependency is needed".
-- **`go.sum`** records a cryptographic checksum of each dependency's content, answering the "verifiable" of 17.1.2: if the downloaded bytes do not match `go.sum`, the build refuses, and a dependency cannot be quietly swapped out.
-- **Semantic versioning** ([17.2](./semantics.md)) gives a set of rules all parties agree on for "is v1.2 or v1.5 newer, and are they compatible". In particular the rule "the major version goes into the import path" (`.../v2`) gives an incompatible major version of C a **different import path**, dissolving the "same path, two versions colliding" of 17.1.1 at the source.
-- **Minimum version selection** (MVS, [17.3](./minimum.md)) is that distinctive solving algorithm. It does one deterministic graph traversal of the module graph and takes, for each dependency, the "**greatest lower bound** among all requirements". This both sidesteps the exponential complexity of SAT and makes the result naturally deterministic, so that the reproducibility of 17.1.2 **no longer depends on a lock file**: the same `go.mod` resolves to the same set of versions at any time and on any machine.
-
-How these four cornerstones each map onto the two difficulties of the previous two sections can be drawn together in one diagram:
-
-```mermaid
-flowchart TD
-    GOMOD["go.mod<br/>explicitly write down require constraints"]
-    SEMVER["semantic versioning + import versioning<br/>v2 goes into the path"]
-    MVS["minimum version selection MVS<br/>graph traversal taking the greatest lower bound"]
-    GOSUM["go.sum<br/>cryptographic content checksum"]
-
-    SELECT["how to choose a version<br/>diamond dependency / constraint solving (17.1.1)"]
-    REPRO["how to keep from drifting once chosen<br/>reproducible build (17.1.2)"]
-
-    GOMOD -->|"carries expressible constraints"| SELECT
-    SEMVER -->|"incompatible majors can coexist,<br/>dissolving the either-or"| SELECT
-    MVS -->|"deterministic traversal, no lock file needed"| REPRO
-    GOMOD -->|"version constraints written fixed, no drift"| REPRO
-    GOSUM -->|"verify downloaded bytes are not swapped"| REPRO
-
-    classDef pillar fill:#dff0d8,stroke:#3c763d,stroke-width:2px;
-    classDef problem fill:#fcf8e3,stroke:#8a6d3b,stroke-width:2px;
-    class GOMOD,SEMVER,MVS,GOSUM pillar;
-    class SELECT,REPRO problem;
-```
-
-Put these four together and both main threads of dependency management are accounted for: how to choose a version is handed to the deterministic traversal of MVS; how to keep from drifting once chosen is handed to the written-fixed `go.mod` plus the verifying `go.sum`. The rest of this chapter unrolls along this line: first semantic versioning ([17.2](./semantics.md)) lays down the contract of the version number, then minimum version selection ([17.3](./minimum.md)) gives the kernel of the solving, and finally we look back at the contest of tools that decided Go's direction ([17.4](./fight.md)), to see clearly why it ultimately chose this path rather than the one others had worn smooth.
-
-Dependency management is one of those rare engineering domains whose answer looks simple while the problem is extremely hard. It has no "perfect solution"; every scheme reapportions weight among **solving complexity**, **fidelity to the author's intent**, **strength of reproducibility**, and **the user's cognitive burden**. Go Modules is no exception, and its trade-offs are exactly what the following sections will examine one by one.
+The difficulty of dependency management has two sources. One is combination: a diamond dependency
+may have no solution, and deciding whether one exists is NP-complete in general. The other is
+time: "take the latest version" makes the build result depend on the moment of the build, and a lock
+file can patch a whole program but not a library. `go get` in the GOPATH era handled neither; it
+knew only the code already on disk and the latest code in the repository. Go modules relax both
+premises of the problem at once: incompatible versions get different names, so they can coexist;
+dependencies declare only minimum versions, so selection needs no search and does not change over
+time. The following sections discuss these two designs and their origins in turn.
 
 ## Further Reading
 
-1. Russ Cox. *Go & Versioning (the "vgo" series, a full account of the problem and the solution).* 2018.
-   https://research.swtch.com/vgo (see especially "Semantic Import Versioning" and
-   "Minimal Version Selection", corresponding respectively to the diamond dependency and solving complexity)
-2. Russ Cox. *Minimal Version Selection.* 2018. https://research.swtch.com/vgo-mvs
-   (argues that the constraints corresponding to MVS are simultaneously 2-SAT / Horn-SAT / Dual-Horn-SAT, hence polynomially solvable;
-   and contrasts the low fidelity of "take latest plus lock")
-3. The Go Authors. *Go Modules Reference.* https://go.dev/ref/mod
-   (the authoritative definition of `go.mod`, `go.sum`, the module graph, the build list, and MVS)
-4. Titus Winters, Tom Manshreck, Hyrum Wright. *Software Engineering at Google.*
-   O'Reilly, 2020. Chapter 21, "Dependency Management" (the difficulties and trade-offs of large-scale dependency management)
-5. Sam Boyer. *So you want to write a package manager.* 2016.
-   https://medium.com/@sdboyer/so-you-want-to-write-a-package-manager-4ae9c17d9527
-   (the author of `dep` systematically surveys version solving and SAT complexity)
-6. This book: [17.2 Semantic Versioning](./semantics.md), [17.3 The Minimum Version Selection Algorithm](./minimum.md),
-   [17.4 The vgo vs. dep Contest](./fight.md).
+- <a id="ref-boyer-2016a"></a>[Boyer, 2016a] Sam Boyer. *So you want to write a package
+  manager.* 2016. https://medium.com/@sdboyer/so-you-want-to-write-a-package-manager-4ae9c17d9527
+  The `dep` author's systematic survey of version solving and SAT complexity.
+- <a id="ref-boyer-2016b"></a>[Boyer, 2016b] Sam Boyer. *The Saga of Go Dependency Management.*
+  Gopher Academy Blog, 2016-12-13.
+  https://blog.gopheracademy.com/advent-2016/saga-go-dependency-management/ The implicit premises of
+  `go get`, the introduction of `vendor`, and the formation and work plan of the 2016 package
+  management committee.
+- <a id="ref-cox-2010"></a>[Cox, 2010] Russ Cox. goinstall: an experiment in (external) package
+  installation. Go commit 3e4e4ec704, 2010. https://golang.org/cl/224043
+  Shipped in the weekly release of 2010-03-15 and removed before Go 1.
+- <a id="ref-cox-2013"></a>[Cox, 2013] Russ Cox. doc/faq: add a FAQ about versioning. Go commit
+  dc8d903155, 2013. https://golang.org/cl/14283044
+  Shipped with Go 1.2.
+- <a id="ref-cox-2016"></a>[Cox, 2016] Russ Cox. *Version SAT.* 2016-12-13.
+  https://research.swtch.com/version-sat The proof of NP-completeness of version selection, how
+  various package managers solve it, and several directions that avoid NP-completeness.
+- <a id="ref-cox-2018a"></a>[Cox, 2018a] Russ Cox. *Go & Versioning.* 2018.
+  https://research.swtch.com/vgo Index of the seven-part series of February 2018 and its follow-ups;
+  see especially *Semantic Import Versioning* and *Minimal Version Selection*, which address diamond
+  dependencies and solving complexity respectively.
+- <a id="ref-cox-2018b"></a>[Cox, 2018b] Russ Cox. *Minimal Version Selection.* 2018-02-21.
+  https://research.swtch.com/vgo-mvs Argues that the constraints MVS produces belong to 2-SAT,
+  Horn-SAT and Dual-Horn-SAT at once and so are solvable in polynomial time; contrasts low-fidelity
+  and high-fidelity builds.
+- <a id="ref-cox-2019"></a>[Cox, 2019] Russ Cox. *The Principles of Versioning in Go.* 2019-12-03.
+  https://research.swtch.com/vgo-principles The three principles of compatibility, repeatability and
+  cooperation, and how Go modules differ from `dep` in design.
+- <a id="ref-go-authors-2016a"></a>[Go Authors, 2016a] The Go Authors. *Go 1.6 Release Notes.* 2016.
+  https://go.dev/doc/go1.6
+  `vendor` enabled by default.
+- <a id="ref-go-authors-2016b"></a>[Go Authors, 2016b] The Go Authors. *Go 1.7 Release Notes.* 2016.
+  https://go.dev/doc/go1.7
+  `GO15VENDOREXPERIMENT` removed; `vendor` becomes a standard feature.
+- <a id="ref-go-authors-nd"></a>[Go Authors, n.d.] The Go Authors. *Go Modules Reference.*
+  https://go.dev/ref/mod
+  The authoritative definition of `go.mod`, `go.sum`, the module graph, the build list and MVS.
+- <a id="ref-mancinelli-et-al-2006"></a>[Mancinelli et al., 2006] Fabio Mancinelli, Jaap Boender,
+  Roberto Di Cosmo, Jérôme Vouillon, Berke Durak, Xavier Leroy, Ralf Treinen. Managing the
+  Complexity of Large Free and Open Source Package-Based Software Distributions. *ASE 2006*, pp.
+  199–208. https://doi.org/10.1109/ASE.2006.49 One result of the EDOS project, which encodes Debian
+  installability as a SAT problem and solves it.
+- <a id="ref-niemeyer-2012"></a>[Niemeyer, 2012] Gustavo Niemeyer. cmd/goinstall: remove now
+  that 'go get' works. Go commit 1e5b7e706e, 2012. https://golang.org/cl/5572083 Shipped with Go 1.
+- <a id="ref-preston-werner-2013"></a>[Preston-Werner, 2013] Tom Preston-Werner. *Semantic
+  Versioning 2.0.0.* 2013. https://semver.org/ The two directions of "dependency hell" in the
+  introduction; item 3: the contents of a released version must not be modified.
+- <a id="ref-winters-et-al-2020"></a>[Winters et al., 2020] Titus Winters, Tom Manshreck, Hyrum
+  Wright (eds.). *Software Engineering at Google.* O'Reilly, 2020. Chapter 21, "Dependency
+  Management" (written by Titus Winters). https://abseil.io/resources/swe-book/html/ch21.html The
+  difficulties and trade-offs of dependency management at scale.
+- This book: [17.2 Semantic Version Management](./semantics.md),
+  [17.3 Minimal Version Selection](./minimum.md), [17.4 The vgo versus dep Dispute](./fight.md).
