@@ -367,3 +367,57 @@ title: "附录 A：术语表"
 | 用户标注 | [16.3](./part5toolchain/ch16tools/trace.md) | User Annotation | |
 | 向量时钟 | [16.2](./part5toolchain/ch16tools/race.md) | Vector Clock | |
 | 等待图 | [16.1](./part5toolchain/ch16tools/deadlock.md) | Wait-for Graph | |
+
+## 异构计算与 AI
+
+| 术语 | 章节 | English | 缩写 |
+| --- | --- | --- | --- |
+| 算术强度 | [18.4](./part6hetero/ch18gpu/model.md) | Arithmetic Intensity | |
+| 自回归 | [20.3](./part6hetero/ch20inference/serving.md) | Autoregressive | |
+| 背压 | [20.3](./part6hetero/ch20inference/serving.md) | Backpressure | |
+| 批处理 | [19.1](./part6hetero/ch19graphics/pipeline.md) | Batching | |
+| 字节对编码 | [20.2](./part6hetero/ch20inference/tokenize.md) | Byte Pair Encoding | BPE |
+| 命令缓冲 | [19.1](./part6hetero/ch19graphics/pipeline.md) | Command Buffer | |
+| 连续批处理 | [20.3](./part6hetero/ch20inference/serving.md) | Continuous Batching | |
+| 驱动 API | [18.1](./part6hetero/ch18gpu/boundary.md) | CUDA Driver API | |
+| 运行时 API | [18.1](./part6hetero/ch18gpu/boundary.md) | CUDA Runtime API | |
+| 当前上下文 | [19.2](./part6hetero/ch19graphics/bindings.md) | Current Context | |
+| 决策点 | [21.2](./part6hetero/ch21agent/mcp.md) | Decision Point | |
+| 解码 | [20.3](./part6hetero/ch20inference/serving.md) | Decode | |
+| 绘制调用 | [19.1](./part6hetero/ch19graphics/pipeline.md) | Draw Call | |
+| 易并行 | [19.3](./part6hetero/ch19graphics/software.md) | Embarrassingly Parallel | |
+| 显式 API | [19.1](./part6hetero/ch19graphics/pipeline.md) | Explicit API | |
+| 外部同步 | [19.1](./part6hetero/ch19graphics/pipeline.md) | External Synchronization | |
+| extra M | [18.2](./part6hetero/ch18gpu/sched.md) | Extra M | |
+| 固定功能 | [19.1](./part6hetero/ch19graphics/pipeline.md) | Fixed-Function | |
+| 图捕获 | [18.1](./part6hetero/ch18gpu/boundary.md) | Graph Capture | |
+| 运行框架 | [21.1](./part6hetero/ch21agent/loop.md) | Harness | |
+| 宿主 | [21.2](./part6hetero/ch21agent/mcp.md) | Host | |
+| 实例化 | [19.1](./part6hetero/ch19graphics/pipeline.md) | Instancing | |
+| 迭代级调度 | [20.3](./part6hetero/ch20inference/serving.md) | Iteration-Level Scheduling | |
+| KV 缓存 | [20.1](./part6hetero/ch20inference/runtime.md) | KV Cache | |
+| 启动开销 | [18.1](./part6hetero/ch18gpu/boundary.md) | Launch Overhead | |
+| 主线程 | [19.2](./part6hetero/ch19graphics/bindings.md) | Main Thread | |
+| Model Context Protocol | [21.2](./part6hetero/ch21agent/mcp.md) | Model Context Protocol | MCP |
+| 细腰 | [21.2](./part6hetero/ch21agent/mcp.md) | Narrow Waist | |
+| 页锁定内存 | [18.3](./part6hetero/ch18gpu/memory.md) | Page-Locked Memory | |
+| 预填充 | [20.3](./part6hetero/ch20inference/serving.md) | Prefill | |
+| 预乘 alpha | [19.4](./part6hetero/ch19graphics/wasm.md) | Premultiplied Alpha | |
+| 量化 | [20.2](./part6hetero/ch20inference/tokenize.md) | Quantization | |
+| 渲染包 | [19.4](./part6hetero/ch19graphics/wasm.md) | Render Bundle | |
+| 渲染管线 | [19.1](./part6hetero/ch19graphics/pipeline.md) | Rendering Pipeline | |
+| Roofline 模型 | [18.4](./part6hetero/ch18gpu/model.md) | Roofline Model | |
+| 选择性批处理 | [20.3](./part6hetero/ch20inference/serving.md) | Selective Batching | |
+| 着色器 | [19.1](./part6hetero/ch19graphics/pipeline.md) | Shader | |
+| 单指令多线程 | [18.4](./part6hetero/ch18gpu/model.md) | Single Instruction, Multiple Threads | SIMT |
+| 软件渲染 | [19.3](./part6hetero/ch19graphics/software.md) | Software Rendering | |
+| 流 | [18.1](./part6hetero/ch18gpu/boundary.md) | Stream | |
+| 步长 | [20.2](./part6hetero/ch20inference/tokenize.md) | Stride | |
+| 桩模型 | [21.1](./part6hetero/ch21agent/loop.md) | Stub Model | |
+| 线程亲和 | [19.2](./part6hetero/ch19graphics/bindings.md) | Thread Affinity | |
+| 分块 | [19.3](./part6hetero/ch19graphics/software.md) | Tiling | |
+| 首词元时间 | [20.3](./part6hetero/ch20inference/serving.md) | Time to First Token | TTFT |
+| 词元 | [20.2](./part6hetero/ch20inference/tokenize.md) | Token | |
+| 分词器 | [20.2](./part6hetero/ch20inference/tokenize.md) | Tokenizer | |
+| 统一内存 | [18.3](./part6hetero/ch18gpu/memory.md) | Unified Memory | |
+| 工作流 | [21.1](./part6hetero/ch21agent/loop.md) | Workflow | |
