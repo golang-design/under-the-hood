@@ -5,190 +5,487 @@ title: "1.3 Communicating Sequential Processes"
 
 # 1.3 Communicating Sequential Processes
 
-> This section comes with an online talk: [YouTube](https://www.youtube.com/watch?v=Z8ZpWVuEx8c), [Google Slides](https://changkun.de/s/csp/).
+> An online talk accompanies this section: [YouTube](https://www.youtube.com/watch?v=Z8ZpWVuEx8c),
+> [Google Slides](https://changkun.de/s/csp/).
 
-The intellectual source of Go's concurrency model is **Communicating Sequential Processes** (CSP), which Hoare proposed in CACM in 1978. This section traces that lineage from the perspective of the history of ideas, because it explains why goroutines and channels look the way they do today. The implementation details of channels and select (the ring buffer in hchan, the pairing of `gopark` and `goready`, the two-round locking in `selectgo`) are left for [Chapter 10](../../part3concurrency/ch10chan/readme.md). Here we are concerned with "why CSP", and with how that choice has shaped the appearance of Go programs.
+Five philosophers sit around a circular table. A fork lies between each pair of neighbors, five in
+all, and eating requires both the left and the right fork. In the program below, each philosopher is
+a goroutine and each fork is a channel of capacity 1: taking the value out of the channel means
+picking up the fork, and putting the value back means putting it down. Each philosopher first picks
+up the left fork, thinks for a moment, and then picks up the right fork.
 
-## 1.3.1 The Core Claim of CSP
+```go {run=true}
+package main
 
-In the 1970s, multi-core processors were still a research topic, not yet within the ordinary programmer's view. Means for coordinating concurrent entities were already plentiful by then: semaphores (Dijkstra, 1965), monitors (Hoare, 1974), locks and mutexes, message passing. In 1979 Lauer and Needham even proved that "message passing" and "shared memory plus locking" are equivalent in expressive power, two faces of the same thing. Hoare's choice within this landscape was to make communication (that is, input and output) a basic element of the programming language, and to use it as the sole means of coordination.
+import (
+	"fmt"
+	"sync"
+	"time"
+)
 
-The core of CSP is a counterintuitive claim: **processes do not share state; they coordinate only by passing messages.** In the world of shared memory, multiple threads read and write the same block of memory, relying on locks to keep from trampling one another, which is both dangerous (data races, deadlocks) and hard to reason about. CSP goes the opposite way: each sequential process guards its own state, and when it needs to cooperate it **sends a message**, handing off data and control through a single synchronous act of communication. Go distills this claim into its well-known maxim: "**Do not communicate by sharing memory; instead, share memory by communicating.**"
+const footman = false // change to true: leave only four chairs at the table
 
-There is a point of historical fact that needs clearing up here. It is often passed over in a single sentence, yet it is precisely the key to understanding the relationship between Go and CSP.
+func main() {
+	const n = 5
+	forks := make([]chan struct{}, n) // forks: a value in the channel means the fork is on the table
+	for i := range forks {
+		forks[i] = make(chan struct{}, 1)
+		forks[i] <- struct{}{}
+	}
+	seats := make(chan struct{}, n-1) // chairs: at most n-1 philosophers seated at once
 
-## 1.3.2 CSP in 1978: Communicating by Process Name, Without Channels
-
-A reader who opens Hoare's original 1978 paper will find something unexpected: that language has **no first-class channels**. Communication is not a matter of dropping data into some anonymous pipe; it **names a process directly**. The two basic operators are:
-
-- `p!value`: **send** a value to the process named `p`;
-- `q?var`: **receive** a value from the process named `q`, storing it into `var`.
-
-The sender writes down the name of the receiver, and the receiver writes down the name of the sender; the communication happens only when both parties **rendezvous** at their corresponding statements, at which point the value is copied across and each side proceeds. The whole language stands on a handful of operators: sequence `;`, parallel `||`, assignment `:=`, input `?`, output `!`, guard `→`, choice `□`, and repetition `*`. For example,
-
-```
-[west::DISASSEMBLE || X::COPY || east::ASSEMBLE]
-```
-
-launches three parallel processes that address one another by name. This "communicate by process name" design has a plain virtue: the language need not introduce an extra concept such as a channel. But its cost is just as direct. A subprocess must know the name of the process that uses it, which makes it hard to encapsulate into a reusable library; and the parallel composition `[a::P || b::Q]` is an operation with a variable number of operands, which cannot be reduced algebraically any further. Hoare himself corrected both of these in his 1985 book.
-
-Abstracting the communicating entity into **a channel that can be named independently and passed as a value** came only later: it was established in the **occam** language of the early 1980s (running on the transputer processor), and was paired with a revised process algebra in the **1985 CSP book**. What Go inherits is exactly this later, channel-centric line, not the 1978 process-name addressing. So when we write `make(chan int)` in Go, store it in a variable, stuff it into a struct, or even receive one channel from another channel, we are drawing on the tradition of occam and the 1985 book, not on that seminal paper.
-
-## 1.3.3 The Lineage of Process Algebra: From CCS to the π-calculus
-
-CSP is not a lone peak. Around the same time, Robin Milner was developing another strand of **process algebra**, **CCS** (Calculus of Communicating Systems, Milner 1980). CCS and CSP are concerned with the same question (how to formally describe and characterize the behavior and equivalence of concurrent processes), with different emphases in technique: CCS takes "both parties synchronizing on a single action" as the atom of its algebra, and developed **bisimulation** as a tool for characterizing process equivalence.
-
-The step that truly connects CCS to Go's bloodline is its successor, the **π-calculus** (Milner, Parrow, Walker 1992). The π-calculus adds **mobility** to process algebra: the name of a channel can itself be passed as a message along a channel. One process sends the name of some channel to another process, which thereby gains the ability to communicate on that channel, so that the **topology of communication can change at run time**. This is exactly what `chan chan T` (a channel of channels) expresses in Go, and the theoretical counterpart of the design in which "a channel is a first-class value". The snippet below, which sends a "reply channel" out along with the request, is the most common Go form of π-calculus-style mobility:
-
-```go
-type request struct {
-    arg   int
-    reply chan int // send along the reply channel as well
+	var wg sync.WaitGroup
+	for i := range n {
+		left, right := forks[i], forks[(i+1)%n]
+		wg.Go(func() {
+			if footman {
+				seats <- struct{}{} // take a seat (wait if no chair is free)
+			}
+			<-left                            // pick up the left fork
+			time.Sleep(10 * time.Millisecond) // think for a moment
+			<-right                           // pick up the right fork
+			fmt.Println("philosopher", i, "starts eating")
+			left <- struct{}{} // put both forks back
+			right <- struct{}{}
+			if footman {
+				<-seats // leave the table
+			}
+		})
+	}
+	wg.Wait()
+	fmt.Println("all five philosophers have eaten")
 }
-
-func server(reqs <-chan request) {
-    for r := range reqs {
-        r.reply <- r.arg * r.arg // send the result back along the channel the caller provided
-    }
-}
 ```
 
-Drawing the whole lineage together makes Go's place clear:
+The output is as follows (most of the call stacks are omitted; goroutine numbers and file paths vary
+by machine):
+
+```
+fatal error: all goroutines are asleep - deadlock!
+
+goroutine 1 [sync.WaitGroup.Wait]:
+...
+goroutine 19 [chan receive]:
+main.main.func1()
+	.../main.go:29 +0x4c
+...
+```
+
+Five goroutines in total are listed in the `chan receive` state, and line 29 is `<-right`. All five
+philosophers hold their left fork and wait for the right one, which is in a neighbor's hand; nobody
+can get it, and nobody will put theirs down first. A state in which a group of participants wait for
+one another and none can proceed is called a **deadlock**. The Go runtime detects that all
+goroutines are waiting and that no goroutine can change the situation, and exits with an error.
+
+Change the first line to `const footman = true` and the program finishes normally (the order in
+which they eat may differ on every run):
+
+```
+philosopher 2 starts eating
+philosopher 1 starts eating
+philosopher 0 starts eating
+philosopher 4 starts eating
+philosopher 3 starts eating
+all five philosophers have eaten
+```
+
+Only one thing changed: four chairs are left at the table, represented by the channel `seats` with
+capacity 4, and the fifth philosopher must wait until someone finishes and leaves before sitting
+down. With four people sharing five forks, at least one can get two; once that person finishes and
+puts the forks down, the others can continue.
+
+The problem was first posed by Dijkstra. In 1978 Tony Hoare used it as an example in the paper that
+introduced CSP, pointing out that this way of writing the solution can leave all five philosophers
+starving at once; the hint the paper gives is precisely to forbid all five from sitting down
+together (Hoare notes that this solution is due to Dijkstra) [[Hoare, 1978](#ref-hoare-1978)]. The
+paper's thesis is that a concurrent program consists of a set of processes, each executing
+sequentially, that share no variables and cooperate only by sending and receiving messages. Both
+goroutines and channels derive from it. This section discusses how the idea evolved step by step
+into Go's design, and which parts Go adopted and which it dropped.
+
+## 1.3.1 Two Ways to Cooperate
+
+For several simultaneously running threads to accomplish a task together, they must agree on the
+order of execution and on how data is handed over. In the 1960s and 1970s, the methods fell into two
+classes.
+
+One is shared memory with locks: threads read and write the same data, and a lock ensures that only
+one thread modifies it at a time. The **semaphore**, proposed by Dijkstra in 1965, was the earliest
+such tool. In 1973 and 1974, Per Brinch Hansen and Hoare proposed the **monitor**
+[[Hoare, 1974](#ref-hoare-1974)], which packages shared data together with the procedures that
+operate on it and guarantees that only one thread executes inside at any time. In Go, a `sync.Mutex`
+together with the fields it protects amounts to a hand-built monitor.
+
+The other is message passing: each thread manages only its own data, and when it needs data held by
+another thread it asks that thread to send it.
+
+Neither class is inherently stronger. In 1979 Hugh Lauer and Roger Needham compared operating
+systems designed in each of the two styles and argued that they can be transformed into each other:
+every component of one design has a counterpart in the other, and the transformed system behaves the
+same and can perform the same [[Lauer and Needham, 1979](#ref-lauer-needham-1979)]. The choice
+therefore depends on which style reads more clearly and which suits the underlying machine, not on
+which is more expressive.
+
+Hoare chose message passing, and only message passing. Go offers both but favors message passing.
+This preference is summed up in a widely repeated maxim: "Do not communicate by sharing memory;
+instead, share memory by communicating" [[Gerrand, 2010](#ref-gerrand-2010)].
+
+## 1.3.2 CSP in 1978: Naming the Peer
+
+Hoare's 1978 paper is titled "Communicating Sequential Processes", abbreviated **CSP**. "Sequential
+processes" means that statements within each process execute in order; "communicating" means that
+processes cooperate only by sending and receiving messages.
+
+Processes in the paper name the peer of a communication directly. `lineprinter!lineimage` sends
+`lineimage` to the process named `lineprinter`, and `cardreader?cardimage` receives a value from the
+process named `cardreader` and stores it in `cardimage`. Sender and receiver each wait for the
+other: whichever arrives first pauses until both have reached the matching statements, at which
+point the value is copied from one to the other and both continue. Communication that completes only
+when both parties are present is called a **rendezvous**. Unbuffered channels in Go work in exactly
+this way.
+
+Naming the peer causes an immediate problem: every process must know whom it communicates with. A
+general-purpose buffer process would have to name in its code which process it receives from and
+which it sends to, and would need changing for each new use.
+
+The paper also borrowed the notion of choice from the **guarded command** proposed by Dijkstra in
+1975 [[Dijkstra, 1975](#ref-dijkstra-1975)]. A selection command consists of several branches, each
+preceded by a condition called a guard; at execution one branch whose guard holds is chosen. Hoare
+allowed a guard to be a receive, meaning "if a value arrives from A, run this branch; if a value
+arrives from B, run that one", and whichever message arrives first selects its branch. This is the
+forerunner of Go's `select`. Which branch to choose when several are ready, the paper explicitly
+leaves unspecified: Hoare thought an efficient implementation should prefer the output that has
+waited longest, but since the relative speeds of processes are undefined, the language itself cannot
+prescribe it [[Hoare, 1978](#ref-hoare-1978)]. A program must therefore not depend on any particular
+choice.
+
+## 1.3.3 The 1985 Monograph: Channels and Deadlock
+
+In 1985 Hoare published a monograph of the same title [[Hoare, 1985](#ref-hoare-1985)], which made
+two changes.
+
+The first concerns what processes communicate with. A process no longer names its peer but sends and
+receives on a named **channel**: `c!v` sends `v` on channel `c`, and `c?x` receives from `c`. A
+process needs to know only the channel, not who is at the other end, and the problem above
+disappears. The occam language, designed by INMOS in 1983 for its transputer processor, also adopted
+this approach [[INMOS, 1984](#ref-inmos-1984)].
+
+These channels are not yet the passable values of Go, however. A CSP channel is merely a name
+written in the program; an occam channel can be passed to a procedure as a parameter, but cannot be
+assigned to a variable, sent over another channel, or created at run time. Which processes are
+connected is fixed when the program is written.
+
+The second change is more important: the monograph gives a precise mathematical definition of a
+process's behavior. The idea is to consider only what can be observed from outside: which
+communications the process may perform in sequence, and which communications it may refuse after a
+given step. As an example, take two vending machines. After a coin is inserted, the first lets the
+customer choose tea or coffee; after a coin, the second decides for itself to offer only tea or only
+coffee this time. If one records only what "may have been sold", the two machines cannot be told
+apart, but a customer who wants only coffee may get stuck at the second one. The difference lies in
+what the machine "may refuse". Under this definition, deadlock is a process refusing all
+communication after some step, so that no event ever happens again.
+
+Both kinds of machine exist in Go programs. A `select` waits on several channels at once and runs
+whichever is ready first, which corresponds to the first machine. A goroutine that decides in
+advance that it will "receive only from `a`" and then waits at `<-a` corresponds to the second. The
+philosophers' deadlock arises in just this way: each has decided beforehand on the right-hand fork.
+
+With precise definitions, a computer can do the checking. In the 1990s Bill Roscoe and others at
+Oxford developed the FDR tool [[Roscoe, 1997](#ref-roscoe-1997)], which explores all possible
+execution orders of a system model described in CSP and answers questions such as "can it
+deadlock" and "does it meet its specification". The best-known case is that in 1995 Gavin Lowe used
+FDR to find a flaw in the Needham-Schroeder public-key authentication protocol, published in 1978
+and believed correct for more than a decade [[Lowe, 1996](#ref-lowe-1996)].
+
+Go did not take this route. Go programs create channels and change connections at run time, so
+exploring every execution order in advance is impractical. The runtime can detect only the most
+extreme case, in which all goroutines are waiting, as with the philosophers above (for how detection
+works, see [16.1](../../part5toolchain/ch16tools/deadlock.md)). If only some goroutines block one
+another while the rest run normally, the program reports no error, and the blocked goroutines and
+the memory they hold are retained indefinitely. Go 1.26 offers an experimental feature for this
+case: when built with `GOEXPERIMENT=goroutineleakprofile`, the garbage collector finds goroutines
+blocked on channels or locks that no runnable goroutine can reach any more, and reports them through
+a profile named `goroutineleak` in `runtime/pprof` [[Go Authors, 2026c](#ref-go-authors-2026c)].
+
+## 1.3.4 Newsqueak: Channels Become Values
+
+Making channels freely passable values was accomplished in several languages designed by Rob Pike.
+
+In 1985 Luca Cardelli and Pike designed Squeak at Bell Labs
+[[Cardelli and Pike, 1985](#ref-cardelli-pike-1985)] for writing graphical interfaces: a process
+each for the mouse, the keyboard and the screen, connected by channels. In Squeak, however, the
+processes and channels are fixed at compile time.
+
+In the late 1980s Pike designed Newsqueak [[Pike, 1990](#ref-pike-1990)]. In Newsqueak a channel is
+an ordinary value: it can be created at run time, stored in a variable, passed to a function, and
+sent over another channel; processes can likewise be started at any time. The connection structure
+of a program can from then on be generated and changed dynamically as it runs. In 1990 Doug McIlroy
+used Newsqueak to compute power series [[McIlroy, 1990](#ref-mcilroy-1990)], with each operation on
+a series carried out by a chain of connected processes.
+
+The approach then passed into Alef on Plan 9 (designed by Phil Winterbottom)
+[[Winterbottom, n.d.](#ref-winterbottom-nd)] and Limbo on Inferno
+[[Dorward et al., 1997](#ref-dorward-et-al-1997)], extending from interface programming to systems
+programming, and finally into Go [[Cox, n.d.](#ref-cox-nd)]. When the Go FAQ introduces Go's
+ancestry, its entry for concurrency is exactly "languages inspired by Tony Hoare's CSP, such as
+Newsqueak and Limbo" [[Go Authors, 2026a](#ref-go-authors-2026a)].
+
+Theory advanced in the same direction. CCS, proposed by Robin Milner in 1980, belongs with CSP to
+the process algebras; the communication ports are fixed in the process definition and cannot be
+passed as messages [[Milner, 1980](#ref-milner-1980)]. The π-calculus, published by Milner, Joachim
+Parrow and David Walker in 1992, allows a channel name itself to be sent as a message, and so can
+describe systems whose connection structure changes during execution
+[[Milner et al., 1992](#ref-milner-et-al-1992)]; in theory it corresponds to Newsqueak's treatment
+of channels as values.
 
 ```mermaid
-flowchart LR
-    GC["Dijkstra guarded commands<br/>(1975)"] --> CSP78["CSP 1978<br/>communicate by process name"]
-    CSP78 --> CCS["CCS<br/>Milner 1980"]
-    CSP78 --> OCCAM["occam + transputer<br/>ALT guarded choice"]
-    CSP78 --> CSP85["CSP book 1985<br/>channels become first-class"]
-    CCS --> PI["π-calculus<br/>Milner-Parrow-Walker 1992<br/>channel names are transferable"]
-    OCCAM --> NSQ["Newsqueak / Alef / Limbo<br/>channels made first-class"]
-    CSP85 --> NSQ
-    PI --> GO["Go<br/>goroutine + channel + select"]
-    NSQ --> GO
+flowchart TD
+    GC["Dijkstra guarded commands<br/>1975"] --> CSP78["Hoare CSP paper 1978<br/>rendezvous by process name"]
+    CSP78 --> CSP85["Hoare CSP monograph 1985<br/>named channels<br/>definition of deadlock"]
+    CSP78 --> OCCAM["occam 1983<br/>channels fixed at compile time"]
+    CSP78 --> SQ["Squeak 1985<br/>GUIs written with processes"]
+    SQ --> NSQ["Newsqueak late 1980s<br/>channels become values"]
+    NSQ --> AL["Alef (Plan 9)<br/>Limbo (Inferno)"]
+    AL --> GO["Go 2009<br/>goroutines, channels, select"]
 ```
 
-That middle line, Newsqueak / Alef / Limbo, is a continuous series of experimental languages built by Rob Pike and others over two decades at Bell Labs. They progressively "made first-class" occam's channels and guarded choice; Go's `<-` communication operator and its `select` statement are inherited from here ([1.1](./history.md)). Go is therefore not an out-of-thin-air application of a single paper, but stands at the end of this engineering lineage.
+## 1.3.5 Go's Approach
 
-## 1.3.4 occam's ALT and Go's select
+### Rendezvous and Buffering
 
-CSP has one more legacy worth singling out: **guarded choice**. It originates in Dijkstra's guarded commands, became `ALT` in occam, and is `select` in Go. The problem it solves is this: a process facing several communications at once should handle whichever one becomes ready first, without having to prescribe an order in advance. In the CSP of 1978, it is written as
+`make(chan int)` creates an unbuffered channel, where a send must wait for the receiver to take the
+value: a rendezvous. `make(chan int, 4)` creates a channel with a buffer that holds 4 values: a send
+returns immediately while the buffer is not full and waits only when it is full, and a receive waits
+when the buffer is empty. Hoare's 1978 CSP had only rendezvous; where buffering was needed, a
+separate process to hold the data was inserted between the two parties.
 
-```
-*[X?V() → val := val+1 □ val > 0; Y?P() → val := val-1]
-```
+The figure below simulates a pair of goroutines. The sender needs 1 tick to produce a value and the
+receiver needs 3 ticks to process one, and 4 values are passed in all. You can step through the
+replay and change the capacity and the scenario.
 
-`□` separates several guarded branches, each guarded by an input; if several guards are ready at once, one is chosen **at random** to execute. This "random" choice is not laziness but a way to provide **fairness**, preventing any one communication from being starved indefinitely. Go's `select` inherits this semantics unchanged: when multiple cases are ready at once, the runtime picks one pseudo-randomly ([Chapter 10](../../part3concurrency/ch10chan/readme.md)).
+<div class="viz" data-viz="csp-rendezvous"></div>
 
-## 1.3.5 Go's Concurrency Model: Let the Code Speak
+With capacity 0, the sender must wait for the receiver to finish the previous value before each
+send, and spends 6 of the first 10 ticks waiting. With capacity 2 the sender never waits and
+finishes sending at tick 4. In both cases, however, the receiver finishes at tick 13. The buffer
+reduces the waiting of the faster side but does not speed up the slower side. If the scenario is
+changed to a slow sender and a fast receiver, the buffer is always empty and its capacity does not
+matter.
 
-With the lineage laid out, coming down to Go itself, the model has only two things: **goroutines** (sequential processes) and **channels** (communication). A `go` keyword starts a goroutine, and a `<-` completes one communication.
+### Channels as Values: The Prime Sieve
 
-The most basic form is a single send and a single receive:
+The following is a classic Go example, and a CSP version of it appears in Hoare's 1978 paper. It
+finds primes with a chain of goroutines:
 
-```go
-ch := make(chan int)
-go func() { ch <- 42 }() // one goroutine sends
-v := <-ch                // another goroutine receives, getting 42
-```
+```go {run=true}
+package main
 
-Whether a channel is buffered determines whether this communication is a **synchronous rendezvous** or an **asynchronous delivery**, which corresponds exactly to the two forms of CSP 1978. An unbuffered channel is a pure rendezvous: the sender blocks until some receiver is in place, and the two meet strictly at the point of communication. A buffered channel lets the sender go a step ahead while the buffer is not full, relaxing one synchronization into a bounded queue (the CSP of 1978 did not take buffered communication as a primitive; Hoare **simulated** a buffer using an unbuffered process, and the **concept** of "relaxing synchronization with a bounded queue" is precisely the conceptual forerunner of the buffered channel):
+import "fmt"
 
-```go
-unbuffered := make(chan int)    // capacity 0: send blocks until a receiver is in place (rendezvous)
-buffered := make(chan int, 4)   // capacity 4: send when not full, no need to wait for a receiver
-```
+// generate sends 2, 3, 4, ... to out in turn.
+func generate(out chan<- int) {
+	for i := 2; ; i++ {
+		out <- i
+	}
+}
 
-`select` lets a goroutine choose among several communications, and through `default` it can make a non-blocking attempt, and through `time.After` it can time out:
+// filter reads numbers from in and forwards to out only those not divisible by p.
+func filter(in <-chan int, out chan<- int, p int) {
+	for {
+		if n := <-in; n%p != 0 {
+			out <- n
+		}
+	}
+}
 
-```go
-select {
-case v := <-in:
-    handle(v)
-case out <- result:
-    // sent successfully
-case <-time.After(time.Second):
-    // time out and exit, avoiding a permanent block
+func main() {
+	ch := make(chan int)
+	go generate(ch)
+	for range 10 {
+		p := <-ch // the first number to pass all existing filters must be prime
+		fmt.Print(p, " ")
+		next := make(chan int)
+		go filter(ch, next, p) // attach a new filter at the end of the pipeline
+		ch = next
+	}
+	fmt.Println()
 }
 ```
 
-With these three things, the classic CSP patterns become the natural way to write code. That DISASSEMBLE → COPY → ASSEMBLE example from Hoare's 1978 paper (read in from 80-column cards, flow it character by character, then lay it out for 125-column printing) is in essence a **pipeline**: each process does one small thing in sequence, channels connect upstream to downstream, and data flows along the channels. Translated into Go, it is a few goroutines strung together:
+```
+2 3 5 7 11 13 17 19 23 29
+```
 
-```go
-// COPY: pass characters from upstream to downstream unchanged, and close downstream at end of input
-func copyStage(west <-chan rune, east chan<- rune) {
-    for c := range west {
-        east <- c
-    }
-    close(east) // closing means "I am done"; downstream's range then ends
-}
+`generate` feeds 2, 3, 4, ... into a channel. A number that `main` receives from the end of the
+pipeline is always prime: each smaller prime has a filter, and the number survived all of them.
+After receiving a prime `p`, `main` creates a new channel, starts a `filter` that connects the old
+end to the new channel, and points `ch` at the new channel. The length of the pipeline is not fixed
+when the program is written but is extended one stage at a time at run time. In occam this would
+require fixing the number of processes in advance; the version in Hoare's paper uses precisely an
+array of processes of fixed size.
 
-// String the three stages into a pipeline: the upstream close propagates stage by stage, and the whole pipeline winds down naturally
-func reformat(cardfile <-chan []rune, lines chan<- string) {
-    west, east := make(chan rune), make(chan rune)
-    go disassemble(cardfile, west)
-    go copyStage(west, east)
-    assemble(east, lines) // the final stage runs synchronously in the current goroutine
+<div class="viz" data-viz="csp-sieve"></div>
+
+In the figure, when 2 through 30 have been fed in there are 10 filters, which together with the
+generator and `main` make 12 goroutines and 11 channels. Every prime passes through the filters of
+all smaller primes in turn, so the program is in effect doing trial division one divisor after
+another [[O'Neill, 2009](#ref-oneill-2009)] and is not an efficient way to find primes; its value
+lies in the clarity of its structure. Also, `main` returns after printing 10 primes, while the
+generator and the filters are still blocked on channels and vanish when the process exits
+([3.6](../ch03life/main.md)).
+
+### select: Random Choice Among Ready Branches
+
+```go {run=true}
+package main
+
+import "fmt"
+
+func main() {
+	a := make(chan int, 1)
+	b := make(chan int, 1)
+	count := map[string]int{}
+	for range 10000 {
+		a <- 1 // put one value in each channel,
+		b <- 2 // so both cases below can proceed immediately
+		select {
+		case <-a:
+			count["a"]++
+			<-b // drain the other channel for the next round
+		case <-b:
+			count["b"]++
+			<-a
+		}
+	}
+	fmt.Println("chose a:", count["a"], " chose b:", count["b"])
 }
 ```
 
-There is a Go-specific convention at work here: use `close` to express "the data stream has ended", and downstream's `for range` will exit naturally once the channel is closed and drained, so the close signal propagates stage by stage along the pipeline. The other side of the same technique is to use a dedicated **done channel** to broadcast cancellation: once it is closed, every goroutine listening on it is immediately unblocked at `<-done`:
+The two counts sum to 10000, each fluctuating around 5000, and differ on every run. The result of
+one run:
 
-```go
-func worker(in <-chan int, done <-chan struct{}) {
-    for {
-        select {
-        case v := <-in:
-            process(v)
-        case <-done: // as soon as upstream closes done, return here immediately
-            return
-        }
-    }
-}
+```
+chose a: 4920  chose b: 5080
 ```
 
-This way of "moving data along channels and propagating signals with close" is the recurring skeleton of Go concurrency code, and the underlying form of the cancellation mechanism in the `context` package.
+The Go language specification states that when several branches can proceed, one of them is chosen
+by a uniform pseudo-random selection [[Go Authors, 2026b](#ref-go-authors-2026b)]. The runtime
+shuffles the order in which branches are examined on every execution of a `select`
+(`runtime/select.go`). If it always chose the first executable branch in source order, then whenever
+an earlier channel always had data, the later branches would never run. Shuffling gives every ready
+branch the same chance. For implementation details see
+[10.5](../../part3concurrency/ch10chan/select.md).
 
-## 1.3.6 CSP and the Actor Model
+## 1.3.6 Comparison with the Actor Model
 
-Contemporary with CSP, but taking another road, is the **Actor model** proposed by Hewitt and others in 1973, which received its most complete engineering realization in Erlang (Armstrong and others, 1980s). Both hold that "do not share state, cooperate through messages"; they part ways on **who a message is addressed to, when it arrives, and whether an entity has an identity**:
+CSP is often mentioned together with the **Actor model**, proposed by Carl Hewitt and colleagues in
+1973 [[Hewitt et al., 1973](#ref-hewitt-et-al-1973)]. It likewise shares no state and only passes
+messages. In 1986 Gul Agha developed it into a complete model of computation
+[[Agha, 1986](#ref-agha-1986)]. The most frequently cited instance of the Actor model is Erlang. The
+two differ in where a message goes:
 
-| Dimension | CSP / Go | Actor / Erlang |
+| | Go (the CSP line) | Actor (such as Erlang) |
 | --- | --- | --- |
-| Communication medium | the anonymous channel, which is a "value" | the actor with an identity, addressed by its address (PID) |
-| What the sender names | a channel | a receiver |
-| Entity identity | a goroutine has no externally exposed identity | each actor has a unique address that can be referenced and supervised |
-| Default timing | unbuffered means synchronous rendezvous | asynchronous delivery into the receiver's mailbox |
-| Buffering | a channel's capacity is explicitly bounded | a mailbox is conceptually unbounded |
-| Multi-way choice | `select` chooses among several channels | the receiver picks messages from the mailbox by pattern matching |
-| Failure model | no built-in semantics, relies on convention (panic/done) | supervision trees, "let it crash", links and monitors |
+| A message is sent to | a channel | a recipient's address |
+| Has a name | a goroutine has no externally visible name or number | every actor has an address and can be referenced and monitored |
+| Does sending wait | with no buffer, waits until the other side takes it | no, the message goes into the recipient's mailbox |
+| After a failure | not specified by the language, relies on convention | processes can be linked, and a supervisor restarts a crashed one |
 
-In one sentence: CSP lets you **name the pipe of communication**; Actor lets you **name the other end of communication**. Go chose the former, so goroutines do not know who each other are, only that they jointly hold a channel; whoever holds the channel can take part in this communication. Erlang chose the latter, so each process has an address and a mailbox, and on top of this grows a **fault-tolerance system** for which CSP has no counterpart: processes can link to and supervise one another, and one crash can let the supervisor restart it according to a strategy. Each road has its strengths, and Go did not copy either of them wholesale.
+Go names the conduit of communication: goroutines do not know who the others are, and whoever holds
+the channel can take part. Erlang names the party being communicated with, so every process has an
+address and a mailbox, and on that basis builds a fault-tolerance mechanism of "restart after a
+crash" [[Armstrong, 2003](#ref-armstrong-2003)]. Achieving something similar in Go requires
+combining tools such as `context` and `errgroup` yourself.
 
-## 1.3.7 Go's Choices Within CSP, and Why This Lineage Matters
+## 1.3.7 What Go Adopted and What It Dropped
 
-Go does not treat CSP as dogma; every change reflects its engineering taste:
-
-- **Not pure CSP.** Go **keeps** shared memory and locks ([11 Synchronization](../../part3concurrency/ch11sync)). It takes CSP as the **preferred** rather than the **only** means: use a channel when flow is best expressed by a channel, and use a lock when a small piece of state is best guarded by a lock. This lack of dogma is exactly the Go style.
-- **Channels are first-class values.** They can be passed, stored, and sent over a channel, letting the communication topology change at run time (the π-calculus-style mobility of 1.3.3).
-- **Goroutines are extremely cheap.** A CSP "process" is a goroutine in Go ([9.3](../../part3concurrency/ch09sched/mpg.md)), starting from just a 2KB stack, able to exist by the million at once, turning "open one process per concurrent task" from theoretical elegance into practical feasibility.
-- **`select` is guarded choice.** occam's `ALT` became `select` in Go.
-
-Choosing the CSP lineage has deeply shaped the appearance of Go programs. It encourages us to imagine a concurrent program as "a group of small processes, each running sequentially and connected to one another by channels": data flows along channels, ownership transfers with it, and so "a given piece of data is held by only one goroutine at any one moment" becomes a natural result, greatly lightening the mental burden of contention and locks. This is of a piece with Go's overall philosophy of "explicit and simple" ([1.2](./go.md)): communication is explicit (you can see every channel), and the units of concurrency are cheap and independent. Once you understand this lineage of ideas, from the process names of 1978, through occam and the π-calculus, to the experimental languages of Bell Labs, you can then read [9 The Scheduler](../../part3concurrency/ch09sched/readme.md) and [10 Channels and select](../../part3concurrency/ch10chan/readme.md) and see both the trees (the implementation details) and the forest (why it is designed this way).
+- **Sequential processes and rendezvous.** A goroutine executes sequentially inside, and an
+  unbuffered channel is a rendezvous. Pike summarizes this style as "the composition of
+  independently executing processes", and points out that concurrency concerns the structure of a
+  program while parallelism concerns its execution; the two are not the same thing
+  [[Pike, 2012](#ref-pike-2012)].
+- **Choice.** `select` descends from guarded commands, with the selection rule specified as
+  uniformly random.
+- **Newsqueak's channels.** Channels are values and can be created and passed at run time. The cost
+  is that the connections cannot be known in advance, so deadlock cannot be found before running, as
+  FDR does.
+- **Not limited to message passing.** Go keeps shared memory, `sync.Mutex` and atomic operations
+  ([Chapter 11](../../part3concurrency/ch11sync/readme.md)). By Lauer and Needham's conclusion the
+  two styles are equally expressive, and Go lets the programmer choose whichever reads more clearly.
+  To protect a counter, a lock is far simpler than a goroutine plus a channel.
+- **Cheap processes.** A new goroutine takes up only about 2 KB of stack (measured in
+  [1.2](./go.md)), which makes "start a goroutine for every concurrent task" a practical style. How
+  the scheduler assigns them to threads is covered in
+  [Chapter 9](../../part3concurrency/ch09sched/readme.md).
 
 ## Further Reading
 
-1. C. A. R. Hoare. "Communicating Sequential Processes." *Communications of the ACM*,
-   21(8): 666-677, 1978. https://doi.org/10.1145/359576.359585 (the seminal CSP paper, communicating by process name);
-   book: *Communicating Sequential Processes.* Prentice-Hall, 1985. (channels made first-class, algebra revised)
-2. Robin Milner. *A Calculus of Communicating Systems.* LNCS 92, Springer, 1980. (CCS)
-3. Robin Milner, Joachim Parrow, David Walker. "A Calculus of Mobile Processes, I & II."
-   *Information and Computation*, 100(1): 1-77, 1992. (the π-calculus, the mobility of transferable channel names)
-4. Carl Hewitt, Peter Bishop, Richard Steiger. "A Universal Modular ACTOR Formalism for
-   Artificial Intelligence." *IJCAI*, 1973. (the Actor model)
-5. Joe Armstrong. *Making Reliable Distributed Systems in the Presence of Software Errors.*
-   PhD thesis, KTH, 2003. https://erlang.org/download/armstrong_thesis_2003.pdf (Erlang and supervision trees)
-6. INMOS Ltd. *occam Programming Manual.* Prentice-Hall, 1984. (occam's channels and ALT)
-7. Rob Pike. *Concurrency Is Not Parallelism.* 2012. https://go.dev/blog/waza-talk
-8. The Go Authors. *Share Memory By Communicating.* https://go.dev/blog/codelab-share ;
-   this book's [10 Channels and select](../../part3concurrency/ch10chan/readme.md) (the implementation of hchan/select).
+- <a id="ref-dijkstra-1975"></a>[Dijkstra, 1975] Edsger W. Dijkstra. "Guarded Commands,
+  Nondeterminacy and Formal Derivation of Programs." *Communications of the ACM*, 18(8):
+  453–457, 1975. https://doi.org/10.1145/360933.360975 The source of guarded commands, and the
+  origin of `select`.
+- <a id="ref-hoare-1978"></a>[Hoare, 1978] C. A. R. Hoare. "Communicating Sequential
+  Processes." *Communications of the ACM*, 21(8): 666–677, 1978.
+  https://doi.org/10.1145/359576.359585 The first CSP paper. Processes rendezvous by name and there
+  are no channels yet; the dining philosophers and the prime sieve are both examples in it.
+- <a id="ref-hoare-1985"></a>[Hoare, 1985] C. A. R. Hoare. *Communicating Sequential Processes*.
+  Prentice Hall International, 1985. The CSP monograph, which switches to communication over named
+  channels and gives precise definitions of concepts such as deadlock.
+- <a id="ref-lauer-needham-1979"></a>[Lauer and Needham, 1979] Hugh C. Lauer, Roger M. Needham. "On
+  the Duality of Operating System Structures." *ACM SIGOPS Operating Systems Review*, 13(2):
+  3–19, 1979. Argues that message-passing and procedure-call-with-locks system designs can be
+  transformed into each other.
+- <a id="ref-hoare-1974"></a>[Hoare, 1974] C. A. R. Hoare. "Monitors: An Operating System
+  Structuring Concept." *Communications of the ACM*, 17(10): 549–557, 1974. The classic monitor
+  paper.
+- <a id="ref-roscoe-1997"></a>[Roscoe, 1997] A. W. Roscoe. *The Theory and Practice of Concurrency*.
+  Prentice Hall, 1997. A systematic exposition of CSP theory, which also covers how to use FDR.
+- <a id="ref-lowe-1996"></a>[Lowe, 1996] Gavin Lowe. "Breaking and Fixing the Needham-Schroeder
+  Public-Key Protocol Using FDR." *TACAS 1996*, LNCS 1055, Springer, 1996: 147–166. The paper that
+  found the protocol flaw with FDR.
+- <a id="ref-cardelli-pike-1985"></a>[Cardelli and Pike, 1985] Luca Cardelli, Rob Pike. "Squeak: a
+  Language for Communicating with Mice." *Computer Graphics (SIGGRAPH '85)*, 19(3): 199–204, 1985.
+  The first attempt to write graphical interfaces with processes and channels.
+- <a id="ref-pike-1990"></a>[Pike, 1990] Rob Pike. "The Implementation of Newsqueak." *Software:
+  Practice and Experience*, 20(7): 649–659, 1990. The implementation of Newsqueak, where channels
+  become passable values.
+- <a id="ref-mcilroy-1990"></a>[McIlroy, 1990] M. Douglas McIlroy. "Squinting at Power
+  Series." *Software: Practice and Experience*, 20(7): 661–683, 1990. Computes power series with
+  chains of Newsqueak processes; published in the same issue as Pike's paper.
+- <a id="ref-winterbottom-nd"></a>[Winterbottom, n.d.] Phil Winterbottom. *Alef Language Reference
+  Manual*. Plan 9 Programmer's Manual, AT&T Bell Laboratories. The language manual for Alef.
+- <a id="ref-dorward-et-al-1997"></a>[Dorward et al., 1997] Sean Dorward, Rob Pike, David Leo
+  Presotto, Dennis M. Ritchie, Howard Trickey, Phil Winterbottom. "The Inferno Operating
+  System." *Bell Labs Technical Journal*, 2(1): 5–18, 1997. An introduction to Inferno and Limbo.
+- <a id="ref-cox-nd"></a>[Cox, n.d.] Russ Cox. "Bell Labs and CSP
+  Threads." https://swtch.com/~rsc/thread/ A short history, with examples, of the languages along
+  the line from CSP to Go.
+- <a id="ref-hewitt-et-al-1973"></a>[Hewitt et al., 1973] Carl Hewitt, Peter Bishop, Richard
+  Steiger. "A Universal Modular ACTOR Formalism for Artificial Intelligence." *IJCAI*, 1973. The
+  source of the Actor model.
+- <a id="ref-agha-1986"></a>[Agha, 1986] Gul Agha. *Actors: A Model of Concurrent Computation in
+  Distributed Systems*. MIT Press, 1986. A systematic treatment of the Actor model.
+- <a id="ref-armstrong-2003"></a>[Armstrong, 2003] Joe Armstrong. *Making Reliable Distributed
+  Systems in the Presence of Software Errors*. PhD thesis, Royal Institute of Technology (KTH),
+  Stockholm, 2003. https://erlang.org/download/armstrong_thesis_2003.pdf Erlang's design and
+  the "restart after a crash" approach to fault tolerance.
+- <a id="ref-oneill-2009"></a>[O'Neill, 2009] Melissa E. O'Neill. "The Genuine Sieve of
+  Eratosthenes." *Journal of Functional Programming*, 19(1): 95–106, 2009. Shows that this kind of
+  pipeline "sieve" is actually trial division, and compares it with the true sieve.
+- <a id="ref-gerrand-2010"></a>[Gerrand, 2010] Andrew Gerrand. "Share Memory By Communicating." The
+  Go Blog, 2010. https://go.dev/blog/codelab-share The official Go explanation of the maxim above.
+- <a id="ref-milner-1980"></a>[Milner, 1980] Robin Milner. *A Calculus of Communicating Systems.*
+  LNCS 92, Springer, 1980. (CCS)
+- <a id="ref-milner-et-al-1992"></a>[Milner et al., 1992] Robin Milner, Joachim Parrow, David
+  Walker. "A Calculus of Mobile Processes, I & II." *Information and Computation*, 100(1):
+  1-77, 1992. (The π-calculus, with mobility through passable channel names)
+- <a id="ref-inmos-1984"></a>[INMOS, 1984] INMOS Ltd. *occam Programming Manual.*
+  Prentice-Hall, 1984. (occam's channels and ALT)
+- <a id="ref-pike-2012"></a>[Pike, 2012] Rob Pike. *Concurrency Is Not Parallelism.* Heroku Waza,
+  2012; The Go Blog, 2013-01-16. https://go.dev/blog/waza-talk
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *Frequently Asked Questions:
+  What are Go's ancestors?* https://go.dev/doc/faq#ancestors
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *The Go Programming Language
+  Specification: Select statements.* https://go.dev/ref/spec#Select_statements
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *Go 1.26 Release Notes:
+  Goroutine leak profiles.* https://go.dev/doc/go1.26#goroutineleak-profiles

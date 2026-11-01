@@ -5,128 +5,403 @@ title: "3.2 The Go Compilation Pipeline"
 
 # 3.2 The Go Compilation Pipeline
 
-[3.1](./cmd.md) explained that the real work behind `go build` is carried out by two programs, `compile` and `link`. This section zooms in on `compile` and traces the full journey from a single `.go` source file to a single `.o` object file: what each stage receives, what it produces, and why the work is cut up this way. This section is a **panorama** of the compilation pipeline. The inner workings of each stage (how the grammar is designed, what algorithm type checking uses, the optimization rules of SSA) are left to [Chapter 15](../../part5toolchain/ch15compile/readme.md) to unfold one by one. Here we only string them into a single line and point out two threads that run through all of it.
+The two functions below are almost identical. Each creates a `point` inside the function and takes
+its address:
 
-To avoid sliding back into a word-for-word recitation of the compiler's directory structure, the discussion below uses **one small example that runs through the whole journey** to tie the stages together. Keep this function in mind; the pipeline will knead and reshape it over and over until it becomes machine code:
+```go {run=true}
+package main
 
-```go
-func send(ch chan int) {
-	go work() // start a new goroutine
-	ch <- 1   // send on the channel
+import (
+	"fmt"
+	"testing"
+)
+
+type point struct{ x, y int }
+
+func sum(p *point) int { return p.x + p.y }
+
+// The address of p is passed only to sum and is not referenced after sum returns
+func local() int {
+	p := point{1, 2}
+	return sum(&p)
+}
+
+// The address of p is returned to the caller, so it outlives escape itself
+func escape() *point {
+	p := point{3, 4}
+	return &p
+}
+
+var sink *point // keeps the compiler from optimizing the result away
+
+func main() {
+	a := testing.AllocsPerRun(100, func() { _ = local() })
+	b := testing.AllocsPerRun(100, func() { sink = escape() })
+	fmt.Println("heap allocations per call of local: ", a)
+	fmt.Println("heap allocations per call of escape:", b)
 }
 ```
 
-It is only two lines, yet it happens to hide the second thread this section wants to stress: language keywords like `go` and `<-` are ultimately not implemented directly by CPU instructions; they are **translated by the compiler into calls into the runtime**. Let us first walk through the whole pipeline, then come back and dissect these two lines.
+`testing.AllocsPerRun` runs a function 100 times and reports the average number of heap allocations
+per call:
 
-## 3.2.1 Two Hidden Threads: Why Talk About Them First
-
-Before laying out the details of the pipeline, let us name the two design orientations that run through all of it, since every later stage is serving them.
-
-The first thread is that **compilation speed itself is a first-class constraint**. From the very beginning Go treated "compilation must be fast" as a language goal rather than an afterthought ([1.1](../ch01intro/history.md)). This goal seeped into every layer of the syntax, dependency management, and compiler structure: the grammar is designed to be parsed quickly without backtracking, dependencies are carried by **compact export data** produced at compile time rather than by source, and there is no C/C++ style `#include` that contaminates layer upon layer. In *Go at Google*, Rob Pike lists this as a direct motivation for Go's birth; back then a single large C++ build at Google routinely took hours, while Go aimed to "press enter and the compile is done".
-
-The second thread is the **conspiracy between the compiler and the runtime**. Many of Go's language features are not implemented by the compiler alone; instead the compiler emits a piece of **code that calls into the runtime**, and the runtime backs it up while the program runs. `go f()` is lowered to `runtime.newproc`, `<-ch` is lowered to `runtime.chanrecv`, every function entry has a **stack-growth prologue** inserted, types containing pointers are equipped with a **GC pointer bitmap** and a type descriptor, and every place that writes a pointer has a **write barrier** inserted. One could say the compiler lays down one agreed-upon interface after another for the runtime, and only the two together form the complete semantics. This thread will be cashed out in [3.2.6](#326-hidden-thread-one-compilation-speed-as-a-first-class-constraint) and [3.2.7](#327-hidden-thread-two-the-conspiracy-between-compiler-and-runtime).
-
-## 3.2.2 Panorama of the Pipeline
-
-In go1.26, `compile` can logically be divided into three segments, front end, middle end, and back end, which subdivide into the pipeline below. Its code is scattered across several subpackages of `cmd/compile/internal`, but the reader need not memorize directories, only the change in the shape of the data: source code to syntax tree to typed syntax tree to the compiler's own IR to SSA to machine-dependent SSA to machine code.
-
-```mermaid
-flowchart TD
-    SRC[".go source file"] --> LEX["lexing + parsing<br/>syntax package, produces an AST"]
-    LEX --> TC["type checking<br/>types2 package: name resolution + type inference"]
-    TC --> IR["IR construction (noding)<br/>noder package: convert to the compiler's own IR"]
-    IR --> MID["middle-end optimization<br/>inline / devirtualize / escape"]
-    MID --> WALK["walk: lowering + ordering<br/>go / send-receive / map replaced by runtime calls"]
-    WALK --> SSA["generic SSA<br/>ssagen + ssa packages: machine-independent optimization"]
-    SSA --> LOWER["lower + architecture-specific optimization<br/>write barriers, register allocation, stack-frame layout"]
-    LOWER --> OBJ["machine code generation<br/>cmd/internal/obj: insert the stack-growth prologue"]
-    OBJ --> O[".o object file<br/>machine code + export data + reflection/debug info"]
-    style SRC fill:#e8f0fe
-    style O fill:#e8f0fe
+```
+heap allocations per call of local:  0
+heap allocations per call of escape: 1
 ```
 
-The segment that sits between the front end and the back end (the middle end plus walk) is often called the "middle-end"; it is where optimization is densest and where Go's design trade-offs show most clearly. Following this line, let us see what happens to the `send` function at each stop.
+The `p` in `local` lives on the stack and is released automatically when the function returns. The
+`p` in `escape` lives on the heap and must be reclaimed by the garbage collector. The compiler makes
+this decision before the program runs. With `-gcflags=-m`, the compiler reports its judgments (the
+lines about `p` are excerpted):
 
-## 3.2.3 Front End: From a Character Stream to a Typed Syntax Tree
+```
+$ go build -gcflags=-m -o /dev/null .
+./main.go:10:6: can inline sum
+./main.go:13:6: can inline local
+./main.go:19:6: can inline escape
+./main.go:10:10: p does not escape
+./main.go:20:2: moved to heap: p
+```
 
-**Lexing and parsing** (`cmd/compile/internal/syntax`) is the first stop. The source is first cut into a stream of tokens (lexing), then assembled into an **abstract syntax tree** (AST) according to the grammar rules (parsing). The body of `send` is parsed into two statement nodes: a `go` statement and a send statement, each node carrying a precise source position for later error reporting and debug-info generation. Go's grammar is designed for speed and can be parsed in a single pass without backtracking, which is exactly the first item [3.2.6](#326-hidden-thread-one-compilation-speed-as-a-first-class-constraint) will detail (for grammar details see [15.1](../../part5toolchain/ch15compile/parse.md)).
+How does the compiler decide whether the lifetime of `p` extends beyond the function, and what
+does "can inline" mean? This section follows the order in which the compiler works: which
+representation it converts the source into, which analyses and transformations it applies to that
+representation, and how it finally produces machine instructions.
 
-**Type checking** (`cmd/compile/internal/types2`) then takes over. `types2` is a port of `go/types` that uses the AST from the `syntax` package instead. It does two things: name resolution (which declaration each identifier points to) and type inference (what type each expression has), and on top of that it applies extra checks, for example "declared but not used". Type inference for generics and constraint solving also happen at this stage, and are among the most intricate parts of the whole compiler ([8.3](../../part2lang/ch08generics/checker.md)). For `send`, this step confirms that `ch` is a `chan int`, that the `1` in `ch <- 1` is assignable to `int`, and that `work` is a function with no parameters. Once the check passes, every expression on the AST carries a definite type.
+## 3.2.1 The Compiler Phases
 
-It is worth pointing out that the public packages `go/parser` and `go/types` are **not** used by the compiler. The compiler was originally written in C, and the `go/*` series was later developed separately for tools like `gofmt` and `vet`; the two share an origin but diverged.
+[3.1](./cmd.md) noted that `go build` invokes the compiler `compile` once per package, producing one
+object file. Inside, the compiler is a pipeline: each phase converts the program into another
+representation and passes it on [[Go Authors, 2026a](#ref-go-authors-2026a)]:
 
-## 3.2.4 Middle End: IR, Inlining, and Escape Analysis
+1. **Lexing and parsing**: split the source text into tokens (keywords, identifiers, literals,
+   operators), then organize them by the grammar into a **syntax tree**.
+2. **Type checking**: determine which declaration each identifier refers to and the type of each
+   expression. Type errors are reported in this phase.
+3. **Inlining and escape analysis**: expand the bodies of small functions at their call sites, and
+   decide whether each variable is allocated on the stack or on the heap.
+4. **Lowering** (walk): rewrite language features such as `go` statements, channel operations and
+   map operations into calls to runtime functions.
+5. **Optimization**: convert the program into an intermediate representation that is closer to the
+   machine and easier to analyze, and run dozens of optimization passes.
+6. **Code generation**: select instructions for the target architecture, allocate registers, and
+   write the object file.
 
-The representation after type checking is not yet convenient for optimization, so there is **IR construction** (noding, `cmd/compile/internal/noder`): converting the `syntax` plus `types2` representation into the compiler's own IR (the `ir` package) and type system (the `types` package). This IR is bloodline left over from when the compiler was still written in C, and all of the middle-end and back-end code is built on it. The noding in go1.26 takes the **Unified IR** route: it serializes the code after type checking into an intermediate product, then rebuilds the IR from it, and this product also serves as the carrier for package import/export and inlining. This point is crucial for the first thread, and [3.2.6](#326-hidden-thread-one-compilation-speed-as-a-first-class-constraint) will return to it.
+The first two phases are concerned with whether the program is correct; the later ones with how to
+execute it efficiently. The interactive figure below uses the function `larger` from 3.2.6 as an
+example and shows how its representation changes phase by phase.
 
-Once the IR is in place, the **middle end** runs several optimization passes over it: dead-code elimination, (early) devirtualization, function inlining (the `inline` package), and escape analysis (the `escape` package). **Escape analysis** is especially important; it decides whether each variable can safely live on the stack or must be allocated on the heap. This step directly determines who manages each object: objects that stay on the stack are reclaimed automatically when the function returns, while objects that escape to the heap come into the view of garbage collection ([13.1](../../part4memory/ch13gc/basic.md)). In `send`, the function passed to `go work()` and any variable captured by the new goroutine will be judged to escape, because the lifetime of the new goroutine outlives the stack frame of `send`.
+<div class="viz" data-viz="build-pipeline"></div>
 
-## 3.2.5 Walk and Back End: Lowering, SSA, and Machine Code
+## 3.2.2 Parsing and Type Checking
 
-After the middle end comes **walk** (`cmd/compile/internal/walk`), the last pass over the IR, which does two things. The first is **ordering**: it splits compound statements into simple statements with temporary variables and fixes the evaluation order. The second is **lowering** (desugaring): translating high-level language constructs into more primitive forms. The second thread of this section first shows itself here. `switch` is rewritten into a binary search or a jump table, while **operations on maps and channels, and the `go` statement, are replaced by calls into the runtime**. By this step the two lines of `send` become roughly this:
+The first phase is implemented in `cmd/compile/internal/syntax`. The Go grammar is deliberately
+designed to be easy to parse: on reading a token, the parser can determine the structure of a
+statement without knowing whether the preceding identifier is a type name or a variable name. In C,
+whether `T * x;` declares a pointer or computes a product depends on whether `T` is a type name. Go
+declarations always begin with a keyword such as `var`, `func` or `type`, so this ambiguity does not
+exist. In his 2012 article "Go at Google", Rob Pike observed that parsing Go requires neither type
+information nor a symbol table, which lets the compiler and a variety of tools be small and fast
+[[Pike, 2012](#ref-pike-2012)].
+
+Type checking is implemented in `cmd/compile/internal/types2`, and type inference for generics also
+happens in this phase ([8.3](../../part2lang/ch08generics/checker.md)). The standard library also
+has `go/parser` and `go/types`, used by tools such as `gofmt`, `go vet` and gopls; the compiler
+itself does not use them. `types2` is a port of `go/types` into the compiler, and the two share one
+test suite.
+
+## 3.2.3 Inlining
+
+A function call has a fixed cost: preparing arguments, jumping, setting up a stack frame, and
+jumping back on return. A bigger loss is that the caller cannot see what happens inside the callee,
+which rules out many optimizations. Expanding the body of the callee directly at the call site
+removes both problems. This transformation is called **inlining**.
+
+Inlining increases code size and lengthens compile time, so it is applied only to small functions.
+The compiler uses the number of nodes in the syntax tree of the function body as its **inline
+cost**, and inlines only when the cost is at most 80; each call in the body to a function that
+cannot be inlined adds another 57 (`cmd/compile/internal/inline/inl.go`). `-gcflags=-m=2` prints the
+cost, for example for the function `larger` discussed in 3.2.6:
+
+```
+./main.go:3:6: can inline larger with cost 14 as: func(int, int) int { m := a; if b > a { m = b }; return m }
+```
+
+In the opening example, `sum`, `local` and `escape` are all inlined. This is why, in the experiment
+of [3.1](./cmd.md), changing the body of `greet.Hello` also forces `main` to be recompiled: the body
+of `Hello` has been inlined into `main`.
+
+The budget of 80 treats all functions alike, yet the running time of a program is often concentrated
+in a few functions. Since Go 1.21, a CPU profile collected in production can be placed in the main
+package directory (as the file `default.pgo`); the compiler uses it to find the most frequently
+executed call sites and raises the budget at those sites to 2000. This technique is called
+**profile-guided optimization** (PGO) [[Go Authors, 2026d](#ref-go-authors-2026d)].
+
+## 3.2.4 Escape Analysis
+
+A local variable is allocated in the function's stack frame and released together with the frame
+when the function returns, at no extra cost. But if a pointer to a local variable still exists after
+the function returns, the variable cannot disappear with the frame; it must be allocated on the heap
+and reclaimed by the garbage collector once it is no longer referenced.
+
+C leaves this problem to the programmer: returning the address of a local variable is an error, and
+the program then reads memory that has been overwritten. Go allows `return &p` and guarantees that
+it is safe, by having the compiler decide whether each variable escapes the function that contains
+it. This is called **escape analysis**. The comment at the top of `escape.go` reduces the properties
+to be guaranteed to two invariants:
+
+1. A pointer to a stack object cannot be stored in the heap.
+2. A pointer to a stack object cannot outlive the object.
+
+The compiler builds a weighted directed graph: vertices represent storage locations such as
+variables, edges represent assignments, and the weight of an edge records the number of address-of
+and dereference operations along the way. It then checks whether there is a path that carries the
+address of a variable into the heap or out of the function; if there is, the variable is allocated
+on the heap. The `p` in `escape` is carried out of the function by `return &p`, so the compiler
+reports "moved to heap". The parameter `p` of `sum` only has two of its fields read, so the report
+is "does not escape". This conclusion is saved with the package's export data, so when other
+packages call `sum`, they also know that passing it the address of a stack variable is safe.
+
+Escape analysis is conservative: a variable that cannot be proved not to escape is treated as
+escaping. Storing an address in a global variable, sending it on a channel, passing it as an
+argument to a new goroutine, or passing it to a function the compiler cannot analyze (for example, a
+method called through an interface) usually causes the variable to be allocated on the heap.
+
+The idea did not originate with Go. In the 1990s, researchers in functional languages and in Java
+were exploring how a compiler could discover that an object does not escape the function that
+creates it, so that it can be allocated on the stack. At OOPSLA 1999, Choi et al. at IBM and
+Blanchet each presented an escape analysis for Java [[Choi et al., 1999](#ref-choi-et-al-1999)]
+[[Blanchet, 1999](#ref-blanchet-1999)]. The Java virtual machine performs this analysis during
+just-in-time compilation; Go performs it at compile time, on every build, and the results can be
+inspected directly with `-gcflags=-m`. Fewer heap allocations also reduce the burden on the garbage
+collector ([Chapter 13](../../part4memory/ch13gc/readme.md)).
+
+## 3.2.5 Lowering Language Features
+
+The next phase is called walk. It decomposes complex statements into simple steps, fixes the order
+of evaluation, and rewrites high-level language features into lower-level forms: `switch` becomes
+binary search or a jump table, and `go` statements and channel and map operations become calls to
+runtime functions. Take the following function as an example:
 
 ```go
-// after walk (illustrative): go / <- are lowered to runtime calls
-func send(ch chan int) {
-	newproc(work)          // go work()  -> runtime.newproc
-	var tmp int = 1
-	chansend1(ch, &tmp)    // ch <- 1    -> runtime.chansend1
+func work() {}
+
+func send(ch chan int, m map[string]int) {
+	go work()
+	ch <- 1
+	m["k"]++
 }
 ```
 
-Next comes **generic SSA** (`ssagen` converts the IR into SSA, and the `ssa` package carries it). SSA (static single assignment) is a low-level intermediate representation in which each value is assigned exactly once, a property that makes data-flow analysis and optimization concise (for details see [15.2](../../part5toolchain/ch15compile/ssa.md)). During the conversion, **intrinsics** are applied (the compiler hardcodes highly optimized implementations for certain functions) and more constructs continue to be lowered (for example `copy` is turned into a memory move and a range loop is rewritten into a for loop). A series of **machine-independent** optimizations then runs: dead-code elimination, removal of redundant nil checks, constant folding, and rewriting multiplications and floating-point operations into more efficient forms. These rules do not involve any specific architecture and run identically on every `GOARCH`.
+`go build -trimpath -gcflags=-S` prints the assembly of `send` (darwin/arm64; the instruction
+address column and some auxiliary instructions are omitted):
 
-Last is the **machine-dependent** back end. It opens with the **lower pass**, which rewrites generic SSA values into variants specialized for the target architecture (for example, on amd64 merging several load-stores into a single instruction with a memory operand). After lower, another round of optimization runs along with a few key tasks: **register allocation**, **stack-frame layout** (assigning stack offsets to local variables), **pointer liveness analysis** (computing which on-stack pointers are live at each GC safe point, a prerequisite for precise GC, see [4.1](../../part2lang/ch04type/type.md) and [Chapter 13 Garbage Collection](../../part4memory/ch13gc/readme.md)), and inserting **write barriers** (a dedicated `writebarrier` pass in the `ssa` package). At this point the function has been turned into a sequence of `obj.Prog` instructions, handed to the assembler (`cmd/internal/obj`). The assembler turns them into real machine code **and inserts the stack-growth prologue at every function entry** (`stacksplit` in `cmd/internal/obj`), and writes out the final object file. Besides machine code, the object file also contains export data, reflection data, and debug info.
+```
+TEXT  main.send(SB), ABIInternal, $48-16
+MOVD  16(g), R16                       // load the stack guard of the current goroutine
+CMP   R16, RSP                         // compare the stack pointer with the guard
+BLS   112                              // not enough stack: jump to the end to grow it
+...
+MOVD  $main.work·f(SB), R0
+CALL  runtime.newproc(SB)              // go work()
+MOVD  main.ch(FP), R0
+MOVD  $main..stmp_0(SB), R1
+CALL  runtime.chansend1(SB)            // ch <- 1
+MOVD  $type:map[string]int(SB), R0
+MOVD  main.m+8(FP), R1
+MOVD  $go:string."k"(SB), R2
+CALL  runtime.mapassign_faststr(SB)    // locate the storage of m["k"]
+MOVD  (R0), R1
+ADD   $1, R1, R1                       // ++
+MOVD  R1, (R0)
+...
+RET   (R30)
+...
+CALL  runtime.morestack_noctxt(SB)     // grow the stack, then restart from the function entry
+JMP   0
+```
 
-To see with your own eyes how `send` changes between the SSA passes, you can export a visualized SSA with one command: `GOSSAFUNC=send go build`, which generates an `ssa.html` listing the evolution of each value pass by pass.
+Three lines of Go become three runtime calls. The runtime implements most of the semantics of
+goroutines, channels and maps, and the compiler is responsible for calling it at the right places
+with the required information prepared. The first three instructions and the `morestack` call at the
+end are also inserted by the compiler: a function that needs stack space checks at entry whether
+enough remains, and grows the stack first if not (a small function that uses no stack, like `larger`
+in 3.2.6, omits the check). A goroutine stack can therefore start very small and grow on demand
+([Chapter 14](../../part4memory/ch14stack/readme.md)).
 
-## 3.2.6 Hidden Thread One: Compilation Speed as a First-Class Constraint
+The compiler and the runtime divide labor in many similar ways. The common ones are:
 
-Back to the first thread. Go bakes "fast" into three layers of the pipeline, each corresponding to one of the stops above.
+| Go code | Code generated by the compiler | Responsibility of the runtime |
+| --- | --- | --- |
+| `go f()` | call `runtime.newproc` | create a goroutine and hand it to the scheduler ([9.4](../../part3concurrency/ch09sched/schedule.md)) |
+| `ch <- v`, `<-ch` | call `runtime.chansend1`, `runtime.chanrecv1` | send, receive and blocking ([Chapter 10](../../part3concurrency/ch10chan/readme.md)) |
+| entry of a function that needs stack space | check the stack bound and call `morestack` if it is exceeded | allocate a larger stack and migrate to it ([Chapter 14](../../part4memory/ch14stack/readme.md)) |
+| writing a pointer into the heap, `*p = q` | insert a write barrier that records extra information during garbage collection | the collector uses it to avoid missing objects ([13.2](../../part4memory/ch13gc/barrier.md)) |
+| types that contain pointers | generate a bitmap marking where the pointer fields are | the collector uses it to scan objects ([4.1](../../part2lang/ch04type/type.md)) |
 
-**The grammar layer.** Go's grammar can be scanned in a single pass without backtracking, and lexing is even simple enough to be close to regular. This compresses the first stop of [3.2.3](#323-front-end-from-a-character-stream-to-a-typed-syntax-tree) into linear time, in sharp contrast with the C++ style grammar that needs unbounded lookahead and entangles parsing with semantics.
+## 3.2.6 Static Single Assignment Form
 
-**The dependency layer.** This is the most skillful stroke. When compiling package P, the Unified IR mentioned in [3.2.4](#324-middle-end-ir-inlining-and-escape-analysis) also writes out a body of **export data**: it serializes into the object file the type information of all exported declarations in P, the bodies of inlinable functions, the bodies of generic functions, and escape analysis's conclusions about parameters. When package Q imports P, the compiler reads only this export data of P and **does not touch P's source**. More crucially, this export data is usually "deep": it has already packed together the information that P transitively depends on and that Q might use, so Q only needs to read one file per direct dependency, without recursively expanding the whole dependency graph. This precisely eliminates the fatal flaw of `#include` in C/C++, where a header file is contaminated layer by layer along the dependency chain, and a widely referenced header gets re-parsed over and over by hundreds or thousands of translation units. Go swaps out this repeated labor for a single compact binary produced at compile time.
+Up to this point the program still has the shape of the source: a variable can be assigned many
+times, which makes optimization hard. Consider this function:
 
-**The structural layer.** Go uses the **package** as the unit of compilation and compiles packages in parallel; packages are coupled only through the narrow interface of export data, which lets the whole build be highly parallel ([3.1](./cmd.md) already described how `go build` schedules these parallel compilations).
+```go
+func larger(a, b int) int {
+	m := a
+	if b > a {
+		m = b
+	}
+	return m
+}
+```
 
-There is a cost. Deep export data tends to "swell as it travels up the dependency graph": a set of widely used types with large APIs will cause almost every package's export data to carry a copy of them. This very problem gave rise to more economical export formats such as "indexed" and "shallow" (the latter adopted by gopls, trading random on-demand reads for size). Performance trade-offs are never free; here a bit of redundancy is exchanged for a simple, single-pass-readable build system.
+To answer "what is the value of `m` when `return m` executes", one must find all assignments to `m`
+and decide which of them can reach this point. Changing the representation simplifies the question:
+every assignment introduces a new name. Write `m := a` as `m1` and `m = b` as `m2`. The two
+control-flow paths merge before `return`, and at the merge point a special selection operation is
+placed: "take `m2` if coming from the `if` branch, otherwise `m1`". Its result is written `m3`.
+After this rewrite, each name is defined in exactly one place, and to learn about a value one only
+has to look at its definition.
 
-## 3.2.7 Hidden Thread Two: The Conspiracy Between Compiler and Runtime
+This representation is called **static single assignment form** (SSA), and the selection operation
+at the merge point is called a φ function. It was proposed in the late 1980s by Barry Rosen, Mark
+Wegman, Kenneth Zadeck and others while studying how to decide whether two expressions in a program
+are always equal [[Rosen et al., 1988](#ref-rosen-et-al-1988)]. In 1991 Ron Cytron et al. gave an
+efficient algorithm for converting an arbitrary program to SSA form
+[[Cytron et al., 1991](#ref-cytron-et-al-1991)], and it has since become the standard intermediate
+representation of compilers; both GCC and LLVM are built around it. The reason is that many
+optimizations become direct on SSA form: if a value is a constant, all its uses can be replaced by
+that constant; if two values are computed identically, the computation need be done only once; if a
+value is never used, it can be deleted.
 
-The second thread is the key to understanding the Go runtime. Many readers assume that goroutines, channels, and GC are "the runtime's business" and have nothing to do with the compiler, but the two are in fact **conspiring**: the runtime defines a set of agreed-upon interfaces, and the compiler generates calls to them or the accompanying metadata at the right places; without either side the semantics are incomplete. Here we gather up the several points of conspiracy scattered above:
+The original Go back end was inherited from the Plan 9 C compiler and did not use SSA. Go 1.7 (2016)
+enabled a new SSA-based back end on amd64 [[Go Authors, 2016](#ref-go-authors-2016)], and Go 1.8
+extended it to all architectures [[Go Authors, 2017](#ref-go-authors-2017)]. Setting `GOSSAFUNC`
+shows the form of a function after each optimization pass; adding `+` after the function name also
+prints it to the terminal, otherwise only the web page `ssa.html` is generated
+[[Go Authors, 2026b](#ref-go-authors-2026b)]:
 
-| Language feature | What the compiler does | Stage where it happens | The runtime side |
-| --- | --- | --- | --- |
-| `go f()` | lowered to `runtime.newproc(f)` | walk | the scheduler creates and enqueues the goroutine ([9.4](../../part3concurrency/ch09sched/schedule.md)) |
-| `ch <- v` / `<-ch` | lowered to `runtime.chansend` / `chanrecv` | walk | channel send/receive and block/wake ([Chapter 10](../../part3concurrency/ch10chan/readme.md)) |
-| function entry | inserts the stack-growth prologue (`stacksplit`) | obj assembly | `morestack` triggers stack growth ([2.2](../ch02asm/callconv.md), [Chapter 14](../../part4memory/ch14stack/readme.md)) |
-| pointer write `*p = q` | inserts a write barrier | SSA `writebarrier` pass | GC uses the barrier records to maintain the tricolor invariant ([13.2](../../part4memory/ch13gc/barrier.md)) |
-| types containing pointers | generates a type descriptor + GC pointer bitmap | back end / reflection data | GC uses the bitmap to scan objects precisely ([4.1](../../part2lang/ch04type/type.md), [13.1](../../part4memory/ch13gc/basic.md)) |
+```
+$ GOSSAFUNC=larger+ go build -o /dev/null .
+```
 
-This table finishes telling where the two lines of `send` end up: `go work()` became a `newproc`, taken over by the scheduler; `ch <- 1` became a `chansend`, taken over by the channel's runtime implementation. And that invisible **stack-growth prologue** is carried by every Go function: at the entry it compares the stack pointer against the stack boundary, and if this call would burst the current stack, it first jumps to `morestack` to grow it before continuing, which is exactly the implementation basis that lets a goroutine start from a small stack of a few KB and grow on demand.
+Right after conversion to SSA form, `larger` looks as follows (a few irrelevant values removed):
 
-Putting the two threads together, the role the compiler plays in Go becomes clear: on one side it is pressed to stay lean by the constraint of "fast" (thread one), and on the other it shoulders the heavy work of laying down interfaces for the runtime (thread two). The tug between these two forces shapes every trade-off from grammar to object file. The next section ([3.3](./bootstrap.md)) asks a more fundamental question: this compiler, itself written in Go, where did it originally come from?
+```
+b1:
+    v7 = Arg <int> {a}
+    v8 = Arg <int> {b}
+    v10 = Less64 <bool> v7 v8          // a < b
+    If v10 -> b3 b2
+b2: <- b1 b3
+    v12 = Phi <int> v7 v11 (m[int])    // φ function: take v7 (m1) or v11 (m2)
+    Ret ...
+b3: <- b1
+    v11 = Copy <int> v8 (b[int], m[int])
+    Plain -> b2
+```
+
+`b1`, `b2` and `b3` are three **basic blocks**: sequences of instructions that execute in order,
+with the end of the block deciding where control goes next. The `m` in the source has become three
+values: `v7`, `v11`, and `v12` at the merge point, where `v12` is the φ function. `larger` goes
+through 54 passes in all, and a few of them have the most visible effect:
+
+- `branchelim` finds that the two paths exist only to select one value, so it rewrites the branch
+  into a conditional select and merges the three basic blocks into one:
+  `v12 = CondSelect <int> v8 v7 v10`.
+- `lower` replaces architecture-independent operations with arm64 instructions: the comparison
+  becomes `CMP` and the conditional select becomes `CSEL`.
+- `regalloc` assigns a register to each value: `a` in `R0`, `b` in `R1`, and the result is written
+  back to `R0`.
+
+The final machine code is only three instructions:
+
+```
+CMP   R0, R1            // compare b with a
+CSEL  GT, R1, R0, R0    // take b if b is greater than a, otherwise a; the result goes to R0
+RET
+```
+
+There is no branch instruction in it. A processor predicts the direction of branches and must
+discard speculatively executed work when the prediction fails; `CSEL` involves no branch, so there
+is no misprediction cost.
+
+## 3.2.7 Object Files and Export Data
+
+Besides machine code and information for the linker ([3.4](./link.md)), the object file written by
+the compiler contains **export data**, which holds everything other packages need when they import
+this package: the exported types and function signatures, the bodies of inlinable functions, the
+bodies of generic functions, and the conclusions of escape analysis for each parameter
+[[Go Authors, 2026c](#ref-go-authors-2026c)].
+
+When package Q imports package P, the compiler reads only the export data of P, not the source of P.
+The export data also includes the information from lower-level packages that is involved in the
+public interface of P, so Q needs to read just one file for each directly imported package. C and
+C++ do the opposite: `#include` inserts the text of a header file verbatim, the same header is
+parsed again in every source file that includes it, and headers include other headers in turn. Pike
+gives an example from inside Google in "Go at Google": after header expansion, the input handed to
+the compiler for a large C++ program was about two thousand times the size of the source itself
+[[Pike, 2012](#ref-pike-2012)].
+
+This approach has a cost too: the higher a package sits, the more lower-level information its export
+data carries, and a widely used set of large types appears in the export data of almost every
+package. The compiler's remedy is to build an index over the export data and decode only the parts
+that are actually used [[Go Authors, 2026a](#ref-go-authors-2026a)].
+
+This shows the orientation of the Go compiler: it compiles one package at a time, packages are
+connected only through export data, and packages can be compiled in parallel; optimization is mostly
+within a package, and the inline budget is set small. The result is very fast compilation, which
+makes the incremental builds described in [3.1](./cmd.md), where only modified packages are
+recompiled, truly save time. The price is some run-time performance, and profile-guided optimization
+exists to recover that loss where it matters.
 
 ## Further Reading
 
-1. The Go Authors. *Introduction to the Go compiler* (`cmd/compile/README.md`).
-   https://github.com/golang/go/blob/master/src/cmd/compile/README.md
-   (The first-hand basis for this section's pipeline division, including export data §7a.)
-2. The Go Authors. *Introduction to the Go compiler's SSA backend*
-   (`cmd/compile/internal/ssa/README.md`).
-   https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/README.md
-3. Rob Pike. *Go at Google: Language Design in the Service of Software Engineering.* 2012.
-   https://go.dev/talks/2012/splash.article (Lists compilation speed as a design motivation of Go.)
-4. Ron Cytron, Jeanne Ferrante, et al. "Efficiently Computing Static Single Assignment Form
-   and the Control Dependence Graph." *ACM TOPLAS*, 13(4), 1991.
-   https://doi.org/10.1145/115372.115320 (The theoretical origin of SSA.)
-5. The Go Authors. *Unified IR* (`cmd/compile/internal/noder/README.md`).
-   https://github.com/golang/go/blob/master/src/cmd/compile/internal/noder/README.md
-   (IR construction and the export data format.)
-6. This book: [15.1 Lexing and Parsing](../../part5toolchain/ch15compile/parse.md),
-   [15.2 Intermediate Representation](../../part5toolchain/ch15compile/ssa.md),
-   [8.3 Type-Checking Techniques](../../part2lang/ch08generics/checker.md).
-7. This book: [1.1 The Evolution of Programming Languages](../ch01intro/history.md),
-   [13.2 Write Barrier Techniques](../../part4memory/ch13gc/barrier.md),
-   [Chapter 14 Execution Stack Management](../../part4memory/ch14stack/readme.md).
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. "Introduction to the Go
+  compiler." `cmd/compile/README.md`.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/README.md
+  https://github.com/golang/go/blob/master/src/cmd/compile/README.md The official description of the
+  compiler phases and export data; the division into phases in this section comes from it.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. "Introduction to the Go
+  compiler's SSA backend." `cmd/compile/internal/ssa/README.md`.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/ssa/README.md
+  https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/README.md Values, basic
+  blocks and rewrite rules in the SSA back end, and the use of `GOSSAFUNC`.
+- <a id="ref-rosen-et-al-1988"></a>[Rosen et al., 1988] Barry K. Rosen, Mark N. Wegman, F. Kenneth
+  Zadeck. "Global Value Numbers and Redundant Computations." *Proceedings of the 15th ACM Symposium
+  on Principles of Programming Languages (POPL)*, 1988. One of the earliest papers in which SSA
+  appears, used to find equal values in a program.
+- <a id="ref-cytron-et-al-1991"></a>[Cytron et al., 1991] Ron Cytron, Jeanne Ferrante, Barry K.
+  Rosen, Mark N. Wegman, F. Kenneth Zadeck. "Efficiently Computing Static Single Assignment Form and
+  the Control Dependence Graph." *ACM Transactions on Programming Languages and Systems*, 13(4):
+  451–490, 1991. https://doi.org/10.1145/115372.115320 Gives an efficient algorithm for constructing
+  SSA form, since adopted by compilers generally.
+- <a id="ref-choi-et-al-1999"></a>[Choi et al., 1999] Jong-Deok Choi, Manish Gupta, Mauricio
+  Serrano, Vugranam C. Sreedhar, Sam Midkiff. "Escape Analysis for Java." *Proceedings of
+  OOPSLA '99*, 1999. https://doi.org/10.1145/320384.320386 Escape analysis for Java, likewise aimed
+  at allocating objects on the stack.
+- <a id="ref-pike-2012"></a>[Pike, 2012] Rob Pike. "Go at Google: Language Design in the Service of
+  Software Engineering." 2012. https://go.dev/talks/2012/splash.article
+  Why Go treats compilation speed as a design goal, and the C++ header expansion example.
+- <a id="ref-go-authors-2016"></a>[Go Authors, 2016] The Go Authors. *Go 1.7 Release
+  Notes*, "Compiler Toolchain". https://go.dev/doc/go1.7 The first official release shipped with the
+  new SSA-based back end.
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *Making Unified Intermediate
+  Representation (UIR) Changes* (`cmd/compile/internal/noder/README.md`).
+  https://github.com/golang/go/blob/master/src/cmd/compile/internal/noder/README.md
+  (IR construction and the export data format.)
+- <a id="ref-blanchet-1999"></a>[Blanchet, 1999] Bruno Blanchet. "Escape Analysis for
+  Object-Oriented Languages: Application to Java." *Proceedings of OOPSLA '99*, 1999: 20–34.
+  https://doi.org/10.1145/320384.320387 Another escape analysis for Java, published at the same time
+  as Choi et al.
+- <a id="ref-go-authors-2017"></a>[Go Authors, 2017] The Go Authors. *Go 1.8 Release
+  Notes*, "Compiler Toolchain". https://go.dev/doc/go1.8#compiler The SSA back end extended to all
+  architectures.
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. *Profile-guided
+  optimization.* https://go.dev/doc/pgo The use of `default.pgo` and the optimizations PGO performs.
+- This book: [15.1 Lexing and Grammar](../../part5toolchain/ch15compile/parse.md),
+  [15.2 Intermediate Representation](../../part5toolchain/ch15compile/ssa.md),
+  [8.3 Type-Checking Techniques](../../part2lang/ch08generics/checker.md).
+- This book: [1.1 The Evolution of Programming Languages](../ch01intro/history.md),
+  [13.2 Write Barrier Techniques](../../part4memory/ch13gc/barrier.md),
+  [Chapter 14 Execution Stack Management](../../part4memory/ch14stack/readme.md).

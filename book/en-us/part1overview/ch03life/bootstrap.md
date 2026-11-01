@@ -5,110 +5,248 @@ title: "3.3 Bootstrapping the Language"
 
 # 3.3 Bootstrapping the Language
 
-One question sounds like a paradox: Go's compiler, assembler, linker, and runtime are all written in Go today, so where did the first program capable of compiling Go come from? Without a Go compiler, how do you compile a Go compiler? This is **bootstrapping**. It is both the classic chicken-and-egg dilemma and a piece of engineering in the history of the Go toolchain that can be retold precisely. This section answers three things: how this egg was first hatched; how, after bootstrapping, the chain for building a new version of Go works, and why the demands it places on the bootstrap version keep rising year over year; and finally, why a language that "implements itself with itself" deserves to be taken seriously.
+The Go compiler is written in Go. To compile it, one first needs a Go compiler, and then the
+question is who compiled that one.
 
-## 3.3.1 The Egg First: From a C Toolchain to a Go Toolchain
-
-The premise of bootstrapping is to first have a starting point that does not depend on itself. The Go toolchain's earliest (through **Go 1.4**, in 2014) compiler, assembler, linker, and `cmd/dist` were all written in **C**, and the compilers carried over Plan 9's naming (`5c`, `6c`, `8c`, `9c`, and so on, with the digits corresponding to different target architectures). This set of C programs was compiled by the system's own `gcc` or `clang`, so building Go required no pre-existing Go at all. This was the "egg".
-
-Starting with **Go 1.5 (August 2015)**, Go completed a landmark transition: the compiler and runtime were **rewritten in Go in their entirety**, the C toolchain was deleted, and from then on the toolchain could bootstrap itself. The cost and the benefit of this move are both concrete. The benefit is that compiler developers now maintain the toolchain in Go, a memory-safe, concurrency-friendly language with built-in testing and profiling tools, and bugs in the compiler can be hunted with Go's own debugging facilities; the runtime and the compiler share one language, so collaboration across the boundary (such as escape analysis and stack management) is smoother. The cost is that building Go is no longer as self-sufficient as compiling a piece of C, it now needs "another Go that already works". How to build a new Go from an old Go became a question every release since then has had to answer.
-
-> This rewrite landed in two steps, which can be matched against two of Cox's design documents: `go13compiler` records the process of mechanically transpiling the C-written compiler into Go, while `go15bootstrap` lays out the complete plan for removing C and bootstrapping with an older Go. `make.bash` still points to the latter in its comments today.
-
-## 3.3.2 The Bootstrap Chain: Compiling New Go with Old Go
-
-After bootstrapping, the starting point for building a new version of Go becomes an **older, already-working Go toolchain**, recorded in the environment variable `$GOROOT_BOOTSTRAP` (which by default looks under `$HOME` for a directory like `sdk/go1.24.6`). The whole bootstrap process is driven by `cmd/dist`, itself a deliberately "restrained" Go program that uses only the language features already present in the bootstrap version, so that it can be compiled directly by that old Go.
-
-Bootstrapping is not "compile once" and done, but three rounds of compilation in a row, each with a reason it cannot be skipped. Drawing the chain out:
-
-```mermaid
-flowchart TD
-    BOOT["Old Go for bootstrapping<br/>($GOROOT_BOOTSTRAP, ≥ go1.24.6)"] --> DIST["Compile cmd/dist<br/>(using old Go)"]
-    DIST --> TC1["toolchain1<br/>new compiler/assembler/linker<br/>built by old Go, no build ID"]
-    TC1 --> GOBOOT["go_bootstrap<br/>new cmd/go, built by toolchain1"]
-    GOBOOT --> TC2["toolchain2<br/>rebuilt by toolchain1 + go_bootstrap<br/>semantically equivalent, faster, with build ID"]
-    TC2 --> TC3["toolchain3<br/>rebuilt by toolchain2<br/>build ID stable, usable for caching"]
-    TC3 --> STD["build the standard library and all commands with the final toolchain"]
-```
-
-The division of labor across the three rounds is the heart of this design, and it is worth spelling out level by level:
-
-1. **toolchain1**: `cmd/dist` first compiles the **new source code** of the compiler, assembler, linker, and so on, using the `go` command from the old bootstrap version. This toolchain is already the new version in behavior, but since it is built by the old `go` command, the binaries carry no build ID.
-2. **go_bootstrap**: then toolchain1 compiles a temporary `go` command. From this step on, control of the build is handed back from `cmd/dist` to the `go` command itself.
-3. **toolchain2**: using toolchain1 plus go_bootstrap, the same toolchain is **compiled again**. It is semantically equivalent to toolchain1, but because it is built with the newly compiled compiler (rather than the old bootstrap compiler), it runs faster, and this version carries a build ID.
-4. **toolchain3**: toolchain2 then compiles the final version. By this point the toolchain is "a new compiler built by a new compiler that was built from scratch", its build ID is accurate and stable, suitable for feeding to the build cache.
-
-Why more than one round? The key is build IDs and reproducibility. toolchain1 is the product of "new source plus old compiler", enough to bootstrap, but it carries traces of the old bootstrap environment (no build ID). Walking two more rounds lets the final toolchain shed the influence of the bootstrap Go entirely: toolchain3 is a new toolchain built by a new toolchain, with no remaining ties to the old Go that built it. This doubles as a self-check: if the new compiler itself has a defect, it will often surface in the toolchain2 or toolchain3 round.
-
-Hidden here is a subtle but important judgment: toolchain2 and toolchain3 are completely identical at the source level, and ideally the two should be **byte-for-byte identical**. The reason they are split into two versions is that toolchain2 is "the new compiler compiled by the old compiler, compiled once more", while toolchain3 is "the new compiler compiling itself". Only when the latter two versions converge can we be confident that the new compiler has not carried some hidden difference that depends on "who compiled it" into the output. This is the classic **compiler fixed point**: a correct bootstrapping compiler, compiling itself again after some round, should produce stable output. Go approaches this fixed point with build IDs and the version identifiers in release builds, so that the final binary can be cached and reproduced.
-
-An implementation detail easily overlooked: `cmd/dist` does not compile in place, but copies the source needed for bootstrapping (`cmd/compile`, `cmd/asm`, `cmd/link`, and their dependencies) into a `$GOROOT/pkg/bootstrap` workspace and uniformly rewrites their import paths to a `bootstrap/...` prefix. This way the old Go compiles a copy that is **isolated** from the final standard library, and the two same-named packages, old and new, do not contaminate each other during bootstrapping.
-
-The entry point to the whole chain is `make.bash` (`all.bash` runs an additional round of tests on top of it). Roughly, one `make.bash` does the following in sequence: check for and locate `$GOROOT_BOOTSTRAP`, use it to build `cmd/dist`, have `cmd/dist` walk through the three rounds toolchain1 to toolchain3 above, and finally build the rest of the standard library and the commands with the final toolchain. These steps are visible to the naked eye in the terminal, and their output is almost a textual version of the diagram above:
+Start with an experiment. Take the source of Go 1.26.10 (with the precompiled programs in the
+release package removed) and copy it twice. Build one copy with an installed Go 1.26.0 and the other
+with Go 1.27.3. `make.bash` is the script that builds Go from source, and the environment variable
+`GOROOT_BOOTSTRAP` names the existing Go to use as the starting point (darwin/arm64, paths
+abbreviated, about 40 seconds per build):
 
 ```shell
-$ GOROOT_BOOTSTRAP=$HOME/sdk/go1.24.6 ./make.bash
-Building Go cmd/dist using /Users/you/sdk/go1.24.6. (go1.24.6 darwin/arm64)
-Building Go toolchain1 using /Users/you/sdk/go1.24.6.
+$ GOROOT_BOOTSTRAP=.../go1.27.3 bash make.bash
+Building Go cmd/dist using .../go1.27.3. (go1.27.3 darwin/arm64)
+Building Go toolchain1 using .../go1.27.3.
 Building Go bootstrap cmd/go (go_bootstrap) using Go toolchain1.
 Building Go toolchain2 using go_bootstrap and Go toolchain1.
 Building Go toolchain3 using go_bootstrap and Go toolchain2.
 Building packages and commands for darwin/arm64.
 ---
-Installed Go for darwin/arm64 in /Users/you/go
+Installed Go for darwin/arm64 in .../goroot-b
 ```
 
-Each line corresponds to a link in the chain: first the old bootstrap Go builds `cmd/dist`, then it lifts out, in order, toolchain1, the temporary `go` command (go_bootstrap), toolchain2, toolchain3, and finally the final toolchain, now on solid footing, lays out the standard library and the commands. Read this output, and bootstrapping is no longer an abstract concept: it is a few lines of state transitions in the terminal that can be retold.
+The two builds produce 10 programs in total under `bin` and `pkg/tool`, and a byte-by-byte
+comparison shows that all are identical:
 
-## 3.3.3 The Ever-Rising Bootstrap Version
-
-Bootstrapping loosened the bind on toolchain developers: they can write Go itself with increasingly new Go features. The cost comes with it: once the toolchain source uses a feature available only in some newer version (generics being the typical case), the minimum Go version that can bootstrap it has to rise accordingly. This bootstrap-version line rising all the way up is itself a profile of Go's own evolution:
-
-| Target Go version | Minimum version required to bootstrap |
-|---|---|
-| Go ≤ 1.4 | C toolchain (`gcc` / `clang`) |
-| Go 1.5 ~ 1.19 | Go 1.4 |
-| Go 1.20 ~ 1.21 | Go 1.17 (specifically 1.17.13) |
-| Go 1.22 ~ 1.23 | Go 1.20 |
-| Go 1.24 onward | given by a formula |
-
-Starting with Go 1.20 (2023), the bootstrap baseline formally said goodbye to Go 1.4, which it had relied on for nearly eight years. The trade-off behind this is recorded in issues 44505 and 54265: staying pinned to Go 1.4 meant the toolchain could never use any language feature after Go 1.5 to write itself, and this constraint was increasingly not worth it. From Go 1.24 onward, the requirement is no longer handwritten version by version, but converges into a single rule: building Go 1.N requires Go 1.M, where $M = N - 2$ rounded down to an even number. So Go 1.24 and 1.25 both require Go 1.22, and Go 1.26 and 1.27 both require Go 1.24. This formula is exactly the `requiredBootstrapVersion` in `cmd/dist`:
-
-```go
-// Building Go 1.N requires Go 1.M, M = N-2 rounded down to even (N ≥ 22)
-// e.g.: Go 1.24, 1.25 require Go 1.22; Go 1.26, 1.27 require Go 1.24
-requiredMinor := minor - 2 - minor%2
+```shell
+$ shasum -a 256 goroot-{a,b}/bin/go goroot-{a,b}/pkg/tool/darwin_arm64/{compile,link} | cut -c1-16,65-
+2ff6483c8cefb8fd  goroot-a/bin/go
+2ff6483c8cefb8fd  goroot-b/bin/go
+115ccaac31d7e4d4  goroot-a/pkg/tool/darwin_arm64/compile
+c2deb9df764bc6dc  goroot-a/pkg/tool/darwin_arm64/link
+115ccaac31d7e4d4  goroot-b/pkg/tool/darwin_arm64/compile
+c2deb9df764bc6dc  goroot-b/pkg/tool/darwin_arm64/link
 ```
 
-Down at Go 1.26, the minimum bootstrap version is pinned further to the patch number **go1.24.6**. If someone runs `make.bash` with an older Go, the build fails right when compiling `cmd/dist`: the source tree specially places a file that participates in compilation only under `//go:build !go1.24`, with the package name `building_Go_requires_Go_1_24_6_or_later`, using a "cannot find a valid main package" error to tell the builder about the insufficient version as early and as conspicuously as possible.
+The starting compilers differ, yet the products are exactly the same. This section answers three
+questions: where the first Go compiler came from; what toolchain1, 2 and 3 in the output above are
+and why the result does not depend on the starting point; and why this property matters.
 
-The "N-2 then round to even" margin the formula leaves is not arbitrary: it guarantees that any release can always be bootstrapped by a stable version from two to three release cycles earlier that is already widely distributed, so downstream packagers need not first obtain an overly new Go just to build a new Go. This is a concrete expression of the toolchain's care for the ecosystem, which the next section expands on.
+## 3.3.1 The First Compiler
 
-## 3.3.4 Why Bootstrapping Matters
+A compiler involves three languages: the source language it processes (Go), the target language it
+produces (for example arm64 machine code), and the language in which it is implemented. The first
+two determine what the compiler does; the third determines how one gets the compiler in the first
+place.
 
-Bootstrapping is more than a piece of technical trivia; it has three layers of concrete significance.
+Up to Go 1.4 (December 2014), the compiler, assembler and linker were all written in C, derived from
+the Plan 9 C compiler ([2.1](../ch02asm/asm.md)). Building Go required only a C compiler on the
+system, and either `gcc` or `clang` would do.
 
-**It is a signal of a language's maturity.** That a language can implement itself with itself, especially implementing system software like compilers and runtimes that demand exacting performance and low-level control, shows that both its abstraction power and its runtime efficiency are already equal to serious work. Go is not alone on this road. Self-hosting is almost a rite of passage for a system-level language's maturity: Rust's `rustc` likewise bootstraps from the previous Rust version, and like Go has to manage the constraint of "how old a version can do the bootstrapping"; GCC and LLVM also long use a round of self-compilation to ensure the compiler can compile itself. The difference lies in where each places the "starting point": Go chooses to pin the starting point at a publicly distributed old release, rather than, as some toolchains do, keep an original bootstrap path that can be traced back to assembly. The two choices each have their trade-offs: the former is simple and reproducible, but requires the bootstrap version to roll along with it; the latter is more thorough on "being rebuildable from the most primitive starting point", at the cost of maintaining that ancient path.
+Go 1.5 (August 2015) reimplemented all of them in Go [[Go Authors, 2015](#ref-go-authors-2015)]. The
+conversion was not a rewrite: Russ Cox wrote a program that translated the C code into Go
+automatically. The translated code at first kept the style of C and was then gradually rewritten
+into idiomatic Go. In a 2013 design document, Cox gave the reasons: correct programs are easier to
+write in Go than in C, and Go comes with testing and profiling tools; the runtime was being migrated
+from C to Go, and a compiler written in Go would cooperate with it more easily; and contributors
+would need to know only one language [[Cox, 2013](#ref-cox-2013)].
 
-**It unifies the development experience.** Toolchain authors and ordinary users use the same language and the same set of tools. Problems in the compiler can be investigated directly with Go's testing, race detection, and profiling, and new language features can be "eaten" and tried out by the toolchain itself at the first opportunity: generics entering the bootstrap requirement is precisely the result of this self-digestion.
+The cost is that building Go now requires a working Go first [[Cox, 2015](#ref-cox-2015)]. Compiling
+a compiler with the compiler of the same language is called **bootstrapping**, a word that comes
+from the English idiom "to pull oneself up by one's bootstraps".
 
-**It also places a responsibility.** The toolchain must always be bootstrappable by a **reasonably old** Go, and cannot depend on overly new features for convenience, otherwise "building Go from source" would become difficult: this is exactly the reason the N-2 formula in the previous section exists. This responsibility also leads to a deeper topic: Thompson, in *Reflections on Trusting Trust*, pointed out that a self-compiling toolchain can in theory pass a backdoor down through generations without leaving a trace in the source. Go puts this trust on an independently verifiable footing with multi-round reproducible builds, a public bootstrap chain, and checkable binaries: the convenience and the trustworthiness of bootstrapping must be guarded together with engineering discipline.
+## 3.3.2 Building the New Version from an Old One
 
-From the egg written in C, to the toolchain written in Go, constrained on its bootstrap version by a formula, compiling three rounds in pursuit of reproducibility, this bootstrap history is the best footnote to Go "proving itself with itself".
+The output of `make.bash` shows the whole bootstrapping process. Below, the existing Go used as the
+starting point is called the old Go:
+
+1. The old Go first compiles `cmd/dist`, a small program that orchestrates the remaining steps and
+   uses only language features the old Go also supports.
+2. **toolchain1**: the old Go compiles the source of the new version's compiler, assembler and
+   linker. The behavior of the resulting compiler is determined by the new source, but its own
+   machine code was generated by the old compiler.
+3. **go_bootstrap**: toolchain1 compiles the new `go` command, which takes over the builds from here
+   on.
+4. **toolchain2**: toolchain1 compiles the same source again.
+5. **toolchain3**: toolchain2 compiles it once more.
+6. toolchain3 compiles the standard library and the remaining commands.
+
+Step 4 is the key. The code a compiler generates depends only on its source and not on which
+compiler compiled it. The behavior of toolchain1 is determined by the new source, so toolchain2 is
+the result of "the new compiler compiling the new source", and the influence of the old Go ends
+there.
+
+`make.bash -d` saves the compiler of each round as `compile1`, `compile2` and `compile3`. The
+results of the two builds are:
+
+| | Starting from Go 1.26.0 | Starting from Go 1.27.3 |
+| --- | --- | --- |
+| `compile1` (compiled by the old Go) | `f04179ffde503a8f` | `21b1c7c8410a0c79` |
+| `compile2` (compiled by toolchain1) | `f91490ecbac04f2c` | `f91490ecbac04f2c` |
+| `compile3` (compiled by toolchain2) | `115ccaac31d7e4d4` | `115ccaac31d7e4d4` |
+
+`compile1` differs with the starting point, and from `compile2` on the results are identical.
+
+`compile2` and `compile3` differ because of a compile option. The compiler's source directory holds
+a profile of the compiler itself, `default.pgo`, which guides optimization ([3.2](./compile.md)).
+When `cmd/dist` builds toolchain2, it deliberately turns this option off; a comment in the source
+gives the reason that toolchain2 does not need PGO [[Go Authors, 2026b](#ref-go-authors-2026b)]. It
+is turned on when toolchain3 is built. Compile the compiler once more with the final compiler and
+the same options (here `go` is the Go 1.26.10 just built):
+
+```shell
+$ CGO_ENABLED=0 GOFLAGS="-trimpath -ldflags=-w -gcflags=cmd/...=-dwarf=false" \
+    go build -a -o compile4 cmd/compile
+$ shasum -a 256 compile4 | cut -c1-16
+115ccaac31d7e4d4
+```
+
+The result is still itself. Compiling again with the profile turned off (`-pgo=off`) gives exactly
+`f91490ecbac04f2c`, the `compile2`. A compiler that compiles its own source and gets itself back is
+said to have reached a **fixed point**: however many more times it is compiled, the result does not
+change. If a compiler cannot generate itself stably, its output depends on something it should not,
+such as the time or a memory address. GCC likewise uses a three-stage process when built from source
+and compares the products of the last two stages [[GCC, n.d.](#ref-gcc-nd)].
+
+Since toolchain2 is already independent of the old Go, why is toolchain3 needed? A comment in
+`cmd/dist` explains that the reason concerns the build ID introduced in [3.1](./cmd.md)
+[[Go Authors, 2026b](#ref-go-authors-2026b)]. toolchain1 is built by the `go` command of the old Go
+and contains no build ID, so a toolchain2 with a build ID has to be built. In a development version,
+however, the build ID of the toolchain enters the computation of the build IDs of its products, so
+once the compiler is replaced, the `go` command considers everything built before to be out of date.
+A release version instead substitutes the version number reported by the toolchain for the build ID,
+and the problem does not arise. To make the two cases behave alike, `cmd/dist` uses toolchain2 to
+force a rebuild of the whole set of tools, which yields toolchain3, whose compiler and linker carry
+accurate build IDs that the cache can rely on. At the end, `make.bash` also has the `go` command
+check, one by one, that from its point of view the toolchain and the standard library are all up to
+date and need no rebuild.
+
+The comment at the top of `buildid.go` explains why the design in 3.1 is necessary here: the
+compiler is compiled by itself, so if the key of the next step recorded the action ID of the
+compiler step, the key would change every time the compiler compiled itself and never converge; if
+it records the digest of the compiler's content, then once the content converges, the key converges
+with it.
+
+## 3.3.3 The Minimum Version of the Starting Point
+
+The Go used as a starting point has a minimum version, which rises over time with the language
+features and libraries the new source uses [[Go Authors, 2026a](#ref-go-authors-2026a)]:
+
+| Version to build | Minimum requirement for the starting point |
+| --- | --- |
+| Go 1.4 and earlier | a C compiler |
+| Go 1.5 to 1.19 | Go 1.4 |
+| Go 1.20, 1.21 | Go 1.17.13 |
+| Go 1.22, 1.23 | Go 1.20.6 |
+| Go 1.24, 1.25 | Go 1.22.6 |
+| Go 1.26, 1.27 | Go 1.24.6 |
+
+Go 1.4 served as the starting point for nearly eight years. It is the last version written in C, and
+any machine with a C compiler can begin building from it. The cost is that the compiler itself could
+never use features introduced after Go 1.4, such as generics; Go 1.4 also does not support some
+platforms that appeared later, such as Macs with Apple silicon. go.dev/issue/44505 and 54265 record
+the related discussion [[Cox, 2021](#ref-cox-2021)] [[Cox, 2022](#ref-cox-2022)]. Go 1.20 raised the
+starting point to Go 1.17. From Go 1.22 on, it rises by a fixed rule: building Go 1.N requires Go
+1.M, where M is N minus 2, rounded down to an even number. Go releases even-numbered versions in
+February and odd-numbered versions in August, so the starting point moves forward once a year and is
+always a version released at least a year earlier. The rule is implemented in
+`requiredBootstrapVersion` in `cmd/dist` [[Go Authors, 2026b](#ref-go-authors-2026b)].
+
+When the version is too old, `cmd/dist` reports an error as early as possible. Its source directory
+contains a file `notgo124.go`, which takes part in compilation only under versions before Go 1.24
+and whose package name is `building_Go_requires_Go_1_24_6_or_later`. When `cmd/dist` is compiled
+with a Go that is too old, two different package names appear in the same directory, compilation
+fails, and the error message contains exactly this sentence. For versions between 1.24 and 1.24.6,
+`cmd/dist` checks the version number and reports the error itself. Any Go newer than required can be
+used; the Go 1.27.3 in the experiment above is one example.
+
+## 3.3.4 Trusting the Compiler
+
+In 1983 Ken Thompson described an attack in his Turing Award lecture "Reflections on Trusting
+Trust" [[Thompson, 1984](#ref-thompson-1984)]. Modify the source of a C compiler so that when it
+compiles the login program, it quietly plants a backdoor; further make it so that when it compiles
+the compiler itself, it plants this same modification into the new compiler. Compile the modified
+source once to get a compiler with the backdoor, then delete the modification from the source.
+Nothing in the source looks wrong from then on, yet compiling the clean source with this compiler
+yields a compiler that still has the backdoor, and it passes from generation to generation.
+Thompson's conclusion is that code one has not written entirely oneself cannot be fully trusted, and
+that inspecting the source is not enough.
+
+No self-hosting language can avoid this problem: today's Go compiler was compiled by the previous Go
+compiler, which can be traced all the way back to Go 1.4 written in C and to earlier C compilers. In
+2005 David A. Wheeler proposed a way to check this, called **diverse double-compiling** (DDC)
+[[Wheeler, 2005](#ref-wheeler-2005)]: choose an independently sourced compiler, use it to compile
+the source of the compiler under test, use the resulting compiler to compile the same source once
+more, and compare the result byte by byte with the binary under test. If the two are identical, the
+binary was indeed produced from this source, unless both starting points were tampered with in
+exactly the same way.
+
+The experiment at the beginning of this section has exactly this structure: two different starting
+points yield the same result. But Go 1.26.0 and Go 1.27.3 come from the same project, so the check
+is not independent. Go's source can also be built starting from gccgo, an independent implementation
+in GCC, which is a starting point of truly different origin
+[[Go Authors, 2026a](#ref-go-authors-2026a)].
+
+Such a check is possible only because builds are reproducible ([3.1](./cmd.md)): once time, paths or
+random numbers get mixed into compilation, a byte-by-byte comparison is out of the question.
+According to Russ Cox's 2023 article, Go has had fully reproducible toolchains since Go 1.21: the
+toolchain for a given target platform is byte-for-byte identical no matter which operating system it
+is built on, and the Go team wrote a tool that rebuilds the official release toolchains from source
+and compares them with the published ones [[Cox, 2023](#ref-cox-2023)]. The two builds in the
+experiment above are identical to each other, but they cannot be compared byte by byte with the
+official downloaded binaries: the official macOS release carries Apple's code signature (visible
+with `codesign -dv`), while a locally built binary has only the ad-hoc signature added by the
+linker.
 
 ## Further Reading
 
-1. The Go Authors. *Go 1.5 Release Notes* (compiler and runtime rewritten in Go, toolchain achieves bootstrapping).
-   https://go.dev/doc/go1.5
-2. Russ Cox. *Go 1.5 Bootstrap Plan* (`go15bootstrap`, the complete plan for removing C and bootstrapping with an older Go).
-   https://go.googlesource.com/proposal/+/master/design/go15bootstrap.md
-3. Russ Cox. *Go 1.3+ Compiler Overhaul* (`go13compiler`, mechanical transpilation of the C compiler into Go).
-   https://go.googlesource.com/proposal/+/master/design/go13compiler.md
-4. The Go Authors. *Installing Go from source / Bootstrap toolchain* (bootstrap version requirements and the N-2 rule).
-   https://go.dev/doc/install/source
-5. The Go Authors. *cmd/dist: `buildtool.go` (`minBootstrap`, import path rewriting) and `build.go` (`requiredBootstrapVersion`, toolchain1~3)*.
-   https://github.com/golang/go/tree/master/src/cmd/dist
-6. Go issue #44505, #54265: *Why the bootstrap baseline migrated from Go 1.4 to a newer version*.
-   https://go.dev/issue/44505 , https://go.dev/issue/54265
-7. Ken Thompson. *Reflections on Trusting Trust.* Communications of the ACM, 1984.
-   https://dl.acm.org/doi/10.1145/358198.358210
+- <a id="ref-cox-2013"></a>[Cox, 2013] Russ Cox. "Go 1.3+ Compiler Overhaul." 2013.
+  https://go.dev/s/go13compiler
+  https://go.googlesource.com/proposal/+/master/design/go13compiler.md
+  The plan to translate the compiler written in C into Go automatically, and its rationale.
+- <a id="ref-cox-2015"></a>[Cox, 2015] Russ Cox. "Go 1.5 Bootstrap Plan." 2015.
+  https://go.dev/s/go15bootstrap
+  https://go.googlesource.com/proposal/+/master/design/go15bootstrap.md The scheme that removed C
+  and took an older Go as the starting point; the comments in `make.bash` still point to it.
+- <a id="ref-go-authors-2015"></a>[Go Authors, 2015] The Go Authors. *Go 1.5 Release Notes*.
+  https://go.dev/doc/go1.5
+  The release in which the compiler and runtime were reimplemented in Go.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. "Installing Go from source."
+  https://go.dev/doc/install/source
+  The rules for the starting version, and how to start from gccgo.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `cmd/dist/build.go`,
+  `buildtool.go`, `notgo124.go` (Go 1.26).
+  https://github.com/golang/go/tree/release-branch.go1.26/src/cmd/dist
+  https://github.com/golang/go/tree/master/src/cmd/dist
+  The build process of toolchain1 to 3, `requiredBootstrapVersion` and the version check.
+- <a id="ref-cox-2021"></a>[Cox, 2021] Russ Cox. "build: adopt Go 1.17 as bootstrap toolchain for Go
+  1.20." Go issue 44505, 2021. https://go.dev/issue/44505 One of the issues the comment in
+  `notgo124.go` points to; it discusses why Go no longer starts from Go 1.4.
+- <a id="ref-cox-2022"></a>[Cox, 2022] Russ Cox. "build: adopt Go 1.20 as bootstrap toolchain for Go
+  1.22." Go issue 54265, 2022. https://go.dev/issue/54265
+  Proposes moving the starting point forward every year to the version released the year before.
+- <a id="ref-thompson-1984"></a>[Thompson, 1984] Ken Thompson. "Reflections on Trusting
+  Trust." *Communications of the ACM*, 27(8): 761–763, 1984. https://doi.org/10.1145/358198.358210
+  (ACM Digital Library: <https://dl.acm.org/doi/10.1145/358198.358210>) The 1983 Turing Award
+  lecture, which describes a compiler backdoor that can pass from generation to generation.
+- <a id="ref-wheeler-2005"></a>[Wheeler, 2005] David A. Wheeler. "Countering Trusting Trust through
+  Diverse Double-Compiling." *Proceedings of the 21st Annual Computer Security Applications
+  Conference (ACSAC)*, 2005. https://dwheeler.com/trusting-trust/ A method of checking a compiler
+  binary with another, independent compiler.
+- <a id="ref-cox-2023"></a>[Cox, 2023] Russ Cox. "Perfectly Reproducible, Verified Go
+  Toolchains." The Go Blog, 2023. https://go.dev/blog/rebuild How the Go toolchain became
+  byte-for-byte reproducible, and how official releases are verified independently.
+- <a id="ref-gcc-nd"></a>[GCC, n.d.] GCC Team. *Installing GCC: Building.*
+  https://gcc.gnu.org/install/build.html
+  GCC's three-stage bootstrap, and the comparison of the stage 2 and stage 3 compilers.

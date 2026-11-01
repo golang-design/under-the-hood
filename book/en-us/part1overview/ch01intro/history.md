@@ -5,78 +5,205 @@ title: "1.1 The Evolution of Programming Languages"
 
 # 1.1 The Evolution of Programming Languages
 
-To understand why Go turned out the way it did, why it is so restrained, so obsessed with compilation speed, so concerned with concurrency, we first have to look at the language landscape it was born into, and at whose pain it set out to solve. Go was not designed in a vacuum. It is the response of a group of people who spent their careers writing systems software, a response to their long-standing dissatisfaction with the mainstream languages of the time. Understanding this background gives a unified starting point for all the trade-offs the rest of this book examines, in the scheduler, the memory model, and generics.
+In 2007, Google's build engineers measured the compilation of a large C++ program. It consisted of
+about 2000 source files totalling 4.2 MB when simply concatenated, yet after all `#include`
+directives were expanded, more than 8 GB of text reached the compiler, an average blow-up of about
+2000 bytes for every source byte. Building it took 45 minutes on the distributed build system of the
+day. Rob Pike cited these figures in his 2012 article "Go at
+Google" [[Pike, 2012a](#ref-pike-2012a)].
 
-## 1.1.1 A Few Main Threads in the Evolution of Languages
+The blow-up comes from the way `#include` works. The preprocessor inserts the full text of a header
+file verbatim, and that header includes other headers in turn. Every `.cc` file reads and parses all
+of this again, so a commonly used header is processed thousands of times in a single build.
 
-Half a century of programming-language evolution is not a straight line but a repeated tug-of-war among several forces. Compressed into a single timeline: in the late 1950s, Fortran freed scientific computing from assembly and Lisp brought higher-order functions and automatic memory management; in the 1960s Algol established structured blocks and syntax; in the 1970s C was born alongside Unix and gave systems programmers a language that "hugs the machine without making you write assembly"; in the 1980s and 90s C++ and Java pushed object orientation into the mainstream, the former chasing zero cost, the latter chasing portability and management; in the same period scripting languages such as Python and Perl won on development efficiency; after the 2000s, Go and Rust represented two answers to "rethinking systems programming", one betting on simplicity and concurrency, the other on compile-time memory safety.
+Go began while its designers waited for builds like this one. In September 2007, Robert Griesemer,
+Rob Pike and Ken Thompson wrote the goals of a new language on a whiteboard; Go was open-sourced in
+November 2009 [[Cox et al., 2022](#ref-cox-et-al-2022)], and Go 1 was released in March 2012. This
+section covers three topics: the problems they set out to solve, what each of the three designers
+brought, and a principle that runs through Go's design: a language should have as few features as
+possible, and each addition must prove its worth.
 
-Behind every step lies a set of **specific trade-offs** along several dimensions. No language can be optimal on every dimension at once, and seeing these dimensions clearly is what makes it possible to understand why each one turned out the way it did:
+## 1.1.1 The Problems Go Set Out to Solve
 
-- **Level of abstraction**: from assembly's "directly manipulate the machine", to C's procedural abstraction, to the object abstraction of C++/Java, to the higher-order abstraction of functional languages. The higher the level, the more concise the expression and the further from the machine, and the weaker the grip on performance and predictability.
-- **Memory safety**: from C's manual `malloc`/`free` (powerful but extremely error-prone, with dangling pointers, out-of-bounds access, leaks), to managed languages with garbage collection (which eliminate a large class of memory errors at the cost of runtime overhead and pauses), to Rust's ownership (compile-time safety guarantees at the cost of a steeper learning curve).
-- **Concurrency model**: from manual threads with locks (dangerous and hard to reason about), to higher-level message passing such as CSP / Actor ([1.3](./csp.md)), to the stackless coroutines of `async`/`await`.
-- **Type system**: swinging back and forth between "the safety of static strong typing" and "the flexibility of dynamic typing", and again choosing differently between "nominal typing" and "structural typing" ([4.2](../../part2lang/ch04type/interface.md)).
-- **Engineering qualities**: compilation speed, build model, toolchain, dependency management. This dimension has long been undervalued by language designers, yet it is the lifeline of large-scale software collaboration, and it is exactly where Go pushed hardest.
+Pike states plainly in "Go at Google" that Go was designed to solve the problems Google met in
+software development. Its purpose was not programming language research but to improve the working
+environment of its designers and their colleagues; in Pike's words, it is a language design "in the
+service of software engineering" [[Pike, 2012a](#ref-pike-2012a)]. There were three main problems.
 
-Placing a few representative languages on these axes makes the differences plain:
+**Slow builds.** The cause is described above. When Go compiles a package, the compiler distills the
+package's exported content (types, function signatures, constants and so on) into a summary and
+writes it into the compiled output. Packages that import it read only this summary and never parse
+its source again ([3.2](../ch03life/compile.md)). In addition, importing a package without using it
+is a compile error, and packages may not import each other cyclically, so the dependency graph stays
+clear and does not grow without bound.
 
-| Language | Memory management | Concurrency | Types | Compilation/execution | Design orientation |
-| --- | --- | --- | --- | --- | --- |
-| C | Manual | Threads + locks | Static, weak | Compiled to native code | Close to the machine, zero-cost abstraction |
-| C++ | Manual / RAII | Threads + locks | Static, strong, complex | Slow to compile, fast to run | Maximizing expressiveness |
-| Java | GC | Threads + locks / virtual threads | Static, nominal, rich reflection | JIT, heavy runtime | "Write once, run anywhere" |
-| Python | GC (reference counting) | GIL + threads / async | Dynamic | Interpreted | Development efficiency first |
-| Rust | Ownership | Threads + async | Static, strong, ownership | Slow to compile, fast to run | Safe and zero-cost |
-| Go | GC | goroutine (CSP) | Static, structural interfaces | Extremely fast to compile, fast to run | Simple, engineering-friendly |
+**Difficult concurrent programming.** Google's servers run on multicore machines and must handle
+many requests at once. In C++ such programs have to rely on threads and locks, which makes the code
+verbose and error-prone. Go builds concurrency into the language: the `go` statement starts a
+goroutine, and channels pass data between goroutines ([1.3](./csp.md)).
 
-This table is not meant to rank the languages; there is no "best" row, only several rows that "made different trade-offs for different goals". Go's place in the table, with GC, CSP concurrency, structural interfaces, extremely fast compilation, and a design orientation toward "simplicity", was forced out by exactly the pains it set out to solve.
+**An overly complex language.** C++ has many features that interact with one another; each team
+typically uses a subset, and different teams choose different subsets. By Pike's recollection,
+around September 2007 he was waiting on a build of a large C++ program that took about 45 minutes,
+and in the meantime attended a talk by several Google employees on the C++ standards committee. The
+talk introduced the new standard then known as C++0x (later C++11) and covered about 35 new features
+in an hour. What troubled Pike (and, in his view, Thompson and Griesemer) most was the new memory
+model with its atomic types: it specified such fine details in an already heavily burdened type
+system and tied the language too closely to the hardware of the time (Go's own memory model is in
+[11.9](../../part3concurrency/ch11sync/mem.md)). Back in his office, Pike started another build,
+turned to Griesemer and asked a string of questions; before the build finished they had pulled in
+Thompson and decided to design a new language [[Pike, 2012b](#ref-pike-2012b)]. Thompson also said
+that reading the C++0x draft standard firmed up his resolve (see the epigraph on the chapter's first
+page).
 
-## 1.1.2 The Designers' Lineage
+## 1.1.2 The Three Designers
 
-A language's character is often written in the resumes of its designers. Go began inside Google in 2007, started by Robert Griesemer, Rob Pike, and Ken Thompson, and the backgrounds of these three almost guaranteed that Go would look the way it does today.
+Ken Thompson and Dennis Ritchie created Unix together [[Kernighan, 2019](#ref-kernighan-2019)], and
+Thompson also designed B, the predecessor of C. Rob Pike worked at Bell Labs on Plan 9, the research
+successor to Unix. In 1992 Thompson and Pike designed UTF-8, now the most widely used character
+encoding on the web. Pike also took part in designing several languages built around channels
+[[Pike, 1990](#ref-pike-1990)] ([1.3](./csp.md)). Robert Griesemer earned his doctorate at ETH
+Zürich, where Niklaus Wirth designed Pascal, Modula-2 and Oberon; Griesemer later worked on Java's
+HotSpot virtual machine and on Chrome's V8 JavaScript engine.
 
-**Ken Thompson** is a co-creator of Unix, the author of the B language (C's predecessor), and one of the sources of the Unix philosophy that "each program should do one thing well, and compose them through simple interfaces". **Rob Pike** came from Bell Labs and was a principal designer of Plan 9, the research operating system that followed Unix, and together with Thompson he invented UTF-8; more important, over twenty years at Bell Labs he ran a continuous line of concurrent-language experiments, **Newsqueak, Alef, and Limbo**, gradually turning Hoare's CSP ([1.3](./csp.md)) ideas into a language. Go's `go` keyword, channels, and `select` are the continuation of this line. **Robert Griesemer** brought a deep compiler background, having worked on Google's V8 JavaScript engine, Java's HotSpot virtual machine, and Strongtalk.
+The official Go FAQ summarizes Go's lineage this way: the basic syntax belongs to the C family; the
+design of declarations and packages borrows heavily from the Pascal, Modula and Oberon family; and
+the concurrency ideas come from languages inspired by Hoare's CSP, such as Newsqueak and Limbo
+[[Go Authors, 2026](#ref-go-authors-2026)]. These three sources correspond roughly to the experience
+of the three designers [[Donovan and Kernighan, 2015](#ref-donovan-kernighan-2015)]:
 
-Layer these three lineages together and Go's genes become clear: **Unix minimalism** (small, orthogonal, composable), **a twenty-year genealogy of concurrent languages** (CSP and channels), and **front-line compiler and runtime engineering experience** (extremely fast compilation, a substantial runtime). A language designed by "Unix systems programmers plus concurrent-language researchers plus compiler experts" naturally leans toward simplicity, stays close to the system, and treats the toolchain as paramount. Go is not the product of some new fashion in linguistics, but a set of trade-offs distilled from these people's lifetime of experience.
+| Source | What it contributed to Go |
+| --- | --- |
+| C | Braces, expressions and operators, pointers (but no pointer arithmetic) |
+| Pascal, Modula-2, Oberon | Declarations with the name first and the type after; compilation by package; export status marked at the declaration |
+| Newsqueak, Limbo and others | The `go` statement, channels, `select` |
 
-## 1.1.3 The Dissatisfaction at Go's Birth
+The influence of the Oberon family shows most clearly in declaration syntax. A C declaration has to
+be read starting from the name and alternating to the right and left. Take a function pointer whose
+target function takes another function pointer as its first parameter; in C it is written:
 
-What prompted them to act were several concrete, everyday pains in large-scale C++ / Java server-side development. In *Go at Google*, Rob Pike put it bluntly: Go was born "to solve Google's software engineering problems", not to pursue linguistic novelty. These pains included:
+```c
+int (*fp)(int (*)(int, int), int);
+```
 
-- **Compilation slow enough to wreck the rhythm.** Google's enormous C++ codebase, because of the **transitive dependencies** of header files, where one `.cc` file `#include`s a header, that header includes others, and so on, layer upon layer, could end up parsing the same batch of headers thousands of times in a single compile. Pike has cited an often-quoted example: in one large build, the amount of header expansion the compiler actually processed was thousands of times the size of the source itself, and builds routinely took tens of minutes. The "change one line, compile, see the result" development loop was badly slowed. Go's later, near-obsessive emphasis on compilation speed ([3.2](../ch03life/compile.md), [15](../../part5toolchain/ch15compile)) has its roots right here.
-- **Chaotic dependency management.** The textual-inclusion model of `#include` left dependency relationships murky and led to repeated compilation. Go's package model (the package as the smallest unit, no circular dependencies, depending on a read-only exported summary rather than all the source) and its "an unused import is a compile error" rule are aimed squarely at this pain.
-- **Concurrency hard to write and dangerous.** Concurrency in C++ relied on thread libraries plus manual locks, which is both verbose and extremely error-prone (races, deadlocks), while Google's server programs are inherently highly concurrent. Go made concurrency a first-class citizen of the language, with a single `go` keyword, channels, and `select` ([1.3](./csp.md), [9](../../part3concurrency/ch09sched)), turning concurrency from "only experts dare touch it" into "anyone can write it".
-- **The language too sprawling.** C++ has so many features, so intertwined, that within a single team it was hard to reach consensus on "which subset of the language to use", and newcomers needed a long time before they dared touch certain corners. Pike has mentioned several times that it was precisely an experience of waiting for a large C++ program to compile, while idly flipping through the C++0x draft standard, that made him resolve to build a "small" language.
+In Go the same declaration reads from left to right:
 
-## 1.1.4 A "Less Is More" Response
+```go
+var fp func(func(int, int) int, int) int
+```
 
-Go's response is a deliberate **restraint**. It chose: compilation to native machine code, garbage collection, static typing; a minimal syntax (just 25 keywords, few enough to recite in one breath); concurrency modeled on CSP ([1.3](./csp.md)); a type system whose skeleton is **composition** rather than inheritance ([4.2](../../part2lang/ch04type/interface.md)); and an extreme emphasis on the toolchain and build speed.
+Pike's 2010 article "Go's Declaration Syntax" is devoted to this choice
+[[Pike, 2010](#ref-pike-2010)]. The export rule follows the same thinking: Oberon marks an exported
+name with a trailing `*`, while Go distinguishes by whether the first letter of the name is upper
+case. Either way the status is visible at the declaration, and no separate export list needs to be
+maintained.
 
-What it **deliberately left out** is as striking as what it kept, and every "leave out" corresponds to one of the pains or values above:
+## 1.1.3 Less Is More
 
-- For a long time it had **no generics** (until Go 1.18 in 2022, [8](../../part2lang/ch08generics)), because no scheme had been found that did not sacrifice compilation speed and simplicity, and it preferred to do without rather than rush.
-- **No exceptions** ([7](../../part2lang/ch07errors)): errors are ordinary values, returned explicitly and handled explicitly, refusing "implicit control-flow jumps".
-- **No inheritance**, replaced by interfaces and composition, avoiding the fragility and entanglement of class hierarchies.
-- **No operator overloading and no implicit type conversion**, refusing the magic of "you can't tell what a line of code does just by looking at it".
+Pike set out Go's design approach in his 2012 talk "Less is exponentially
+more" [[Pike, 2012b](#ref-pike-2012b)]. The "exponentially" in the title can be understood through
+the interaction of features. Language features are not independent: whenever two meet, a dedicated
+rule may be needed to specify how they behave together. Most Go programmers have met the following
+three examples:
 
-Pike condensed this orientation into a single line, "**Less is exponentially more**": removing a feature saves not only that feature itself but also the complexity born of its pairwise interactions with every other feature, and that complexity grows combinatorially with the number of features. What makes a small language valuable is precisely that its features have so few hidden entanglements among them.
+- **For loops and closures.** Before Go 1.22 a loop had a single loop variable. Closures and
+  goroutines in the loop body captured that same variable and usually saw only its last value. Go
+  1.22 creates a new variable for each iteration.
+- **Interfaces and nil.** When an interface variable holds a nil pointer, the interface variable
+  itself is not equal to nil.
+- **Defer and panic.** After a panic, deferred functions that were already registered still run;
+  `recover` works only when called directly from a deferred function.
 
-## 1.1.5 Complexity Must Earn Its Place
+Simple counting shows why features should be few. Twelve features give 66 pairs; adding one more
+creates 12 new pairs. If interactions among three and four features at once are counted as well, the
+number of combinations doubles with every added feature. The specification must describe each
+combination, the compiler must implement each one, and everyone reading code must remember each one.
+Removing a feature therefore saves far more than the feature itself.
 
-The orientation of "designing by subtraction" is a thread running through the whole book. A distilled example is the **"generic dilemma"** that Russ Cox posed in 2009: among "slow programmers, slow compilers, slow runtimes", any generics scheme seems able to pick only two of the three. C++ templates chose a fast runtime (sacrificing compilation speed and code size), Java chose fast compilation (sacrificing runtime boxing overhead). Precisely because Go valued the latter two so highly (fast compilation, a lean runtime), it preferred to let programmers write a bit of repetitive code for a while rather than introduce generics that would sacrifice them, and it held off until 2022, when it found an implementation that balanced the three reasonably well (GC-shape stenciling plus dictionaries, [8.1](../../part2lang/ch08generics/history.md)). This thirteen-year wait is the most vivid footnote to Go's design philosophy: **complexity must earn its place, and a new feature must first prove it is worth it.**
+The figure below draws 12 common Go features as points on a circle, with a line between every two
+points. You can add and remove features to watch the number of lines change, and inspect several
+pairs of features that do have dedicated rules.
 
-Once we understand these dissatisfactions and responses present at Go's birth, the analysis of each piece of the implementation in the rest of this book, why the scheduler is cooperative plus signal-based preemption ([9.7](../../part3concurrency/ch09sched/preemption.md)), why the memory model offers only sequentially consistent atomics ([11.9](../../part3concurrency/ch11sync/mem.md)), why the GC fights so hard for low latency ([13](../../part4memory/ch13gc)), all share a common origin in coordinates: they are concrete unfoldings, in every corner, of one set of values, "simple, engineering-friendly, in the service of real large-scale software collaboration". The next section ([1.2](./go.md)) first sketches a bird's-eye view for the whole book, making clear how this set of values is distributed across the three layers of language, runtime, and toolchain.
+<div class="viz" data-viz="lang-interactions"></div>
+
+The idea was articulated before Go. In "No Silver Bullet", proposed in 1986 and published in 1987,
+Fred Brooks divided the difficulties of software development into essence and accident: the former
+comes from the problem itself, the latter from tools and means of expression, and earlier advances
+such as high-level languages removed only the latter [[Brooks, 1987](#ref-brooks-1987)]. The rules
+between features are exactly such accidental difficulties, and every user of the language must bear
+them. In his 1980 Turing Award lecture Tony Hoare said [[Hoare, 1981](#ref-hoare-1981)]: "There are
+two ways of constructing a software design: One way is to make it so simple that there are obviously
+no deficiencies, and the other way is to make it so complicated that there are no obvious
+deficiencies. The first method is far more difficult."
+
+In his 1995 "A Plea for Lean Software", Wirth cites Martin Reiser's observation that software is
+getting slower more rapidly than hardware is getting faster. As a counterexample he offers the
+Oberon system that he and Jürg Gutknecht developed: a complete operating system together with its
+compiler, small enough to be explained from start to finish in a single book (*Project Oberon*)
+[[Wirth, 1995](#ref-wirth-1995)].
+
+## 1.1.4 New Features Must Prove Their Worth
+
+Generics are the classic example. In his 2009 post "The Generic Dilemma", Russ Cox sorted the
+approaches of the time into three routes. Provide no generics and make programmers write repetitive
+code, as C does. Generate a separate copy of the code for each type, at the cost of slower
+compilation and larger programs, as C++ does. Or box every value implicitly, at the cost of slower
+execution, as Java does. In short, one must choose among slow programmers, slow compilers and
+bloated programs, and slow execution [[Cox, 2009](#ref-cox-2009)].
+
+Go 1 had no generics. They entered the language only with Go 1.18, released in March 2022, and the
+implementation took a compromise: types with the same underlying representation (for example, all
+pointer types) share one copy of the code, and the remaining differences are supplied by a
+dictionary passed in at the call ([8.1](../../part2lang/ch08generics/history.md)). Counting from the
+open-sourcing in 2009, this decision waited thirteen years.
+
+Other features Go deliberately omits are exceptions (errors are ordinary return values,
+[Chapter 7](../../part2lang/ch07errors/readme.md)), class inheritance (replaced by interfaces and
+struct embedding), operator overloading, and implicit conversions between numeric types. Each has
+its uses, and each becomes entangled with other features.
+
+The principle recurs in later chapters. Goroutines cannot be given priorities
+([Chapter 9](../../part3concurrency/ch09sched/readme.md)). Atomic operations offer only one
+semantics, and the one easiest to reason about ([11.9](../../part3concurrency/ch11sync/mem.md)). The
+garbage collector has only two tunable parameters, `GOGC` and `GOMEMLIMIT`
+([Chapter 13](../../part4memory/ch13gc/readme.md)). The next section describes the parts that make
+up Go.
 
 ## Further Reading
 
-1. Rob Pike. *Go at Google: Language Design in the Service of Software Engineering.* 2012.
-   https://go.dev/talks/2012/splash.article (Go's engineering motivation, the most authoritative first-hand account)
-2. Russ Cox. *The Generic Dilemma.* 2009. https://research.swtch.com/generic
-3. Rob Pike. *Less is exponentially more.* 2012.
-   https://commandcenter.blogspot.com/2012/06/less-is-exponentially-more.html
-4. The Go Authors. *Frequently Asked Questions (FAQ): Origins / Design.* https://go.dev/doc/faq
-5. Rob Pike. *The Implementation of Newsqueak / Concurrency, and Go's language genealogy.*
-   (The CSP line from Newsqueak/Alef/Limbo to Go)
-6. Brian W. Kernighan. *Unix: A History and a Memoir.* 2019 (the Go designers' Unix / Plan 9 origins).
-7. Alan A. A. Donovan, Brian W. Kernighan. *The Go Programming Language.* 2015.
+- <a id="ref-pike-2012a"></a>[Pike, 2012a] Rob Pike. "Go at Google: Language Design in the Service
+  of Software Engineering." 2012. https://go.dev/talks/2012/splash.article The engineering
+  motivation for Go; the header-bloat figures come from here.
+- <a id="ref-pike-2012b"></a>[Pike, 2012b] Rob Pike. "Less is exponentially more." 2012.
+  https://commandcenter.blogspot.com/2012/06/less-is-exponentially-more.html The source of the "less
+  is more" slogan in the Go community; it also records the C++0x talk at Go's beginning.
+- <a id="ref-cox-et-al-2022"></a>[Cox et al., 2022] Russ Cox, Robert Griesemer, Rob Pike, Ian Lance
+  Taylor, Ken Thompson. "The Go Programming Language and Environment." *Communications of the ACM*,
+  65(5): 70–78, 2022. https://doi.org/10.1145/3488716 Go's designers look back on which decisions
+  proved right.
+- <a id="ref-go-authors-2026"></a>[Go Authors, 2026] The Go Authors. *Frequently Asked Questions
+  (FAQ)*, sections "Origins" and "Design". https://go.dev/doc/faq Go's lineage, and the reasons for
+  several things Go does not do.
+- <a id="ref-pike-2010"></a>[Pike, 2010] Rob Pike. "Go's Declaration Syntax." The Go Blog, 2010.
+  https://go.dev/blog/declaration-syntax
+  Why types are written after names.
+- <a id="ref-cox-2009"></a>[Cox, 2009] Russ Cox. "The Generic Dilemma." 2009.
+  https://research.swtch.com/generic
+  The three routes to generics, and the cost of each.
+- <a id="ref-brooks-1987"></a>[Brooks, 1987] Frederick P. Brooks, Jr. "No Silver Bullet: Essence and
+  Accidents of Software Engineering." *IEEE Computer*, 20(4): 10–19, 1987. Divides the difficulties
+  of software development into essential and accidental ones.
+- <a id="ref-hoare-1981"></a>[Hoare, 1981] C. A. R. Hoare. "The Emperor's Old
+  Clothes." *Communications of the ACM*, 24(2): 75–83, 1981. Hoare's Turing Award lecture, on the
+  lessons of excessive complexity in language design.
+- <a id="ref-wirth-1995"></a>[Wirth, 1995] Niklaus Wirth. "A Plea for Lean Software." *IEEE
+  Computer*, 28(2): 64–68, 1995. Argues for lean software, using the Oberon system as the example.
+- <a id="ref-pike-1990"></a>[Pike, 1990] Rob Pike. "The Implementation of Newsqueak." *Software:
+  Practice and Experience*, 20(7): 649–659, 1990. Pike's early channel-based language, the origin of
+  Go's concurrency design.
+- <a id="ref-kernighan-2019"></a>[Kernighan, 2019] Brian W. Kernighan. *UNIX: A History and a
+  Memoir*. Kindle Direct Publishing, 2019. The history of Bell Labs and Unix, in which both Thompson
+  and Pike appear.
+- <a id="ref-donovan-kernighan-2015"></a>[Donovan and Kernighan, 2015] Alan A. A. Donovan, Brian W.
+  Kernighan. *The Go Programming Language*. Addison-Wesley, 2015. Its preface has a diagram of Go's
+  ancestry that corresponds to the table in this section.

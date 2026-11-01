@@ -18,4 +18,23 @@ bookCollapseSection: true
 </div>
 </div>
 
-To understand the implementation of a language, we first have to understand why it was designed the way it is today. Go did not appear out of nowhere. Every one of its trade-offs carries the traditions of Unix, C, and CSP, along with the designers' long-standing worry about complexity spinning out of control in large-scale engineering. This part starts from design philosophy and historical context, sketching the full picture of the language first: what problems it set out to solve, and what it deliberately gave up. We then descend to assembly and calling conventions, the layer closest to the machine, to work out how functions, arguments, and stack frames actually land on real hardware. Finally, we follow the complete lifecycle of a program from startup to exit, stringing together the runtime's various subsystems into a single traceable thread. Once we have read through this part, the seemingly scattered implementation details in later chapters will fall back into a unified design intent.
+The rest of the book goes deep into the scheduler, the memory allocator, the garbage collector and
+the compiler. Before that, this part answers three more basic questions.
+
+First, why Go looks the way it does today. Chapter 1 covers the engineering problems Go was created
+to solve, which ideas it inherited from Unix, C and CSP, and which it deliberately left behind.
+Almost every later implementation trade-off finds its motivation here.
+
+Second, what Go code looks like at the machine level. The lowest layers of the runtime (switching
+goroutines, growing stacks, atomic operations) are written in assembly. Chapter 2 introduces what is
+needed to read that assembly: Go's own assembly language, and where arguments and results live
+during a function call.
+
+Third, which stages a program goes through from source to exit. Chapter 3 follows one program end to
+end: the `go` command orchestrates the build, the compiler and linker produce an executable, the
+runtime initializes before `main`, and finally `main` returns and the process ends. This thread ties
+together the subsystems discussed in the later parts.
+
+After this part, the reader should be able to follow every step in the output of `go build -x`, read
+a short assembly routine in the runtime using Go assembly, and explain what happens before and after
+`main` in a Go program.

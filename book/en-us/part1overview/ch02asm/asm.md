@@ -5,141 +5,164 @@ title: "2.1 The Plan 9 Assembly Language"
 
 # 2.1 The Plan 9 Assembly Language
 
-Read the source of the Go runtime long enough, and sooner or later you run into code that looks
-like assembly yet not quite like any assembly you are familiar with. That is Go's
-**Plan 9 style assembly**. We will keep returning to it as we dissect the scheduler, stack
-switching, and atomic operations: `gogo`, `mcall`, `morestack`, and `asyncPreempt` are all assembly
-routines. This section explains what it is, why it exists, and the few key concepts you need in
-order to read it. We do not aim to teach the reader to write Plan 9 assembly, which is the subject
-of another book; we aim to turn it into a **reading vocabulary**: when a later section mentions some
-assembly routine, the reader knows what kind of abstraction layer it lives in and what each symbol
-points to.
+Open `runtime/asm_amd64.s` and you find code like this (Go 1.26):
 
-The examples in this section are drawn from `runtime/asm_amd64.s` and `internal/runtime/atomic`.
-These routines are fairly stable across versions. To keep the focus on design, we have trimmed a
-few experimental branches unrelated to this section (such as `GOEXPERIMENT` guards); for the
-complete definitions, please consult the corresponding source files.
-
-## 2.1.1 Why Go Has Its Own Assembly
-
-Go's assembly descends from the assembler tradition of the **Plan 9 operating system**. Plan 9 was
-a research system built at Bell Labs after Unix, and several of Go's designers (Ken Thompson, Rob
-Pike, Russ Cox) came from there, carrying the ideas of that toolchain into Go. Its key trait is
-this: **it is not the native assembly of any one CPU, but a semi-abstract, cross-architecture
-unified intermediate assembly**. One syntax, one set of pseudo-instructions and pseudo-registers,
-translated by the toolchain `cmd/asm` into the real instructions of each target architecture, amd64,
-arm64, riscv64, and others. This is entirely unlike the GNU as design, where each architecture has
-its own dialect.
-
-This choice serves one of Go's original hard goals: **one toolchain, cross-compilation out of the
-box**. When the assembly layer is itself cross-architecture, porting the runtime to a new
-architecture degenerates into "add a backend for this unified syntax" rather than "relearn an
-assembly and rewrite the entire runtime." The cost is equally real: Go has to maintain its own
-assembler, linker, and object file format (`cmd/internal/obj`), an entire extra layer of
-infrastructure to feed. What it buys is **complete control** over code generation, calling
-conventions, and coordination with the runtime. This trade-off of "build it ourselves rather than
-reuse off-the-shelf parts" will reappear in the custom ABI of [2.3 Calling Conventions](./callconv.md)
-and in the function calls of [6.1](../../part2lang/ch06func/func.md), and it is one of the main
-threads in understanding the Go runtime.
-
-So why does Go **need** to descend to assembly at all? The vast majority of Go code of course never
-touches it, but the runtime has a few places where the compiler is powerless and a human must hand
-write the machine-level glue:
-
-- **Stack switching**. `gogo` and `mcall` ([9.4](../../part3concurrency/ch09sched/schedule.md)) have
-  to directly swap SP and PC from one goroutine's live state to another, an operation that does not
-  exist in a high-level language.
-- **The prologue of stack growth**. `morestack` is called when the stack is too small, and it must
-  precisely save the current function's live state before switching to the g0 stack.
-- **Atomic operations**. CAS, atomic add, and the like require issuing specific CPU instructions
-  (such as `CMPXCHG` with the `LOCK` prefix), which the compiler will not generate out of thin air.
-- **Signal and system call entry points**. Saving and restoring live state during signal handling
-  ([9.6](../../part3concurrency/ch09sched/signal.md)), and entering and leaving a syscall, all
-  require arranging registers precisely, bypassing the compiler.
-
-What these places have in common is that the object they manipulate is "the live state of execution"
-itself (the stack pointer, the program counter, the registers), precisely what a high-level language
-hides away. Assembly is that last thin, unavoidable layer of glue between the runtime and the
-hardware.
-
-## 2.1.2 The Four Pseudo-Registers
-
-The thing in Plan 9 assembly most likely to confuse, and the thing best understood first, is its
-**pseudo-registers**. They do not necessarily correspond to some real physical register; they are
-an abstraction the toolchain provides: you use them to express intent ("the first argument," "the
-second local variable," "some global symbol"), and `cmd/asm` is responsible for mapping that intent
-onto each architecture's real registers and addressing modes. It is exactly this abstraction layer
-that lets one piece of assembly be reused across architectures. There are four in all:
-
-- **FP** (Frame Pointer): accesses a function's **input arguments and return values**, given as a
-  symbol plus an offset, such as `ptr+0(FP)` or `ret+16(FP)`. The arguments live in the caller's
-  stack frame, and FP points to their base.
-- **SP** (Stack Pointer): accesses the current function's **local variables**, such as `x-8(SP)`.
-  Note that this is the **pseudo-register** SP, which means something different from the hardware SP;
-  see the trap below.
-- **PC** (Program Counter): the current instruction address, used for jumps and branches.
-- **SB** (Static Base): accesses **global symbols**, such as `runtime·gogo(SB)`. All function names
-  and global variable names are given as offsets from SB; you can think of SB as "the starting point
-  of the entire address space."
-
-A one-line mnemonic: **FP handles arguments, SP handles locals, SB handles globals, PC handles
-jumps**. These four give names to the three kinds of data a function touches at runtime (what is
-passed in, what is its own temporary, what is external and global) and to control flow. The figure
-below shows where the first three point during a single call:
-
-```mermaid
-flowchart TB
-    subgraph caller["Caller's stack frame (high address)"]
-        ret["return value slot ret+16(FP)"]
-        args["arguments ptr+0(FP) / old+8(FP) / new+12(FP)"]
-        retaddr["return address"]
-    end
-    subgraph callee["Callee's stack frame (low address)"]
-        locals["local variables x-8(SP) ..."]
-    end
-    FP["pseudo-register FP"] -.points to.-> args
-    SP["pseudo-register SP"] -.points to.-> locals
-    SB["pseudo-register SB"] -.points to.-> GLOBAL["global symbol runtime·foo(SB)"]
+```asm
+TEXT runtime·gogo(SB), NOSPLIT, $0-8
+	MOVQ	buf+0(FP), BX		// gobuf
+	MOVQ	gobuf_g(BX), DX
+	MOVQ	0(DX), CX		// make sure g != nil
+	JMP	gogo<>(SB)
 ```
 
-On most architectures the stack grows toward lower addresses: arguments and return values are
-prepared by the caller and land at **higher** addresses, accessed with FP plus a positive offset;
-the callee's local variables land at **lower** addresses, accessed with SP plus a negative offset.
-Once you understand this figure, the assembly routines in the runtime turn from gibberish into
-"precise reads and writes of the stack and registers."
+It resembles x86 assembly but does not match the notation in Intel's manuals: the instruction is
+spelled `MOVQ`, operands include `(SB)` and `(FP)`, and the function name contains a `·`. This is
+Go's own assembly language, whose notation descends from the Plan 9 operating system. The Go 1.26
+`runtime` directory holds 182 `.s` files (covering various architectures and operating systems), and
+the chapters on scheduling, stacks and signals cite them repeatedly.
 
-### A Trap That Repeatedly Trips Up the Reader: Pseudo SP Versus Hardware SP
+This section addresses three questions: which Go code must be written in assembly, why Go has an
+assembly language of its own, and which of its notations are easiest to misread.
 
-Plan 9 has **two SPs**, written differently and meaning different things:
+## 2.1.1 What Assembly Is Used For
 
-- The **named** `sym+offset(SP)`, such as `x-8(SP)`, refers to the **pseudo-register SP**, the
-  local-variable region relative to the current stack frame.
-- The **unnamed** `offset(SP)`, such as `0(SP)` or `8(SP)`, refers to the **hardware stack pointer
-  SP**, a real machine register.
+amd64 has sixteen 64-bit general-purpose **registers**, written in Go assembly as `AX`, `BX`, `CX`,
+`DX`, `SI`, `DI`, `BP`, `SP` and `R8` through `R15`; floating-point and vector registers are written
+`X0`, `X1` and so on. Two registers have dedicated roles. The **program counter** (PC) holds the
+address of the next instruction to execute, and a jump overwrites it. The **stack pointer** (SP)
+points to the top of the current stack. Each goroutine has its own stack, which a function call
+claims from high addresses toward low addresses and which a return releases.
 
-The two have different offset baselines, and confusing them reads out a completely wrong address. A
-practical test is to look for a symbol name: with a name (`x-8(SP)`) it is the pseudo SP, accessing
-a local variable; with a bare offset (`8(SP)`) it is the hardware SP, used mostly when pushing
-arguments onto the stack or in routines like `morestack` that arrange the machine stack directly.
-This is exactly the first mine the "reading vocabulary" should defuse for the reader.
+The compiler translates nearly all Go code into machine instructions. Only the following kinds of
+work need hand-written assembly:
 
-Having grasped the pseudo-registers and the addressing syntax, the next step is to apply them to a
-complete routine: how a hand-written assembly function declares its own symbol and declares the size
-of its stack frame. That is exactly what [2.2 Stack Frames and Symbols in Assembly](./frame.md) does,
-where three real routines, `Cas`, `gogo`, and `morestack`, will line these conventions up point by
-point.
+- **Switching goroutines**: replacing both SP and PC with the values saved for another goroutine
+  (`gogo`, `mcall`). The Go language has no statement that writes the stack pointer.
+- **Atomic operations**: compare-and-swap and similar operations need dedicated processor
+  instructions, such as `CMPXCHG` with the `LOCK` prefix on amd64.
+- **Talking to the operating system**: when issuing system calls or receiving signals, data must be
+  placed in specific registers according to the operating system's convention.
+- **A few hot paths**: `memmove`, string search and some cryptographic algorithms are hand-written
+  with vector instructions that process several data items at once, which can make them several
+  times faster.
+
+## 2.1.2 Origin: A Toolchain Inherited from Plan 9
+
+Plan 9 is the operating system Bell Labs developed after Unix, and two of Go's original designers,
+Ken Thompson and Rob Pike, worked on it. Around 1990, Thompson wrote a set of C compilers for Plan
+9, one per architecture [[Thompson, 1990](#ref-thompson-1990)] [[Pike, n.d.b](#ref-pike-ndb)]; Pike
+wrote the manual for the accompanying assembly language [[Pike, n.d.a](#ref-pike-nda)].
+
+The division of labor in this toolset differs from a traditional toolchain. In the object files that
+the compiler and assembler emit, instructions are not yet encoded as the byte sequences the
+processor finally executes. The linker (called the loader in Plan 9) acts as the second half of the
+assembler and as a global optimizer, fixing the encoding of each instruction only when it merges all
+the files. The assembly language can therefore sit one level above machine instructions: the
+programmer writes "put this constant in R0", and the tools decide whether one machine instruction or
+several are needed. Thompson's verdict on this design, in the conclusion of his paper, is that
+compilation is fast and linking is slow [[Thompson, 1990](#ref-thompson-1990)].
+
+Go initially followed the same approach, with the same cost in slow linking: every time a program
+was linked, the instructions of all packages had to be processed again. Go 1.3 (2014) moved
+instruction encoding into the step that compiles each package, so each package is processed once
+[[Cox, 2013](#ref-cox-2013)]; Go 1.5 then rewrote the whole toolchain from C to Go. The build flow
+today is:
+
+```
+foo.go ──► cmd/compile ──┐
+                         ├──► cmd/internal/obj ──► foo.o ──► cmd/link ──► executable
+foo.s  ──► cmd/asm ──────┘
+```
+
+The compiler and the assembler hand their results to the same shared library, `cmd/internal/obj`,
+which determines the final machine instructions [[Go Authors, 2026b](#ref-go-authors-2026b)] and
+inserts a stack check at the start of each function ([2.4](./args.md)). The linker `cmd/link` only
+merges the packages and relocates addresses ([3.4](../ch03life/link.md)). Hand-written assembly
+functions and compiler-generated functions travel the same path and receive the same treatment.
+
+The design in which assembly sits one level above machine instructions has survived as well. Every
+arm64 instruction is 4 bytes long and cannot hold an immediate as large as `0x123456789`. Write
+`MOVD $0x123456789, R0` in arm64 assembly, cross-compile to linux/arm64 and inspect the result with
+`go tool objdump`, and it has been expanded into three instructions that load 16 bits each:
+
+```
+MOVD $26505, R0        // 0x6789
+MOVK $(9029<<16), R0   // 0x2345, written to bits 16 through 31
+MOVK $(1<<32), R0      // 0x1, written to bits 32 through 47
+```
+
+## 2.1.3 Trade-offs
+
+What this design buys is a uniform notation across architectures. Instruction names still vary by
+architecture (`MOVQ` on amd64, `MOVD` on arm64), but operands always list the source first and the
+destination second; the data width is always given by the last letter of the instruction name (`B`,
+`W`, `L` and `Q` for 1, 2, 4 and 8 bytes); and functions, arguments and local variables are written
+the same way everywhere. Once you know Go assembly on one architecture, moving to another only
+requires consulting its instruction table. Support for every architecture lives in one set of tools,
+so cross-compiling needs no separate toolchain installation [[Pike, 2016](#ref-pike-2016)], and
+`GOOS=linux GOARCH=amd64 go build` runs directly on any machine.
+
+The cost is isolation from the surrounding ecosystem. Go assembly differs from both Intel syntax and
+the GNU assembler's AT&T syntax, so assembly code from other sources has to be rewritten. Go must
+also maintain its own assembler, linker and object file format, and each new architecture requires
+writing the corresponding code.
+
+## 2.1.4 The Four Pseudo-Registers
+
+The notations in Go assembly that are easiest to misread are four that look like registers but do
+not exist as such. They are called **pseudo-registers**
+[[Go Authors, 2026a](#ref-go-authors-2026a)]. The assembler converts them into a real register plus
+an offset:
+
+| Notation | Locates | Example |
+| --- | --- | --- |
+| `FP` | this function's arguments and results | `a+0(FP)`, `ret+16(FP)` |
+| `SP` | this function's local variables | `x-8(SP)` |
+| `SB` | functions and global variables | `runtime·gogo(SB)` |
+| `PC` | a nearby instruction, for jumps | `JMP 2(PC)` |
+
+`SB` (static base) stands for the origin of the program's address space, so `runtime·gogo(SB)` is
+the address of the function `runtime.gogo`. The middle dot `·` corresponds to `.` in Go; writing
+`·gogo(SB)` without a package name refers to `gogo` in the current package.
+
+Accessing an argument through `FP` requires its name, and the offset must agree with the Go function
+declaration. For `func add(a, b int) int`, the arguments are written `a+0(FP)` and `b+8(FP)`, and
+the result `ret+16(FP)`. The processor uses only the offset; the name is there for readers and for
+`go vet` to check. If `b+8(FP)` is mistakenly written `b+4(FP)`, `go vet` reports
+`invalid offset b+4(FP); expected b+8(FP)`.
+
+`SP` is the notation most prone to error. amd64 has a hardware register named SP, and Go assembly
+distinguishes the two by whether the notation carries a name. `x-8(SP)` has a name and refers to the
+pseudo-register, counted downward from the top of the local variable area; `8(SP)` has no name and
+refers to the hardware stack pointer, counted upward from the bottom of the stack. The two differ by
+the size of the entire local variable area. [2.2](./frame.md) uses a real disassembly to convert
+these notations into actual addresses.
 
 ## Further Reading
 
-1. The Go Authors. *A Quick Guide to Go's Assembler.* https://go.dev/doc/asm
-   (the authoritative reference for pseudo-registers, addressing, `TEXT`/`DATA`/`GLOBL`, and frame
-   size)
-2. Rob Pike. *A Manual for the Plan 9 Assembler.* https://9p.io/sys/doc/asm.html
-   (the direct source of Go's assembly syntax)
-3. Rob Pike. *How to Use the Plan 9 C Compiler.* http://doc.cat-v.org/plan_9/2nd_edition/papers/comp
-   (background on the Plan 9 toolchain and register conventions)
-4. The Go Authors. *cmd/asm, cmd/internal/obj.* https://github.com/golang/go/tree/master/src/cmd/asm
-   (the implementation that translates the unified assembly to each architecture's backend)
-5. This book: [2.2 Stack Frames and Symbols in Assembly](./frame.md) (the `Cas`/`gogo`/`morestack`
-   routines), [2.3 Calling Conventions and the Register ABI](./callconv.md) (the custom ABI),
-   [6.1 Function Calls](../../part2lang/ch06func/func.md).
+- <a id="ref-thompson-1990"></a>[Thompson, 1990] Ken Thompson. "Plan 9 C Compilers." *Plan 9
+  Programmer's Manual*, Volume 2. Originally published as "A New C Compiler" in *Proceedings of the
+  Summer 1990 UKUUG Conference*, London, 1990. https://9p.io/sys/doc/compiler.html The division of
+  labor among the Plan 9 compiler, assembler and linker, and the practice of letting the linker fix
+  the final instructions.
+- <a id="ref-pike-nda"></a>[Pike, n.d.a] Rob Pike. "A Manual for the Plan 9 Assembler." *Plan 9
+  Programmer's Manual*, Volume 2. https://9p.io/sys/doc/asm.html The direct source of Go's assembly
+  notation; the pseudo-registers FP, SP, SB and PC are all defined here.
+- <a id="ref-cox-2013"></a>[Cox, 2013] Russ Cox. "Go 1.3 Linker Overhaul." 2013.
+  https://golang.org/s/go13linker The design document for moving instruction encoding from the
+  linker to the compile step, explaining the motivation for the change.
+- <a id="ref-pike-2016"></a>[Pike, 2016] Rob Pike. "The Design of the Go Assembler." GopherCon 2016.
+  https://go.dev/talks/2016/asm.slide
+  How `cmd/asm` supports every architecture with one program and a set of tables.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. "A Quick Guide to Go's
+  Assembler." https://go.dev/doc/asm The official description of the pseudo-registers, the `TEXT`
+  directive and the frame size notation.
+- <a id="ref-pike-ndb"></a>[Pike, n.d.b] Rob Pike. *How to Use the Plan 9 C Compiler.*
+  http://doc.cat-v.org/plan_9/2nd_edition/papers/comp
+  (Background on the Plan 9 toolchain and register conventions)
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *cmd/asm, cmd/internal/obj.*
+  https://github.com/golang/go/tree/master/src/cmd/asm
+  (The implementation that translates the uniform assembly to each architecture's backend)
+- This book: [2.2 Stack Frames and Symbols in Assembly](./frame.md) (the `Cas`, `gogo` and
+  `morestack` routines), [2.3 Calling Convention and the Register ABI](./callconv.md) (the custom
+  ABI), [6.1 Function Calls](../../part2lang/ch06func/func.md).

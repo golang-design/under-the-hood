@@ -5,310 +5,373 @@ title: "3.1 Starting from the `go` Command"
 
 # 3.1 Starting from the `go` Command
 
-The life cycle of a Go program begins with running the `go` command. The `go build`, `go test`,
-and `go run` that readers type every day look like they merely "turn source into a binary," but
-behind them hides a fact that is often misunderstood: `go` itself is not the compiler. It is a
-**build orchestrator**, responsible for breaking a single build into many individual steps,
-arranging their ordering and parallelism, and then invoking the real tools one by one: the
-compiler `compile` ([3.2](./compile.md)), the assembler `asm`, and the linker `link`
-([3.4](./link.md)). This section first makes this orchestration relationship clear, as it is the
-master outline for the sections that follow: once you understand how `go` decomposes a build into
-a graph and how it uses a content-addressed cache to avoid duplicate work, then turning to the
-details of compilation and linking gives you a frame to stand on.
+Start with an experiment. The module `cut` has two packages, and `main` calls a function in
+`cut/greet`:
 
-## 3.1.1 `go` Is a Build Orchestrator, Not a Compiler
+```go
+// greet/greet.go
+package greet
 
-The most direct way to lay out the build process of a minimal program is `go build -x`, which
-prints every subcommand that `go` actually executes. For a `main` package with a single line of
-`fmt.Println`, the skeleton of the output looks like this:
+// Hello returns a greeting.
+func Hello(name string) string { return "hello, " + name }
+```
+
+```go
+// main.go
+package main
+
+import (
+	"fmt"
+
+	"cut/greet"
+)
+
+func main() { fmt.Println(greet.Hello("gopher")) }
+```
+
+Starting from an empty build cache, make one kind of change to the source, run
+`go build -x -o hello .`, and count how often the compiler `compile` and the linker `link` are
+invoked in the output (Go 1.26.10, darwin/arm64):
+
+| Action before the build | Packages recompiled | Relinked |
+| --- | --- | --- |
+| First build | 58 standard library packages, `cut/greet`, `main` | yes |
+| No change | none | no |
+| `touch greet/greet.go`, updating only the modification time | none | no |
+| Edit a comment in `greet.go` | `cut/greet` | no |
+| Edit the body of `Hello` | `cut/greet`, `main` | yes |
+| Restore `greet.go` to its original content | none | yes |
+
+Three rows are counterintuitive. After `touch`, no package is recompiled. When only a comment
+changes, `greet` is recompiled but `main`, which depends on it, is not. After the original content
+is restored, no package needs compiling. This section explains how the `go` command breaks a build
+into many steps and how it decides which steps to skip. The approach builds on decades of research
+on build systems, and it also determines whether Go can deliver "the same source produces the same
+binary".
+
+## 3.1.1 What the `go` Command Does
+
+The `go` command does not translate source code itself. With `-x` it prints every command it
+actually runs. Here is the build of a program that prints `hello, world` (packages such as `fmt` are
+already in the cache; paths are abbreviated):
 
 ```shell
-$ go build -x -o /dev/null .
-WORK=/tmp/go-build1449454186
+$ go build -x -o hello .
+WORK=/var/folders/.../go-build2047229470
 mkdir -p $WORK/b001/
 cat >$WORK/b001/importcfg << 'EOF' # internal
 # import config
-packagefile fmt=/Users/.../go-build/7d/7d74...-d
-packagefile runtime=/Users/.../go-build/60/60cb...-d
+packagefile fmt=/Users/changkun/Library/Caches/go-build/93/931515f5...-d
+packagefile runtime=/Users/changkun/Library/Caches/go-build/68/6859d6a5...-d
 EOF
-# invoke the compiler to compile main.go into the archive _pkg_.a
-.../pkg/tool/darwin_arm64/compile -o $WORK/b001/_pkg_.a -p main -lang=go1.26 \
-    -complete -buildid ... -importcfg $WORK/b001/importcfg -pack ./main.go
-.../pkg/tool/darwin_arm64/buildid -w $WORK/b001/_pkg_.a # internal
-cp $WORK/b001/_pkg_.a /Users/.../go-build/82/8256...-d # internal
-# write the link configuration, then invoke the linker
+.../pkg/tool/darwin_arm64/compile -o $WORK/b001/_pkg_.a -trimpath "$WORK/b001=>" -p main \
+    -lang=go1.26 -complete \
+    -buildid dlhVKz4Cg7gapk_IKXLH/dlhVKz4Cg7gapk_IKXLH -goversion go1.26.10 ... \
+    -importcfg $WORK/b001/importcfg -pack ./main.go
+go tool buildid -w $WORK/b001/_pkg_.a # internal
+cp $WORK/b001/_pkg_.a /Users/changkun/Library/Caches/go-build/38/38c3c38b...-d # internal
 cat >$WORK/b001/importcfg.link << 'EOF' # internal
-packagefile demo=$WORK/b001/_pkg_.a
-packagefile fmt=/Users/.../go-build/7d/7d74...-d
-...
+packagefile hello=$WORK/b001/_pkg_.a
+packagefile fmt=/Users/changkun/Library/Caches/go-build/93/931515f5...-d
+... (59 lines in total, one per package to link)
 EOF
-.../pkg/tool/darwin_arm64/link -o $WORK/b001/exe/a.out -importcfg ... $WORK/b001/_pkg_.a
+.../pkg/tool/darwin_arm64/link -o $WORK/b001/exe/a.out -importcfg $WORK/b001/importcfg.link ...
+go tool buildid -w $WORK/b001/exe/a.out # internal
+mv $WORK/b001/exe/a.out hello
 ```
 
-What `go` does itself is to create a temporary working directory, write out a series of
-`importcfg` files (which tell the compiler and linker where on disk the archive of each dependency
-package lives), and then `exec` the two independent executables `compile` and `link`. The real
-translation from source files to object code happens in tools outside of `go`. This structure of
-"the main program only orchestrates and hands the dirty work to independent tools" is carried
-inside the `go` command by two data types: `Builder` holds the shared state of the entire build
-(working directory, the various caches, parallelism control), while `Action` is a node in the
-build graph, describing "a step that must be done":
+The `go` command itself does only the following: it creates a temporary directory; writes an
+`importcfg` file that tells the compiler where the compiled result of each imported package is;
+invokes the compiler to compile `main.go` into the archive `_pkg_.a` and stores it in the build
+cache; and writes the `importcfg.link` used for linking and invokes the linker to produce the
+executable. The actual translation is done by several separate programs under
+`$GOROOT/pkg/tool/<os_arch>/`: the compiler `compile` ([3.2](./compile.md)), the assembler `asm`,
+and the linker `link` ([3.4](./link.md)).
+
+Breaking a build into steps, ordering them, and deciding which can run in parallel and which can be
+skipped is the job of build systems such as `make` and Bazel. Go folds this job into the `go`
+command.
+
+## 3.1.2 The Action Graph
+
+When package P imports package Q, compiling P needs the compiled result of Q, so Q must be compiled
+first. Represent build steps as vertices and "A must finish before B" as a directed edge from A to
+B, and the result is a directed graph. Go forbids import cycles, so the graph has no cycles.
+
+The `go` command calls each step an **action** and the whole graph the **action graph**. An action
+is defined as follows (`cmd/go/internal/work/action.go`, keeping only the fields relevant to
+scheduling [[Go Authors, 2026b](#ref-go-authors-2026b)]):
 
 ```go
-// Action: a step in the build graph (a sketch, keeping only orchestration-related fields)
 type Action struct {
-    Mode    string         // what this step does: "build" / "link" ...
-    Actor   Actor          // the function that actually runs it (invokes compile, link, etc.)
-    Deps    []*Action      // steps that must complete before this one
-    Package *load.Package   // the package this step processes
+	Mode    string        // action kind: "build" (compile a package), "link", etc.
+	Package *load.Package // the package being processed
+	Deps    []*Action     // actions that must finish first
+	Actor   Actor         // the function that performs the action, e.g. invokes compile
 
-    actionID cache.ActionID // the cache key computed from all inputs (see 3.1.3)
-    buildID  string         // the content identity of the output: actionID + hash of output content
-    triggers []*Action      // the reverse edges of Deps: who this step unblocks once done
-    pending  int            // how many Deps remain incomplete; ready when it reaches zero
-    priority int            // execution priority, for ordering the ready queue
+	actionID cache.ActionID // hash of all inputs of the action, used as the cache key (3.1.4)
+	buildID  string         // input hash and output hash, written into the artifact (3.1.4)
+	pending  int            // number of unfinished Deps; the action can run when it reaches zero
+	priority int            // execution priority among ready actions
 }
 ```
 
-The `Mode`, `Deps`, and `Actor` of an `Action` together answer "what this step is, what it depends
-on, and who executes it." A single `go build` is not a straight line but connects these nodes into
-a graph and then drives it. The next section looks at how this graph grows out of `go.mod` and the
-source code.
-
-## 3.1.2 From go.mod to the Action Graph
-
-The first step of a build is to figure out "which packages need to be compiled and who depends on
-whom among them." This is answered by the module system: `go` parses `go.mod`, settles on the
-exact version of each dependency by the Minimal Version Selection (MVS) algorithm, and loads a
-package dependency graph (the details of module resolution are in
-[Chapter 17](../../part5toolchain/ch17modules/readme.md)). The package dependency graph is the
-input; `go` must translate it into an **action graph**, that is, a directed acyclic graph (DAG)
-made of `Action` nodes.
-
-The translation rules are plain to the point of being mechanical. For each package to be built,
-recursively create a compile step for each of its imports as a dependency of this package's step;
-when a `main` package is encountered, create a link step instead:
-
-```go
-// build a compile step for package p, recursively building its imports as dependencies too
-func (b *Builder) CompileAction(mode, depMode BuildMode, p *load.Package) *Action {
-    a := &Action{Mode: "build", Package: p, Actor: &buildActor{}}
-    for _, p1 := range p.Internal.Imports {
-        a.Deps = append(a.Deps, b.CompileAction(depMode, depMode, p1))
-    }
-    return a
-}
-
-// top-level entry: the main package links into an executable, the rest only compile into archives
-func (b *Builder) AutoAction(mode, depMode BuildMode, p *load.Package) *Action {
-    if p.Name == "main" {
-        return b.LinkAction(mode, depMode, p)   // link step, depends on compile steps
-    }
-    return b.CompileAction(mode, depMode, p)
-}
-```
-
-Once the recursion unfolds, the whole action graph takes shape: the leaves are packages with no
-dependencies (compiling them needs only their source), the root is the link step, the link depends
-on the compilation of the `main` package, and the compilation of the `main` package in turn depends
-on the compilation of each package it imports, layer by layer downward. That check on `main` inside
-`AutoAction` is exactly the boundary, on the build graph, between the two sections
-[3.2 Compilation](./compile.md) and [3.4 Linking](./link.md).
-
-Once the graph is built, execution is driven by `Builder.Do`. The core constraint here is
-**topological order**: a step can only begin after all of its dependencies have completed. `go`
-does not do a full topological sort; instead it keeps a `pending` count for each `Action` (the
-number of dependencies not yet finished), decrements the `pending` of the corresponding `triggers`
-as soon as a dependency completes, and the step whose count reaches zero enters a ready queue
-ordered by `priority`. Multiple mutually independent steps can run in parallel, with the degree of
-parallelism controlled by `-p` (defaulting to `GOMAXPROCS`) through a semaphore `readySema`. The
-whole scheduling can be sketched like this:
+The rules for building the graph are simple. `CompileAction` creates a compile action for a package
+and recursively creates a compile action for each package it imports, as its own `Deps`. When
+`AutoAction` meets the `main` package, it creates a link action instead, which depends on the
+compilation of `main`. For the `cut` module above, the backbone of the action graph is:
 
 ```mermaid
-flowchart TD
-    MOD["Parse go.mod / MVS<br/>load package dependency graph"] --> GRAPH["Build the action graph (DAG)<br/>CompileAction recursion + AutoAction picks link"]
-    GRAPH --> DO["Builder.Do drives execution"]
-    DO --> READY{"Any step with pending=0?"}
-    READY -->|"Yes, parallel under the -p semaphore"| RUN["Run: skip on cache hit<br/>otherwise exec compile / link"]
-    RUN --> DEC["After completion, decrement pending of triggers"]
-    DEC --> READY
-    READY -->|"No, all done"| END["Build finished"]
+flowchart BT
+    G["compile cut/greet"] --> M["compile main"]
+    S["compile fmt, runtime, etc.<br/>58 standard library packages"] --> M
+    G --> L["link hello"]
+    M --> L
+    S --> L
 ```
 
-Worth calling out is the step "skip on cache hit" in the diagram: most nodes in the action graph,
-in most builds, do not in fact invoke the compiler at all. They first ask the build cache, "are
-the inputs of this step exactly the same as last time?", and if so, they retrieve last time's
-output directly. This cache is the fundamental reason the `go` command is so fast that it hardly
-seems to be compiling, and it is the subject of the next section.
+The graph is complete before execution begins. The `import` declarations at the top of Go source
+files state all dependencies, so the `go` command only has to parse them to build the whole graph
+[[Go Authors, 2026c](#ref-go-authors-2026c)], without compiling any code first. Go 1.26 also adds
+a "check cache" action for each compile action, which computes the cache key and looks up the
+result. `go build -debug-actiongraph=ag.json` exports the action graph as JSON: for the
+`hello, world` program above, the graph has 122 nodes, of which 59 are compile actions, 59 are
+check-cache actions, and 1 is a link action, plus 3 auxiliary nodes.
 
-## 3.1.3 The Content-Addressed Build Cache
+`Builder.Do` (`cmd/go/internal/work/exec.go`) executes the action graph. For each node it records
+the number of unfinished dependencies, `pending`, and puts the nodes whose count is zero in a ready
+queue; when an action completes, the `pending` of each node that depends on it drops by one, and a
+node whose count reaches zero enters the ready queue. This is the same idea as Kahn's algorithm,
+which [3.6](./main.md) uses to determine initialization order, except that here multiple actions may
+run in parallel. The degree of parallelism is controlled by `-p` and defaults to `GOMAXPROCS`
+(usually the number of CPUs, see [3.5](./boot.md)).
 
-A clean `go build` may compile hundreds or thousands of packages, yet the second build often
-returns within a second. The secret lies in a **content-addressed** build cache: the output of
-each step is stored in the cache (by default under `$GOCACHE`, that is, `go env GOCACHE`) keyed by
-the hash of "all the inputs that produced this output." On the next build, if the input hash of the
-same step is unchanged, `go` concludes that the output must be identical and reuses it directly,
-without even starting the compiler.
+## 3.1.3 When to Rebuild
 
-Everything hinges on how the "input hash" is composed. `go` uses `buildActionID` to feed all the
-inputs of a compile step into a SHA-256:
+### The Timestamp Rule of make
 
-```go
-// compute the cache key of a compile step (a sketch, omitting cgo and other branches)
-func (b *Builder) buildActionID(a *Action) cache.ActionID {
-    p := a.Package
-    h := cache.NewHash("build " + p.ImportPath) // mix in the Go version number as salt right at the start
-    fmt.Fprintf(h, "compile\n")
-    fmt.Fprintf(h, "goos %s goarch %s\n", cfg.Goos, cfg.Goarch)  // target platform
-    fmt.Fprintf(h, "import %q\n", p.ImportPath)
-    // the compiler's own ID (change the compiler and the cache is invalidated) and the compile arguments
-    fmt.Fprintf(h, "compile %s %q %q\n", b.toolID("compile"), forcedGcflags, p.Internal.Gcflags)
-    // the content hash of each source file
-    for _, file := range inputFiles {
-        fmt.Fprintf(h, "file %s %s\n", file, b.fileHash(filepath.Join(p.Dir, file)))
-    }
-    // the buildID of each dependency package (i.e. the content identity of the dependency's output)
-    for _, a1 := range a.Deps {
-        fmt.Fprintf(h, "import %s %s\n", a1.Package.ImportPath, contentID(a1.buildID))
-    }
-    return h.Sum()
-}
-```
+In 1976 Stuart Feldman at Bell Labs wrote `make`, and in 1979 he published the paper describing it
+[[Feldman, 1979](#ref-feldman-1979)]. Programs on Unix were growing, and developers often forgot to
+rebuild the parts that depended on a file they had changed, then debugged for a long time before
+discovering that they were still running old code. The rule of `make` can be summarized in one
+sentence: **if the modification time of a target file is earlier than that of any of its
+dependencies, regenerate the target.**
 
-Turn on `GODEBUG=gocachehash=1` and you can see the real process of these inputs being fed into the
-hash one by one. For the demo package above, the string of hexadecimal on the last line is the
-final `actionID`:
+The rule is cheap and widely applicable, and it is still in use today. But it judges whether a file
+was modified, not whether its content changed:
+
+- `touch` a file without changing its content, and every target that depends on it is regenerated.
+- After switching to an older branch, a file's modification time may be earlier than the artifact's,
+  so a target that should be regenerated is skipped.
+- When the compiler version or the compile flags change, the file's modification time stays the same
+  but the artifact is stale.
+- A file regenerated with exactly the same content still gets a new modification time, so the steps
+  that depend on it are redone as well.
+
+### Two Dimensions of Build Systems
+
+In 2018 Andrey Mokhov, Neil Mitchell and Simon Peyton Jones published *Build Systems à la Carte* at
+ICFP, which brings seemingly unrelated systems such as Make, Excel, Shake and Bazel into a single
+framework [[Mokhov et al., 2018](#ref-mokhov-et-al-2018)]. They observe that any build system must
+answer two independent questions:
+
+1. **Scheduling**: in what order to run the steps. If all dependencies are known in advance, the
+   order can be fixed once and the steps run in sequence (the approach of Make); if dependencies are
+   discovered only during execution, the order must be adjusted as the build proceeds.
+2. **Rebuilding**: whether a step must be run again. Make compares timestamps. Another class of
+   systems records a digest of each step's inputs from the previous run, recomputes it in this run
+   and compares. A third class builds a cache keyed by the digest of the inputs that records the
+   corresponding outputs.
+
+The third approach has two advantages. First, as long as the current inputs have appeared in the
+cache, the corresponding output can be reused directly, no matter when or even on which machine it
+was produced. Second, when a step is rerun and its output is identical to the earlier one, the steps
+that depend on it need not be redone, and the rebuild stops there. This property is called **early
+cutoff** [[Mokhov et al., 2018](#ref-mokhov-et-al-2018)].
+
+The position of `go build` in this framework is clear. Dependencies are given in advance by
+`import`, so scheduling fixes the order once. Whether to rebuild is decided by the build cache,
+which is exactly a cache keyed by input digests that records outputs. The cache of Bazel is of the
+same type [[Bazel Authors, n.d.](#ref-bazel-authors-nd)]; the difference is that Bazel allows new
+dependencies to be discovered during execution, and its scheduling is more complex.
+
+## 3.1.4 The Content-Addressed Build Cache
+
+### Content Addressing and Merkle Trees
+
+Using the hash of a piece of data as the address for storing and retrieving it is called **content
+addressing**. The Go build cache uses SHA-256, whose digest is 32 bytes long.
+
+The digest of an artifact should cover all the inputs it depends on, and those dependencies are
+themselves the artifacts of other steps. A structure that Ralph Merkle designed around 1979 for
+digital signatures [[Merkle, 1988](#ref-merkle-1988)] solves exactly this problem: data sits at the
+leaves of a tree, and the hash of each internal node is computed from the hashes of its children. A
+single hash at the root represents the whole tree. If any leaf changes, the hashes along the path
+from that leaf to the root change, while the hashes of unaffected subtrees stay the same. The
+structure later became known as the **Merkle tree**, and Git uses it to store commits and
+directories.
+
+### Computing the Cache Key
+
+The cache key of a compile action is called its **action ID**. `buildActionID`
+(`cmd/go/internal/work/exec.go`) computes it by writing all inputs of the action into SHA-256. With
+`GODEBUG=gocachehash=1`, the `go` command prints every line written into the hash
+[[Go Authors, 2026a](#ref-go-authors-2026a)]. Take the `hello, world` program of 3.1.1 as an example
+(the module is named `hello`; only the compile action of package `main` is excerpted):
 
 ```shell
 $ GODEBUG=gocachehash=1 go build -o /dev/null .
-HASH[build demo]
-HASH[build demo]: "go1.26.1"                                   # salt: the Go version number
-HASH[build demo]: "compile\n"
-HASH[build demo]: "goos darwin goarch arm64\n"                 # target platform
-HASH[build demo]: "import \"demo\"\n"
-HASH[build demo]: "compile compile version go1.26.1 [...] []\n" # compiler ID + arguments
-HASH[build demo]: "file main.go KUKxlydUIi2I-10EjTIw\n"        # source file content hash
-HASH[build demo]: "import fmt a-nQ4YX2Z0xMeqSMWW55\n"          # dependency fmt's output identity
-HASH[build demo]: "import runtime 8asGqFcOH5UKoaTdthA0\n"      # dependency runtime's output identity
-HASH[build demo]: e783bda8414d9313a775eb0d5a6eb354559cb647a628acb64782f2359965759b
+HASH[build hello]: "go1.26.10"                              # Go version, written first into every hash
+HASH[build hello]: "compile\n"
+HASH[build hello]: "dir /private/tmp/.../hello\n"           # source directory (recorded in debug info)
+HASH[build hello]: "go 1.26\n"                              # language version declared in go.mod
+HASH[build hello]: "goos darwin goarch arm64\n"             # target platform
+HASH[build hello]: "import \"hello\"\n"
+...
+HASH[build hello]: "compile compile version go1.26.10 [\"-shared\"] []\n"  # compiler and flags
+HASH[build hello]: "GOARM64=v8.0\n"
+HASH[build hello]: "file main.go ndwR08Lz3EpwYHjxBZW0\n"     # hash of the source file content
+HASH[build hello]: "import fmt dNREUiHuykkfKQNLuuw2\n"       # hash of the artifact of dependency fmt
+HASH[build hello]: "import runtime GvQgxar5yLrWdvDo90Uh\n"
+HASH[build hello]: 7658552b3e0283b81aa64fc82972c758fc8120b2cb684550c6c74a5085448eeb
 ```
 
-Note the last few lines: the dependencies `fmt` and `runtime` take part in this package's hash via
-their respective `buildID` (output content identity), and a `buildID` is in turn computed from its
-own `actionID` plus its output content. So the entire cache key nests layer by layer along the
-action graph, forming a **Merkle hash tree**: any change to a source file, a compile argument, a
-dependency's output, or even the compiler version causes the keys of all steps above it to change,
-so the cache is naturally invalidated; conversely, a subtree that has not been touched keeps a
-constant key and is reused wholesale. This is the fundamental advantage of content addressing over
-"judging new versus old by timestamp" (as in traditional `make`): it judges by **content** rather
-than by **time**, so `git checkout` switching branches back and forth, or file mtimes jumping
-around, will never cause a misjudgment.
+The last line is the action ID, the cache key. Note the second and third lines from the end: a
+dependency takes part in the computation through the **hash of its artifact content**, called the
+**content ID**, and not through the action ID of the dependency. The artifact of every package
+carries a build ID of the form `actionID/contentID` (the build ID of an executable has an extended
+format). In the `-x` output above, the compiler receives a placeholder,
+`dlhVKz4Cg7gapk_IKXLH/dlhVKz4Cg7gapk_IKXLH`; after the artifact is written, `go tool buildid -w`
+computes the hash of the file content (treating the bytes holding the build ID as zeros) and
+rewrites the second half to the real content ID.
 
-For this design to be correct, it relies on an invariant: **every input that can affect the output
-must enter `buildActionID` without exception.** The source code lays down an explicit
-commandment for this; in `exec.go`, next to that step's execution function, it is written that "any
-new influence on this logic must likewise be registered in the `buildActionID` above." Omit one,
-and it means an input changed while the key did not, so the build would wrongly reuse a stale
-output, which is one of the most insidious classes of bug in cache-like systems. To put a safeguard
-on this invariant, `go` provides `GODEBUG=gocacheverify=1`: it makes the cache effectively void,
-forcing every step to re-execute, then compares the new output byte for byte against the old output
-in the cache and reports an error the moment they differ, which amounts to verifying at runtime
-that "the same key really does correspond to the same output."
+As a result, every key covers the entire dependency tree beneath it, which is exactly the structure
+of a Merkle tree. What propagates upward is the digest of the artifact, not the digest of the
+inputs, and this is what lets the rebuild stop early. Back to the opening experiment:
 
-## 3.1.4 Reproducible Builds
+- `touch` changes only the modification time. The hash of the file content is unchanged, so the key
+  is unchanged and the cache is hit directly.
+- After a comment is edited, the hash of `greet.go` changes, and the key of `greet` changes with it,
+  so it must be recompiled. But comments do not enter the artifact. The new `greet` artifact is
+  byte-for-byte identical to the old one, its content ID is unchanged, and the key of `main` is
+  therefore unchanged: the rebuild stops there.
+- After the function body is edited, the artifact of `greet` changes (`Hello` is inlined into
+  `main`, see [3.2](./compile.md)), so the key of `main` changes, and so does the key of the link
+  action.
+- After the original content is restored, every key equals the one from the first build, and the
+  cache still holds the results from then. The cache keeps every "key to artifact" mapping that has
+  appeared; only entries unused for 5 days are purged. The link is rerun because `go build` does not
+  store executables in the cache. Instead it checks whether the build ID in the target file `hello`
+  matches the key computed this time, and at this point `hello` is the result of the previous build.
 
-The content-addressed cache can hold up only on the premise that the build is **reproducible**:
-the same inputs must produce byte-for-byte identical outputs. If the compiled output carries in an
-absolute path, a timestamp, or a random number from build time, the same source will produce
-different binaries on two machines, the cache hit rate collapses, and there is no question of
-letting a third party independently verify that "this binary was indeed compiled from this source."
-Go imposes several constraints at the toolchain level for this.
+The interactive figure below replays this experiment. Each node shows its action ID and content ID
+(illustrative values). Choose a change and click "Build" to see which keys change, which actions hit
+the cache, and which steps the timestamp rule of `make` would redo.
 
-The most direct one is the Go version salt in the cache key: `cache.NewHash` mixes in
-`runtime.Version()` right at the start, so that `go` commands of different versions never share the
-same batch of cache entries, and one version's bug does not contaminate another version's build.
-Another is `-trimpath`: by default, debug information embeds the absolute source directory (inputs
-like the `dir /tmp/...` line omitted from the hash trace above come from exactly this), so changing
-the machine or the directory produces a different output; with `-trimpath`, the path is rewritten to
-the module path plus version, and the build no longer depends on its concrete location in the file
-system. Add to this that the Go compiler itself deliberately introduces no build timestamp and
-eliminates nondeterminism such as map iteration, and the result makes "same source, same version,
-same arguments leads to the same binary" an attainable goal. Module verification (`go.sum`, the
-checksum database) then seals off the input from the dependency side; the related mechanisms are
-detailed in [Chapter 17](../../part5toolchain/ch17modules/semantics.md). Reproducibility serves
-both the correctness of the cache and the verifiability of the software supply chain, which is
-exactly the direction the Reproducible Builds project has advocated for years.
+<div class="viz" data-viz="build-cache"></div>
 
-## 3.1.5 A Unified Toolchain Contrasted with Fragmentation
+### The Precondition for Cache Correctness
 
-Looking back at the command list mentioned in [3.1.2](#312-from-gomod-to-the-action-graph), one
-finds that `go` is far more than just the `build` subcommand. Parsing, building, testing,
-formatting, static checking, documentation, profiling: in Go, all of these are gathered under the
-same `go` command:
+The correctness of this method rests on one premise: **every factor that can affect the artifact
+must be included in the key.** If one is missed, the input changes while the key does not, and the
+`go` command retrieves a stale artifact without reporting any error. A comment before the function
+in `exec.go` that performs the compilation says that any new factor affecting this logic must also
+be reflected in `buildActionID` [[Go Authors, 2026b](#ref-go-authors-2026b)]. `GOARM64` and
+`GOEXPERIMENT` in the hash above, and even debugging environment variables such as `GOSSAFUNC`, were
+added for this reason.
+
+To detect omissions, the `go` command provides `GODEBUG=gocacheverify=1`: every action is rerun as
+usual, and the new artifact is compared with the old artifact stored in the cache under the same
+key; a mismatch is reported as an error [[Go Authors, 2026a](#ref-go-authors-2026a)].
+
+## 3.1.5 Reproducible Builds
+
+A content-addressed cache implicitly assumes that the same inputs always produce the same output.
+This property is called a **reproducible build**. The Reproducible Builds project defines it this
+way: given the same source code, build environment and build instructions, anyone can recreate a
+byte-for-byte identical artifact [[Reproducible Builds, n.d.](#ref-reproducible-builds-nd)]. Its
+value goes beyond caching: if a released binary can be rebuilt from source by anyone and compared
+byte for byte, users need not trust that the machine that built it was not tampered with.
+
+What usually breaks reproducibility is the following: build time, random numbers, map iteration
+order, and the absolute path of the source. The Go compiler and linker avoid the first three in
+their artifacts, and the last can be removed with `-trimpath`. Copy the same `hello, world` module
+into two different directories and build each:
 
 ```shell
-go build      # compile packages and dependencies
-go test       # compile and run tests (test results are cached too)
-go run        # compile and run directly
-go fmt        # format source code (gofmt)
-go vet        # statically check suspicious constructs
-go doc        # view documentation
-go tool pprof # profiling
-go mod        # module maintenance (tidy / download / verify ...)
+$ (cd a/hello && go build -o ../../h1 . && go build -trimpath -o ../../h1t .)
+$ (cd b/src/hello && go build -o ../../../h2 . && go build -trimpath -o ../../../h2t .)
+$ shasum -a 256 h1 h2 h1t h2t | cut -c1-16,65-
+210c9a5524efb8c2  h1      # directory a/hello, default flags
+91cfb5c24d5fd180  h2      # directory b/src/hello, default flags
+1bbde893d88e78fb  h1t     # directory a/hello, -trimpath
+1bbde893d88e78fb  h2t     # directory b/src/hello, -trimpath
 ```
 
-Setting this side by side with the C/C++ world brings out the difference. Over there, compilation
-relies on `gcc`/`clang`, build orchestration relies on `make` or `CMake`, `autotools`, `ninja`, and
-crossing versions and platforms also requires `pkg-config` to mediate; to avoid recompiling
-everything each time, the community built a separate "external compiler cache" of the `ccache`
-kind; formatting is `clang-format`, static checking is `clang-tidy`, and dependency management long
-had no agreed-upon answer. These tools each go their own way, with configurations independent of one
-another, and assembling them for a project, getting them to work, and keeping them consistent across
-a team is a craft in itself. Go builds them into the same binary, with caching, dependency
-resolution, and cross-platform cross-compilation all built in and zero-configuration: on a new
-machine, after `git clone`, `go build` just works, with no need to first understand a build script.
+By default the source directory is recorded in the debug information, so the two binaries differ
+(this is also why the hash above contains a `dir` line). With `-trimpath`, paths are rewritten to
+the module path and the two binaries are identical. The Go toolchain itself has been fully
+reproducible since Go 1.21 [[Cox, 2023](#ref-cox-2023)]; see [3.3](./bootstrap.md).
 
-This unification is not without cost. The `go` build model is fixed; it assumes "a package is a
-directory, an import is a dependency," and unlike `make` it cannot express arbitrary, cross-language
-build logic with custom rules; when you need to generate code at build time, embed resources, or
-chain together non-Go toolchains, `go generate` and `//go:embed` cover only the common cases, and
-more complex scenarios still need an external script to fall back on. This is a trade-off that
-**exchanges flexibility for consistency**: giving up the expressiveness of "being able to describe
-any build" in exchange for the consistent experience of "not having to describe the build at all."
-For the vast majority of Go projects, the latter is far more worthwhile than the former, and this
-also fits Go's consistent leaning in language design, namely narrowing the choices so that most
-people do not have to choose.
+## 3.1.6 Trade-offs
 
-Widening the view one more layer, Google's internal Bazel takes another road: it likewise centers on
-a content-addressed action cache, but it makes build rules explicit and language-agnostic, and it
-supports distributing the cache and execution to a remote cluster, in service of an enormous,
-multi-language monorepo. The `go` build cache can be seen as a lightweight incarnation of this idea
-under the constraints of a single language and zero configuration. The distance between the two is
-shrinking: the `GOCACHEPROG` protocol introduced in Go 1.21 (proposal #59719, Brad Fitzpatrick)
-allows the reading and writing of the build cache to be delegated to an external program, taking
-over `get`/`put` through a JSON protocol so as to plug into remote, shared, or even P2P cache
-backends. This is a step by `go`, while keeping the zero-configuration default, toward feeling out a
-Bazel-style extensible cache; for now it remains a relatively cutting-edge capability aimed at
-authors of build infrastructure, and everyday use does not need it.
+In C and C++, the same work is spread across many tools: `gcc` or `clang` to compile, `make`, CMake
+or Ninja to schedule, a separately installed `ccache` to cache, and `pkg-config` to locate
+libraries, and every project has to configure them one by one. Go gathers building, testing, caching
+and cross-compilation into a single `go` command: on a new machine, after `git clone` one can run
+`go build` directly, without first learning a set of build scripts.
 
-By this point the full picture of the `go` command as an orchestrator is clear: it grows an action
-graph out of `go.mod` and the source, drives it in topological order in parallel, uses a
-content-addressed cache to fend off duplicate work, and then hands the real work of each node to
-`compile` and `link`. The next section, [3.2 Compilation](./compile.md), steps into the first of
-these two steps, looking at how a package's source is translated into object code.
+The cost is that the build model is fixed. The `go` command assumes that "a directory is a package
+and `import` is a dependency", and it cannot describe arbitrary, cross-language custom rules the way
+`make` can. `go generate` and `//go:embed` cover common needs such as generating code and embedding
+resources; more complex cases need external scripts, or a language-independent build system such as
+Bazel.
+
+The location of the cache was also fixed once: it could only be the local `$GOCACHE` directory. Go
+1.21 added `GOCACHEPROG` as an experimental feature [[Fitzpatrick, 2023](#ref-fitzpatrick-2023)],
+and Go 1.24 enabled it officially [[Go Authors, 2025](#ref-go-authors-2025)]: the `go` command hands
+cache reads and writes to an external program through a JSON-based protocol, which lets teams set up
+shared or remote caches. The way keys are computed does not change; only where the cache lives does.
 
 ## Further Reading
 
-1. The Go Authors. *Command go* (the `go` command reference, including Build and test caching and
-   the various subcommands). https://pkg.go.dev/cmd/go ; see also `go help build`, `go help cache`.
-2. The Go Authors. *Go Modules Reference* (`go.mod`, MVS, `go.sum`, and verifiable builds).
-   https://go.dev/ref/mod
-3. The Go Authors. *cmd/go/internal/work/{action.go, exec.go}, cmd/go/internal/cache/hash.go.*
-   https://github.com/golang/go/tree/master/src/cmd/go (`buildActionID`, the action graph, and `Builder.Do`).
-4. Brad Fitzpatrick et al. *proposal: cmd/go: support a GOCACHEPROG to use an alternative build cache.*
-   golang/go#59719 (since Go 1.21). https://go.dev/issue/59719
-5. The Reproducible Builds Project. https://reproducible-builds.org/
-   (the independently verifiable path from source to binary, against which to read the design motivation of `-trimpath` and the version salt).
-6. The Bazel Authors. *Bazel: Remote Caching.*
-   https://bazel.build/remote/caching (the industrial-grade form of a content-addressed action cache).
-7. This book: [3.2 Compilation](./compile.md), [3.4 Linking](./link.md), [Chapter 17 Modules](../../part5toolchain/ch17modules/readme.md).
+- <a id="ref-feldman-1979"></a>[Feldman, 1979] Stuart I. Feldman. "Make — A Program for Maintaining
+  Computer Programs." *Software: Practice and Experience*, 9(4): 255–265, 1979.
+  https://doi.org/10.1002/spe.4380090402
+  The original `make` paper, the source of the timestamp rule.
+- <a id="ref-mokhov-et-al-2018"></a>[Mokhov et al., 2018] Andrey Mokhov, Neil Mitchell, Simon Peyton
+  Jones. "Build Systems à la Carte." *Proceedings of the ACM on Programming Languages*, 2(ICFP):
+  79, 2018. https://doi.org/10.1145/3236774 Compares build systems along the two dimensions of
+  scheduling and rebuilding; the framework of this section comes from this paper.
+- <a id="ref-merkle-1988"></a>[Merkle, 1988] Ralph C. Merkle. "A Digital Signature Based on a
+  Conventional Encryption Function." *Advances in Cryptology — CRYPTO '87*, LNCS 293: 369–378,
+  Springer,
+  1988. The classic source of the Merkle tree.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *Command go*, "Build and test
+  caching". https://pkg.go.dev/cmd/go The official description of the build cache, `GOCACHE`,
+  `GODEBUG=gocacheverify` and related settings.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors.
+  `cmd/go/internal/work/action.go`, `exec.go`, `buildid.go`.
+  https://github.com/golang/go/tree/release-branch.go1.26/src/cmd/go/internal/work
+  https://github.com/golang/go/tree/master/src/cmd/go (`cmd/go/internal/cache/hash.go`) The
+  implementation of the action graph and `buildActionID`; the beginning of `buildid.go` explains the
+  action ID and content ID in detail.
+- <a id="ref-reproducible-builds-nd"></a>[Reproducible Builds, n.d.] Reproducible
+  Builds. "Definitions." https://reproducible-builds.org/docs/definition/ Project home page
+  https://reproducible-builds.org/ The definition of reproducible builds.
+- <a id="ref-cox-2023"></a>[Cox, 2023] Russ Cox. "Perfectly Reproducible, Verified Go
+  Toolchains." The Go Blog, 2023. https://go.dev/blog/rebuild How the Go toolchain became
+  byte-for-byte reproducible.
+- <a id="ref-fitzpatrick-2023"></a>[Fitzpatrick, 2023] Brad Fitzpatrick. "cmd/go: add
+  GOEXPERIMENT=cacheprog to let a child process implement the internal action/output cache." Go
+  issue 59719, 2023. https://go.dev/issue/59719 The proposal and discussion of `GOCACHEPROG`.
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *Go Modules Reference*
+  (`go.mod`, MVS, `go.sum` and verifiable builds). https://go.dev/ref/mod
+- <a id="ref-bazel-authors-nd"></a>[Bazel Authors, n.d.] The Bazel Authors. *Bazel: Remote Caching.*
+  https://bazel.build/remote/caching (an industrial-strength form of the content-addressed action
+  cache).
+- <a id="ref-go-authors-2025"></a>[Go Authors, 2025] The Go Authors. *Go 1.24 Release Notes*, "Go
+  command". https://go.dev/doc/go1.24#go-command
+  `GOCACHEPROG` no longer requires `GOEXPERIMENT`.
+- This book: [3.2 The Go Compilation Pipeline](./compile.md), [3.4 Module Linking](./link.md),
+  [Chapter 17 Modules and Dependencies](../../part5toolchain/ch17modules/readme.md).
