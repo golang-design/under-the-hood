@@ -5,221 +5,317 @@ title: "3.4 模块链接"
 
 # 3.4 模块链接
 
-编译器（[3.2](./compile.md)）把每个包变成一个目标文件，但目标文件还不能直接运行。它们彼此
-引用着对方的函数与变量，地址尚未确定，还缺运行时的支撑。把这些碎片拼成一个完整、可加载执行
-的程序，是**链接器**（`cmd/link`，通常以 `go tool link` 的形式被 `go build` 调起）的活。这一节
-看链接器做了哪几件事，以及 Go 在链接上的几处独特选择,它们一同解释了为什么一个 Go 程序往往是
-一个「拷过去就能跑」的自包含文件。
+编译器（[3.2](./compile.md)）把每个包编译成一个目标文件，但目标文件还不能直接运行：它们相互引用
+对方的函数和变量，而这些符号的最终地址在编译时尚未确定。把全部目标文件连同运行时组合成一个可由
+操作系统加载执行的程序，是**链接器**（linker）的工作。Go 的链接器是 `cmd/link`，由 `go build`
+以 `go tool link` 的形式调用。
 
-## 3.4.1 链接器做的事
-
-链接器的输入是一个 main 包的目标文件，加上它递归依赖的所有包（含整个运行时）的目标文件；
-输出是一个可被操作系统加载执行的二进制。中间它要顺序完成几件关键工作：
-
-- **符号解析**（symbol resolution）：把每一处对外部符号的**引用**，绑定到它在某个目标文件里的
-  唯一**定义**。一个符号就是一个有名字的地址,某个函数的入口、某个全局变量的存储。A 包里写
-  `fmt.Println(...)`，编译 A 时并不知道 `fmt.Println` 在哪，只留下一个待解析的引用；链接器把它
-  接到 `fmt` 包目标文件里那份定义上。
-- **布局**（layout）：把所有符号的机器码与数据，按种类安排进可执行文件的各个段,代码进 text、
-  可读写数据进 data、只读数据（字符串字面量、类型信息）进 rodata 等。布局一旦定下，每个符号的
-  最终地址也就确定了。
-- **重定位**（relocation）：地址定下后，回头修正所有引用处填的临时地址。
-- **死代码消除**（dead-code elimination）：从入口出发不可达的函数与变量，根本不写进最终二进制。
-
-最后产出的，是一个静态布局完毕、地址全部填实的文件。下面三节分别细看其中最值得说的三处：
-重定位（3.4.2）、死代码消除（3.4.3）、以及「运行时也被一并链接进来」这一 Go 的标志性后果
-（3.4.4）。
-
-```mermaid
-flowchart LR
-    OBJ["main.a + 依赖包目标文件<br/>(含整个 runtime)"] --> LOAD["装载符号<br/>loader 读入"]
-    LOAD --> RESOLVE["符号解析<br/>引用 → 定义"]
-    RESOLVE --> DEAD["死代码消除<br/>从 main.main 标记可达"]
-    DEAD --> LAYOUT["段布局<br/>text/data/rodata"]
-    LAYOUT --> RELOC["重定位<br/>填实地址"]
-    RELOC --> BIN["可执行二进制"]
-```
-
-## 3.4.2 符号解析与重定位
-
-这两步是链接的核心机制，值得稍微形式化一点。
-
-一个**重定位项**（relocation）可以理解成一个三元组 $(o, S, a)$：在当前符号内偏移 $o$ 处有一个
-待填的「洞」，它应当指向目标符号 $S$，并附带一个加数 $a$（addend）。当链接器在布局后确定了 $S$
-的最终地址 $\text{addr}(S)$，它就把洞填上。最常见的两类填法是：
-
-$$
-\text{绝对引用：} \quad \text{patch}(o) = \text{addr}(S) + a
-$$
-
-$$
-\text{相对引用：} \quad \text{patch}(o) = \text{addr}(S) + a - (\text{addr}(\text{self}) + o)
-$$
-
-绝对重定位把目标的真实地址直接填进去（如取一个全局变量的地址）；相对重定位填的是「目标相对
-当前指令的距离」（如 x86 上 `CALL` 的 `rel32` 操作数），后者使代码可以整体平移而无需重填,这正是
-位置无关代码（PIC）与现代 ASLR 的基础。Go 用一组架构无关的重定位类型（`objabi.RelocType`，如
-`R_CALL`、`R_PCREL`、`R_ADDR`）描述这些洞，链接器在重定位阶段按目标架构翻译成具体的机器码补丁。
-
-符号解析则是建立 $S$ 这个名字到一份定义的映射。同名符号可能出现在多个目标文件里（典型如内联
-产生的同一个函数实例、或编译器生成的类型描述符），链接器要保证每个符号在最终二进制里**恰有
-一份**定义，并让所有引用都指向它。Go 1.15 之前，这一步靠为每个符号建一个 `*sym.Symbol` 对象、
-用一张全局字符串到对象的大哈希表完成；重写后改用整型符号索引（见 3.4.6），正是为了省下这张
-表的内存与查表开销。
-
-## 3.4.3 死代码消除
-
-并非所有被链接进来的包里的代码都会进最终二进制。链接器从程序的**根**出发,主要是 `main.main`
-以及各包的 `init` 函数，沿「谁引用了谁」的符号依赖图做一次可达性遍历（[reachability](https://en.wikipedia.org/wiki/Reachability)），
-只有被标记为可达的符号才参与后续布局。不可达的函数、变量、类型信息会被整体丢弃。go1.26 的
-实现用一个最小堆作为工作队列来跑这趟标记（`deadcodePass`，`src/cmd/link/internal/ld/deadcode.go`），
-堆序遍历是为了改善访问局部性。
-
-这件事可以直接观察。`-dumpdep` 会让链接器把它走过的符号依赖图打印出来，于是我们能看到一句
-`fmt.Println` 是怎样把一长串符号「拽」进二进制的：
-
-```shell
-$ go build -a -ldflags=-dumpdep -o hello hello.go 2>&1 | grep 'main.main ->'
-main.main -> main..stmp_0
-main.main -> os.Stdout
-main.main -> go:itab.*os.File,io.Writer
-main.main -> fmt.Fprintln
-```
-
-反过来，没人引用的东西会被悄悄删掉。下面这个程序里 `unused` 从不被调用：
+以一个只打印一行的程序为例：
 
 ```go
 package main
 
 import "fmt"
 
+func main() { fmt.Println("hello") }
+```
+
+为 linux/amd64 编译该程序，并让编译器输出汇编（`go build -gcflags=-S`）。`main.main` 中调用
+`fmt.Fprintln` 的位置如下（`fmt.Println` 已被内联为对 `fmt.Fprintln` 的调用，源码位置一列已删去）：
+
+```
+0x0041 00065   CALL  fmt.Fprintln(SB)
+0x0040 fe e8 00 00 00 00 48 83 c4 38 5d c3 e8 00 00 00
+rel 66+4 t=R_CALL fmt.Fprintln+0
+```
+
+`e8` 是 x86 的 `CALL` 指令，其后 4 个字节本应给出调用目标，此时却全部为 0。编译器每次只编译一个
+包，编译 `main` 时无从得知 `fmt.Fprintln` 最终位于何处，只能先留出空位，并用最后一行加以记录：
+从第 66 字节起的 4 个字节，待 `fmt.Fprintln` 的地址确定后再行填写。同一条指令在最终的可执行文件
+中是：
+
+```
+$ go tool objdump -s '^main.main$' hello | grep Fprintln
+  print.go:315		0x49e161		e8dab0ffff		CALL fmt.Fprintln(SB)
+```
+
+空位已被填写。另一个值得注意的现象是：`main.main` 只有 83 字节，整个文件却有 2,414,502 字节。
+填写地址、并写入其余两百余万字节的，都是链接器。
+
+## 3.4.1 链接器的工作
+
+编译器为每个包产出的**目标文件**（object file，见 [3.2](./compile.md)）包含该包的机器码和数据，
+以及两张表。一张是**符号**（symbol）表，列出本包定义的函数和全局变量，如 `fmt.Fprintln`、
+`os.Stdout`；另一张是**重定位项**（relocation）表，记录代码和数据中所有待填写的地址，上例中以
+`rel` 开头的一行就是一条重定位项。
+
+链接器读入 `main` 包及其直接、间接依赖的全部包（包括运行时）的目标文件，依次完成四项工作
+[[Levine, 2000](#ref-levine-2000)]：
+
+1. **符号解析**（symbol resolution）：把每一处对外部符号的引用绑定到唯一的定义；
+2. **死代码消除**（dead-code elimination）：从程序入口出发找出可达的符号，丢弃其余部分（3.4.3）；
+3. **布局**（layout）：把保留下来的符号按类别安排到可执行文件的各个段中，代码、只读数据、可写数据
+   各居其位，每个符号由此获得确定的地址；
+4. **重定位**：依据重定位项回填所有地址（3.4.2），并按操作系统要求的格式（Linux 上为 ELF）写出
+   文件。
+
+## 3.4.2 重定位
+
+`CALL` 指令中存放的不是 `fmt.Fprintln` 的绝对地址，而是从下一条指令到 `fmt.Fprintln` 的偏移量，
+CPU 执行时将二者相加得到跳转目标。因此，链接器在这里只需做一次减法：
+
+```
+$ go tool nm hello | grep ' fmt.Fprintln$'
+  499240 T fmt.Fprintln
+```
+
+`fmt.Fprintln` 位于 `0x499240`。调用指令起始于 `0x49e161`，长 5 字节，下一条指令位于 `0x49e166`。
+`0x499240 - 0x49e166 = -0x4f26`，按小端序写成 4 个字节即 `da b0 ff ff`，与最终文件中 `e8` 之后的
+4 个字节一致。
+
+另一类重定位填写的是目标的绝对地址，例如某张表中存放的全局变量地址。编译器以 `R_CALL`、`R_PCREL`、
+`R_ADDR` 等类型区分不同的填写方式，链接器在 `cmd/link/internal/ld/data.go` 中按目标体系结构逐一
+处理。
+
+相对寻址的好处在于：只要代码各部分之间的相对位置不变，已经填好的偏移量就无须修改。操作系统因而
+可以在每次加载时把程序放到不同的地址，使攻击者难以预测函数的位置，即地址空间布局随机化（ASLR）。
+能够加载到任意地址的可执行文件称为位置无关可执行文件（position-independent executable，PIE）。
+Go 1.26 在 macOS、Windows、Android 和 iOS 上默认生成 PIE（Windows 上启用竞态检测时除外）；在 Linux
+上则默认加载到固定地址 `0x400000` 附近，需要时可指定 `-buildmode=pie`。
+
+## 3.4.3 死代码消除
+
+标准库有数百个包，而一个程序通常只用到其中一小部分。链接器从程序入口出发，沿符号之间的引用关系
+遍历，标记所有可达的符号，未被标记的符号不写入最终文件。这与垃圾回收器的标记阶段是同一种算法
+（[第 13 章](../../part4memory/ch13gc/readme.md)），只是后者从全局变量和栈出发，沿指针遍历对象。
+
+`-ldflags=-dumpdep` 使链接器每标记一个符号就输出一行「引用者 -> 被引用
+者」[[Go Authors, 2026b](#ref-go-authors-2026b)]。从一万余行输出中筛选出通往 `main.main` 的路径：
+
+```
+$ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags=-dumpdep -o /dev/null . 2>&1 \
+    | grep -E '^_ |-> (_rt0_amd64|runtime\.(rt0_go|mainPC|main|main_main·f)|main\.main)$'
+_ -> _rt0_amd64_linux
+_ -> runtime.unreachableMethod
+_ -> go:main.inittasks
+_rt0_amd64_linux -> _rt0_amd64
+_rt0_amd64 -> runtime.rt0_go
+runtime.rt0_go -> runtime.mainPC
+runtime.mainPC -> runtime.main
+runtime.main -> runtime.main_main·f
+runtime.main_main·f -> main.main
+```
+
+`_` 表示遍历的根。真正的起点是操作系统进入程序的位置 `_rt0_amd64_linux`，`main.main` 经由运行时的
+启动代码被间接引用。程序运行时沿这条路径所做的工作，见 [3.5](./boot.md)。
+
+对普通函数而言，可达性分析是直接的，难点在于方法。直接调用的方法与普通函数无异；但对于经由接口的调用，
+例如 `q.Quack()`，链接器无法知道 `q` 的动态类型，也就无法确定应当保留哪个类型的 `Quack`。Go
+的链接器（`cmd/link/internal/ld/deadcode.go` [[Go Authors, 2026a](#ref-go-authors-2026a)]）采取的策略是：
+记录程序中所有经由接口调用的方法（方法名加签名），对于被转换为接口的类型，凡名字和签名与之匹配的方法均予以
+保留。源码注释对此的评价是「极其保守，但简单且正确」[[Go Authors, 2026a](#ref-go-authors-2026a)]。
+
+反射使问题更加复杂。若 `reflect.Value.MethodByName(name)` 中的 `name` 在运行时才能确定，任何导出
+方法都可能被调用。编译器会为这类调用加上标记，链接器一旦遍历到带标记的函数，便不再筛选：所有被
+转换为接口的类型，其导出方法全部保留。若 `name` 是常量，则只保留同名方法。
+
+下面的程序可以验证这一点（`//go:noinline` 用于阻止编译器推断出接口背后的具体类型）：
+
+```go
+type Duck struct{}
+
+func (Duck) Quack() string { return "quack" }
+func (Duck) Swim() string  { return "swim" } // 没有任何地方调用
+
+type Quacker interface{ Quack() string }
+
 //go:noinline
-func used()   { fmt.Println("used") }
+func newQuacker() Quacker { return Duck{} }
 
 //go:noinline
-func unused() { fmt.Println("unused") } // 无人引用
+func unused() { fmt.Println("unused") } // 没有任何地方调用
 
-func main() { used() }
+func main() { fmt.Println(newQuacker().Quack()) }
 ```
 
-用 `go tool nm`（列出二进制里的符号表）一查，`main.used` 在，`main.unused` 不在,它在链接阶段
-被消除了：
-
-```shell
-$ go build -o dc dc.go
-$ go tool nm dc | grep 'main.used'
-10009f4a0 T main.used
-$ go tool nm dc | grep 'main.unused'    # 无输出：已被死代码消除
+```
+$ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o duck . && go tool nm duck | grep ' main\.'
+  49e1e0 T main.(*Duck).Quack
+  49e120 T main.Duck.Quack
+  49e160 T main.main
+  49e140 T main.newQuacker
 ```
 
-死代码消除对 Go 尤其重要，原因在 3.4.4：每个 Go 程序都把**整个运行时和所用标准库**链了进来，
-若不剪枝，最朴素的 `hello world` 也会拖着一堆永不执行的代码。这趟标记最棘手的一处是接口与反射,
-通过接口或 `reflect` 调用的方法，其调用点在静态分析里看不出具体落到哪个类型的实现，链接器必须
-保守地把「可达类型的、签名匹配的方法」一并标活（`deadcodePass` 里的 `ifaceMethod`、`reflectSeen`
-正为此存在）。这也是为什么大量使用反射的程序往往剪不掉多少代码。
+`unused` 与 `Swim` 均已被删除（`(*Duck).Quack` 是编译器为指针类型生成的包装方法）。再将 `main`
+改为先取得 `q := newQuacker()`，并加入一处反射调用：
 
-## 3.4.4 运行时也被链接进来
+| `main` 中额外的代码 | `Swim` | 文件大小（字节） | 函数个数 |
+| --- | --- | --- | --- |
+| 无 | 删除 | 2,414,840 | 1,944 |
+| `reflect.ValueOf(q).MethodByName("Swim")` | 保留 | 2,544,376 | 2,031 |
+| 同上，但方法名是运行时拼接的字符串 | 保留 | 3,562,204 | 3,342 |
 
-最该记住的一点：**运行时是被链接进来的**。你的 `main` 包、它依赖的每一个包、以及整个 Go 运行时
-（调度器、垃圾回收器、内存分配器、`netpoll` 等）都被链接器拼进同一个二进制。没有外部虚拟机，
-没有解释器，运行时就静静待在可执行文件里。这正是 Go 程序「自带运行时」的由来。
+（linux/amd64；函数个数为 `go tool nm` 输出中类型为 `T` 或 `t` 的符号数。）第三种情况多出 1,398 个
+函数和 47% 的体积，均为「可能经由反射调用」的导出方法。`text/template` 按模板中书写的名字调用方法，
+而这个名字正是运行时才确定的字符串，因此使用它的程序体积会明显增大。
 
-它有多大一块？拿前面那个只打印一行的 `hello` 看：
+下面的交互图演示这一过程：可以单步观察待处理队列的变化，也可以加入一处反射调用，观察 `Swim` 如何被
+保留。链接器实际处理符号的顺序与图中不同，但处理顺序不影响最终保留的符号集合。
 
-```shell
-$ go tool nm hello | wc -l           # 二进制里的符号总数
-2598
-$ go tool nm hello | grep -c 'runtime\.'   # 其中属于 runtime 的
-1717
+<div class="viz" data-viz="link-deadcode"></div>
+
+## 3.4.4 可执行文件的构成
+
+`go tool nm -size hello` 列出每个符号的大小。`hello` 中 1,941 个函数共 612,583 字节，其中 `runtime`
+包占 434,726 字节（71%），`main.main` 只有 83 字节。调度器、内存分配器和垃圾回收器都包含在内：Go
+程序不依赖外部的虚拟机或运行库，运行时本身就是可执行文件的一部分。
+
+文件中最大的部分甚至不是代码。`objdump -h hello` 显示，代码段为 643,505 字节，而名为 `.gopclntab` 的表有
+681,250 字节。这张表记录了从任意指令地址到所属函数、源码行号以及栈上指针位置的映射，panic 时打印调用栈、
+垃圾回收时扫描栈（[第 14 章](../../part4memory/ch14stack/readme.md)）都依赖它，因此不能删除。
+可以删除的是供调试器使用的部分：`-ldflags="-s -w"` 去掉符号表（`-s`）和 DWARF 调试信息
+（`-w`）[[Go Authors, 2026b](#ref-go-authors-2026b)]，`hello` 由 2,414,502 字节减小到 1,605,794 字节，
+panic 时仍能打印调用栈。
+
+链接器还会写入构建信息，包括 Go 版本、所依赖的模块及其版本、构建参数等。`go version -m hello` 无须
+运行程序即可读出这些信息，漏洞扫描工具 `govulncheck` 也依据它判断程序是否包含存在已知漏洞的模块
+版本。程序自身可以这样读取：
+
+```go {run=true}
+package main
+
+import (
+	"fmt"
+	"runtime/debug"
+)
+
+func main() {
+	info, ok := debug.ReadBuildInfo() // 读链接器写进文件的构建信息
+	if !ok {
+		fmt.Println("没有构建信息")
+		return
+	}
+	fmt.Println("Go 版本：" + info.GoVersion)
+	fmt.Println("主包：" + info.Path)
+	for _, s := range info.Settings {
+		if s.Value != "" {
+			fmt.Printf("  %s=%s\n", s.Key, s.Value)
+		}
+	}
+}
 ```
 
-一个 `hello world` 里六成以上的符号来自运行时。这解释了 Go 二进制「天生就有几 MB 起步」的观感,
-它装的不是你的几行代码，而是一套完整的并发运行时。与之相对，C 程序把这类支撑（线程、内存
-管理）大多交给操作系统与 libc，故而可以很小。两种取舍各有去处：Go 用更大的体积换来「单文件
-即整个执行环境」，下一节会看到这正是它在容器时代的杀手锏。
+在 darwin/arm64 上执行 `go run main.go` 的输出如下。在网站上运行时，最后几行为 `CGO_ENABLED=0`、
+`GOARCH=wasm` 和 `GOOS=js`；在 Git 管理的模块中构建时，还会包含 `vcs.revision` 等版本控制信息。
 
-## 3.4.5 静态链接的取舍
-
-Go 的另一个标志性选择是**默认静态链接**。一个纯 Go 程序编译出的，通常是不依赖外部共享库的、
-自包含的可执行文件。把它拷到另一台同架构同系统的机器上就能跑，无需预装任何运行库。这与
-C/C++ 程序常见的「依赖一堆 `.so`/`.dll`、换台机器就缺库」形成对比，也是 Go 在云原生时代大受
-欢迎的原因之一,一个 `FROM scratch` 的空镜像里塞进一个 Go 二进制就能工作：
-
-```dockerfile
-FROM scratch
-COPY hello /hello
-ENTRYPOINT ["/hello"]
+```
+Go 版本：go1.26.10
+主包：command-line-arguments
+  -buildmode=exe
+  -compiler=gc
+  CGO_ENABLED=1
+  GOARCH=arm64
+  GOOS=darwin
+  GOARM64=v8.0
 ```
 
-「默认静态」需要两处限定，不要把它说成绝对。其一，**cgo 会拉回动态依赖**：一旦程序经 cgo 调用
-C 代码，链接器要接上系统的 libc，二进制便重新有了动态依赖。其二，**有些平台天生不全静态**:
-macOS 不提供静态的系统库，纯 Go 程序也仍会动态链接 `libSystem`。这两点在实验里都看得见，
-也提示我们「静态」的边界在哪：
+## 3.4.5 静态链接与动态链接
 
-```shell
-# Linux 上关掉 cgo，得到一个完全静态的二进制
-$ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o hello_linux hello.go
-$ file hello_linux
-hello_linux: ELF 64-bit ... statically linked, ...
+使用外部库有两种方式。一种是把用到的代码复制进程序，称为**静态链接**（static linking）；另一种只在
+程序中记录对库中符号的引用，由系统在程序启动时加载库并完成链接，称为**动态链接**（dynamic
+linking）。后一种方式下的库可由多个程序共享，称为**共享库**（shared library，Linux 上为 `.so`
+文件）。
 
-# 同一份源码在 macOS 上：仍依赖 libSystem（平台所致，非 Go 之过）
-$ otool -L hello
+早期的 Unix 只支持静态链接，几乎每个程序都带有一份 C 库，磁盘和内存中存在大量相同的副本。1980 年代后期，
+共享库出现在主流 Unix 中：System V Release 3（1987 年）的共享库须加载到预先约定的固定地址；SunOS
+4.0（1988 年）则实现了在程序启动时完成的动态链接 [[Gingell et al., 1987](#ref-gingell-et-al-1987)]，
+System V Release 4 随后也采用了这种方式。多个进程由此共享内存中的同一份库，库升级时也无须重新编译依赖它的
+程序，Linux 和各 BSD 系统沿用至今。其代价是程序每次启动都要查找并链接共享库，能否运行还取决于目标机器上所
+安装的库的版本 [[Drepper, 2011](#ref-drepper-2011)]。
+
+贝尔实验室的 Plan 9 有意不支持动态链接，所有程序均为静态链接。Go 的工具链出自 Plan 9 的作者之手
+（[2.1](../ch02asm/asm.md)），也继承了这一做法：纯 Go 程序编译后是一个不依赖任何共享库的文件。
+
+```
+$ file hello
+hello: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=...
+```
+
+例外有两种。其一是 cgo：程序调用 C 代码时，Go 把最后的链接交给系统的 C 链接器完成，结果通常会动态链接 C
+库。标准库中的 `net` 和 `os/user` 在 cgo 可用时也会编译进调用 C 库的实现：`os/user` 默认通过 C
+库查询用户；`net` 在 Unix 上默认使用纯 Go 的域名解析器，但在某些配置下（例如 `/etc/nsswitch.conf`
+使用了纯 Go 解析器不支持的功能）改用 C 库的 `getaddrinfo`。因此，导入这两个包的程序在 cgo
+可用时同样会动态链接 C 库。设置 `CGO_ENABLED=0`，或使用构建标签 `netgo` 与 `osusergo`，可使它们只使用纯
+Go 的实现。其二是 macOS：苹果只保证经由系统库 `libSystem` 调用内核的接口长期稳定，Go 自 1.11 起在 macOS
+上通过它发起系统调用 [[Go Authors, 2018](#ref-go-authors-2018)]，因此 macOS 上的 Go
+程序总是动态链接这个库：
+
+```
+$ go build -o hello . && otool -L hello
 hello:
-	/usr/lib/libSystem.B.dylib ...
+	/usr/lib/libSystem.B.dylib (compatibility version 0.0.0, current version 0.0.0)
+	/usr/lib/libresolv.9.dylib (compatibility version 0.0.0, current version 0.0.0)
 ```
 
-`CGO_ENABLED=0` 因此成了构建可移植静态二进制的常用开关,它顺带禁用 cgo，逼使纯 Go 实现
-（如 `net` 包的纯 Go 解析器）上场，从而切断对 libc 的动态依赖。
+两种方式的比较如下：
 
-静态链接的代价也要明说。**体积**更大，每个二进制都自带一份运行时与所用库代码（前面 `hello`
-约 2.5MB）；好在死代码消除与 strip 能削掉一部分,`-ldflags="-s -w"` 去掉符号表与 DWARF 调试
-信息，能把那个 `hello` 从约 2.5MB 压到约 1.7MB：
+| | 静态链接 | 动态链接 |
+| --- | --- | --- |
+| 部署 | 复制单个文件即可，容器镜像可以基于空镜像（`FROM scratch`） | 目标机器上需要有版本匹配的库 |
+| 启动 | 直接运行 | 需先加载共享库并完成符号解析 |
+| 体积与内存 | 每个程序各带一份库代码 | 多个进程共享同一份 |
+| 修复漏洞 | 所有使用该库的程序都要重新编译、重新发布 | 替换库文件并重启进程 |
 
-```shell
-$ go build -ldflags="-s -w" -o hello_stripped hello.go   # -s 去符号表，-w 去 DWARF
-```
+Go 主要用于服务端和容器环境，这些场景下每次发布本来就要重新构建镜像，「单个文件即全部」带来的
+便利更为突出。代价体现在表格的最后一行：标准库或某个依赖修复漏洞之后，所有使用它的程序都必须重新
+编译。前面提到的构建信息，正是用于找出这些程序的。
 
-更要紧的代价在**安全更新**：动态链接下，libc 出了漏洞，系统换掉那个 `.so`、重启进程即可；
-静态链接把库的代码焊进了每个二进制，任何一个依赖的安全修复都要求**重新编译并重新分发**所有
-受影响的程序。把它放进谱系看，这并非 Go 独有的难题，C 世界里用 musl 静态链接、或 Rust 默认
-静态链接的人也都在这条权衡线上：可移植与部署简单在一端，体积与「集中打补丁」的能力在另一端。
-Go 替它瞄准的服务端/容器场景做了选择,在那里，「一个文件就是整个交付物」省下的运维成本，通常
-压过了重编译分发的代价。
+## 3.4.6 链接器的重写
 
-## 3.4.6 链接器的演化与前沿
+Go 最早的链接器是 Plan 9 的 C 语言链接器，Go 1.5 时随编译器一起被自动翻译成 Go（[3.3](./bootstrap.md)）。
+翻译保留了原有的设计：每个符号都是内存中的一个对象，通过一张以名字为键的大表查找。程序规模越大，
+对象和表也越大，链接逐渐成为构建过程中最慢、占用内存最多的步骤之一。而构建速度从一开始就是 Go
+的首要设计目标之一 [[Pike, 2012](#ref-pike-2012)]。
 
-Go 的链接器同样源自 Plan 9 传统（[2.1](../ch02asm/asm.md)），多年来持续被改造。最值得记的一次是
-Go 1.15 前后、代号 `dev.link` 的**大规模重写**。改造的核心是目标文件格式与符号的内部表示：
-旧实现把每个符号都展开成一个 `*sym.Symbol` 堆对象、靠一张全局哈希表按名字索引，符号一多，
-内存与 GC 压力随之上来；新实现引入新的对象文件格式，并把符号统一表示为紧凑的整型索引，由新增
-的 `loader` 包（`src/cmd/link/internal/loader`）集中管理，按需才把符号「实体化」成对象。另一处
-改动是把链接的内部阶段进一步并行化，例如并行地对符号施加重定位。按 Go 1.15 发布说明给出的
-实测，对一组有代表性的大型 Go 程序，在 ELF 系统的 amd64 上链接平均**快约 20%、省约 30% 内存**
-（其他架构与系统上提升更温和，代价是新对象文件比 1.14 的略大）。这是一个跨多个版本的「重写
-链接器」工程的一部分，后续版本仍在持续改进。
+2019 年起，Go 团队重写了链接器的核心 [[Clements, 2019](#ref-clements-2019)]：目标文件改用新的格式，
+符号以整数编号标识，引用直接记录编号；链接器按需读取符号，不再为每个符号创建对象、按名字查表。据 Go 1.15
+的发布说明，在 amd64 的 Linux 等系统上，一组有代表性的大型程序链接速度平均提高 20%，内存占用减少 30%
+[[Go Authors, 2020](#ref-go-authors-2020)]；Go 1.16 在此基础上又提速 20% 至 25%，内存再减少 5% 至
+15%（linux/amd64）[[Go Authors, 2021](#ref-go-authors-2021)]。
 
-这次重写呼应着 Go 对**构建速度**的一贯执念（[1.1](../ch01intro/history.md)）。链接是构建流水线
-的最后一站，它快不快，直接决定每一次「改一行、重新跑」的等待时长；从编译到链接，整条流水线
-的设计目标始终一致,让大规模 Go 工程的构建保持飞快。
+## 延伸阅读
 
-链接仍有未尽的前沿。对极大的二进制，链接时间和峰值内存依然可能成为瓶颈，DWARF 调试信息的
-生成是其中一项不小的开销（故而 CI 里常用 `-w` 关掉它换速度）；增量链接、更激进的并行化、以及
-与编译器更紧的协同，都是仍在演进的方向。下一站，我们看这个链接好的二进制被操作系统加载后，
-如何把自己「开机」（[3.5](./boot.md)）。
+- <a id="ref-levine-2000"></a>[Levine, 2000] John R. Levine. *Linkers and Loaders*. Morgan Kaufmann, 2000.
+  链接与加载的经典教材，符号、重定位、共享库各有专章。
+- <a id="ref-gingell-et-al-1987"></a>[Gingell et al., 1987] Robert A. Gingell, Meng Lee, Xuong T. Dang,
+  Mary S. Weeks. "Shared Libraries in SunOS." *Proceedings of the Summer 1987 USENIX Conference*, 1987.
+  Unix 共享库的早期设计，阐述了引入共享库的动机。
+- <a id="ref-drepper-2011"></a>[Drepper, 2011] Ulrich Drepper. "How To Write Shared Libraries." 2011.
+  https://akkadia.org/drepper/dsohowto.pdf
+  动态链接在启动时间和代码生成上的具体开销。
+- <a id="ref-clements-2019"></a>[Clements, 2019] Austin Clements. "Building a better Go linker." 2019.
+  https://go.dev/s/better-linker
+  Go 链接器重写的设计文档。
+- <a id="ref-go-authors-2020"></a>[Go Authors, 2020] The Go Authors. *Go 1.15 Release Notes*, "Linker".
+  https://go.dev/doc/go1.15
+  重写后链接速度与内存占用的实测数据。
+- <a id="ref-go-authors-2021"></a>[Go Authors, 2021] The Go Authors. *Go 1.16 Release Notes*, "Linker".
+  https://go.dev/doc/go1.16
+  在 Go 1.15 的基础上进一步的提速与内存节省。
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `cmd/link/internal/ld/deadcode.go`
+  （Go 1.26）.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/link/internal/ld/deadcode.go
+  https://github.com/golang/go/tree/master/src/cmd/link/internal （`ld/deadcode.go`、`loader`：新对象文件格式与符号索引）
+  死代码消除的实现。函数 `deadcode` 之前的注释说明了方法的三种调用途径及各自的处理方式。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *cmd/link 文档与源码（含
+  `-dumpdep`、`-s`、`-w` 等链接选项）.* https://pkg.go.dev/cmd/link
+  ；https://github.com/golang/go/tree/master/src/cmd/link
+- <a id="ref-pike-2012"></a>[Pike, 2012] Rob Pike. *Go at Google: Language Design in the Service of
+  Software Engineering（构建速度作为一等设计目标）.* 2012. https://go.dev/talks/2012/splash.article
+- <a id="ref-go-authors-2018"></a>[Go Authors, 2018] The Go Authors. *Go 1.11 Release Notes*, "Runtime".
+  https://go.dev/doc/go1.11#runtime
+  macOS 与 iOS 上的运行时改经 `libSystem.dylib` 发起系统调用。
+- 本书 [2.1 Plan 9 汇编](../ch02asm/asm.md)、[3.2 编译流程](./compile.md)、
+  [3.5 启动引导](./boot.md)、[1.1 历史与设计哲学](../ch01intro/history.md)、
+  [17 模块与生态](../../part5toolchain/ch17modules).
 
-## 延伸阅读的文献
-
-1. The Go Authors. *cmd/link 文档与源码（含 `-dumpdep`、`-s`、`-w` 等链接选项）.*
-   https://pkg.go.dev/cmd/link ；https://github.com/golang/go/tree/master/src/cmd/link
-2. The Go Authors. *src/cmd/link/internal/ld/deadcode.go（从 `main.main` 出发的可达性标记）、
-   src/cmd/link/internal/loader（新对象文件格式与符号索引）.*
-   https://github.com/golang/go/tree/master/src/cmd/link/internal
-3. Austin Clements et al. *Building a better Go linker（链接器现代化设计文档，多版本工程）.*
-   https://go.dev/s/better-linker
-4. The Go Authors. *Go 1.15 Release Notes（链接器：新对象文件格式、并行重定位，平均快约 20%、
-   省约 30% 内存）.* https://go.dev/doc/go1.15
-5. Rob Pike. *Go at Google: Language Design in the Service of Software Engineering（构建速度作为
-   一等设计目标）.* 2012. https://go.dev/talks/2012/splash.article
-6. 本书 [2.1 Plan 9 汇编](../ch02asm/asm.md)、[3.2 编译流程](./compile.md)、
-   [3.5 启动引导](./boot.md)、[1.1 历史与设计哲学](../ch01intro/history.md)、
-   [17 模块与生态](../../part5toolchain/ch17modules).

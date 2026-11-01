@@ -5,175 +5,205 @@ title: "3.3 语言的自举"
 
 # 3.3 语言的自举
 
-一个问题听起来像悖论：Go 的编译器、汇编器、链接器与运行时如今都用 Go 写成，那么第一个能编译
-Go 的程序是从哪里来的？没有 Go 编译器，怎么编译出 Go 编译器？这就是**自举**（bootstrapping）。
-它既是「先有鸡还是先有蛋」的经典困局，也是 Go 工具链演化史上一段可被精确复述的工程。本节
-回答三件事：这只蛋最初是怎么孵出来的；自举之后，构建一个新版 Go 的链条如何运转，以及它对
-引导版本的要求为何逐年抬升；最后，为什么一门语言「用自己实现自己」值得郑重对待。
+Go 的编译器是用 Go 编写的。要编译它，必须先有一个 Go 编译器；而这个编译器又是由谁编译的？
 
-## 3.3.1 先有蛋：从 C 写的工具链到 Go 写的工具链
-
-自举的前提，是先有一个不依赖自身的起点。Go 工具链最初（到 **Go 1.4**，2014 年）的编译器、
-汇编器、链接器与 `cmd/dist` 都是用 **C** 写的，编译器沿用了 Plan 9 的命名（`5c`、`6c`、`8c`、
-`9c` 等，数字对应不同的目标架构）。这套 C 程序由系统自带的 `gcc` 或 `clang` 编译，于是构建
-Go 不需要任何已存在的 Go,这便是那只「蛋」。
-
-从 **Go 1.5（2015 年 8 月）**起，Go 完成了一次里程碑式的转变：编译器与运行时被**整体用 Go
-重写**，C 工具链被删除，工具链从此可以自我引导。这步棋的代价与收益都很实在。收益是，编译器
-开发者从此用 Go 这门内存安全、并发友好、自带测试与剖析工具的语言来维护工具链，编译器里的
-bug 可以用 Go 自己的调试手段去查；运行时与编译器共用一套语言，跨边界的协作（如逃逸分析与
-栈管理）也更顺。代价是，构建 Go 不再像编译一段 C 那样自给自足，它现在需要「另一个已经能用的
-Go」。如何用一个旧的 Go 造出一个新的 Go，就成了此后每个版本都要回答的问题。
-
-> 这次重写分两步落地，可对照 Cox 的两份设计文档：`go13compiler` 记录了把 C 写的编译器机械
-> 转译为 Go 的过程，`go15bootstrap` 则给出了删除 C、改用旧版 Go 引导的完整方案，`make.bash`
-> 至今在注释里指向后者。
-
-## 3.3.2 自举链：用旧 Go 编译新 Go
-
-自举之后，构建新版 Go 的起点变成一个**较旧的、已经能运行的 Go 工具链**，记在环境变量
-`$GOROOT_BOOTSTRAP` 中（默认在 `$HOME` 下寻找 `sdk/go1.24.6` 一类的目录）。整个引导过程由
-`cmd/dist` 驱动,它本身是一段刻意写得「克制」的 Go 程序，只用得起引导版本里就有的语言特性，
-从而能被那个旧 Go 直接编译出来。
-
-引导不是「编译一次」就完事，而是连编三轮，每一轮都有它非编不可的理由。把链条画出来：
-
-```mermaid
-flowchart TD
-    BOOT["引导用的旧 Go<br/>($GOROOT_BOOTSTRAP, ≥ go1.24.6)"] --> DIST["编译 cmd/dist<br/>(用旧 Go)"]
-    DIST --> TC1["toolchain1<br/>新编译器/汇编器/链接器<br/>由旧 Go 编出，无 build ID"]
-    TC1 --> GOBOOT["go_bootstrap<br/>新 cmd/go，由 toolchain1 编出"]
-    GOBOOT --> TC2["toolchain2<br/>由 toolchain1 + go_bootstrap 重编<br/>语义等价、更快、带 build ID"]
-    TC2 --> TC3["toolchain3<br/>由 toolchain2 重编<br/>build ID 稳定，可用于缓存"]
-    TC3 --> STD["用最终工具链编出标准库与全部命令"]
-```
-
-三轮的分工是这套设计的核心，值得逐级说清：
-
-1. **toolchain1**,`cmd/dist` 先把编译器、汇编器、链接器等的**新源码**，用引导版旧 Go 的
-   `go` 命令编译出来。这一版工具链行为上已是新版，但它由旧 `go` 命令构建，二进制里没有 build
-   ID。
-2. **go_bootstrap**,再用 toolchain1 编出一个临时的 `go` 命令。从这一步起，构建的主导权
-   从 `cmd/dist` 交回给 `go` 命令本身。
-3. **toolchain2**,用 toolchain1 加 go_bootstrap，把同一套工具链**再编一遍**。它与
-   toolchain1 语义等价，但因为是用新编出的编译器（而非旧引导编译器）构建的，跑得更快，且
-   这一版带上了 build ID。
-4. **toolchain3**,再用 toolchain2 编出最终一版。到这里，工具链已是「由从头构建的新编译器
-   编出的新编译器」，其 build ID 准确稳定，适合喂给构建缓存。
-
-为什么不止一轮？关键在 build ID 与可复现性。toolchain1 是「新源码 + 旧编译器」的产物，足以
-自举，但带着旧引导环境的痕迹（无 build ID）。多走两轮，让最终工具链完全脱离引导版 Go 的影响,
-toolchain3 是用新工具链构建的新工具链，与构建它的旧 Go 再无瓜葛。这也顺带是一道自检：若新
-编译器自身有缺陷，往往在 toolchain2 或 toolchain3 这一轮就会暴露。
-
-这里藏着一个微妙但要紧的判断：toolchain2 与 toolchain3 在源码层面完全相同，理想情况下两者
-应当**逐字节一致**。它们之所以分作两版，是因为 toolchain2 是「旧编译器编出的新编译器又编了
-一遍」，而 toolchain3 是「新编译器编它自己」,只有当后两版趋于一致，才能确信新编译器没有把
-某种依赖于「是谁编译了它」的隐性差异带进产物。这正是经典的**编译器不动点**：一个正确的自举
-编译器，从某一轮之后再编自己，输出应当稳定下来。Go 用 build ID 与发布构建里的版本标识来逼近
-这个不动点，让最终二进制可被缓存、可被复现。
-
-一个容易被忽略的实现细节：`cmd/dist` 并不直接在原地编译，而是把引导所需的源码（`cmd/compile`、
-`cmd/asm`、`cmd/link` 及其依赖）拷进 `$GOROOT/pkg/bootstrap` 工作区，并把它们的导入路径统一
-改写成 `bootstrap/...` 前缀。这样旧 Go 编译的是一份与最终标准库**隔离**的副本，新旧两套同名
-包不会在引导期间彼此污染。
-
-整条链的入口是 `make.bash`（`all.bash` 在它之外多跑一轮测试）。粗略地看，一次 `make.bash`
-依次做的是：检查并定位 `$GOROOT_BOOTSTRAP`,用它编出 `cmd/dist`,由 `cmd/dist` 走完上面
-toolchain1 至 toolchain3 三轮，最后用最终工具链编出其余标准库与命令。这几步在终端上是肉眼
-可见的，它的输出几乎就是上图的文字版：
+先看一个实验。取 Go 1.26.10 的源码（删去发布包中预先编译好的程序），复制为两份，一份用已安装的
+Go 1.26.0 构建，另一份用 Go 1.27.3 构建。`make.bash` 是从源码构建 Go 的脚本，环境变量
+`GOROOT_BOOTSTRAP` 指定用作起点的现成 Go（darwin/arm64，路径有删节，每次约 40 秒）：
 
 ```shell
-$ GOROOT_BOOTSTRAP=$HOME/sdk/go1.24.6 ./make.bash
-Building Go cmd/dist using /Users/you/sdk/go1.24.6. (go1.24.6 darwin/arm64)
-Building Go toolchain1 using /Users/you/sdk/go1.24.6.
+$ GOROOT_BOOTSTRAP=.../go1.27.3 bash make.bash
+Building Go cmd/dist using .../go1.27.3. (go1.27.3 darwin/arm64)
+Building Go toolchain1 using .../go1.27.3.
 Building Go bootstrap cmd/go (go_bootstrap) using Go toolchain1.
 Building Go toolchain2 using go_bootstrap and Go toolchain1.
 Building Go toolchain3 using go_bootstrap and Go toolchain2.
 Building packages and commands for darwin/arm64.
 ---
-Installed Go for darwin/arm64 in /Users/you/go
+Installed Go for darwin/arm64 in .../goroot-b
 ```
 
-每一行对应链上的一环：先用引导版旧 Go 编出 `cmd/dist`，再由它顺次抬出 toolchain1、临时
-`go` 命令（go_bootstrap）、toolchain2、toolchain3，最后用站稳的最终工具链铺开标准库与命令。
-读这段输出，自举就不再是抽象概念,它是终端里几行可被复述的状态迁移。
+两份构建在 `bin` 与 `pkg/tool` 下共产出 10 个程序，逐字节比较，全部相同：
 
-## 3.3.3 不断抬升的引导版本
-
-自举给工具链开发者松了绑：他们可以用越来越新的 Go 特性来写 Go 自己。代价随之而来,工具链
-源码一旦用上某个新版才有的特性（典型如泛型），能引导它的最低 Go 版本就得跟着上抬。这条引导
-版本线一路走高，本身就是 Go 语言自我演化的一份侧写：
-
-| 目标 Go 版本 | 引导所需最低版本 |
-|---|---|
-| Go ≤ 1.4 | C 工具链（`gcc` / `clang`） |
-| Go 1.5 ~ 1.19 | Go 1.4 |
-| Go 1.20 ~ 1.21 | Go 1.17（具体为 1.17.13） |
-| Go 1.22 ~ 1.23 | Go 1.20 |
-| Go 1.24 起 | 由公式给出 |
-
-从 Go 1.20（2023 年）起，引导基准正式告别了沿用近八年的 Go 1.4,背后的取舍记录在 issue
-44505 与 54265 里：继续钉死在 Go 1.4，意味着工具链永远不能用 Go 1.5 之后的任何语言特性来
-写自己，这个束缚越来越不划算。从 Go 1.24 起，要求不再逐版手写，而是收敛成一条规则：构建
-Go 1.N 需要 Go 1.M，其中 $M = N - 2$ 再向下取到偶数。于是 Go 1.24 与 1.25 都要 Go 1.22，
-Go 1.26 与 1.27 都要 Go 1.24。这条公式正是 `cmd/dist` 里的 `requiredBootstrapVersion`：
-
-```go
-// 构建 Go 1.N 需要 Go 1.M，M = N-2 向下取偶（N ≥ 22）
-// 例：Go 1.24、1.25 需 Go 1.22；Go 1.26、1.27 需 Go 1.24
-requiredMinor := minor - 2 - minor%2
+```shell
+$ shasum -a 256 goroot-{a,b}/bin/go goroot-{a,b}/pkg/tool/darwin_arm64/{compile,link} | cut -c1-16,65-
+2ff6483c8cefb8fd  goroot-a/bin/go
+2ff6483c8cefb8fd  goroot-b/bin/go
+115ccaac31d7e4d4  goroot-a/pkg/tool/darwin_arm64/compile
+c2deb9df764bc6dc  goroot-a/pkg/tool/darwin_arm64/link
+115ccaac31d7e4d4  goroot-b/pkg/tool/darwin_arm64/compile
+c2deb9df764bc6dc  goroot-b/pkg/tool/darwin_arm64/link
 ```
 
-落到 Go 1.26，最低引导版本被进一步钉到补丁号 **go1.24.6**。若有人拿更旧的 Go 去跑
-`make.bash`，构建会在编译 `cmd/dist` 时就失败,源码树里专门放了一个文件，仅在
-`//go:build !go1.24` 时参与编译，包名是 `building_Go_requires_Go_1_24_6_or_later`,
-用一条「找不到合法 main 包」的报错，把版本不足这件事尽早地、显眼地告诉构建者。
+作为起点的编译器不同，产物却完全一致。本节回答三个问题：最早的 Go 编译器从何而来；上述输出中的
+toolchain1、2、3 分别是什么，为何结果与起点无关；以及这一性质为何重要。
 
-公式留出的「N-2 再取偶」这道余量并非随意：它保证任一发布版总能被两到三个发布周期之前的、
-已经广泛分发的稳定版引导，下游打包者不必为了构建新 Go 而先去弄一个过于新的 Go。这是工具链
-对生态体贴的一处具体体现，下一节再展开。
+## 3.3.1 最早的编译器
 
-## 3.3.4 自举为何重要
+一个编译器涉及三种语言：它所处理的源语言（Go）、它生成的目标语言（例如 arm64 机器码），以及它自身
+的实现语言。前两者决定了编译器的功能，第三者决定了如何得到这个编译器。
 
-自举不止是一段技术趣闻，它有三层实在的意义。
+Go 1.4（2014 年 12 月）及以前，编译器、汇编器和链接器都用 C 编写，源自 Plan 9 的 C 编译器
+（[2.1](../ch02asm/asm.md)）。构建 Go 只需要系统中的 C 编译器，`gcc` 与 `clang` 均可。
 
-**它是语言成熟的信号。** 一门语言能用自己实现自己，尤其是实现编译器、运行时这类对性能和
-底层控制要求苛刻的系统软件，说明它的抽象能力与运行效率都已堪当重任。这条路 Go 不是孤例。
-自托管（self-hosting）几乎是系统级语言成熟的通过仪式：Rust 的 `rustc` 同样以前一版 Rust
-引导，并和 Go 一样要管理「能用多旧的版本引导」这道约束；GCC 与 LLVM 也都长期用一轮自编译
-来确保编译器能编译它自己。差别在于各家对「起点」的安置,Go 选择把起点钉在一个公开分发的
-旧发布版上，而非像某些工具链那样保留一条可回溯到汇编的最初引导路径。两种选择各有取舍：前者
-简单、可复现，但要求引导版本随之滚动；后者在「可从最朴素的起点重建」上更彻底，代价是维护
-那条古老路径的成本。
+Go 1.5（2015 年 8 月）将它们全部改用 Go 实现 [[Go Authors, 2015](#ref-go-authors-2015)]。
+这次转换并非重写：Russ Cox 编写了一个把这批 C 代码自动翻译为 Go 的程序，翻译所得的代码起初保留着 C
+的风格，此后再逐步改写为惯用的 Go。Cox 在 2013 年的设计文档中给出了这样做的理由：用 Go 比用 C
+更容易写出正确的程序，且 Go 自带测试与性能剖析工具；运行时正在从 C 迁移到 Go，编译器同样用 Go 编写，
+二者才便于协同；贡献者也只需掌握 Go 一种语言 [[Cox, 2013](#ref-cox-2013)]。
 
-**它统一了开发体验。** 工具链作者与普通用户用的是同一门语言、同一套工具。编译器里的问题可以
-用 Go 的测试、竞态检测与性能剖析直接排查，新语言特性也能第一时间被工具链自己「吃下去」试用,
-泛型进入引导要求，正是这种自我消化的结果。
+代价是，此后构建 Go 必须先有一个可用的 Go [[Cox, 2015](#ref-cox-2015)]。用一门语言自身的编译器来编译该编译
+器，称为**自举**（bootstrapping），这个词源自英语成语「拉着自己的靴带把自己提起来」（pull oneself up by
+one's bootstraps）。
 
-**它也压上了一份责任。** 工具链必须始终能被一个**合理旧**的 Go 引导出来，不能为图方便而依赖
-过新的特性，否则「从源码构建 Go」会变得困难,这正是上一节那条 N-2 公式存在的理由。这份责任
-也牵出一个更深的话题：Thompson 在《Reflections on Trusting Trust》里指出，一个自我编译的工具链
-理论上可以把后门一代代传下去而不留源码痕迹。Go 用多轮可复现构建、公开的引导链与可校验的二进制，
-把这种信任建立在可被独立检验的基础上,自举的便利与可信，需要靠工程纪律一同守住。
+## 3.3.2 由旧版本构建新版本
 
-从用 C 写的那只蛋，到用 Go 写的、靠一条公式约束着引导版本、连编三轮以求可复现的工具链，这段
-自举史是 Go「用自己证明自己」的最佳注脚。
+`make.bash` 的输出展示了自举的全过程。下文把用作起点的现成 Go 称为旧 Go：
 
-## 延伸阅读的文献
+1. 旧 Go 首先编译 `cmd/dist`。这是一个负责调度后续步骤的小程序，只使用旧 Go 同样支持的语言特性。
+2. **toolchain1**：旧 Go 编译新版本的编译器、汇编器和链接器的源码。所得编译器的行为由新源码决定，
+   但它自身的机器码由旧编译器生成。
+3. **go_bootstrap**：用 toolchain1 编译出新的 `go` 命令，此后的构建由它接管。
+4. **toolchain2**：用 toolchain1 把同一份源码再编译一遍。
+5. **toolchain3**：用 toolchain2 再编译一遍。
+6. 用 toolchain3 编译标准库和其余命令。
 
-1. The Go Authors. *Go 1.5 Release Notes*（编译器与运行时用 Go 重写，工具链实现自举）.
-   https://go.dev/doc/go1.5
-2. Russ Cox. *Go 1.5 Bootstrap Plan*（`go15bootstrap`，删除 C、用旧版 Go 引导的完整方案）.
-   https://go.googlesource.com/proposal/+/master/design/go15bootstrap.md
-3. Russ Cox. *Go 1.3+ Compiler Overhaul*（`go13compiler`，C 编译器机械转译为 Go）.
-   https://go.googlesource.com/proposal/+/master/design/go13compiler.md
-4. The Go Authors. *Installing Go from source / Bootstrap toolchain*（引导版本要求与 N-2 规则）.
-   https://go.dev/doc/install/source
-5. The Go Authors. *cmd/dist：`buildtool.go`（`minBootstrap`、导入路径改写）与 `build.go`
-   （`requiredBootstrapVersion`、toolchain1~3）*.
-   https://github.com/golang/go/tree/master/src/cmd/dist
-6. Go issue #44505、#54265：*为何从 Go 1.4 引导基准迁移到更新的版本*.
-   https://go.dev/issue/44505 ，https://go.dev/issue/54265
-7. Ken Thompson. *Reflections on Trusting Trust.* Communications of the ACM, 1984.
-   https://dl.acm.org/doi/10.1145/358198.358210
+关键在第 4 步。一个编译器生成什么样的代码，只取决于它的源码，与它自身由哪个编译器编译无关。
+toolchain1 的行为由新源码决定，因此 toolchain2 是「新编译器编译新源码」的结果，旧 Go 的影响至此
+消失。
+
+`make.bash -d` 会把每一轮的编译器另存为 `compile1`、`compile2`、`compile3`。两份构建的结果如下：
+
+| | 以 Go 1.26.0 为起点 | 以 Go 1.27.3 为起点 |
+| --- | --- | --- |
+| `compile1`（由旧 Go 编译） | `f04179ffde503a8f` | `21b1c7c8410a0c79` |
+| `compile2`（由 toolchain1 编译） | `f91490ecbac04f2c` | `f91490ecbac04f2c` |
+| `compile3`（由 toolchain2 编译） | `115ccaac31d7e4d4` | `115ccaac31d7e4d4` |
+
+`compile1` 随起点而不同，从 `compile2` 起便完全一致。
+
+`compile2` 与 `compile3` 不同，原因在于编译选项。编译器的源码目录中存放着一份它自身的性能剖析数据
+`default.pgo`，用于引导优化（[3.2](./compile.md)）。`cmd/dist` 构建 toolchain2 时特意关闭了这一选项，
+源码注释给出的理由是 toolchain2 无须启用 PGO [[Go Authors, 2026b](#ref-go-authors-2026b)]；构建
+toolchain3 时才将其打开。用最终的编译器、以相同的选项再编译它自身一次（这里的 `go` 是刚构建完成的 Go
+1.26.10）：
+
+```shell
+$ CGO_ENABLED=0 GOFLAGS="-trimpath -ldflags=-w -gcflags=cmd/...=-dwarf=false" \
+    go build -a -o compile4 cmd/compile
+$ shasum -a 256 compile4 | cut -c1-16
+115ccaac31d7e4d4
+```
+
+结果仍是它自身；关闭性能剖析数据（`-pgo=off`）后再编译，得到的正是 `compile2` 的
+`f91490ecbac04f2c`。编译器编译自身的源码得到它自己，这称为**不动点**（fixed point）：再编译多少次，
+结果都不会改变。如果一个编译器无法稳定地生成自身，说明它的输出依赖了不应依赖的因素，例如时间或内存
+地址。GCC 从源码构建时也采用类似的三阶段过程，并比较后两个阶段的产物是否相同 [[GCC, n.d.](#ref-gcc-nd)]。
+
+既然 toolchain2 已与旧 Go 无关，为何还需要 toolchain3？`cmd/dist` 的注释说明，原因与 [3.1](./cmd.md)
+介绍的 build ID 有关 [[Go Authors, 2026b](#ref-go-authors-2026b)]。toolchain1 由旧 Go 的 `go` 命令构建，
+其中不含 build ID，因此需要再构建一个带有 build ID 的 toolchain2。然而在开发版本中，工具链的 build ID
+会参与计算其产物的 build ID，编译器一经更换，`go` 命令便认为此前构建的一切都已过期；
+发布版本则以工具链报告的版本号代替 build ID，不会出现这种情况。为使两种情形的行为一致，`cmd/dist` 用
+toolchain2 强制重新构建整套工具，得到 toolchain3，其编译器与链接器带有准确的 build ID，
+可以作为缓存的依据。`make.bash` 最后还会让 `go` 命令逐一检查，确认在它看来工具链和标准库都已是最新状态，
+无须重新构建。
+
+`buildid.go` 开头的注释说明了 3.1 中这一设计的必要性：编译器由它自身编译，如果下一步的键中记录的
+是编译器这一步的 action ID，那么编译器每编译一次自身，键就改变一次，永远无法收敛；记录的是编译器
+内容的摘要，内容一旦收敛，键也随之收敛。
+
+## 3.3.3 起点的最低版本
+
+可用作起点的 Go 有一个最低版本，并随新源码所使用的语言特性和库逐步提高
+[[Go Authors, 2026a](#ref-go-authors-2026a)]：
+
+| 要构建的版本 | 起点的最低要求 |
+| --- | --- |
+| Go 1.4 及以前 | C 编译器 |
+| Go 1.5 至 1.19 | Go 1.4 |
+| Go 1.20、1.21 | Go 1.17.13 |
+| Go 1.22、1.23 | Go 1.20.6 |
+| Go 1.24、1.25 | Go 1.22.6 |
+| Go 1.26、1.27 | Go 1.24.6 |
+
+Go 1.4 作为起点长达近八年。它是最后一个用 C 编写的版本，任何装有 C 编译器的机器都可以由它开始构建。
+代价是编译器本身永远无法使用 Go 1.4 之后的新特性，例如泛型；Go 1.4 也不支持后来出现的一些平台，例如采用
+Apple 芯片的 Mac。go.dev/issue/44505 与 54265 记录了相关的讨论 [[Cox, 2021](#ref-cox-2021)]
+[[Cox, 2022](#ref-cox-2022)]。Go 1.20 把起点提高到 Go 1.17；从 Go 1.22 起，起点按一条固定的规则提高：构建
+Go 1.N 需要 Go 1.M，M 为 N 减 2 后向下取偶数。Go 每年 2 月发布偶数版本、8 月发布奇数版本，
+因此起点每年前移一次，并且总是至少一年前发布的版本。这条规则实现于 `cmd/dist` 的
+`requiredBootstrapVersion` 中 [[Go Authors, 2026b](#ref-go-authors-2026b)]。
+
+版本过旧时，`cmd/dist` 会尽早报错。它的源码目录中有一个文件 `notgo124.go`，仅在 Go 1.24 以前的版本下
+参与编译，其包名为 `building_Go_requires_Go_1_24_6_or_later`。用过旧的 Go 编译 `cmd/dist` 时，同一
+目录下出现两个不同的包名，编译失败，错误信息中恰好包含这句话。版本介于 1.24 与 1.24.6 之间的，由
+`cmd/dist` 检查版本号后报错。比要求更新的 Go 均可使用，上面实验中的 Go 1.27.3 即是一例。
+
+## 3.3.4 编译器的可信性
+
+1983 年，Ken Thompson 在图灵奖演讲《Reflections on Trusting Trust》中描述了一种攻击
+[[Thompson, 1984](#ref-thompson-1984)]。修改 C 编译器的源码，使它在编译登录程序时悄悄植入后门；
+再使它在编译编译器自身时，把这段修改原样植入新的编译器。把修改后的源码编译一次，得到带有后门的编译器，
+然后从源码中删去这段修改。此后源码中看不出任何异常，但用这个编译器编译干净的源码，
+得到的编译器依然带有后门，并代代相传。Thompson 的结论是：不是完全由自己编写的代码，就不能完全信任，
+仅审查源码是不够的。
+
+所有自举的语言都无法回避这个问题：今天的 Go 编译器由上一个 Go 编译器编译而来，一路可以追溯到用 C 编写的
+Go 1.4 以及更早的 C 编译器。2005 年，David A. Wheeler 提出了一种检验方法，称为**多样化双重编译**（diverse
+double-compiling，DDC）[[Wheeler, 2005](#ref-wheeler-2005)]：另选一个独立来源的编译器，
+用它编译待检验编译器的源码，再用所得的编译器把同一份源码编译一遍，与待检验的二进制逐字节比较。若二者相同，
+就说明该二进制确实由这份源码生成，除非两个起点被以完全相同的方式篡改。
+
+本节开头的实验正是这一结构：两个不同的起点，得到相同的结果。不过 Go 1.26.0 与 Go 1.27.3 出自同一个
+项目，这样的检验并不独立。Go 的源码也可以用 GCC 中独立实现的 gccgo 作为起点，那才是来源真正不同的
+起点 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
+
+这种检验能够进行的前提是构建可复现（[3.1](./cmd.md)）：编译过程中一旦混入时间、路径或随机数，
+逐字节比较便无从谈起。据 Russ Cox 2023 年的文章，Go 从 1.21 起实现了工具链的完全可复现：
+无论在哪种操作系统上构建，同一目标平台的工具链都逐字节相同；Go 团队还编写了一个工具，
+从源码重新构建官方发布的工具链并与之比对 [[Cox, 2023](#ref-cox-2023)]。上面实验中的两份构建彼此相同，
+却不能直接与官方下载的二进制逐字节比较：官方的 macOS 版本带有苹果的代码签名（可用 `codesign -dv` 查看），
+而本地构建的二进制只有链接器添加的临时签名。
+
+## 延伸阅读
+
+- <a id="ref-cox-2013"></a>[Cox, 2013] Russ Cox. "Go 1.3+ Compiler Overhaul." 2013.
+  https://go.dev/s/go13compiler
+  https://go.googlesource.com/proposal/+/master/design/go13compiler.md
+  把 C 编写的编译器自动翻译为 Go 的计划及其理由。
+- <a id="ref-cox-2015"></a>[Cox, 2015] Russ Cox. "Go 1.5 Bootstrap Plan." 2015.
+  https://go.dev/s/go15bootstrap
+  https://go.googlesource.com/proposal/+/master/design/go15bootstrap.md
+  去除 C、改以旧版 Go 为起点的方案，`make.bash` 的注释至今仍指向它。
+- <a id="ref-go-authors-2015"></a>[Go Authors, 2015] The Go Authors. *Go 1.5 Release Notes*.
+  https://go.dev/doc/go1.5
+  编译器与运行时改用 Go 实现的版本。
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. "Installing Go from source."
+  https://go.dev/doc/install/source
+  起点版本的规则，以及以 gccgo 为起点的方法。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `cmd/dist/build.go`、
+  `buildtool.go`、`notgo124.go`（Go 1.26）.
+  https://github.com/golang/go/tree/release-branch.go1.26/src/cmd/dist
+  https://github.com/golang/go/tree/master/src/cmd/dist
+  toolchain1 至 3 的构建过程、`requiredBootstrapVersion` 与版本检查。
+- <a id="ref-cox-2021"></a>[Cox, 2021] Russ Cox. "build: adopt Go 1.17 as bootstrap toolchain for Go
+  1.20." Go issue 44505, 2021. https://go.dev/issue/44505
+  `notgo124.go` 的注释所指向的 issue 之一，讨论 Go 为何不再以 Go 1.4 为起点。
+- <a id="ref-cox-2022"></a>[Cox, 2022] Russ Cox. "build: adopt Go 1.20 as bootstrap toolchain for Go
+  1.22." Go issue 54265, 2022. https://go.dev/issue/54265
+  提出此后每年把起点前移到上一年发布的版本。
+- <a id="ref-thompson-1984"></a>[Thompson, 1984] Ken Thompson. "Reflections on Trusting Trust."
+  *Communications of the ACM*, 27(8): 761–763, 1984. https://doi.org/10.1145/358198.358210 （ACM
+  数字图书馆：https://dl.acm.org/doi/10.1145/358198.358210）
+  1983 年的图灵奖演讲，描述了能够代代相传的编译器后门。
+- <a id="ref-wheeler-2005"></a>[Wheeler, 2005] David A. Wheeler. "Countering Trusting Trust through
+  Diverse Double-Compiling." *Proceedings of the 21st Annual Computer Security Applications Conference
+  (ACSAC)*, 2005. https://dwheeler.com/trusting-trust/
+  以另一个独立的编译器检验编译器二进制的方法。
+- <a id="ref-cox-2023"></a>[Cox, 2023] Russ Cox. "Perfectly Reproducible, Verified Go Toolchains." The Go
+  Blog, 2023. https://go.dev/blog/rebuild
+  Go 工具链如何实现逐字节可复现，以及官方发布如何被独立验证。
+- <a id="ref-gcc-nd"></a>[GCC, n.d.] GCC Team. *Installing GCC: Building.*
+  https://gcc.gnu.org/install/build.html
+  GCC 的三阶段自举，以及对第二、三阶段编译器的比较。

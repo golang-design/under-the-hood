@@ -5,254 +5,320 @@ title: "3.1 从 `go` 命令谈起"
 
 # 3.1 从 `go` 命令谈起
 
-Go 程序的生命周期要从执行 `go` 命令开始谈起。读者每天敲下的 `go build`、`go test`、`go run`，
-看上去只是「把源码变成二进制」，背后却藏着一个常被误解的事实：`go` 本身并不是编译器。它是一个
-**构建编排器**（build orchestrator），负责把一次构建分解成许多道工序，安排它们的先后与并行，
-再逐道调用真正的工具，编译器 `compile`（[3.2](./compile.md)）、汇编器 `asm`、链接器 `link`
-（[3.4](./link.md)）。本节先把这层编排关系讲清楚，它是后续几节的总纲：读懂了 `go` 如何把一次
-构建拆成一张图、如何用内容寻址的缓存避免重复劳动，再去看编译与链接的细节，就有了落脚的框架。
+先看一个实验。模块 `cut` 中有两个包，`main` 调用 `cut/greet` 中的一个函数：
 
-## 3.1.1 `go` 是构建编排器，不是编译器
+```go
+// greet/greet.go
+package greet
 
-把一个最小程序的构建过程摊开，最直接的办法是 `go build -x`，它会打印出 `go` 实际执行的每一条
-子命令。对一个只有一行 `fmt.Println` 的 `main` 包，输出的骨架是这样：
+// Hello 返回问候语。
+func Hello(name string) string { return "hello, " + name }
+```
+
+```go
+// main.go
+package main
+
+import (
+	"fmt"
+
+	"cut/greet"
+)
+
+func main() { fmt.Println(greet.Hello("gopher")) }
+```
+
+从空的构建缓存开始，每次对源码做一种改动，然后执行 `go build -x -o hello .`，统计输出中编译器
+`compile` 与链接器 `link` 被调用的情况（Go 1.26.10，darwin/arm64）：
+
+| 构建前的操作 | 重新编译的包 | 重新链接 |
+| --- | --- | --- |
+| 首次构建 | 58 个标准库包、`cut/greet`、`main` | 是 |
+| 不做任何修改 | 无 | 否 |
+| `touch greet/greet.go`，仅更新修改时间 | 无 | 否 |
+| 修改 `greet.go` 中的注释 | `cut/greet` | 否 |
+| 修改 `Hello` 的函数体 | `cut/greet`、`main` | 是 |
+| 将 `greet.go` 恢复为最初的内容 | 无 | 是 |
+
+其中三行结果有违直觉：`touch` 之后没有任何包被重新编译；只修改注释时，`greet` 被重新编译，依赖它的
+`main` 却没有；恢复原样之后，没有一个包需要编译。本节说明 `go` 命令如何把一次构建分解为许多步骤，
+又如何判断哪些步骤可以跳过。这套方法建立在数十年来构建系统研究的基础上，也直接决定了 Go 能否做到
+「相同的源码产生相同的二进制」。
+
+## 3.1.1 `go` 命令的职责
+
+`go` 命令本身并不翻译源码。以 `-x` 让它输出实际执行的每条命令，构建一个输出 `hello, world` 的程序
+（`fmt` 等标准库包已在缓存中，路径有删节）：
 
 ```shell
-$ go build -x -o /dev/null .
-WORK=/tmp/go-build1449454186
+$ go build -x -o hello .
+WORK=/var/folders/.../go-build2047229470
 mkdir -p $WORK/b001/
 cat >$WORK/b001/importcfg << 'EOF' # internal
 # import config
-packagefile fmt=/Users/.../go-build/7d/7d74...-d
-packagefile runtime=/Users/.../go-build/60/60cb...-d
+packagefile fmt=/Users/changkun/Library/Caches/go-build/93/931515f5...-d
+packagefile runtime=/Users/changkun/Library/Caches/go-build/68/6859d6a5...-d
 EOF
-# 调用编译器，把 main.go 编成归档 _pkg_.a
-.../pkg/tool/darwin_arm64/compile -o $WORK/b001/_pkg_.a -p main -lang=go1.26 \
-    -complete -buildid ... -importcfg $WORK/b001/importcfg -pack ./main.go
-.../pkg/tool/darwin_arm64/buildid -w $WORK/b001/_pkg_.a # internal
-cp $WORK/b001/_pkg_.a /Users/.../go-build/82/8256...-d # internal
-# 写出链接配置，再调用链接器
+.../pkg/tool/darwin_arm64/compile -o $WORK/b001/_pkg_.a -trimpath "$WORK/b001=>" -p main \
+    -lang=go1.26 -complete \
+    -buildid dlhVKz4Cg7gapk_IKXLH/dlhVKz4Cg7gapk_IKXLH -goversion go1.26.10 ... \
+    -importcfg $WORK/b001/importcfg -pack ./main.go
+go tool buildid -w $WORK/b001/_pkg_.a # internal
+cp $WORK/b001/_pkg_.a /Users/changkun/Library/Caches/go-build/38/38c3c38b...-d # internal
 cat >$WORK/b001/importcfg.link << 'EOF' # internal
-packagefile demo=$WORK/b001/_pkg_.a
-packagefile fmt=/Users/.../go-build/7d/7d74...-d
-...
+packagefile hello=$WORK/b001/_pkg_.a
+packagefile fmt=/Users/changkun/Library/Caches/go-build/93/931515f5...-d
+...（共 59 行，每个要链接的包一行）
 EOF
-.../pkg/tool/darwin_arm64/link -o $WORK/b001/exe/a.out -importcfg ... $WORK/b001/_pkg_.a
+.../pkg/tool/darwin_arm64/link -o $WORK/b001/exe/a.out -importcfg $WORK/b001/importcfg.link ...
+go tool buildid -w $WORK/b001/exe/a.out # internal
+mv $WORK/b001/exe/a.out hello
 ```
 
-`go` 自己做的事，是建一个临时工作目录、写出一份份 `importcfg`（告诉编译器与链接器每个依赖包的
-归档在磁盘何处），然后 `exec` 出 `compile` 与 `link` 这两个独立的可执行文件。源文件到目标代码
-的真正翻译，发生在 `go` 之外的工具里。这种「主程序只负责编排、把脏活交给独立工具」的结构，在
-`go` 命令的内部用两个数据类型承载：`Builder` 持有整次构建的共享状态（工作目录、各类缓存、并行度
-控制），`Action` 则是构建图上的一个节点，描述「一道要做的工序」：
+`go` 命令自身所做的工作只有以下几项：创建临时目录；写出 `importcfg` 文件，告知编译器每个被导入的包
+的编译结果位于何处；调用编译器把 `main.go` 编译为归档文件 `_pkg_.a`，并将其存入构建缓存；写出链接
+所用的 `importcfg.link`，调用链接器生成可执行文件。实际的翻译工作由 `$GOROOT/pkg/tool/<系统_体系
+结构>/` 下的几个独立程序完成：编译器 `compile`（[3.2](./compile.md)）、汇编器 `asm` 和链接器
+`link`（[3.4](./link.md)）。
+
+把一次构建分解为若干步骤，安排其先后，决定哪些可以并行、哪些可以跳过，这正是 `make` 和 Bazel 等
+构建系统的职责。Go 把这一职责纳入了 `go` 命令。
+
+## 3.1.2 动作图
+
+包 P 导入包 Q 时，编译 P 需要读取 Q 的编译结果，因此 Q 必须先编译。以顶点表示构建步骤，以从 A 指向
+B 的有向边表示「A 必须在 B 之前完成」，便得到一张有向图。Go 禁止循环导入，因此这张图中不存在环。
+
+`go` 命令把每个步骤称为一个**动作**（action），整张图称为**动作图**（action graph）。
+动作的定义如下（`cmd/go/internal/work/action.go`，仅保留与调度有关的字段
+[[Go Authors, 2026b](#ref-go-authors-2026b)]）：
 
 ```go
-// Action：构建图上的一道工序（速写，只留与编排相关的字段）
 type Action struct {
-    Mode    string         // 这道工序做什么："build" / "link" ...
-    Actor   Actor          // 真正执行它的函数（调用 compile、link 等）
-    Deps    []*Action      // 必须先于本工序完成的工序
-    Package *load.Package   // 本工序处理的包
+	Mode    string        // 动作类型："build"（编译一个包）、"link"（链接）等
+	Package *load.Package // 所处理的包
+	Deps    []*Action     // 必须先完成的动作
+	Actor   Actor         // 执行该动作的函数，例如调用 compile
 
-    actionID cache.ActionID // 由全部输入算出的缓存键（见 3.1.3）
-    buildID  string         // 输出的内容标识：actionID + 输出内容的哈希
-    triggers []*Action      // Deps 的逆向边：本工序完成后可解锁谁
-    pending  int            // 还有多少个 Dep 未完成，归零即就绪
-    priority int            // 执行优先级，供就绪队列排序
+	actionID cache.ActionID // 该动作全部输入的哈希，用作缓存的键（3.1.4）
+	buildID  string         // 输入哈希与输出哈希，写入产物（3.1.4）
+	pending  int            // 尚未完成的 Deps 个数，降为零即可执行
+	priority int            // 就绪动作之间的执行优先级
 }
 ```
 
-`Action` 的 `Mode`、`Deps`、`Actor` 三者合起来回答了「这道工序是什么、依赖谁、由谁执行」。一次
-`go build` 不是一条直线，而是把这些节点连成一张图，再驱动它运转。下一节就来看这张图如何从
-`go.mod` 与源码长出来。
-
-## 3.1.2 从 go.mod 到行动图
-
-构建的第一步是搞清楚「要编译哪些包、它们之间谁依赖谁」。这由模块系统回答：`go` 解析 `go.mod`，
-按最小版本选择（MVS）算法定下每个依赖的确切版本，加载出一张包依赖图（模块解析的细节见
-[第 17 章](../../part5toolchain/ch17modules/readme.md)）。包依赖图是输入，`go` 要把它翻译成一张
-**行动图**（action graph），即由 `Action` 节点构成的有向无环图（DAG）。
-
-翻译的规则朴素得近乎机械。对每个待构建的包，递归地为它的每个导入建一个编译工序，作为本包工序的
-依赖；遇到 `main` 包则改建链接工序：
-
-```go
-// 为包 p 建一个编译工序，并递归地把它的导入也建成依赖
-func (b *Builder) CompileAction(mode, depMode BuildMode, p *load.Package) *Action {
-    a := &Action{Mode: "build", Package: p, Actor: &buildActor{}}
-    for _, p1 := range p.Internal.Imports {
-        a.Deps = append(a.Deps, b.CompileAction(depMode, depMode, p1))
-    }
-    return a
-}
-
-// 顶层入口：main 包要链接成可执行文件，其余包只需编译成归档
-func (b *Builder) AutoAction(mode, depMode BuildMode, p *load.Package) *Action {
-    if p.Name == "main" {
-        return b.LinkAction(mode, depMode, p)   // 链接工序，依赖编译工序
-    }
-    return b.CompileAction(mode, depMode, p)
-}
-```
-
-递归一展开，整张行动图便成形：叶子是无依赖的包（编译它们只需源码），根是链接工序，链接依赖
-`main` 包的编译，`main` 包的编译又依赖它导入的每个包的编译，层层向下。`AutoAction` 里那个对
-`main` 的判断，正是 [3.2 编译](./compile.md) 与 [3.4 链接](./link.md) 两节在构建图上的分界。
-
-图建好后，由 `Builder.Do` 驱动执行。这里的核心约束是**拓扑序**：一道工序只有在它的全部依赖都
-完成后才能开始。`go` 没有做完整的拓扑排序，而是给每个 `Action` 记一个 `pending` 计数（尚未完成
-的依赖数），依赖一旦完成就递减对应 `triggers` 的 `pending`，归零的工序进入一个按 `priority` 排序
-的就绪队列。多个互不依赖的工序可以并行，并行度由 `-p`（默认取 `GOMAXPROCS`）经一个信号量
-`readySema` 控制。整个调度可以这样勾勒：
+建图的规则并不复杂。`CompileAction` 为一个包创建编译动作，并递归地为它导入的每个包创建编译动作，
+作为自身的 `Deps`；`AutoAction` 遇到 `main` 包时改为创建链接动作，链接依赖于 `main` 包的编译。对于
+上面的 `cut` 模块，动作图的主干如下：
 
 ```mermaid
-flowchart TD
-    MOD["解析 go.mod / MVS<br/>加载包依赖图"] --> GRAPH["构造行动图（DAG）<br/>CompileAction 递归 + AutoAction 选链接"]
-    GRAPH --> DO["Builder.Do 驱动执行"]
-    DO --> READY{"有 pending=0 的工序?"}
-    READY -->|"是，受 -p 信号量约束并行"| RUN["执行：查缓存命中则跳过<br/>否则 exec compile / link"]
-    RUN --> DEC["完成后递减 triggers 的 pending"]
-    DEC --> READY
-    READY -->|"否，全部完成"| END["构建结束"]
+flowchart BT
+    G["编译 cut/greet"] --> M["编译 main"]
+    S["编译 fmt、runtime 等<br/>58 个标准库包"] --> M
+    G --> L["链接 hello"]
+    M --> L
+    S --> L
 ```
 
-值得点出的是图中「查缓存命中则跳过」这一步：行动图上的大多数节点，在多数构建里其实并不真的去
-调用编译器。它们会先去问构建缓存，「这道工序的输入和上次一模一样吗」，一样就直接取回上次的产物。
-这套缓存是 `go` 命令快得不像在编译的根本原因，也是下一节的主题。
+这张图在执行之前就已完整：Go 源文件开头的 `import` 声明了全部依赖，`go` 命令只需解析这些声明即可建出整张图
+[[Go Authors, 2026c](#ref-go-authors-2026c)]，无须先编译任何代码。Go 1.26 还为每个编译动作增加了一个「检查
+缓存」动作，专门负责计算缓存的键并查找结果。`go build -debug-actiongraph=ag.json` 可以把动作图导出为
+JSON：前述 `hello, world` 程序的动作图共有 122 个节点，其中编译动作 59 个、检查缓存动作 59 个、链接动作
+1 个，另有 3 个辅助节点。
 
-## 3.1.3 内容寻址的构建缓存
+动作图由 `Builder.Do`（`cmd/go/internal/work/exec.go`）执行。它为每个节点记录尚未完成的依赖数
+`pending`，将其中为零的节点放入就绪队列；一个动作完成后，依赖它的节点的 `pending` 减一，降为零即
+进入就绪队列。这与 [3.6](./main.md) 中确定初始化顺序的 Kahn 算法思路相同，区别在于这里允许多个动作
+并行执行：并行度由 `-p` 控制，默认等于 `GOMAXPROCS`（通常即 CPU 的个数，见 [3.5](./boot.md)）。
 
-一次干净的 `go build` 要编译成百上千个包，第二次却往往一秒返回。秘密在于一个**内容寻址**
-（content-addressed）的构建缓存：每道工序的产物，用「算出这件产物的全部输入」的哈希作为键存进
-缓存（默认在 `$GOCACHE`，即 `go env GOCACHE`）。下次构建时，若同一道工序的输入哈希不变，就断定
-产物必然相同，直接复用，连编译器都不必启动。
+## 3.1.3 何时需要重新构建
 
-关键全在「输入哈希」如何构成。`go` 用 `buildActionID` 把一道编译工序的所有输入喂进一个 SHA-256：
+### make 的时间戳规则
 
-```go
-// 计算一道编译工序的缓存键（速写，省略 cgo 等分支）
-func (b *Builder) buildActionID(a *Action) cache.ActionID {
-    p := a.Package
-    h := cache.NewHash("build " + p.ImportPath) // 起手即混入 Go 版本号作为 salt
-    fmt.Fprintf(h, "compile\n")
-    fmt.Fprintf(h, "goos %s goarch %s\n", cfg.Goos, cfg.Goarch)  // 目标平台
-    fmt.Fprintf(h, "import %q\n", p.ImportPath)
-    // 编译器本身的 ID（编译器换了，缓存即失效）与编译参数
-    fmt.Fprintf(h, "compile %s %q %q\n", b.toolID("compile"), forcedGcflags, p.Internal.Gcflags)
-    // 每个源文件的内容哈希
-    for _, file := range inputFiles {
-        fmt.Fprintf(h, "file %s %s\n", file, b.fileHash(filepath.Join(p.Dir, file)))
-    }
-    // 每个依赖包的 buildID（即依赖的产物内容标识）
-    for _, a1 := range a.Deps {
-        fmt.Fprintf(h, "import %s %s\n", a1.Package.ImportPath, contentID(a1.buildID))
-    }
-    return h.Sum()
-}
-```
+1976 年，贝尔实验室的 Stuart Feldman 编写了 `make`，并于 1979 年发表了描述它的论文
+[[Feldman, 1979](#ref-feldman-1979)]。当时 Unix 上的程序规模日益增大，开发者经常在修改一个文件后忘记重新编
+译依赖它的部分，调试许久才发现运行的仍是旧代码。`make` 的规则可以概括为一句话：
+**若目标文件的修改时间早于它的任何一个依赖文件，就重新生成该目标。**
 
-把 `GODEBUG=gocachehash=1` 打开，就能看到这些输入被逐条喂进哈希的真实过程。对前面那个 demo 包，
-末行那串十六进制就是最终的 `actionID`：
+这条规则开销低、适用面广，沿用至今。然而它判断的是文件是否被修改过，而不是内容是否发生了变化：
+
+- `touch` 一个文件，内容未变，依赖它的所有目标都会重新生成；
+- 切换到旧的分支后，文件的修改时间可能早于产物，应当重新生成的目标反而被跳过；
+- 编译器版本或编译参数发生变化，文件的修改时间不变，产物却已过时；
+- 一个文件被重新生成而内容完全相同，它的修改时间仍会更新，依赖它的步骤因而也要重做。
+
+### 构建系统的两个维度
+
+2018 年，Andrey Mokhov、Neil Mitchell 与 Simon Peyton Jones 在 ICFP 上发表了《Build Systems à la Carte》，
+把 Make、Excel、Shake、Bazel 等看似无关的系统纳入同一个框架
+[[Mokhov et al., 2018](#ref-mokhov-et-al-2018)]。他们指出，任何构建系统都要回答两个相互独立的问题：
+
+1. **调度**（scheduling）：以何种顺序执行各个步骤。若全部依赖事先已知，可以一次排定顺序再依次执行
+   （Make 的做法）；若依赖要在执行过程中才能发现，就需要边执行边调整。
+2. **重建判定**（rebuilding）：某个步骤是否需要重新执行。Make 比较时间戳；另一类系统记录上一次
+   各步骤输入的摘要，本次重新计算并比较；还有一类系统建立一个以输入摘要为键、记录对应输出的缓存。
+
+第三种方式有两个优点。其一，只要本次的输入在缓存中出现过，就可以直接复用对应的输出，无论它是何时、
+甚至在哪台机器上产生的。其二，某个步骤重新执行后，若输出与原来相同，依赖它的步骤就无须重做，重建
+在此处终止，这一性质称为**提前截断**（early cutoff）[[Mokhov et al., 2018](#ref-mokhov-et-al-2018)]。
+
+`go build` 在这一框架中的位置十分明确：依赖由 `import` 事先给出，因此采用一次排定顺序的调度方式；
+是否重建由构建缓存判定，而构建缓存正是以输入摘要为键、记录输出的缓存。Bazel 的缓存同样属于这一类型
+[[Bazel Authors, n.d.](#ref-bazel-authors-nd)]，区别在于它允许在执行过程中发现新的依赖，调度方式也更复杂。
+
+## 3.1.4 内容寻址的构建缓存
+
+### 内容寻址与 Merkle 树
+
+以数据内容的哈希值作为存取地址的方式，称为**内容寻址**（content addressing）。Go 的构建缓存使用
+SHA-256，摘要长 32 字节。
+
+一个产物的摘要应当涵盖它所依赖的全部输入，而这些依赖本身又是其他步骤的产物。Ralph Merkle 在
+1979 年前后为数字签名设计的一种结构 [[Merkle, 1988](#ref-merkle-1988)]，解决的正是这类问题：
+数据位于一棵树的叶子上，每个内部节点的哈希值由其子节点的哈希值计算得出。根节点的一个哈希值即可代表整棵树；
+任何一片叶子发生变化，从它到根的路径上的哈希值都会改变，而未受影响的子树的哈希值保持不变。
+这种结构后来称为 **Merkle 树**（Merkle tree），Git 存储提交与目录时采用的也是这种结构。
+
+### 缓存键的计算
+
+编译动作的缓存键称为 **action ID**，由 `buildActionID`（`cmd/go/internal/work/exec.go`）
+把该动作的全部输入写入 SHA-256 计算得出。设置 `GODEBUG=gocachehash=1` 后，`go` 命令会输出写入哈希的每一行
+[[Go Authors, 2026a](#ref-go-authors-2026a)]。以 3.1.1 的 `hello, world` 程序为例（模块名为 `hello`，
+只摘录 `main` 包的编译动作）：
 
 ```shell
 $ GODEBUG=gocachehash=1 go build -o /dev/null .
-HASH[build demo]
-HASH[build demo]: "go1.26.1"                                   # salt：Go 版本号
-HASH[build demo]: "compile\n"
-HASH[build demo]: "goos darwin goarch arm64\n"                 # 目标平台
-HASH[build demo]: "import \"demo\"\n"
-HASH[build demo]: "compile compile version go1.26.1 [...] []\n" # 编译器 ID + 参数
-HASH[build demo]: "file main.go KUKxlydUIi2I-10EjTIw\n"        # 源文件内容哈希
-HASH[build demo]: "import fmt a-nQ4YX2Z0xMeqSMWW55\n"          # 依赖 fmt 的产物标识
-HASH[build demo]: "import runtime 8asGqFcOH5UKoaTdthA0\n"      # 依赖 runtime 的产物标识
-HASH[build demo]: e783bda8414d9313a775eb0d5a6eb354559cb647a628acb64782f2359965759b
+HASH[build hello]: "go1.26.10"                              # Go 版本，每个哈希都首先写入它
+HASH[build hello]: "compile\n"
+HASH[build hello]: "dir /private/tmp/.../hello\n"           # 源码所在目录（会写入调试信息）
+HASH[build hello]: "go 1.26\n"                              # go.mod 中声明的语言版本
+HASH[build hello]: "goos darwin goarch arm64\n"             # 目标平台
+HASH[build hello]: "import \"hello\"\n"
+...
+HASH[build hello]: "compile compile version go1.26.10 [\"-shared\"] []\n"  # 编译器与编译参数
+HASH[build hello]: "GOARM64=v8.0\n"
+HASH[build hello]: "file main.go ndwR08Lz3EpwYHjxBZW0\n"     # 源文件内容的哈希
+HASH[build hello]: "import fmt dNREUiHuykkfKQNLuuw2\n"       # 依赖 fmt 的产物的哈希
+HASH[build hello]: "import runtime GvQgxar5yLrWdvDo90Uh\n"
+HASH[build hello]: 7658552b3e0283b81aa64fc82972c758fc8120b2cb684550c6c74a5085448eeb
 ```
 
-注意倒数几行：依赖 `fmt`、`runtime` 是以它们各自的 `buildID`（产物内容标识）参与本包哈希的，而
-`buildID` 又是由它们自己的 `actionID` 加上其产物内容算出的。于是整个缓存键沿着行动图层层嵌套，
-构成一棵 **Merkle 哈希树**：任何一处源文件、编译参数、依赖产物、乃至编译器版本发生改变，其上方
-所有工序的键都随之改变，缓存自然失效；反过来，一棵未被触碰的子树，键恒定不变，整片复用。这是
-内容寻址相较「按时间戳判新旧」（如传统 `make`）的根本优势，它判的是**内容**而非**时间**，因此
-`git checkout` 来回切换分支、文件 mtime 乱跳，都不会误判。
+最后一行即 action ID，也就是缓存的键。值得注意的是倒数第二、三行：依赖以其**产物内容的哈希**
+参与计算，称为 **content ID**，而不是依赖的 action ID。每个包的产物中都写有一个 build ID，形如
+`actionID/contentID`（可执行文件的 build ID 格式有所扩展）。在前面 `-x` 的输出中，编译器得到的是一个
+占位的 `dlhVKz4Cg7gapk_IKXLH/dlhVKz4Cg7gapk_IKXLH`；产物写出之后，`go tool buildid -w` 计算文件内容
+的哈希（计算时 build ID 所在的字节按全零处理），并把后半部分改写为真正的 content ID。
 
-这套设计要正确，依赖一条不变式：**凡是会影响产物的输入，必须无一遗漏地进入 `buildActionID`**。
-源码对此立有明文戒律，`exec.go` 中那道工序的执行函数旁写着「任何对本逻辑的新影响，都必须同样在
-上面的 `buildActionID` 中登记」。遗漏一项，就意味着输入变了而键没变，构建会错误地复用陈旧产物，
-这是缓存类系统最隐蔽的一类 bug。为给这条不变式上一道保险，`go` 提供了 `GODEBUG=gocacheverify=1`：
-它令缓存形同失效，强制每道工序重新执行，再把新产物与缓存中的旧产物逐字节比对，一旦不符即报错，
-等于在运行时核对「相同的键是否真的对应相同的产物」。
+由此，每个键都涵盖了其下的整棵依赖树，这正是 Merkle 树的结构；而向上传递的是产物的摘要，不是输入的
+摘要，这使得重建可以提前截断。回到开头的实验：
 
-## 3.1.4 可复现构建
+- `touch` 只改变修改时间。文件内容的哈希不变，键也不变，直接命中缓存。
+- 修改注释后，`greet.go` 的哈希改变，`greet` 的键随之改变，因此必须重新编译。但注释不会进入产物，
+  新的 `greet` 产物与原来逐字节相同，content ID 不变，`main` 的键也就不变，重建在此截断。
+- 修改函数体后，`greet` 的产物发生变化（`Hello` 被内联到 `main` 中，见 [3.2](./compile.md)），
+  `main` 的键随之改变，链接动作的键也随之改变。
+- 恢复原样后，每个键都与首次构建时相同，而缓存中仍保留着当时的结果。缓存保存所有出现过的「键 →
+  产物」，只有 5 天未被使用的条目才会被清除。链接之所以重新执行，是因为 `go build` 不把可执行文件
+  存入缓存，而是检查目标文件 `hello` 中的 build ID 是否与本次计算出的键一致，此时的 `hello` 则是
+  上一次构建的结果。
 
-内容寻址缓存能成立，前提是构建**可复现**（reproducible）：同样的输入，必须产出逐字节相同的输出。
-若编译产物里掺进了构建时的绝对路径、时间戳或随机数，同一份源码在两台机器上就会产出不同二进制，
-缓存命中率崩塌，更谈不上让第三方独立核验「这个二进制确实由这份源码编出」。Go 在工具链层面为此
-做了多处约束。
+下面的交互图再现了这个实验。每个节点显示其 action ID 与 content ID（示意值），选择一种改动后点击
+「构建」，可以观察哪些键发生变化、哪些动作命中缓存，以及 `make` 的时间戳规则会重做哪些步骤。
 
-最直接的一处是缓存键里的 Go 版本 salt：`cache.NewHash` 起手就混入 `runtime.Version()`，使不同
-版本的 `go` 命令绝不共用同一批缓存条目，一个版本的 bug 不会污染另一个版本的构建。另一处是
-`-trimpath`：默认情况下，调试信息里会嵌入源码的绝对目录（前面哈希轨迹中省略的 `dir /tmp/...`
-一类输入正源于此），换一台机器、换一个目录，产物就不同；加上 `-trimpath` 后，路径被改写为模块
-路径加版本，构建便不再依赖它在文件系统中的具体位置。再加上 Go 编译器本身刻意不引入构建时间戳、
-对 map 遍历等不确定性做了消除，最终使「同源同版同参 → 同二进制」成为可达成的目标。模块校验
-（`go.sum`、校验和数据库）则从依赖一侧封住了输入，相关机制详见
-[第 17 章](../../part5toolchain/ch17modules/semantics.md)。可复现既服务于缓存的正确，也服务于
-软件供应链的可验证，这正是 Reproducible Builds 项目多年倡导的方向。
+<div class="viz" data-viz="build-cache"></div>
 
-## 3.1.5 统一工具链与碎片化的对照
+### 缓存正确性的前提
 
-回头看 [3.1.2](#312-从-gomod-到行动图) 提到的命令列表，会发现 `go` 远不止 `build` 一个子命令。
-解析、构建、测试、格式化、静态检查、文档、性能剖析，在 Go 里全部收束于同一个 `go` 命令之下：
+这套方法的正确性依赖于一个前提：**凡是可能影响产物的因素，都必须计入键中。** 一旦遗漏某一项，
+输入发生变化而键不变，`go` 命令就会取出过时的产物，并且不报告任何错误。`exec.go` 中执行编译的函数之前专门
+有一条注释：对这段逻辑的任何新的影响因素，都必须同样反映在 `buildActionID` 中
+[[Go Authors, 2026b](#ref-go-authors-2026b)]。上面哈希中出现的 `GOARM64`、`GOEXPERIMENT`，乃至
+`GOSSAFUNC` 这类调试用的环境变量，都是出于这一原因加入的。
+
+为了发现遗漏，`go` 命令提供了 `GODEBUG=gocacheverify=1`：每个动作照常重新执行，再将新产物与缓存中
+同一个键下的旧产物比较，二者不一致即报错 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
+
+## 3.1.5 可复现构建
+
+内容寻址的缓存隐含着一个假设：相同的输入必然产生相同的输出。这一性质称为**可复现构建**（reproducible
+build）。Reproducible Builds 项目给出的定义是：给定相同的源码、构建环境和构建指令，
+任何人都能重新得到逐字节相同的产物 [[Reproducible Builds, n.d.](#ref-reproducible-builds-nd)]。
+它的意义不限于缓存：若一个发布的二进制可以由任何人从源码重新构建并逐字节比对，用户就不必信任构建它的那台机
+器未遭篡改。
+
+破坏可复现性的通常是以下几种因素：构建时间、随机数、map 的遍历顺序，以及源码所在的绝对路径。Go 的
+编译器与链接器在产物中避免了前三种因素，最后一种可以用 `-trimpath` 消除。把同一个 `hello, world`
+模块复制到两个不同的目录，分别构建：
 
 ```shell
-go build      # 编译包与依赖
-go test       # 编译并运行测试（测试结果同样进缓存）
-go run        # 编译并直接运行
-go fmt        # 格式化源码（gofmt）
-go vet        # 静态检查可疑构造
-go doc        # 查看文档
-go tool pprof # 性能剖析
-go mod        # 模块维护（tidy / download / verify ...）
+$ (cd a/hello && go build -o ../../h1 . && go build -trimpath -o ../../h1t .)
+$ (cd b/src/hello && go build -o ../../../h2 . && go build -trimpath -o ../../../h2t .)
+$ shasum -a 256 h1 h2 h1t h2t | cut -c1-16,65-
+210c9a5524efb8c2  h1      # 目录 a/hello，默认参数
+91cfb5c24d5fd180  h2      # 目录 b/src/hello，默认参数
+1bbde893d88e78fb  h1t     # 目录 a/hello，-trimpath
+1bbde893d88e78fb  h2t     # 目录 b/src/hello，-trimpath
 ```
 
-把这一面与 C/C++ 世界并置，差异便显出来。在 C/C++ 那边，编译靠 `gcc`/`clang`，构建编排靠 `make`
-或 `CMake`、`autotools`、`ninja`，跨版本与跨平台还要 `pkg-config` 周旋；为了不每次全量重编，社区
-另造了 `ccache` 这一类「编译器外挂缓存」；格式化是 `clang-format`，静态检查是 `clang-tidy`，依赖
-管理则长期没有公认答案。这些工具各自为政，配置彼此独立，一个项目要把它们凑齐、调通、在团队里
-保持一致，本身就是一门手艺。Go 把它们做进同一个二进制，缓存、依赖解析、跨平台交叉编译都内建且
-零配置：换台机器 `git clone` 后 `go build` 即可，无需先理解一套构建脚本。
+默认情况下，源码目录会写入调试信息，两个二进制因而不同（这也是上面的哈希中包含 `dir` 一行的原因）；
+加上 `-trimpath` 后，路径被改写为模块路径，两个二进制完全相同。Go 工具链自身从 Go 1.21 起实现了完全
+可复现 [[Cox, 2023](#ref-cox-2023)]，详见 [3.3](./bootstrap.md)。
 
-这种统一并非没有代价。`go` 的构建模型是固定的，它假定「包即目录、导入即依赖」，不像 `make` 那样
-能表达任意的、跨语言的、带自定义规则的构建逻辑；需要在构建期生成代码、嵌入资源、串接非 Go 工具
-链时，`go generate` 与 `//go:embed` 只能覆盖常见情形，更复杂的场景仍要外部脚本兜底。这是一次
-**以灵活性换一致性**的取舍：放弃「能描述任何构建」的表达力，换来「无需描述构建」的一致体验。
-对绝大多数 Go 项目，后者远比前者值得，这也与 Go 在语言设计上一贯的取向相合，把选择收窄，让多数
-人无需选择。
+## 3.1.6 取舍
 
-把视野再放大一层，Google 内部的 Bazel 走的是另一条路：它同样以内容寻址的 action cache 为核心，
-但把构建规则显式化、语言无关化，并支持把缓存与执行分发到远端集群，以服务超大规模的多语言单体
-仓库。`go` 的构建缓存可看作这一思想在单语言、零配置约束下的轻量化身。两者的距离正在缩小，Go 1.21
-引入的 `GOCACHEPROG` 协议（提案 #59719，Brad Fitzpatrick）允许把构建缓存的读写委托给一个外部
-程序，经由 JSON 协议接管 `get`/`put`，从而接入远端、共享乃至 P2P 的缓存后端。这是 `go` 在保持
-零配置默认的同时，向 Bazel 式可扩展缓存试探的一步，目前仍是相对前沿、面向构建基础设施作者的能力，
-日常使用并不需要它。
+在 C/C++ 中，同样的工作分散在许多工具之间：编译使用 `gcc` 或 `clang`，调度使用 `make`、CMake 或
+Ninja，缓存需另行安装 `ccache`，查找依赖库使用 `pkg-config`，每个项目都要把它们逐一配置妥当。Go 把
+构建、测试、缓存与交叉编译集中于一个 `go` 命令，在新机器上执行 `git clone` 之后即可直接 `go build`，
+无须先理解一套构建脚本。
 
-至此，`go` 命令作为编排器的全貌已经清楚：它从 `go.mod` 与源码长出一张行动图，按拓扑序并行驱动，
-用内容寻址的缓存挡掉重复劳动，再把每个节点的真正工作交给 `compile` 与 `link`。下一节
-[3.2 编译](./compile.md) 就走进这两道工序中的第一道，看一个包的源码如何被翻译成目标代码。
+代价是构建模型被固定下来。`go` 命令假定「一个目录即一个包，`import` 即依赖」，无法像 `make` 那样描述
+任意的、跨语言的自定义规则。`go generate` 和 `//go:embed` 覆盖了生成代码、嵌入资源等常见需求，更复杂
+的情形则需要借助外部脚本，或者改用 Bazel 这类与语言无关的构建系统。
 
-## 延伸阅读的文献
+缓存的位置过去也是固定的，只能位于本机的 `$GOCACHE` 目录。Go 1.21 以实验特性的形式加入了 `GOCACHEPROG`
+[[Fitzpatrick, 2023](#ref-fitzpatrick-2023)]，Go 1.24 起正式启用
+[[Go Authors, 2025](#ref-go-authors-2025)]：`go` 命令通过一个基于 JSON 的协议，把缓存的读写交给外部程序完
+成，团队可以借此搭建共享的或远程的缓存。键的计算方法不变，改变的只是缓存的存放位置。
 
-1. The Go Authors. *Command go*（`go` 命令参考，含 Build and test caching、各子命令）。
-   https://pkg.go.dev/cmd/go ；亦见 `go help build`、`go help cache`。
-2. The Go Authors. *Go Modules Reference*（`go.mod`、MVS、`go.sum` 与可验证构建）。
-   https://go.dev/ref/mod
-3. The Go Authors. *cmd/go/internal/work/{action.go, exec.go}、cmd/go/internal/cache/hash.go.*
-   https://github.com/golang/go/tree/master/src/cmd/go（`buildActionID`、行动图与 `Builder.Do`）。
-4. Brad Fitzpatrick 等. *proposal: cmd/go: support a GOCACHEPROG to use an alternative build cache.*
-   golang/go#59719（Go 1.21 起）。https://go.dev/issue/59719
-5. The Reproducible Builds Project. https://reproducible-builds.org/
-   （从源码到二进制的可独立验证路径，对照 `-trimpath` 与版本 salt 的设计动机）。
-6. The Bazel Authors. *Bazel: Remote Caching.*
-   https://bazel.build/remote/caching （内容寻址 action cache 的工业级形态）。
-7. 本书 [3.2 编译](./compile.md)、[3.4 链接](./link.md)、[第 17 章 模块](../../part5toolchain/ch17modules/readme.md)。
+## 延伸阅读
+
+- <a id="ref-feldman-1979"></a>[Feldman, 1979] Stuart I. Feldman. "Make — A Program for Maintaining
+  Computer Programs." *Software: Practice and Experience*, 9(4): 255–265, 1979.
+  https://doi.org/10.1002/spe.4380090402
+  `make` 的原始论文，时间戳规则的出处。
+- <a id="ref-mokhov-et-al-2018"></a>[Mokhov et al., 2018] Andrey Mokhov, Neil Mitchell, Simon Peyton
+  Jones. "Build Systems à la Carte." *Proceedings of the ACM on Programming Languages*, 2(ICFP): 79, 2018.
+  https://doi.org/10.1145/3236774
+  以调度与重建判定两个维度比较各种构建系统，本节的框架出自此文。
+- <a id="ref-merkle-1988"></a>[Merkle, 1988] Ralph C. Merkle. "A Digital Signature Based on a
+  Conventional Encryption Function." *Advances in Cryptology — CRYPTO '87*, LNCS 293: 369–378, Springer,
+  1988. Merkle 树的经典出处。
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *Command go*, "Build and test
+  caching". https://pkg.go.dev/cmd/go
+  构建缓存、`GOCACHE`、`GODEBUG=gocacheverify` 等的官方说明。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `cmd/go/internal/work/action.go`、
+  `exec.go`、`buildid.go`.
+  https://github.com/golang/go/tree/release-branch.go1.26/src/cmd/go/internal/work
+  https://github.com/golang/go/tree/master/src/cmd/go （`cmd/go/internal/cache/hash.go`）
+  动作图与 `buildActionID` 的实现；`buildid.go` 开头对 action ID 与 content ID 有详细说明。
+- <a id="ref-reproducible-builds-nd"></a>[Reproducible Builds, n.d.] Reproducible Builds. "Definitions."
+  https://reproducible-builds.org/docs/definition/
+  项目主页 https://reproducible-builds.org/
+  可复现构建的定义。
+- <a id="ref-cox-2023"></a>[Cox, 2023] Russ Cox. "Perfectly Reproducible, Verified Go Toolchains." The Go
+  Blog, 2023. https://go.dev/blog/rebuild
+  Go 工具链实现逐字节可复现的过程。
+- <a id="ref-fitzpatrick-2023"></a>[Fitzpatrick, 2023] Brad Fitzpatrick. "cmd/go: add
+  GOEXPERIMENT=cacheprog to let a child process implement the internal action/output cache." Go issue
+  59719, 2023. https://go.dev/issue/59719
+  `GOCACHEPROG` 的提案与讨论。
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *Go Modules Reference*（`go.mod`、
+  MVS、`go.sum` 与可验证构建）。 https://go.dev/ref/mod
+- <a id="ref-bazel-authors-nd"></a>[Bazel Authors, n.d.] The Bazel Authors. *Bazel: Remote Caching.*
+  https://bazel.build/remote/caching （内容寻址 action cache 的工业级形态）。
+- <a id="ref-go-authors-2025"></a>[Go Authors, 2025] The Go Authors. *Go 1.24 Release Notes*, "Go
+  command". https://go.dev/doc/go1.24#go-command
+  `GOCACHEPROG` 不再需要 `GOEXPERIMENT` 即可使用。
+- 本书 [3.2 编译](./compile.md)、[3.4 链接](./link.md)、
+  [第 17 章 模块](../../part5toolchain/ch17modules/readme.md)。
+

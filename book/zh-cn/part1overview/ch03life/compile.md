@@ -5,205 +5,350 @@ title: "3.2 Go 程序编译流程"
 
 # 3.2 Go 程序编译流程
 
-[3.1](./cmd.md) 说 `go build` 背后真正干活的是 `compile` 与 `link` 两支程序。这一节把镜头推近到
-`compile`，给出它从一份 `.go` 源文件到一个 `.o` 目标文件之间走过的全程：每个阶段拿到什么、
-吐出什么、为什么这样切分。本节是编译流水线的**全景图**，每个阶段的内部机理（文法如何设计、
-类型检查用什么算法、SSA 的优化规则）留给 [第 15 章](../../part5toolchain/ch15compile/readme.md)
-逐一展开，这里只负责把它们串成一条线，并指出两条贯穿始终的暗线。
+下面两个函数几乎相同，都在函数内创建一个 `point` 并取它的地址：
 
-为避免落回逐字翻译编译器目录结构的窠臼，下文用**一个贯穿全程的小例子**来串起所有阶段。
-请记住这段函数，它会被流水线反复揉捏，直到变成机器码：
+```go {run=true}
+package main
 
-```go
-func send(ch chan int) {
-	go work() // 启动一个新 goroutine
-	ch <- 1   // 向 channel 发送
+import (
+	"fmt"
+	"testing"
+)
+
+type point struct{ x, y int }
+
+func sum(p *point) int { return p.x + p.y }
+
+// p 的地址只传给了 sum，sum 返回后不再被引用
+func local() int {
+	p := point{1, 2}
+	return sum(&p)
+}
+
+// p 的地址返回给调用者，其生命期超出 escape 本身
+func escape() *point {
+	p := point{3, 4}
+	return &p
+}
+
+var sink *point // 防止编译器把结果优化掉
+
+func main() {
+	a := testing.AllocsPerRun(100, func() { _ = local() })
+	b := testing.AllocsPerRun(100, func() { sink = escape() })
+	fmt.Println("local 每次调用的堆分配次数：", a)
+	fmt.Println("escape 每次调用的堆分配次数：", b)
 }
 ```
 
-它只有两行，却恰好藏着本节要强调的第二条暗线：`go` 与 `<-` 这样的语言关键字，最终都不是
-靠 CPU 指令直接实现的，而是被编译器**翻译成对运行时的函数调用**。先把流水线看完，再回头
-解剖这两行。
+`testing.AllocsPerRun` 将函数运行 100 次，计算平均每次调用发生的堆分配次数：
 
-## 3.2.1 两条暗线：为何要先讲它们
-
-把流水线的细节铺开之前，先点明两个贯穿全程的设计取向，后面每个阶段都在为它们服务。
-
-第一条暗线是**编译速度本身是一等约束**。Go 从设计之初就把「编译要快」当作语言目标而非事后
-优化（[1.1](../ch01intro/history.md)）。这个目标渗进了语法、依赖管理与编译器结构的每一层：
-文法被设计成可以不回溯地快速解析，依赖以编译期产出的**紧凑导出数据**而非源码传递，且不存在
-C/C++ 那种会层层传染的 `#include`。Rob Pike 在《Go at Google》里把这一点列为 Go 诞生的直接
-动机，当年 Google 一次大型 C++ 构建动辄以小时计，而 Go 要做到「按一下回车就编译完」。
-
-第二条暗线是**编译器与运行时的合谋**。Go 的许多语言特性并非编译器独力实现，而是编译器生成
-一段**调用运行时的代码**，由运行时在程序运行时兜底。`go f()` 被降级为 `runtime.newproc`，
-`<-ch` 被降级为 `runtime.chanrecv`，每个函数入口被插入一段**栈增长前导**，含指针的类型被配上
-**GC 指针位图**与类型描述符，写指针的地方被插入**写屏障**。可以说，编译器为运行时埋下一个个
-约定的接口，二者合起来才构成完整的语义。这条暗线会在 [3.2.6](#326-暗线一编译速度作为一等约束)
-与 [3.2.7](#327-暗线二编译器与运行时的合谋) 集中兑现。
-
-## 3.2.2 流水线全景
-
-go1.26 的 `compile` 在逻辑上可分为前端、中端、后端三段，细分为下面这条流水线。它的代码散落在
-`cmd/compile/internal` 的若干子包里，但读者不必记目录，只需记住数据形态的变化：源码 → 语法树
-→ 类型化的语法树 → 编译器自有 IR → SSA → 机器相关的 SSA → 机器码。
-
-```mermaid
-flowchart TD
-    SRC[".go 源文件"] --> LEX["词法 + 文法分析<br/>syntax 包，产出 AST"]
-    LEX --> TC["类型检查<br/>types2 包：名字解析 + 类型推导"]
-    TC --> IR["IR 构造（noding）<br/>noder 包：转为编译器自有 IR"]
-    IR --> MID["中端优化<br/>inline / devirtualize / escape"]
-    MID --> WALK["walk：降级 + 定序<br/>go / 收发 / map 替换为 runtime 调用"]
-    WALK --> SSA["通用 SSA<br/>ssagen + ssa 包：机器无关优化"]
-    SSA --> LOWER["lower + 架构相关优化<br/>写屏障、寄存器分配、栈帧布局"]
-    LOWER --> OBJ["机器码生成<br/>cmd/internal/obj：插入栈增长前导"]
-    OBJ --> O[".o 目标文件<br/>机器码 + 导出数据 + 反射/调试信息"]
-    style SRC fill:#e8f0fe
-    style O fill:#e8f0fe
+```
+local 每次调用的堆分配次数： 0
+escape 每次调用的堆分配次数： 1
 ```
 
-横在前端与后端之间的那段（中端加 walk）常被称作「middle-end」，是优化最密集、也最能体现 Go
-设计取舍的地方。下面顺着这条线，看 `send` 函数在每一站发生了什么。
+`local` 中的 `p` 分配在栈上，随函数返回自动释放；`escape` 中的 `p` 分配在堆上，需要由垃圾回收器
+回收。这一决定是编译器在程序运行之前作出的。加上 `-gcflags=-m`，编译器会报告它的判断（摘录与 `p`
+有关的几行）：
 
-## 3.2.3 前端：从字符流到类型化的语法树
+```
+$ go build -gcflags=-m -o /dev/null .
+./main.go:10:6: can inline sum
+./main.go:13:6: can inline local
+./main.go:19:6: can inline escape
+./main.go:10:10: p does not escape
+./main.go:20:2: moved to heap: p
+```
 
-**词法与文法分析**（`cmd/compile/internal/syntax`）是第一站。源码先被切成 token 流（词法），
-再按文法规则组装成一棵**抽象语法树**（AST，语法分析）。`send` 的函数体被解析成两个语句节点：
-一个 `go` 语句、一个发送语句，每个节点都挂着精确的源码位置，供后续报错与生成调试信息。
-Go 的文法是为速度而设计的，可以单遍、不回溯地解析，这正是 [3.2.6](#326-暗线一编译速度作为一等约束)
-要细说的第一笔（文法细节见 [15.1](../../part5toolchain/ch15compile/parse.md)）。
+编译器如何判断 `p` 的生命期是否超出函数，「can inline」又是什么含义？本节按照编译器的处理顺序，
+依次说明它把源码转换为何种表示，在其上进行了哪些分析与变换，最终如何生成机器指令。
 
-**类型检查**（`cmd/compile/internal/types2`）随后接手。`types2` 是 `go/types` 的一个移植版，
-改用 `syntax` 包的 AST。它做两件事：名字解析（每个标识符指向哪个声明）与类型推导（每个表达式
-是什么类型），并在此基础上施加额外检查，例如「声明却未使用」。泛型的类型推导与约束求解也在
-这一阶段完成，是全编译器最精巧的部分之一（[8.3](../../part2lang/ch08generics/checker.md)）。
-对 `send` 而言，这一步确认 `ch` 是 `chan int`、`ch <- 1` 中的 `1` 可赋给 `int`、`work` 是个
-无参函数。检查通过后，AST 上每个表达式都带上了确定的类型。
+## 3.2.1 编译器的阶段
 
-值得一提的是，`go/parser`、`go/types` 这套公开包**并不**被编译器使用。编译器最初用 C 写成，
-`go/*` 系列是后来为 `gofmt`、`vet` 等工具单独发展出来的，二者同源而分流。
+[3.1](./cmd.md) 提到，`go build` 每次调用编译器 `compile` 编译一个包，产出一个目标文件。
+编译器内部是一条流水线，每个阶段把程序转换为另一种表示，再交给下一阶段
+[[Go Authors, 2026a](#ref-go-authors-2026a)]：
 
-## 3.2.4 中端：IR、内联与逃逸分析
+1. **词法与语法分析**：把源码文本切分为词法单元（关键字、标识符、字面量、运算符），再按语法规则
+   组织为**语法树**（syntax tree）。
+2. **类型检查**：确定每个标识符所指的声明以及每个表达式的类型，类型错误在此阶段报告。
+3. **内联与逃逸分析**：把小函数的函数体展开到调用处；判断每个变量应分配在栈上还是堆上。
+4. **降级**（walk）：把 `go` 语句、channel 与 map 操作等语言特性改写为对运行时函数的调用。
+5. **优化**：转换为更接近机器、便于分析的中间表示，执行数十趟优化。
+6. **代码生成**：选择目标体系结构的指令，分配寄存器，写出目标文件。
 
-类型检查后的表示还不便于优化，于是有 **IR 构造**（noding，`cmd/compile/internal/noder`）：把
-`syntax` 加 `types2` 的表示转换成编译器自有的 IR（`ir` 包）与类型系统（`types` 包）。这套 IR
-是编译器还用 C 写时留下的血脉，中端与后端的全部代码都以它为基础。go1.26 的 noding 走的是
-**Unified IR**：它把类型检查后的代码序列化成一份中间产物，再据此重建 IR，这份产物同时也是
-包导入/导出与内联的载体。这一点对暗线一至关重要，[3.2.6](#326-暗线一编译速度作为一等约束)
-会回到它。
+前两个阶段关心程序是否正确，后几个阶段关心程序如何高效执行。下面的交互图以 3.2.6 的 `larger` 函数
+为例，逐个阶段展示其表示的变化。
 
-IR 就位后，**中端**在其上跑几趟优化：死代码消除、（早期的）去虚化、函数内联（`inline` 包）、
-逃逸分析（`escape` 包）。**逃逸分析**尤其关键，它判定每个变量能否安全地放在栈上，还是必须
-分配到堆上。这一步直接决定了对象由谁来管：留在栈上的对象随函数返回自动回收，逃逸到堆上的
-对象才进入垃圾回收的视野（[13.1](../../part4memory/ch13gc/basic.md)）。在 `send` 中，传给
-`go work()` 的函数与任何被新 goroutine 捕获的变量都会被判为逃逸，因为新 goroutine 的生命周期
-超出了 `send` 的栈帧。
+<div class="viz" data-viz="build-pipeline"></div>
 
-## 3.2.5 walk 与后端：降级、SSA 与机器码
+## 3.2.2 语法分析与类型检查
 
-中端之后是 **walk**（`cmd/compile/internal/walk`），它是 IR 上的最后一趟，做两件事。其一是
-**定序**（order）：把复合语句拆成带临时变量的简单语句，固定求值次序。其二是**降级**
-（desugar）：把高级语言构造翻译成更原始的形式。本节的第二条暗线正是在这里第一次显形，
-`switch` 被改写成二分查找或跳转表，而对 **map 与 channel 的操作、`go` 语句，被替换成对运行时
-的调用**。`send` 的两行到这一步变成了大致这样：
+第一个阶段由 `cmd/compile/internal/syntax` 完成。Go 的语法有意设计得易于解析：读到一个词法单元时，
+不需要知道前面的标识符是类型名还是变量名，就能确定语句的结构。C 语言中 `T * x;` 究竟是声明一个
+指针还是计算一次乘法，取决于 `T` 是否为类型名；Go 的声明总以 `var`、`func`、`type` 等关键字开头，
+不存在这种歧义。Rob Pike 在 2012 年的《Go at Google》一文中指出，Go 的解析无须类型信息或符号表，这使得
+编译器以及各种工具都可以写得小而快 [[Pike, 2012](#ref-pike-2012)]。
+
+类型检查由 `cmd/compile/internal/types2` 完成，泛型的类型推断也在这一阶段进行
+（[8.3](../../part2lang/ch08generics/checker.md)）。标准库中另有 `go/parser` 与 `go/types`，供
+`gofmt`、`go vet`、gopls 等工具使用，编译器本身并不使用。`types2` 是 `go/types` 移植到编译器中的
+版本，二者共用同一套测试。
+
+## 3.2.3 内联
+
+函数调用有固定的开销：准备参数、跳转、建立栈帧、返回时再跳回。更大的损失在于，调用者无法看到被调
+函数内部的行为，许多优化因此无法进行。把被调函数的函数体直接展开到调用处，可以同时消除这两个问题，
+这种变换称为**内联**（inlining）。
+
+内联的代价是代码体积增大、编译时间延长，因此只对小函数进行。编译器以函数体语法树的节点数作为其
+**内联成本**，成本不超过 80 时才内联；函数体中每调用一个不可内联的函数，成本另加 57
+（`cmd/compile/internal/inline/inl.go`）。`-gcflags=-m=2` 会输出成本，例如 3.2.6 将要讨论的
+`larger` 函数：
+
+```
+./main.go:3:6: can inline larger with cost 14 as: func(int, int) int { m := a; if b > a { m = b }; return m }
+```
+
+开头例子中的 `sum`、`local`、`escape` 均被内联。[3.1](./cmd.md) 的实验中，修改 `greet.Hello` 的
+函数体后 `main` 也必须重新编译，原因正在于此：`Hello` 的函数体已经内联到 `main` 中。
+
+80 的预算对所有函数一视同仁，然而程序的运行时间往往集中在少数几个函数上。从 Go 1.21 起，可以把线上采集的
+CPU 性能剖析数据放入主包目录（文件名为 `default.pgo`），编译器据此找出调用最频繁的位置，
+对这些位置把预算放宽到 2000。这种方法称为**性能制导优化**（profile-guided optimization，
+PGO）[[Go Authors, 2026d](#ref-go-authors-2026d)]。
+
+## 3.2.4 逃逸分析
+
+局部变量分配在函数的栈帧中，函数返回时随栈帧一并释放，没有额外开销。然而，如果函数返回后仍有
+指针指向某个局部变量，这个变量就不能随栈帧消失，只能分配在堆上，在不再被引用之后由垃圾回收器回收。
+
+C 语言把这一问题留给程序员：返回局部变量的地址是一种错误，程序随后会读到已被覆盖的内存。Go 允许
+`return &p`，并保证其安全，办法是由编译器判断每个变量是否会逃出其所在的函数，这称为**逃逸分析**
+（escape analysis）。`escape.go` 开头的注释把需要保证的性质归结为两条不变式：
+
+1. 指向栈上对象的指针不能存放在堆中；
+2. 指向栈上对象的指针，其生命期不能超过该对象。
+
+编译器构造一张带权有向图：顶点表示变量等存储位置，边表示赋值，边的权重记录沿途取地址与解引用的
+次数。随后检查是否存在一条路径，把某个变量的地址带入堆中或带出函数；若存在，该变量即分配在堆上。
+`escape` 中的 `p` 经 `return &p` 被带出函数，因此报告「moved to heap」。`sum` 的参数 `p` 只被读取了
+两个字段，报告「does not escape」；这一结论会随包的导出数据一并保存，其他包调用 `sum` 时，同样知道
+把栈上变量的地址传给它是安全的。
+
+逃逸分析是保守的：无法证明不逃逸的变量，一律按逃逸处理。把地址存入全局变量、通过 channel 发送、
+作为参数传给新的 goroutine，或传给编译器无法分析的函数（例如经由接口调用的方法），通常都会使变量
+分配在堆上。
+
+这一思想并非 Go 首创。1990 年代，函数式语言和 Java 的研究者都在探索如何由编译器发现「对象不会逃出所在函
+数」，从而将其分配在栈上。1999 年的 OOPSLA 会议上，IBM 的 Choi 等人与 Blanchet 分别发表了面向 Java
+的逃逸分析 [[Choi et al., 1999](#ref-choi-et-al-1999)] [[Blanchet, 1999](#ref-blanchet-1999)]。Java
+虚拟机在即时编译阶段进行这项分析；Go 则在编译时进行，每次构建都会执行，其结论可以通过 `-gcflags=-m`
+直接查看。堆分配的减少，也相应减轻了垃圾回收的负担（[第 13 章](../../part4memory/ch13gc/readme.md)）。
+
+## 3.2.5 语言特性的降级
+
+接下来的阶段称为 walk。它把复杂的语句分解为若干简单步骤，确定求值顺序，并把高级语言特性改写为更
+低级的形式：`switch` 转换为二分查找或跳转表，`go` 语句、channel 与 map 的操作则转换为对运行时函数的
+调用。以下面的函数为例：
 
 ```go
-// walk 之后（示意）：go / <- 被降级为 runtime 调用
-func send(ch chan int) {
-	newproc(work)          // go work()  -> runtime.newproc
-	var tmp int = 1
-	chansend1(ch, &tmp)    // ch <- 1    -> runtime.chansend1
+func work() {}
+
+func send(ch chan int, m map[string]int) {
+	go work()
+	ch <- 1
+	m["k"]++
 }
 ```
 
-接着进入**通用 SSA**（`ssagen` 把 IR 转成 SSA，`ssa` 包承载之）。SSA（静态单赋值）是一种
-低级中间表示，每个值只被赋值一次，这个性质让数据流分析与优化变得简洁（细节见
-[15.2](../../part5toolchain/ch15compile/ssa.md)）。转换中会应用**内建函数 intrinsic**（编译器
-对某些函数硬编码了高度优化的实现），并把更多构造继续降级（例如 `copy` 换成内存移动、range
-循环改写成 for）。随后跑一连串**机器无关**的优化：死代码消除、去掉多余的 nil 检查、常量
-折叠、把乘法与浮点运算重写得更高效。这些规则不涉及任何具体架构，在所有 `GOARCH` 上一致运行。
+用 `go build -trimpath -gcflags=-S` 输出 `send` 的汇编（darwin/arm64，省略了指令地址一列和部分
+辅助指令）：
 
-最后是**机器相关**的后端。它以 **lower 趟**开篇，把通用 SSA 值重写成目标架构的专用变体（例如
-在 amd64 上把多个 load-store 合并进一条带内存操作数的指令）。lower 之后再跑一轮优化与几项
-关键工作：**寄存器分配**、**栈帧布局**（给局部变量分配栈偏移）、**指针活性分析**（算出每个
-GC 安全点上哪些栈上指针存活，这是精确 GC 的前提，见 [4.1](../../part2lang/ch04type/type.md)、
-[13 垃圾回收](../../part4memory/ch13gc/readme.md)），以及插入**写屏障**（`ssa` 包中专门的
-`writebarrier` 趟）。至此函数被转成一串 `obj.Prog` 指令，交给汇编器（`cmd/internal/obj`）。
-汇编器把它们变成真正的机器码，**并在每个函数入口插入栈增长前导**（`cmd/internal/obj` 的
-`stacksplit`），写出最终目标文件。目标文件里除了机器码，还含导出数据、反射数据与调试信息。
+```
+TEXT  main.send(SB), ABIInternal, $48-16
+MOVD  16(g), R16                       // 读取当前 goroutine 的警戒线
+CMP   R16, RSP                         // 比较栈指针与警戒线
+BLS   112                              // 栈空间不足，跳转到末尾扩展栈
+...
+MOVD  $main.work·f(SB), R0
+CALL  runtime.newproc(SB)              // go work()
+MOVD  main.ch(FP), R0
+MOVD  $main..stmp_0(SB), R1
+CALL  runtime.chansend1(SB)            // ch <- 1
+MOVD  $type:map[string]int(SB), R0
+MOVD  main.m+8(FP), R1
+MOVD  $go:string."k"(SB), R2
+CALL  runtime.mapassign_faststr(SB)    // 定位 m["k"] 的存储位置
+MOVD  (R0), R1
+ADD   $1, R1, R1                       // ++
+MOVD  R1, (R0)
+...
+RET   (R30)
+...
+CALL  runtime.morestack_noctxt(SB)     // 扩展栈，然后从函数入口重新执行
+JMP   0
+```
 
-想亲眼看 `send` 在 SSA 各趟之间的变化，可以用一行命令导出可视化的 SSA：
-`GOSSAFUNC=send go build`，它会生成一个 `ssa.html`，逐趟列出每个值的演化。
+三行 Go 代码转换为三次运行时调用。goroutine、channel 和 map 的语义大部分由运行时实现，编译器负责在
+恰当的位置调用它们，并准备好所需的信息。开头的三条指令和末尾的 `morestack` 同样由编译器插入：需要
+栈空间的函数在入口处检查剩余的栈空间是否足够，不足则先扩展栈（像 3.2.6 的 `larger` 这样不使用栈的
+小函数则省略这一检查）。goroutine 的栈因此可以从很小的尺寸开始，按需增长
+（[第 14 章](../../part4memory/ch14stack/readme.md)）。
 
-## 3.2.6 暗线一：编译速度作为一等约束
+编译器与运行时之间还有许多类似的分工，常见的几处如下：
 
-回到第一条暗线。Go 把「快」做进了流水线的三个层面，每一层都对应上文的某一站。
+| Go 代码 | 编译器生成的代码 | 运行时的职责 |
+| --- | --- | --- |
+| `go f()` | 调用 `runtime.newproc` | 创建 goroutine，交给调度器（[9.4](../../part3concurrency/ch09sched/schedule.md)） |
+| `ch <- v`、`<-ch` | 调用 `runtime.chansend1`、`runtime.chanrecv1` | 收发与阻塞（[第 10 章](../../part3concurrency/ch10chan/readme.md)） |
+| 需要栈空间的函数入口 | 检查栈边界，不足时调用 `morestack` | 分配更大的栈并迁移（[第 14 章](../../part4memory/ch14stack/readme.md)） |
+| 向堆中写入指针 `*p = q` | 插入写屏障，在垃圾回收期间额外记录 | 回收器据此避免遗漏对象（[13.2](../../part4memory/ch13gc/barrier.md)） |
+| 含指针的类型 | 生成标明指针字段位置的位图 | 回收器据此扫描对象（[4.1](../../part2lang/ch04type/type.md)） |
 
-**文法层。** Go 的文法可不回溯地单遍扫描，词法分析甚至简单到接近正则。这把
-[3.2.3](#323-前端从字符流到类型化的语法树) 的第一站压成线性时间，与 C++ 那种需要无界前瞻、
-解析与语义纠缠的文法形成鲜明对比。
+## 3.2.6 静态单赋值形式
 
-**依赖层。** 这是最见功力的一笔。编译包 P 时，[3.2.4](#324-中端ir内联与逃逸分析) 提到的
-Unified IR 会顺带写出一份**导出数据**：把 P 中所有导出声明的类型信息、可内联函数的函数体、
-泛型函数的函数体，以及逃逸分析对参数的结论，序列化进目标文件。当包 Q 导入 P 时，编译器只读
-P 的这份导出数据，**不碰 P 的源码**。更关键的是，这份导出数据通常是「深」的：它已经把 P 间接
-依赖的、Q 可能用到的信息一并打包，于是 Q 只需读它每个直接依赖的一份文件，无需递归展开整个
-依赖图。这恰好消除了 C/C++ 中 `#include` 的致命缺陷，头文件会沿依赖链层层传染，一个被广泛
-引用的头文件会被成百上千个翻译单元反复重新解析。Go 用一份编译期产出的紧凑二进制，换掉了这场
-重复劳动。
+在此之前，程序仍保留着源码的形态：一个变量可以被多次赋值，这给优化带来了困难。考虑下面的函数：
 
-**结构层。** Go 以**包**为编译单位并行编译，包之间只通过导出数据这一窄接口耦合，使整个构建
-可以高度并行（[3.1](./cmd.md) 已述 `go build` 如何调度这些并行编译）。
+```go
+func larger(a, b int) int {
+	m := a
+	if b > a {
+		m = b
+	}
+	return m
+}
+```
 
-代价并非没有。深导出数据有「随依赖图上行而膨胀」的倾向：一组被广泛使用、API 庞大的类型，会让
-几乎每个包的导出数据都带一份它的拷贝。正是这个问题催生了「indexed」与「shallow」等更省的导出
-格式（后者被 gopls 采用，以按需随机读取换取体积）。性能的取舍从不白来，这里用一点冗余，换来
-构建系统的简单与单遍可读。
+要回答「执行 `return m` 时 `m` 的值是什么」，必须找出所有对 `m` 的赋值，再判断哪些赋值能够到达这里。
+若改变表示方式，问题就会简化：每赋值一次，就引入一个新的名字。`m := a` 记作 `m1`，`m = b` 记作
+`m2`；两条控制流路径在 `return` 之前汇合，在汇合处放置一个特殊的选择操作，「若来自 `if` 分支则取
+`m2`，否则取 `m1`」，其结果记作 `m3`。经过这样的改写，每个名字只在一处被定义，要了解一个值，只需
+查看它的定义。
 
-## 3.2.7 暗线二：编译器与运行时的合谋
+这种表示称为**静态单赋值形式**（static single assignment form，SSA），汇合处的选择操作称为 φ 函数。它由
+Barry Rosen、Mark Wegman、Kenneth Zadeck 等人于 1980 年代后期在研究如何判定程序中两个表达式恒等时提出
+[[Rosen et al., 1988](#ref-rosen-et-al-1988)]；1991 年，Ron Cytron 等人给出了把任意程序高效转换为 SSA
+形式的算法 [[Cytron et al., 1991](#ref-cytron-et-al-1991)]，此后它成为编译器的标准中间表示，GCC 与 LLVM
+均以其为核心。原因在于，许多优化在 SSA 形式上都变得直接：一个值若为常量，所有使用处都可以替换为该常量；
+两个值的计算完全相同，只需计算一次；一个值若从未被使用，即可删除。
 
-第二条暗线，是理解 Go 运行时的钥匙。许多读者会以为 goroutine、channel、GC 是「运行时的事」，
-与编译器无关，其实二者是**合谋**的：运行时定义了一组约定接口，编译器在恰当的位置生成对它们的
-调用或配套的元数据，缺了任何一方，语义都不完整。把上文散落各处的几处合谋汇总：
+Go 原来的后端继承自 Plan 9 的 C 编译器，并不使用 SSA。Go 1.7（2016 年）在 amd64 上启用了基于 SSA 的新后端
+[[Go Authors, 2016](#ref-go-authors-2016)]，Go 1.8 将其推广到所有体系结构
+[[Go Authors, 2017](#ref-go-authors-2017)]。设置 `GOSSAFUNC` 可以查看一个函数在每一趟优化之后的形态；
+在函数名后加 `+` 会同时输出到终端，否则只生成网页 `ssa.html`
+[[Go Authors, 2026b](#ref-go-authors-2026b)]：
 
-| 语言特性 | 编译器做的事 | 发生的阶段 | 运行时一侧 |
-| --- | --- | --- | --- |
-| `go f()` | 降级为 `runtime.newproc(f)` | walk | 调度器创建并排入 goroutine（[9.4](../../part3concurrency/ch09sched/schedule.md)） |
-| `ch <- v` / `<-ch` | 降级为 `runtime.chansend` / `chanrecv` | walk | channel 收发与阻塞唤醒（[第 10 章](../../part3concurrency/ch10chan/readme.md)） |
-| 函数入口 | 插入栈增长前导（`stacksplit`） | obj 汇编 | `morestack` 触发栈扩容（[2.2](../ch02asm/callconv.md)、[第 14 章](../../part4memory/ch14stack/readme.md)） |
-| 写指针 `*p = q` | 插入写屏障 | SSA `writebarrier` 趟 | GC 据屏障记录维持三色不变式（[13.2](../../part4memory/ch13gc/barrier.md)） |
-| 含指针的类型 | 生成类型描述符 + GC 指针位图 | 后端 / 反射数据 | GC 据位图精确扫描对象（[4.1](../../part2lang/ch04type/type.md)、[13.1](../../part4memory/ch13gc/basic.md)） |
+```
+$ GOSSAFUNC=larger+ go build -o /dev/null .
+```
 
-这张表把 `send` 那两行的归宿讲完了：`go work()` 成了一次 `newproc`，由调度器接管；`ch <- 1`
-成了一次 `chansend`，由 channel 的运行时实现接管。而那段不可见的**栈增长前导**，是每个 Go
-函数都背着的：它在入口处比较栈指针与栈边界，若本次调用会撑破当前栈，就先跳到 `morestack`
-扩容再继续，这正是 goroutine 能从几 KB 小栈起步、按需增长的实现基础。
+`larger` 刚转换为 SSA 形式时如下（删去了几个无关的值）：
 
-把两条暗线合起来看，编译器在 Go 里扮演的角色就清晰了：它一面被「快」这个约束逼着精简（暗线
-一），一面又承担着为运行时铺设接口的重活（暗线二）。这两股力量的拉扯，塑造了从文法到目标文件
-的每一处取舍。下一节（[3.3](./bootstrap.md)）会追问一个更基本的问题：这个用 Go 写成的编译器
-自己，最初又是从哪里来的。
+```
+b1:
+    v7 = Arg <int> {a}
+    v8 = Arg <int> {b}
+    v10 = Less64 <bool> v7 v8          // a < b
+    If v10 -> b3 b2
+b2: <- b1 b3
+    v12 = Phi <int> v7 v11 (m[int])    // φ 函数：取 v7（m1）或 v11（m2）
+    Ret ...
+b3: <- b1
+    v11 = Copy <int> v8 (b[int], m[int])
+    Plain -> b2
+```
 
-## 延伸阅读的文献
+`b1`、`b2`、`b3` 是三个**基本块**（basic block），即顺序执行的指令序列，块末尾决定控制流的去向。
+源码中的 `m` 变成了三个值：`v7`、`v11` 和汇合处的 `v12`，其中 `v12` 即 φ 函数。`larger` 共经过 54 趟
+处理，其中几趟的效果最为明显：
 
-1. The Go Authors. *Introduction to the Go compiler* (`cmd/compile/README.md`).
-   https://github.com/golang/go/blob/master/src/cmd/compile/README.md
-   （本节流水线划分的一手依据，含导出数据 §7a。）
-2. The Go Authors. *Introduction to the Go compiler's SSA backend*
-   (`cmd/compile/internal/ssa/README.md`).
-   https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/README.md
-3. Rob Pike. *Go at Google: Language Design in the Service of Software Engineering.* 2012.
-   https://go.dev/talks/2012/splash.article （把编译速度列为 Go 的设计动机。）
-4. Ron Cytron, Jeanne Ferrante, et al. "Efficiently Computing Static Single Assignment Form
-   and the Control Dependence Graph." *ACM TOPLAS*, 13(4), 1991.
-   https://doi.org/10.1145/115372.115320 （SSA 的理论原点。）
-5. The Go Authors. *Unified IR* (`cmd/compile/internal/noder/README.md`).
-   https://github.com/golang/go/blob/master/src/cmd/compile/internal/noder/README.md
-   （IR 构造与导出数据格式。）
-6. 本书 [15.1 词法与文法](../../part5toolchain/ch15compile/parse.md)、
-   [15.2 中间表示](../../part5toolchain/ch15compile/ssa.md)、
-   [8.3 类型检查技术](../../part2lang/ch08generics/checker.md)。
-7. 本书 [1.1 编程语言的发展](../ch01intro/history.md)、
-   [13.2 写屏障技术](../../part4memory/ch13gc/barrier.md)、
-   [第 14 章 执行栈管理](../../part4memory/ch14stack/readme.md)。
+- `branchelim` 发现两条路径只是为了选出一个值，于是把分支改写为条件选择，三个基本块合并为一个：
+  `v12 = CondSelect <int> v8 v7 v10`；
+- `lower` 把与体系结构无关的操作替换为 arm64 的指令：比较替换为 `CMP`，条件选择替换为 `CSEL`；
+- `regalloc` 为每个值分配寄存器：`a` 位于 `R0`，`b` 位于 `R1`，结果写回 `R0`。
+
+最终生成的机器码只有三条指令：
+
+```
+CMP   R0, R1            // 比较 b 与 a
+CSEL  GT, R1, R0, R0    // 若 b 大于 a 则取 b，否则取 a，结果写入 R0
+RET
+```
+
+其中没有分支指令。处理器会预测分支的走向，预测失败时必须丢弃已经推测执行的工作；`CSEL` 不涉及分支，
+也就不存在预测失败的代价。
+
+## 3.2.7 目标文件与导出数据
+
+编译器写出的目标文件中，除了机器码以及供链接器使用的信息（[3.4](./link.md)），还有一份**导出数据**
+（export data），其中包含其他包导入本包时所需的全部信息：导出的类型与函数签名、可内联的函数体、泛型
+函数的函数体，以及逃逸分析对每个参数的结论 [[Go Authors, 2026c](#ref-go-authors-2026c)]。
+
+包 Q 导入包 P 时，编译器只读取 P 的导出数据，而不读取 P 的源码。导出数据还包含了 P 的公开接口所涉及
+的、来自更底层的包的信息，因此 Q 对每个直接导入的包只需读取一个文件。C 与 C++ 的做法恰好相反：
+`#include` 把头文件的文本原样插入，同一个头文件在每个包含它的源文件中都要重新解析，而头文件又会
+包含其他头文件。Pike 在《Go at Google》中举过 Google 内部的一个例子：一个大型 C++ 程序在展开头文件
+之后，交给编译器的输入约为源码本身的两千倍 [[Pike, 2012](#ref-pike-2012)]。
+
+这种做法也有代价：越是上层的包，导出数据中携带的下层信息越多，一组被广泛使用的大型类型几乎会出现在每个包的
+导出数据中。编译器的对策是为导出数据建立索引，只解码实际用到的部分
+[[Go Authors, 2026a](#ref-go-authors-2026a)]。
+
+由此可以看出 Go 编译器的取向：每次只编译一个包，包与包之间只通过导出数据联系，各个包可以并行编译；
+优化以包内为主，内联预算也设定得较小。这换来了很快的编译速度，使 [3.1](./cmd.md) 所述「只重新编译
+修改过的包」的增量构建真正节省时间；付出的是一部分运行性能，性能制导优化正是为了在需要之处弥补这部分
+损失。
+
+## 延伸阅读
+
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. "Introduction to the Go compiler."
+  `cmd/compile/README.md`.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/README.md
+  https://github.com/golang/go/blob/master/src/cmd/compile/README.md
+  编译器各阶段与导出数据的官方说明，本节的阶段划分出自此文。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. "Introduction to the Go compiler's
+  SSA backend." `cmd/compile/internal/ssa/README.md`.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/ssa/README.md
+  https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/README.md
+  SSA 后端中的值、基本块与改写规则，以及 `GOSSAFUNC` 的用法。
+- <a id="ref-rosen-et-al-1988"></a>[Rosen et al., 1988] Barry K. Rosen, Mark N. Wegman, F. Kenneth
+  Zadeck. "Global Value Numbers and Redundant Computations." *Proceedings of the 15th ACM Symposium on
+  Principles of Programming Languages (POPL)*, 1988. SSA 最早出现的论文之一，用于发现程序中相等的值。
+- <a id="ref-cytron-et-al-1991"></a>[Cytron et al., 1991] Ron Cytron, Jeanne Ferrante, Barry K. Rosen,
+  Mark N. Wegman, F. Kenneth Zadeck. "Efficiently Computing Static Single Assignment Form and the Control
+  Dependence Graph." *ACM Transactions on Programming Languages and Systems*, 13(4): 451–490, 1991.
+  https://doi.org/10.1145/115372.115320
+  给出了构造 SSA 形式的高效算法，此后为各种编译器普遍采用。
+- <a id="ref-choi-et-al-1999"></a>[Choi et al., 1999] Jong-Deok Choi, Manish Gupta, Mauricio Serrano,
+  Vugranam C. Sreedhar, Sam Midkiff. "Escape Analysis for Java." *Proceedings of OOPSLA '99*, 1999.
+  https://doi.org/10.1145/320384.320386
+  面向 Java 的逃逸分析，目的同样是把对象分配在栈上。
+- <a id="ref-pike-2012"></a>[Pike, 2012] Rob Pike. "Go at Google: Language Design in the Service of
+  Software Engineering." 2012. https://go.dev/talks/2012/splash.article
+  Go 为何把编译速度作为设计目标，以及 C++ 头文件展开的例子。
+- <a id="ref-go-authors-2016"></a>[Go Authors, 2016] The Go Authors. *Go 1.7 Release Notes*, "Compiler
+  Toolchain". https://go.dev/doc/go1.7
+  基于 SSA 的新后端首次随正式版本发布。
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *Making Unified Intermediate
+  Representation (UIR) Changes* (`cmd/compile/internal/noder/README.md`).
+  https://github.com/golang/go/blob/master/src/cmd/compile/internal/noder/README.md
+  （IR 构造与导出数据格式。）
+- <a id="ref-blanchet-1999"></a>[Blanchet, 1999] Bruno Blanchet. "Escape Analysis for Object-Oriented
+  Languages: Application to Java." *Proceedings of OOPSLA '99*, 1999: 20–34.
+  https://doi.org/10.1145/320384.320387
+  与 Choi 等人同期发表的另一种 Java 逃逸分析。
+- <a id="ref-go-authors-2017"></a>[Go Authors, 2017] The Go Authors. *Go 1.8 Release Notes*, "Compiler
+  Toolchain". https://go.dev/doc/go1.8#compiler
+  SSA 后端推广到所有体系结构。
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. *Profile-guided optimization.*
+  https://go.dev/doc/pgo
+  `default.pgo` 的用法与 PGO 所做的优化。
+- 本书 [15.1 词法与文法](../../part5toolchain/ch15compile/parse.md)、
+  [15.2 中间表示](../../part5toolchain/ch15compile/ssa.md)、
+  [8.3 类型检查技术](../../part2lang/ch08generics/checker.md)。
+- 本书 [1.1 编程语言的发展](../ch01intro/history.md)、
+  [13.2 写屏障技术](../../part4memory/ch13gc/barrier.md)、
+  [第 14 章 执行栈管理](../../part4memory/ch14stack/readme.md)。
+
