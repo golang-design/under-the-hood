@@ -5,199 +5,205 @@ title: "17.2 语义化版本管理"
 
 # 17.2 语义化版本管理
 
-要管理版本，先得让版本号**有意义**。[17.1](./challenges.md) 把依赖管理的难处归到两点：钻石依赖
-里的版本冲突，与跨机器、跨时间的可重现构建。这两点能不能解，取决于一个更底层的前提，**一个版本
-号到底承诺了什么**。如果 `v1.5` 与 `v1.4` 之间的关系完全无从预料，那么任何选择算法都无从下手，
-只能退回到「把所有版本两两试一遍」的求解。Go 模块的做法，是先把版本号变成一份**可被机器信任的
-契约**，再在这份契约之上提出一条独特而强硬的规则,**语义化导入版本**。这一节讲清这两者，它们是
-[17.3](./minimum.md) 那套版本选择算法能够成立、且能简单到「一遍图遍历」的前提。
+选择版本的前提，是版本号有确定的含义。如果 v1.5 与 v1.4 之间的关系无从预料，任何选择算法都无从下手。Go
+模块采用语义化版本作为版本号的语法与次序，但 Cox 在「vgo」系列文章 [[Cox, 2018a](#ref-cox-2018a)]中认为，
+语义化版本本身只是选择和比较版本字符串的一种方式，真正决定依赖能否组合的，是另一条规则：导入兼容性规则
+[[Cox, 2018b](#ref-cox-2018b)]。本节先介绍语义化版本及其局限，再介绍导入兼容性规则与由此得出的语义化导入版
+本，最后说明 Go 如何为没有版本标签、没有 `go.mod` 的代码赋予版本。这些规定共同构成 [17.3](./minimum.md)
+中版本选择算法的前提。
 
-## 17.2.1 语义化版本：把兼容性写进数字
+## 17.2.1 语义化版本
 
-语义化版本（Semantic Versioning，semver）由 Tom Preston-Werner 在 2013 年定形为 2.0.0
-规范，Go 模块直接采用了它，并在版本号前统一冠以 `v`。版本号形如 **`vMAJOR.MINOR.PATCH`**
-（如 `v1.4.2`），三段都是非负整数，且每一段的递增都**有规范约定的含义**：
+**语义化版本**（Semantic Versioning，SemVer）由 Tom Preston-Werner 起草，现行的 2.0.0 版发布于 2013 年
+[[Preston-Werner, 2013](#ref-preston-werner-2013)]。规范要求软件首先声明公共 API，
+版本号的变化描述的正是这个 API 的变化。版本号的形式为 X.Y.Z，三段依次称为主版本号、次版本号与修订号：
+做了不兼容的 API 修改时，递增主版本号；做了向下兼容的功能性新增时，递增次版本号；
+做了向下兼容的问题修正时，递增修订号。递增较高的一段时，较低的各段归零。此外还有几条容易被忽略的规定：
+版本一经发布，其内容不得修改，任何修改都必须作为新版本发布；主版本号为零的 0.y.z 用于初始开发阶段，
+任何内容都可能随时改变；1.0.0 则标志着公共 API 的确立。
 
-- **PATCH**（补丁）递增：「只引入向后兼容的 bug 修复」。`v1.4.1 → v1.4.2`，行为不变，只是更正了
-  错误。
-- **MINOR**（次版本）递增：「以向后兼容的方式向公开 API 增加了功能」。`v1.4 → v1.5`，老代码
-  原封不动仍能编译、仍能运行，只是多了可用的东西。
-- **MAJOR**（主版本）递增：「引入了向后不兼容的 API 变更」。`v1.x → v2.0`，老代码可能编译不过，
-  或行为悄然改变。
-
-把这套约定落到一个具体改动上，递增哪一段是被改动的性质唯一决定的，并无自由裁量：
+修订号之后可以附加以连字符引出的先行版本号，如 `1.0.0-rc.1`，以及以加号引出的版本编译信息，如
+`1.0.0+20130313144700`。比较两个版本的先后时，主版本号、次版本号、修订号依次按数值比较；三者相同时，
+先行版本低于正式版本；先行版本号之间按点分隔的标识符逐个比较；版本编译信息不参与比较。规范给出的例子是：
 
 ```text
-现有版本 v1.4.2，下一次发布该打什么版本号？
-  修了一个 panic，不动任何签名         → v1.4.3   （PATCH：兼容的修复）
-  新增一个导出函数 Encode，旧 API 不变  → v1.5.0   （MINOR：兼容的新功能）
-  删掉 Decode、或改了它的参数类型        → v2.0.0   （MAJOR：破坏兼容）
+1.0.0-alpha < 1.0.0-alpha.1 < 1.0.0-alpha.beta < 1.0.0-beta < 1.0.0-beta.2 < 1.0.0-beta.11 < 1.0.0-rc.1 < 1.0.0
 ```
 
-注意每升一段，更低的段都归零：`v1.4.2` 的次版本一升就是 `v1.5.0` 而非 `v1.5.2`，主版本一升就是
-`v2.0.0`。这条归零规则保证了「同一主版本下，版本号越大、含的兼容功能越全」，[17.3](./minimum.md)
-的「取最大」才有明确语义。
+这一全序关系是「取较高版本」这类操作得以定义的基础。Go 的实现位于 `golang.org/x/mod/semver`，`go`
+命令使用其随 Go 源码树提供的副本。包注释说明了它与规范的两处差别
+[[Go Authors, 2026a](#ref-go-authors-2026a)]：
 
-规范用的是 **MUST** 这种规范性措辞：补丁段「只在仅有向后兼容的修复时**必须**递增」，次版本段
-「在引入向后兼容的新功能时**必须**递增」，主版本段「在引入任何不兼容变更时**必须**递增」。这套
-约定的全部价值，在于它把一件原本只存在于作者脑中的事,「这次改动破不破坏兼容」,编码进了一个
-机器能读的数字。看到从 `v1.4` 升到 `v1.5`，读者（和 `go` 命令）都知道这是兼容的，放心升;看到升到
-`v2.0`，便知道可能要改代码、要重新测试。**版本号本身就是一份兼容性承诺。**
-
-semver 还规定了两段可选后缀，Go 沿用：连字符引出的**预发布**标识（`v1.5.0-rc.1`，优先级低于正式
-版，`v1.0.0-alpha < v1.0.0`），与加号引出的**构建元数据**（`v1.0.0+20130313`，在比较优先级时被
-忽略）。正式版之间则按三段数字逐级比较：$v1.0.0 < v2.0.0 < v2.1.0 < v2.1.1$。这套全序关系，正是
-[17.3](./minimum.md) 的选择算法能「取最大」的数学基础。
-
-这里要点出一个常被忽略的前提：semver 是一份**社会契约，而非编译器强制的事实**。没有任何工具能
-百分百验证作者真的没在 PATCH 版里塞进破坏性变更（Go 1.21 起的 `gorelease`、`apidiff` 等工具能
-辅助检查导出 API 的差异，但语义层面的兼容仍靠作者自律）。Go 模块**强依赖**这个约定,它的整个
-版本选择逻辑（[17.3](./minimum.md)）都建立在「同一主版本内，高版本向后兼容低版本」这个假设上。
-约定一旦被破坏，受伤的是下游;而下文的语义化导入版本，恰恰是为了在「破坏不可避免时」给它一个
-规矩的出口。
-
-还有一类版本号，semver 规范本身没有，却是 Go 让「取最大」这套机器决策能覆盖**未打标签的提交**
-所必需的,**伪版本**（pseudo-version）。当读者依赖某仓库一个尚无 semver 标签的 commit 时，`go`
-命令会为它合成一个形如 `v0.0.0-20191109021931-daa7c04131f5` 的版本：
-
-```mermaid
-flowchart LR
-    A["<code>v0.0.0</code><br/>基版本前缀"] --- B["<code>20191109021931</code><br/>UTC 提交时间"] --- C["<code>daa7c04131f5</code><br/>12 位 commit 哈希前缀"]
+```go
+// This package follows Semantic Versioning 2.0.0 (see semver.org)
+// with two exceptions. First, it requires the "v" prefix. Second, it recognizes
+// vMAJOR and vMAJOR.MINOR (with no prerelease or build suffixes)
+// as shorthands for vMAJOR.0.0 and vMAJOR.MINOR.0.
+package semver
 ```
 
-伪版本被精心设计成在 semver 全序里「排在它所基于的标签版本之后、下一个正式版之前」，于是它能
-和真实标签一同参与 [17.3](./minimum.md) 的版本比较，毫无例外。这是 semver 全序关系在工程上被
-贯彻到底的一个例子：哪怕一个 commit 从未被作者命名，Go 也要给它一个可比较、可排序、可记录的
-版本号。
+因此 Go 模块的版本总是写作 `v1.4.2` 而非 `1.4.2`，`v1` 与 `v1.4` 分别是 `v1.0.0` 与 `v1.4.0` 的简写。
 
-## 17.2.2 语义化导入版本：把主版本写进路径
+## 17.2.2 版本号承诺不了什么
 
-Go 在 semver 之上加了一条与众不同的强硬规则,**语义化导入版本**（Semantic Import
-Versioning，Russ Cox 提出）：**当一个模块升到 v2 或更高主版本时，它的模块路径必须带上主版本
-后缀。** 比如 `example.com/mod` 的 v1，到了 v2 必须改成 `example.com/mod/v2`，到 v3 则是
-`example.com/mod/v3`。导入时也随之带上后缀：
+语义化版本是一种约定，没有任何机制强制作者遵守。`golang.org/x/exp` 中的实验性工具 `gorelease`
+可以比较一个模块的基准版本与当前修订的公共 API 及依赖，判断拟发布的版本号是否与语义化版本相符
+[[Go Authors, n.d.b](#ref-go-authors-ndb)]。但这类工具检查的只是 API 的形式，函数签名没有变化，
+不代表行为没有变化。
+
+Winters 把语义化版本称为对兼容性的一种「有损估计」，它既可能约束过度，也可能保护不足
+[[Winters et al., 2020](#ref-winters-et-al-2020)]。约束过度的情形是：一个库包含 `Foo` 与 `Bar` 两个函数，
+作者对 `Bar` 做了不兼容的修改，只好递增主版本号；依赖它的另外两个库只用到 `Foo`，本来可以照常工作，
+却因为只声明了兼容 1.x 而被求解器拒绝。保护不足的情形则源于海勒姆定律（Hyrum's Law）：用户足够多时，
+系统的每一种可观察行为都会被某个人所依赖。改变日志格式、改变「无序」结果的顺序，在 API
+的契约之内都不算不兼容的修改，按规范只需递增修订号，却总会破坏某些使用者。
+
+Cox 从另一个角度提出了批评 [[Cox, 2018b](#ref-cox-2018b)]。规范说明了不兼容的修改应当递增主版本号，
+却没有说明递增之后该怎么办。文中用一个虚构的故事说明这一点：OAuth2 库发布了部分不兼容的 2.0.0，AWS
+客户端库在内部改用了它，Azure 客户端库仍使用 1.x；一个同时使用两者的应用于是陷入钻石依赖，
+而这个应用直接导入的包，没有一个改变过主版本号。更糟的是，两者共同使用的中间件 Moauth 在自己的 API
+中暴露了 OAuth2 的类型，即使允许 OAuth2 的两个版本共存，也说不清 Moauth 应当导入哪一个。
+按语义化版本的规定，每一步都无可指摘，构建却一再失败。Cox 的结论是，把不兼容的修改标记为 2.0.0，
+很容易被理解为「递增了主版本号，其余一切自然会好」，而事实并非如此。
+
+## 17.2.3 导入兼容性规则与语义化导入版本
+
+Go 模块的回答是把 2013 年 FAQ 中的建议（[17.1](./challenges.md)）确立为规则，Cox
+称之为**导入兼容性规则**（import compatibility rule）[[Cox, 2019](#ref-cox-2019)]：
+
+```text
+If an old package and a new package have the same import path,
+the new package must be backwards compatible with the old package.
+```
+
+即：如果旧包与新包有相同的导入路径，新包必须向后兼容旧包。按照语义化版本，不同的主版本之间没有兼容关系；
+按照这条规则，不兼容的包不能共用导入路径。两者同时成立，不同的主版本就必须使用不同的导入路径。Go
+模块的做法是把主版本号写进模块路径：从 v2 起，模块路径必须带有与主版本一致的后缀，v1 的 `example.com/mod`
+到了 v2.0.0 须改为 `example.com/mod/v2` [[Go Authors, n.d.a](#ref-go-authors-nda)]。Cox
+称这一做法为**语义化导入版本**（semantic import versioning）[[Cox, 2019](#ref-cox-2019)]。
+模块路径是模块内每个包的导入路径的前缀，后缀因此传递给模块中的每一个包。v2 模块的 `go.mod`
+首行与使用者的导入语句如下：
+
+```text
+module example.com/mod/v2
+```
 
 ```go
 import (
-    "example.com/mod"      // 这是 v1（含 v0）
-    "example.com/mod/v2"   // 这是 v2，与上面是「两个不同的包」
+	"example.com/mod"          // v0 或 v1
+	modv2 "example.com/mod/v2" // v2，与上一行是两个不同的包
 )
 ```
 
-这条规则源自一个朴素而深刻的原则,Cox 称之为**导入兼容性规则**（Import Compatibility Rule），
-原话是：
+两个包的包名通常都是 `mod`，同时导入时需要为其中一个取别名。这条规则有几处边界：
 
-> If an old package and a new package have the same import path, the new package must be
-> backwards compatible with the old package.
->
-> 如果一个旧包和一个新包有相同的导入路径，那么新包必须向后兼容旧包。
+- v0 与 v1 不带后缀。v0 不承诺任何兼容，从 v0 到 v1 无须更换路径；对多数模块而言，v1 与最后一个 v0
+  版本兼容，它表达的是对兼容的承诺，而不是一次不兼容的修改。
+- 以 `gopkg.in/` 开头的路径是例外，它们在 v0 与 v1 也必须带有主版本后缀，且以点而非斜杠分隔，如
+  `gopkg.in/yaml.v2`。这一早于 Go 模块的服务，已经采用了把主版本写进导入路径的做法。
+- 一个仓库可以在不同的分支上开发不同的主版本，也可以在主分支上为 v2 建立名为 `v2` 的子目录，放置带有自己
+  `go.mod` 的模块。Go 博客推荐后一种做法，因为它与 GOPATH 模式下的构建兼容性最好
+  [[Barkhuysen and Bui-Palsulich, 2019](#ref-barkhuysen-and-bui-palsulich-2019)]。
 
-把这条规则与 semver 摆在一起，结论就是被逼出来的：按 semver，主版本号递增**按定义**意味着不
-向后兼容;按导入兼容性规则，不兼容就**不能**复用同一个导入路径。两者相乘，唯一的出路就是,
-**不兼容的新主版本必须换一个新路径**。于是 `example.com/mod/v2` 不是一种风格选择，而是规则的
-必然推论。Cox 用一个比喻收束：与其给新 API 起一个「可爱却不相干的新名字」（如把 OAuth 库改叫
-Pocoauth），不如就叫它 `oauth2/v2`,版本号本身成了名字的一部分，既保留了 semver 的清晰，又
-满足了导入兼容性规则。
+在 OAuth2 的故事里，这条规则改变了两个情节 [[Cox, 2018b](#ref-cox-2018b)]。第一，OAuth2
+的作者不能以原来的导入路径发布不兼容的新 API，只能把它作为新的包发布；第二，Moauth 在 API 中暴露了 OAuth2
+的类型，OAuth2 分裂为两个包，迫使 Moauth 也分裂为两个包。于是各个包的导入语句恰好对应需要构建的内容，
+应用的构建不再需要任何特殊处理。代价由包的作者承担：每一次不兼容的修改都需要一个新的名字。Cox
+认为这一代价值得付出，因为作者可以用早已熟悉的「包」与「导入路径」来推想修改对使用者的影响，
+并可能因此作出更好的决定，例如在原有的包中并列加入新的 API，或者借助接口让 Moauth 同时支持两个版本，
+从而避免分裂。
 
-规则在工程上有几处边角，值得一并交代清楚，否则读者一升级就会撞上：
+钻石依赖也就此化解。D 1.3 必须向后兼容 D 1.2，D 2.0 的导入路径则是 `D/v2`；同时使用两个主版本的程序，
+像对待任何两个导入路径不同的包一样对待它们 [[Cox, 2019](#ref-cox-2019)]。一个大型程序可以逐个包地从 v1
+迁移到 v2，在任何时刻都清楚哪些代码已经迁移、哪些还没有。
 
-- **v0 与 v1 不带后缀。** `v0` 是「不稳定、不承诺兼容」的开发期，`v1` 通常是对最后一个 `v0` 的
-  兼容性「定调」而非一次破坏，两者都用裸路径 `example.com/mod`。后缀只从 `v2` 开始出现。
-- **仓库如何安放多个主版本。** 一个仓库要同时提供 v1 和 v2，常见两种做法：在根目录用**主版本
-  分支**（v2 代码打 `v2.x.x` 标签），或在仓库里开一个 **`/v2` 子目录**单独放 v2 代码并带自己的
-  `go.mod`。两种都合法，`go` 命令都认。
-- **历史包袱：`+incompatible`。** 模块机制是 2018 年才进入 `go` 命令的，此前已有大量仓库给
-  `v2.0.0` 以上打了标签却没有 `go.mod`、也没改路径。为兼容它们，`go` 命令给这类版本挂一个
-  `+incompatible` 后缀（如 `example.com/m v4.1.2+incompatible`），表示「它仍被当作低主版本的
-  同一个模块」。这是一条迁移期的妥协通道，不是新模块该走的路,新模块迁移到 v2 时，规规矩矩
-  改路径即可。
-- **`gopkg.in` 的特例。** 这个早于 Go 模块的版本化导入服务从一开始就把主版本写进了路径，且
-  从 `v0`、`v1` 起就带，分隔符用点而非斜杠（如 `gopkg.in/yaml.v2`）。它其实是语义化导入版本的
-  一次「前传」实践，Go 模块把同样的思路标准化、并推广到了所有路径。
+这条规则在推出时遭到不少反对。Cox 在 2019 年逐一作了回应 [[Cox, 2019](#ref-cox-2019)]：
 
-把它放进生态里看，这条规则的取向相当独特。多数语言把版本约束放在一份与源码分离的清单文件里
-（npm 的 `package.json`、Cargo 的 `Cargo.toml`、Maven 的 `pom.xml`），导入语句里**不含版本**，
-靠求解器在构建时挑出一组兼容版本。代价是，同一个包的两个不兼容主版本天然**互斥**,要么求解器
-报冲突，要么得靠 npm 那种「把不同版本各塞进一层 `node_modules` 子树」的嵌套安装来回避，而那又
-会让同一个类型在两个版本里被判为不同类型，埋下隐蔽的运行期错误。Go 把版本焊进导入路径，等于
-把「哪个主版本」这件事从清单挪进了类型系统本身,`mod` 与 `mod/v2` 在编译期就是两个无关的包，
-共存是语言层面的事实，而非安装器的小聪明。这正是它「更麻烦、却更干净」的根由。
+| 异议 | 回应 |
+|:----|:----|
+| 导入路径中的版本号不美观 | 以大写字母表示导出、以完整 URL 作为导入路径，起初也被认为不美观，如今已被视为理所当然 |
+| 升级主版本须改写全部导入路径 | 改写可以由工具完成；路径中的版本也使逐步迁移成为可能 |
+| 同一个构建中不应允许多个主版本 | 这只对被依赖包的作者更简单；禁止共存会使钻石依赖重新出现，并把生态分裂为互不相容的两群。Cargo 等系统同样允许 |
+| 初期开发时频繁破坏兼容，后缀是负担 | v0 不承诺兼容，也不出现在导入路径中 |
 
-## 17.2.3 一条规则解开一个死结
+## 17.2.4 没有标签与没有 `go.mod` 的代码
 
-语义化导入版本带来一个强大到能改变问题性质的后果：因为 `example.com/mod`（v1）与
-`example.com/mod/v2` 是**两个不同的导入路径**，在编译器看来它们就是**两个互不相干的包**,于是
-它们可以**同时**存在于同一个程序里。这恰好化解了 [17.1](./challenges.md) 钻石依赖里最棘手的一类。
+语义化导入版本要求 v2 及以上的模块路径带有后缀，但在模块出现之前，许多仓库已经发布了 v2 或更高版本的标签，
+路径中没有后缀，仓库中也没有 `go.mod`。为了兼容这些仓库，`go` 命令为这类版本加上 `+incompatible` 后缀，
+例如 `v4.1.2+incompatible` [[Go Authors, n.d.a](#ref-go-authors-nda)]。
+后缀表示这个版本与较低主版本属于同一个模块，`go` 命令可能从 v1.5.2 自动升级到 v4.1.2+incompatible，
+即使这会破坏构建。这是一条过渡的通道，参考手册建议此类仓库在迁移到模块时发布新的主版本，
+并使用带后缀的路径。
 
-设想这样一张依赖图：读者的程序同时用到库 A 和库 B，A 依赖 C 的 v1，B 依赖 C 的 v2，而 C 的 v1 与
-v2 不兼容。
+另一类代码根本没有版本标签。依赖一个尚未标记的提交时，`go` 命令为它合成一个**伪版本**（pseudo-version），
+形如 `v0.0.0-20191109021931-daa7c04131f5`，由三部分组成：基础版本前缀、修订创建时刻的 UTC 时间戳（在 Git
+中是提交时间而非作者时间），以及提交哈希的 12 个字符的前缀 [[Go Authors, n.d.a](#ref-go-authors-nda)]。
+`x/mod` 中的注释列出了伪版本的全部形式 [[Go Authors, 2026b](#ref-go-authors-2026b)]：
 
-```mermaid
-flowchart TD
-    APP["你的程序"] --> A["库 A"]
-    APP --> B["库 B"]
-    A -->|依赖| C1["C v1<br/>example.com/c"]
-    B -->|依赖| C2["C v2<br/>example.com/c/v2"]
-    C1 -.无须二选一.-> BUILD["同一次构建"]
-    C2 -.两者共存.-> BUILD
+```go
+// A pseudo-version takes one of the general forms:
+//
+//	(1) vX.0.0-yyyymmddhhmmss-abcdef123456
+//	(2) vX.Y.(Z+1)-0.yyyymmddhhmmss-abcdef123456
+//	(3) vX.Y.(Z+1)-0.yyyymmddhhmmss-abcdef123456+incompatible
+//	(4) vX.Y.Z-pre.0.yyyymmddhhmmss-abcdef123456
+//	(5) vX.Y.Z-pre.0.yyyymmddhhmmss-abcdef123456+incompatible
+//
+// If there is no recently tagged version with the right major version vX,
+// then form (1) is used, creating a space of pseudo-versions at the bottom
+// of the vX version range, less than any tagged version, including the unlikely v0.0.0.
 ```
 
-落到 `go.mod` 上，这种共存毫不特殊，就是平平无奇的两行 `require`，因为对 `go` 命令而言它们本就
-是两个不同的模块：
+伪版本是一种先行版本。若提交之前最近的标签是 vX.Y.Z，伪版本取形式 (2)，即下一个修订号的先行版本，它高于
+vX.Y.Z，又低于 vX.Y.(Z+1) 的任何正式的先行版本；基础版本相同的伪版本之间，则按时间先后排列。借助伪版本，
+一个从未被命名的提交也能参与版本的比较。
 
-```text
-// go.mod
-require (
-    example.com/c     v1.7.0   // A 经由它间接依赖
-    example.com/c/v2  v2.3.1   // B 经由它间接依赖
-)
-```
+为了防止伪版本被滥用，`go` 命令还要做三项检查 [[Go Authors, n.d.a](#ref-go-authors-nda)]。
+若指定了基础版本，对应的标签必须是该提交的祖先，否则有人可以构造 `v1.999.999-99999999999999-daa7c04131f5`
+这样高于一切标签的伪版本，绕过最小版本选择；时间戳必须与提交的时间一致，
+以防止有人以同一个提交制造无数个伪版本，或改变版本之间的相对次序；提交必须是仓库中某个分支或标签的祖先，
+以防止引用未经认可的修改，例如尚未合并的拉取请求。
 
-在没有这条规则的世界里（譬如 GOPATH 时代，或多数语言的求解式包管理器），最终只能把**一个**
-版本的 C 链进程序,选 v1 则 B 崩，选 v2 则 A 崩，这正是「依赖地狱」最经典的死结。而在语义化
-导入版本下，A 导入的是 `example.com/c`，B 导入的是 `example.com/c/v2`，两条路径、两个包、两份
-代码，编译器各编各的，互不打架。Cox 的描述是：「所有包里的 import 恰好对应了需要构建的东西。」
-那个需要求解器去协调的**外部约束**，被它**就地消解**在了导入路径里。
+## 17.2.5 小结
 
-它顺带强制了一种好习惯：发布破坏性变更时，作者**必须显式地改路径**（升主版本号），这让下游
-清清楚楚地看到「这是一个不兼容的新版本」，升级是一次睁眼的、主动的迁移，而非构建时悄悄发生的
-意外。把破坏性变更的代价摆在台面上，本身就会促使作者更慎重地对待它,semver FAQ 与 Cox 都把
-这种「让破坏变贵」视为规则的额外收益，而非负担。
+语义化版本为版本号提供了语法与全序，但它只是作者向使用者传达预期的一种方式：它无法准确描述兼容性，
+也没有说明不兼容的修改应当如何与既有的依赖共处。Go 模块在其上加了一条规则：
+同一导入路径下的新版本必须兼容旧版本，不兼容的修改必须使用新的导入路径。由此得出的语义化导入版本，
+使不同的主版本成为不同的包，钻石依赖中最难处理的冲突不再出现；同一主版本内的版本又都向后兼容，
+一个依赖只需声明它所需的最低版本。[17.3](./minimum.md) 将说明，版本选择正是在这两条前提下变得简单。
 
-## 17.2.4 设计取舍：复杂度前移
+## 延伸阅读
 
-语义化导入版本是 Go 依赖管理里最聪明、也最有争议的设计之一，值得把它的代价摆明。
-
-争议在于它的**严格**。升一次 v2 不只是改个数字：要改模块路径、要相应改掉所有内部互相 import 的
-前缀、要在仓库里特殊安放（子目录或主版本分支）、下游每一处 import 也都要跟着改。对库作者，这是
-一笔实打实的麻烦，社区一度怨言不少。别家的版本约束往往写在一个独立的清单文件里，改起来轻;Go
-把它焊进了源码里的每一行 import。Cox 对此并不回避，他承认「为每次不兼容变更引入一个新名字，
-确实有成本」，但他的判断是这成本用对了地方：它逼作者正视破坏性变更的影响，「不这么做的作者，
-其实是在伤害他们的用户」。
-
-它换来的，是整条版本选择算法（[17.3](./minimum.md)）能变得异常简单。在别的生态里，求解器之所以
-要做 NP-hard 的回溯与 SAT 求解，很大一部分力气正花在「两个不兼容版本只能选一个，怎么选才能让
-最多约束满足」上。语义化导入版本把这类情况**从根上抹掉了**,不兼容的版本是不同的包、能共存，
-于是「二选一」这个最难的子问题根本不会出现，[17.3](./minimum.md) 的 MVS 才能简化成「一遍图
-遍历取最大下限」，既无回溯、也无求解器。
-
-这是一处典型的「**复杂度前移**」：把难题从「构建时的求解算法」搬到「发布时的一条路径约束」上。
-难度没有消失，它被挪到了更早、更显式、也更可控的位置,作者在发布 v2 那一刻多付一点，整个生态
-在每一次构建时就省下了求解的全部代价与不确定性。这与 Go 处处可见的「用约束换简单」一脉相承
-（对照 [17.3](./minimum.md) 的 MVS、乃至全书反复出现的「把复杂度安置到正确位置」）。把这条路径
-铺好，下一节就能看到，[17.3](./minimum.md) 的选择算法是如何在这块地基上，简单到几乎不像是在
-解一个「依赖求解」问题的。
-
-## 延伸阅读的文献
-
-1. Tom Preston-Werner. *Semantic Versioning 2.0.0.* https://semver.org/
-   （`vMAJOR.MINOR.PATCH` 与各段递增的规范定义、预发布与构建元数据语法、优先级规则）
-2. Russ Cox. *Semantic Import Versioning.* https://research.swtch.com/vgo-import
-   （导入兼容性规则原文、v2 路径后缀的由来、多主版本共存）
-3. The Go Authors. *Go Modules Reference：Major version suffixes、+incompatible versions、
-   Pseudo-versions.* https://go.dev/ref/mod
-   （v0/v1 不带后缀、仓库安放方式、`+incompatible` 迁移通道、伪版本格式）
-4. Russ Cox. *Go & Versioning（"vgo" 系列文章的整体论述）.* https://research.swtch.com/vgo
-5. The Go Authors. *golang.org/x/exp/cmd/gorelease、golang.org/x/exp/apidiff*
-   （辅助检查导出 API 兼容性、为 semver 自律提供工具支撑）。
-6. 本书 [17.1 依赖管理的难点](./challenges.md)、[17.3 最小版本选择算法](./minimum.md)。
+- <a id="ref-barkhuysen-and-bui-palsulich-2019"></a>[Barkhuysen and Bui-Palsulich, 2019] Jean Barkhuysen,
+  Tyler Bui-Palsulich. *Go Modules: v2 and Beyond.* The Go Blog, 2019-11-07.
+  https://go.dev/blog/v2-go-modules
+  发布 v2 模块的步骤；推荐以主版本子目录组织多个主版本。
+- <a id="ref-cox-2018a"></a>[Cox, 2018a] Russ Cox. *Go & Versioning.* 2018. https://research.swtch.com/vgo
+  「vgo」系列文章的目录。
+- <a id="ref-cox-2018b"></a>[Cox, 2018b] Russ Cox. *Semantic Import Versioning.* 2018-02-21.
+  https://research.swtch.com/vgo-import
+  导入兼容性规则、OAuth2 与 Moauth 的故事、v2 路径后缀的由来与多个主版本的共存。
+- <a id="ref-cox-2019"></a>[Cox, 2019] Russ Cox. *The Principles of Versioning in Go.* 2019-12-03.
+  https://research.swtch.com/vgo-principles
+  兼容性原则，以及对语义化导入版本的四种异议的回应。
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors.
+  src/cmd/vendor/golang.org/x/mod/semver/semver.go. Go 1.26 源码.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/vendor/golang.org/x/mod/semver/semver.go
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors.
+  src/cmd/vendor/golang.org/x/mod/module/pseudo.go. Go 1.26 源码.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/vendor/golang.org/x/mod/module/pseudo.go
+- <a id="ref-go-authors-nda"></a>[Go Authors, n.d.a] The Go Authors. *Go Modules Reference.*
+  https://go.dev/ref/mod
+  「Major version suffixes」「+incompatible versions」「Pseudo-versions」各节：v0 与 v1 不带后缀、
+  `gopkg.in` 的特例、`+incompatible` 过渡通道、伪版本的格式与检查。
+- <a id="ref-go-authors-ndb"></a>[Go Authors, n.d.b] The Go Authors. *golang.org/x/exp/cmd/gorelease* 与
+  *golang.org/x/exp/apidiff.* https://pkg.go.dev/golang.org/x/exp/cmd/gorelease
+  检查导出 API 的兼容性，为遵守语义化版本提供工具支持。
+- <a id="ref-preston-werner-2013"></a>[Preston-Werner, 2013] Tom Preston-Werner.
+  *Semantic Versioning 2.0.0.* 2013. https://semver.org/
+  主版本号、次版本号、修订号的递增规则，先行版本号与版本编译信息的语法，以及版本的优先级。
+- <a id="ref-winters-et-al-2020"></a>[Winters et al., 2020] Titus Winters, Tom Manshreck, Hyrum Wright
+  (eds.). *Software Engineering at Google.* O'Reilly, 2020. 第 21 章「Dependency Management」（Titus
+  Winters 撰写）. https://abseil.io/resources/swe-book/html/ch21.html
+  语义化版本作为「有损估计」的约束过度与保护不足；对最小版本选择的评价。
+- 本书 [17.1 依赖管理的难点](./challenges.md)、[17.3 最小版本选择算法](./minimum.md)。

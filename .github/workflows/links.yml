@@ -7,10 +7,10 @@ name: Links
 # 429 after a DOI redirect, so those codes are accepted. An unknown DOI still
 # fails: doi.org answers it with 404 before any redirect happens.
 #
-# A few hosts are excluded. mail.mozilla.org is gone, blog.labix.org answers
-# 404/500 and www.uclibc.org times out; the book keeps those URLs as cited and
-# adds a web.archive.org copy beside them. 9p.io serves fine but fails the TLS
-# handshake with lychee's client.
+# A few hosts are excluded. mail.mozilla.org and sdboyer.io are gone,
+# blog.labix.org answers 404/500 and www.uclibc.org times out; the book keeps
+# those URLs as cited and adds a web.archive.org copy beside them. 9p.io serves
+# fine but fails the TLS handshake with lychee's client.
 
 on:
   push:
@@ -45,5 +45,6 @@ jobs:
             --exclude '^https?://blog\.labix\.org/'
             --exclude '^https?://www\.uclibc\.org/'
             --exclude '^https?://9p\.io/'
+            --exclude '^https?://sdboyer\.io/'
             'book/**/*.md'
           fail: true

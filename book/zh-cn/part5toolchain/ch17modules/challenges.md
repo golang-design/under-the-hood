@@ -5,221 +5,228 @@ title: "17.1 依赖管理的难点"
 
 # 17.1 依赖管理的难点
 
-现代软件几乎不再从零写起。一个寻常的服务端程序，`import` 列表往下走一层是日志库、HTTP
-路由、序列化器，再往下是它们各自依赖的加密、压缩、网络原语,真正属于自己的代码，可能不到
-整张依赖图的百分之一。这带来了复用的红利，也带来了一个本不属于读者、却必须由其回答的问题：
-**这张图上每个包，到底该用哪个版本？** 这一节不急着给 Go 的答案，先把问题本身的难讲清楚。
-难点有两条主线：一是**版本如何选**（钻石依赖与约束求解），二是**选定之后如何不漂移**
-（可重现构建）。理解了这两条，才能看懂 [17.3](./minimum.md) 那套「最小版本选择」为什么值得
-专门设计，以及 Go 为走到那一步付出过什么代价。
+Cox 借用 Titus Winters 的说法，把软件工程定义为「加入了时间与其他程序员之后的编
+程」[[Cox, 2019](#ref-cox-2019)]。依赖恰好同时带来了这两样东西：被依赖的代码由别人编写，
+并按别人的节奏发布新版本。一个程序今天能够构建，明年能否以同样的方式构建；同一个依赖的两个使用者，
+能否在同一个程序中相安无事，都不完全由程序的作者决定。Winters 同样强调，
+依赖带来的兼容性问题是软件工程问题而非编程问题：麻烦并不在于让依赖今天能用，而在于依赖随时间的变化
+[[Winters et al., 2020](#ref-winters-et-al-2020)]。本节从三个层面说明这一问题：GOPATH 时代的 `go get`
+为何在版本问题上失效，版本选择为何在一般情形下是 NP 完全问题，以及「取最新版本」
+的策略为何与可重复构建相冲突。Go 模块的回答见 [17.2](./semantics.md) 至 [17.4](./fight.md)。
 
-## 17.1.1 钻石依赖：一个约束求解问题
+## 17.1.1 没有版本的 `go get`
 
-依赖管理的核心难题，集中体现在一种叫**钻石依赖**（diamond dependency）的拓扑上。读者的程序同时
-依赖 A 和 B，而 A 和 B 又都依赖同一个 C,依赖图从顶点出发分成两支，又在 C 处重新汇合，画出来
-正是一颗钻石。问题出在两支对 C 提出了**不同的版本要求**：
+Go 的第一个包安装工具是 `goinstall`，由 Cox 于 2010 年 3 月加入代码库，提交标题称之为一次「（外部）
+包安装的实验」[[Cox, 2010](#ref-cox-2010)]。Go 1 发布之前，它被 `go get` 取代
+[[Niemeyer, 2012](#ref-niemeyer-2012)]。两者遵循同一个模型：导入路径既是代码仓库的地址，也是
+`$GOPATH/src` 下的目录，`import "github.com/foo/bar"` 对应磁盘上的 `$GOPATH/src/github.com/foo/bar`。
+一个导入路径在磁盘上只有一份代码，至于这份代码是哪个版本，没有任何地方记录。
+
+这并非疏忽。2013 年，Go 1.2 的 FAQ 加入了一条关于版本的问答，说明 `go get` 有意不处理版本
+[[Cox, 2013](#ref-cox-2013)]：
+
+```text
+"Go get" does not have any explicit concept of package versions.
+Versioning is a source of significant complexity, especially in large code bases,
+and we are unaware of any approach that works well at scale in a large enough
+variety of situations to be appropriate to force on all Go users.
+```
+
+FAQ 转而给出两条建议。对包的作者：保持向后兼容，需要不同的功能时增加新的名字而不改变旧的名字，
+必须彻底破坏兼容时，改用新的导入路径。对包的使用者：如果担心依赖以意想不到的方式变化，
+就把它复制到自己的仓库中，存放在新的导入路径下，FAQ 注明这正是 Google 内部的做法。
+前一条后来被命名为导入兼容性规则（[17.2](./semantics.md)），后一条则是 `vendor` 目录的前身。
+
+Boyer 指出，`go get` 的行为只有在两个前提下才是正确的：代码总是向后兼容，并且不存在固定的发布版本
+[[Boyer, 2016b](#ref-boyer-2016b)]。由于 `go get` 只取仓库默认分支上的最新代码，
+标记发布版本对普通用户没有任何影响，多数开发者也就不再标记版本。前提一旦不成立，`go get`
+会以两种相反的方式出错。Cox 用下面的例子说明了这两种失败 [[Cox, 2019](#ref-cox-2019)]：
+
+```text
+$ go get D       # 下载 D 的最新版本 D 1.0
+$ go get C       # 下载 C 1.8；C 需要 D 1.4，但磁盘上已有 D 1.0，于是沿用：D 太旧
+$ go get -u C    # 把所有依赖更新到最新；D 恰好刚刚发布了有缺陷的 D 1.6：D 太新
+```
+
+C 的作者在 D 1.4 上开发和测试，构建真正需要的正是 D 1.4。`go get` 不知道版本的存在，只能在「磁盘上已有的」
+与「仓库中最新的」两者之间选择，而两者都不是 D 1.4。
+
+社区为此编写了大量工具。Go 团队的回应是 `vendor` 目录：Go 1.5 以环境变量 `GO15VENDOREXPERIMENT`
+提供实验性的支持，Go 1.6 默认启用，Go 1.7 起成为标准功能 [[Go Authors, 2016a](#ref-go-authors-2016a);
+[Go Authors, 2016b](#ref-go-authors-2016b)]。`vendor` 允许每个项目在自己的目录树中保存依赖的副本，
+解决了依赖的隔离，却没有回答依赖应当是哪个版本，也没有统一的方式记录这一选择。
+各种工具在此基础上各自记录版本，格式互不相通。2016 年，社区组成委员会，着手设计统一的工具，即后来的
+`dep`（[17.4](./fight.md)）。
+
+## 17.1.2 钻石依赖
+
+设程序 A 依赖 B 和 C，B 需要 D 的版本 1，C 需要 D 的版本 2，且两个版本互不兼容。依赖图从 A 分为两支，在 D
+处汇合，形如钻石，这一情形因此称为**钻石依赖**（diamond dependency）[[Cox, 2016](#ref-cox-2016)]：
 
 ```mermaid
 flowchart TD
-    APP["你的程序 main"] --> A["A v1.0"]
-    APP --> B["B v1.0"]
-    A -->|"require C v1.2"| C12["C v1.2"]
-    B -->|"require C v1.5"| C15["C v1.5"]
-    C12 -.->|"二者只能合一"| PICK{"链进哪个 C?"}
-    C15 -.-> PICK
+    A["A"] --> B["B"]
+    A --> C["C"]
+    B -->|"需要 D 1"| D1["D 1"]
+    C -->|"需要 D 2"| D2["D 2"]
 ```
 
-为什么不能让 A 用 C v1.2、B 用 C v1.5，各取所需？多数语言做不到。C 的两个版本通常导出同一个
-包路径、同一组类型名，把两份链进同一个程序，链接器会撞上重复符号；即便链接器允许，C v1.2 的
-`Token` 和 C v1.5 的 `Token` 在类型系统里也是两个互不兼容的类型,一旦 A 把自己拿到的 `Token`
-传给 B，就会在边界上炸开。这条裂缝用一段示意代码看得更清楚：
+如果一个程序只能包含 D 的一个版本，这张依赖图就无法构建。在 Go 中，这一限制来自构建系统本身：
+一个导入路径只能指称唯一的包 [[Cox, 2019](#ref-cox-2019)]。即使构建系统允许两份副本共存，
+问题也不会就此消失。两个版本中同名的类型是不同的类型，B 从 D 1 得到的值不能交给期望 D 2 的 C；
+包级别的状态也会重复，假如 D 在初始化时注册了一个命令行标志或 HTTP 处理函数，除非两个版本之间显式协调，
+否则同时存在就会冲突 [[Cox, 2019](#ref-cox-2019)]。
 
-```go
-// A 内部用 C v1.2，并把 C 的类型暴露在自己的 API 上
-package a
-import c "example.com/c" // 假定解析到 v1.2
-func NewClient() *c.Token { ... }
+语义化版本规范在引言中把这类困境称为「依赖地狱」，并指出它有两个方向：依赖关系定得过紧，
+升级一个包就必须为每个依赖它的包发布新版本，即版本锁死；定得过松，则假定了与过多未来版本的兼容，
+即版本混乱 [[Preston-Werner, 2013](#ref-preston-werner-2013)]。前者让升级寸步难行，
+后者让构建随时可能被一个新版本破坏。依赖管理工具的全部设计，都可以看作在这两个方向之间寻找位置。
 
-// B 内部用 C v1.5，签名里同样是 c.Token
-package b
-import c "example.com/c" // 假定解析到 v1.5
-func Use(t *c.Token) { ... }
+## 17.1.3 版本选择是 NP 完全问题
 
-// 你的程序想把 A 给的 Token 交给 B
-b.Use(a.NewClient())
-// 若 v1.2 与 v1.5 是「两个 c.Token 类型」，这一行编译不过：
-// cannot use a.NewClient() (*c@v1.2.Token) as *c@v1.5.Token
-```
+钻石依赖说明版本选择可能无解，更深的问题在于，判断它是否有解本身就很困难。Cox 在
+2016 年的一篇文章中给出了证明：只要包管理器满足下面四条假设，判定一组依赖能否被满足就是 NP 完全问题
+[[Cox, 2016](#ref-cox-2016)]：
 
-Russ Cox 在「Go & Versioning」里用 OAuth2 的例子细描过这条裂缝：一个应用经由 Azure 库间接
-依赖 OAuth2 v1，又经由 AWS 库间接依赖 OAuth2 v2，当中间库把底层依赖的类型暴露进自己的 API，
-多版本共存就从「能不能链进去」变成了「会不会在接缝处对不上类型」。于是现实退化成一个硬约束：
-**同一个 C，整个程序里只能存在一个版本**。
+1. 一个包可以把零个或多个包、或包的特定版本列为依赖；
+2. 安装一个包，必须安装它的全部依赖；
+3. 一个包的不同版本可以有不同的依赖；
+4. 同一个包的两个不同版本不能同时安装。
 
-一旦接受「一个包一个版本」，钻石依赖就变成了一道选择题：在 v1.2 和 v1.5 里挑一个，挑出来的
-那个必须同时让 A 和 B 都能正常工作。两个节点时这还简单。可真实的依赖图有成百上千个节点，每个
-节点都对版本提出自己的区间约束（C 要 `>=1.2`、D 要 `<2.0`、E 又要 `!=1.4` ……），要找出一组
-让**所有**约束同时成立的版本组合,这就是一个不折不扣的**约束求解**（constraint solving）问题。
-
-它有多难，取决于允许表达什么样的约束。如果约束里出现了**条件依赖**,「若选了 X 的某版本，则
-不能选 Y」这类带否定的蕴含，求解问题立刻滑进**布尔可满足性**（SAT）的范畴。Cox 的观察相当
-扎心：「只需一点点条件约束，版本搜索就掉进了 SAT」,而 SAT 是 NP 完全问题，没有已知的通用
-高效解法。形式化地说，给定变量集合 $V$（每个包选哪个版本）和约束集合 $\Phi$，要判定是否存在
-一个赋值使 $\bigwedge_{\phi \in \Phi}\phi$ 为真,当 $\Phi$ 含任意布尔子句时，这等价于
-3-SAT。这正是为什么 Cargo、npm、apt 这些包管理器内部往往背着一个 SAT 求解器：
+证明把 3-SAT 归约为版本选择。每个布尔变量 $x_j$ 对应一个包 $X_j$，它有两个互斥的版本 $X_j{:}0$ 与
+$X_j{:}1$，安装 $X_j{:}1$ 表示 $x_j$ 为真。每个子句 $C_i$ 对应一个有三个版本的包，第 $k$
+个版本依赖使子句中第 $k$ 个文字为真的那个变量版本。最后，一个包 $F$ 依赖全部的 $C_i$。以子句 $C_5 = (x_1
+\lor \lnot x_2 \lor x_4)$ 为例：
 
 ```text
-# 一个会触发 SAT 的约束系统（示意）
-程序     依赖 A, B
-A v1.0   依赖 C >= 1.2
-B v1.0   依赖 C  < 1.5,  且 若 C >= 1.3 则需 D >= 2.0
-D v2.0   依赖 C  < 1.3            ← 与上一条互相否定，制造组合爆炸
-...      （上千个包，各带自己的区间与条件）
-求解器需在指数级的版本组合空间里，找一组同时满足全部约束的赋值
+C5:0 依赖 X1:1      子句中的第一个文字 x1 为真
+C5:1 依赖 X2:0      子句中的第二个文字 ¬x2 为真
+C5:2 依赖 X4:1      子句中的第三个文字 x4 为真
+F    依赖 C1, C2, ..., Cn
 ```
 
-把求解器请进来，代价有二。一是**慢**：最坏情况下搜索空间随包数指数膨胀，大型工程里一次依赖
-解析耗时可观。二是**意外**：SAT 求解器返回的是「某个可行解」，未必是人直觉里「最该选的那个」。
-求解器内部的搜索顺序、启发式策略稍有调整，同一份约束可能解出不同的版本组合,读者只是升级了一个
-八竿子打不着的包，却发现另一个包被「顺手」换了大版本。**慢与不可预测，是把版本选择当成通用
-约束求解的内生代价。** 记住这一点，[17.3](./minimum.md) 里 Go 刻意把问题限制在多项式可解的
-子类（MVS 对应的约束同时是 2-SAT、Horn-SAT 与 Dual-Horn-SAT），就不再是炫技，而是对这条
-难点的正面回应。
+$F$ 可以安装，当且仅当每个 $C_i$ 都有一个版本可以安装，即每个子句都有一个文字为真，也就是原公式可满足。
+包的「多个版本、每个版本依赖不同」在这里扮演了析取的角色。Cox 在文中说明，EDOS 项目 2005 年的报告已经证明
+Debian 与 RedHat 的包安装是 NP 完全的，但那一证明借助了这些系统中「多选一」的依赖语法，而 Cox
+的构造只用到上述四条几乎所有包管理器都满足的假设，因此同样适用于 Cargo、npm 这类语言级的包管理器
+[[Cox, 2016](#ref-cox-2016)]。文末还致谢 Boyer 指出了 EDOS 的报告；Boyer 本人对包管理器设计空间的梳理见
+[[Boyer, 2016a](#ref-boyer-2016a)]。
 
-## 17.1.2 可重现构建：今天的我，等于下个月的 CI
+这一结论有两层含义。第一，在最坏情况下，包管理器要么可能花费极长的时间求解，
+要么可能把本可安装的包报告为无法安装。Cox 的考察表明，许多包管理器因此转向 SAT 求解器或回溯搜索
+[[Cox, 2016](#ref-cox-2016)]。EDOS 项目本身也把 Debian 的可安装性问题编码为布尔公式，交给 SAT 求解器判定
+[[Mancinelli et al., 2006](#ref-mancinelli-et-al-2006)]。第二，求解器的答案未必唯一。当「最新的 B
+与较旧的 C」和「较旧的 B 与最新的 C」都满足约束时，选择哪一个并没有明确的标准，使用者也难以预测结果
+[[Cox, 2019](#ref-cox-2019)]。何况约束本身往往不完整：求解器只能排除已被声明的不兼容，
+一个「尚未被发现有问题」的组合，不等于一个能够工作的组合。
 
-第二条主线，是选定版本之后如何让它**不漂移**。可重现构建（reproducible build）的要求可以
-一句话说清：今天在我机器上构建出的二进制，与下个月在 CI 流水线上、在读者的笔记本上、在三年后
-某次安全回滚里构建出的，必须由**同一组依赖版本**编译而成。否则便落入那句工程师最熟悉的辩词:
-「在我这儿是好的」(works on my machine)。
+同一篇文章也指出了避开 NP 完全的方向，即放弃四条假设中的某一条 [[Cox, 2016](#ref-cox-2016)]。
+如果依赖只能声明最低版本，不能指定特定版本或排除某些版本（放弃第一条），选择就不再需要搜索；
+如果允许同一个包的不同版本同时存在（放弃第四条），冲突也就不会出现。若包遵循语义化版本，两者还可以结合：
+同一主版本内只取一个版本，不同的主版本视为不同的包。两年后的 Go 模块正是沿着这两个方向设计的
+[[Cox, 2018a](#ref-cox-2018a)]（[17.2](./semantics.md)、[17.3](./minimum.md)）。
 
-它之所以是难点，在于「构建」这个动作天然带着一个隐藏的时间维度。如果依赖解析的规则是
-「取满足约束的**最新**版本」,这是许多生态的默认,那么解析结果就成了构建时刻的函数：
+## 17.1.4 可重复构建与锁文件
+
+第二个难点是时间。如果依赖解析的规则是「取满足约束的最新版本」，解析的结果就成了构建时刻的函数。C
+声明需要 D 1.4 或更高版本：昨天，满足条件的最新版本是 D 1.5；今天 D 1.6 发布了，同一份声明就解析出 D 1.6
+[[Cox, 2019](#ref-cox-2019)]。没有人修改一行代码或一行依赖声明，构建的产物却变了。一旦 D 1.6 引入缺陷，
+线上的问题可能在本地无法复现，因为两处的构建悄悄使用了不同的 D。
+
+`dep`、Bundler、Cargo 等工具以**锁文件**应对：清单文件声明可接受的版本范围，
+锁文件记录某次解析得到的每个依赖的确切版本，此后的构建以锁文件为准。锁文件保证了整个程序的可重复构建，
+但它只对整个程序有效。当 C 是一个库、作为更大程序的一部分被构建时，C 自己的锁文件不能约束外层程序的解析，
+这些工具只能忽略它，退回到依赖于时间的默认决策 [[Cox, 2019](#ref-cox-2019)]。于是同一个库，
+在作者那里使用一组版本，在使用者那里使用另一组版本。Cox 把这种无正当理由地偏离作者构建的情形称为
+**低保真构建**（low-fidelity build）[[Cox, 2018b](#ref-cox-2018b)]。
+
+可重复还要求同一个版本号始终对应同样的内容。语义化版本规范规定，一个版本一经发布，其内容不得修改
+[[Preston-Werner, 2013](#ref-preston-werner-2013)]，但版本控制系统中的标签可以被移动，
+托管代码的服务器也可能被篡改。这一问题由 `go.sum` 与校验和数据库解决（[17.4](./fight.md)）。
+
+## 17.1.5 Go 的回答：三条原则
+
+2019 年，Cox 把 Go 模块不沿用 `dep` 设计的原因归结为三条原则 [[Cox, 2019](#ref-cox-2019)]：
 
 ```text
-# 同一份「取最新」规则，在不同时刻给出不同结果
-一月：require C >= 1.2  →  当时 C 最新是 v1.4  →  链进 v1.4
-三月：require C >= 1.2  →  C 已发布 v1.6        →  链进 v1.6  ← 没人改一行代码，构建却变了
+Compatibility. The meaning of a name in a program should not change over time.
+Repeatability. The result of a build of a given version of a package should not change over time.
+Cooperation. To maintain the Go package ecosystem, we must all work together.
+Tools cannot work around a lack of cooperation.
 ```
 
-没有人改动一行源码、一行依赖声明，只因为上游在两次构建之间发了新版，产物就变了。一旦新版引入
-回归，线上 bug 在本地却复现不出来,因为本地和线上悄悄跑着不同的 C。可重现性因此要求版本选择
-是**确定的**（同样的输入永远给同样的输出）、**可记录的**（能把这次选了哪些版本写下来）、并且
-**可校验的**（能确认下载到的字节就是当初那批字节，没有被篡改或替换）。
+兼容性是说，程序中一个名字的含义不应随时间改变；可重复性是说，一个包的给定版本，其构建结果不应随时间改变；
+协作是说，维护 Go 的包生态需要所有人共同努力，工具无法弥补协作的缺失。
+前两条分别消除了时间对程序含义与构建结果的影响，第三条承认，无论工具多么先进，
+不兼容最终只能由相关的作者合作修复。三条原则与本节各个难点的对应如下，各项机制的规范定义见 Go
+模块参考手册 [[Go Authors, n.d.](#ref-go-authors-nd)]：
 
-主流生态对这道题有两种答法。一种是「**取最新 + 锁文件**」：解析时仍取最新可行版本，但把这次
-解出的整组版本钉进一个 lock 文件（`package-lock.json`、`Cargo.lock`、`Gemfile.lock`），下次
-构建照着锁文件复现。这能保住可重现，却如 Cox 所言，对**库**而言是「低保真」的:库作者实际开发
-和测试时用的，多半不是某个使用者锁文件里那个恰好最新的版本，二者之间的偏差是平白引入的风险。
-另一种答法，是让解析规则本身就具备确定性，使「锁文件」不再是必需品。Go 选了后者，这是
-[17.3](./minimum.md) 的伏笔。
+| 难点 | 原则 | Go 模块的机制 | 详见 |
+|:----|:----|:-------------|:----|
+| 钻石依赖中不兼容的主版本 | 兼容性 | 语义化导入版本：不同的主版本使用不同的导入路径 | [17.2](./semantics.md) |
+| 版本选择的 NP 完全性 | 兼容性 | 依赖只声明最低版本，不声明不兼容 | [17.3](./minimum.md) |
+| 解析结果随时间变化 | 可重复性 | 最小版本选择，无需锁文件 | [17.3](./minimum.md) |
+| 版本内容可能被替换 | 可重复性 | `go.sum` 与校验和数据库 | [17.4](./fight.md) |
+| 新版本破坏既有组合 | 协作 | 构建不会自动采用新版本，为修复留出时间 | [17.3](./minimum.md) |
 
-把这两种答法放进别家生态里对照，难点的轮廓会更立体。npm 允许同一个包的多个版本在
-`node_modules` 树里并存（嵌套安装），等于用「放弃单一版本」来回避 17.1.1 的钻石冲突，代价是
-依赖树膨胀、同一类型在不同子树里互不相认。Cargo 取「最新可行 + `Cargo.lock`」，对应用是好的，
-对库则如前述偏向低保真。Maven 走「最近者优先」（nearest-wins）的就近覆盖，规则简单却常给出
-让人意外的版本。各家选择不同，但都在回答同两个问题:冲突时选谁、选定后如何不漂移,这正说明
-难点是生态无关的，而非某门语言的偶然。
+## 17.1.6 小结
 
-## 17.1.3 Go 的弯路：GOPATH 时代
+依赖管理的困难来自两个方面。一是组合：钻石依赖可能无解，而判定是否有解在一般情形下是 NP 完全的。二是时间：
+「取最新版本」使构建结果依赖于构建的时刻，锁文件只能修补整个程序，修补不了库。GOPATH 时代的 `go get`
+两方面都没有处理，它只认识磁盘上已有的代码和仓库中最新的代码。Go 模块的做法是同时放宽问题的两条前提：
+让不兼容的版本拥有不同的名字，从而可以共存；让依赖只声明最低版本，从而选择无需搜索、也不随时间变化。
+后续各节依次讨论这两项设计及其由来。
 
-把上面两条难点摆出来，再回看 Go 早期的依赖管理，就能精确指出它差在哪。模块出现之前，Go 用的是
-**GOPATH 模式**：所有第三方代码摊在一个全局的 `$GOPATH/src` 目录下，导入路径直接等于目录路径，
-`import "github.com/foo/bar"` 就对应 `$GOPATH/src/github.com/foo/bar`。结构朴素，但它对前两节的
-难点几乎是全面失守：
+## 延伸阅读
 
-```text
-$GOPATH/src/
-  github.com/foo/bar/   ← 一个导入路径，磁盘上只有一份代码、一个版本
-  golang.org/x/net/     ← 没有任何地方记录「这是哪个版本」
-```
-
-- **没有版本概念。** `go get` 拉的是依赖仓库的**最新主分支**。今天拉和下个月拉，可能是不同的
-  提交,17.1.2 里那种「没改代码、构建却变了」的漂移，在 GOPATH 下是常态而非例外。
-- **无法表达版本约束。** GOPATH 里根本没有地方写下「我要 C 的 v1.2」。约束都无从表达，
-  17.1.1 的约束求解自然也无从谈起。
-- **钻石依赖直接无解。** 一个导入路径在 `$GOPATH/src` 下只对应一个目录、一份代码。A 要 C v1.2、
-  B 要 C v1.5，磁盘上却只放得下一个 C,冲突在文件系统层面就被强行抹平了，抹平的代价是某一方
-  默默地跑在它没测试过的版本上。
-
-社区不会坐等。GOPATH 的真空期里涌出一批第三方工具,`godep`、`glide`、`dep` 是其中最知名的几个
-（这场工具竞逐与它如何收束于官方方案，是 [17.4](./fight.md) 的主题）。它们的招式大同小异：把
-依赖的源码连同一个确定的版本**复制**进项目自带的 `vendor/` 目录，构建时优先用 `vendor/` 里这份
-快照，从而绕开 GOPATH 的「永远最新」；再配一个 lock 文件（`Gopkg.lock` 之类）记下每个依赖钉在
-哪个提交，换来一点可重现性。这些补丁确实缓解了痛处，却始终是补丁:格式各异、互不通用，且没有
-一个被工具链原生承认的版本模型，钻石依赖这类需要全局求解的问题，依旧只能靠人工 `vendor` 时
-手动裁决。
-
-这段弯路本身就是依赖管理之难最有力的注脚。连以工程友好著称、连构建速度都要锱铢必较的 Go，
-都在版本这件事上摸索了近十年才落定。值得一提的是，GOPATH 也不是一无可取:它逼着每个导入路径
-全局唯一、可寻址，这个约束后来被模块继承了下来，成为「模块路径即导入前缀」的根基。弯路里
-踩实的部分，往往会留在正解之中。
-
-## 17.1.4 通向 Go 模块
-
-2018 年起，**Go 模块**（Go Modules）成为官方答案，正面回应前三节的每一条难点。它的几块基石，
-本章后续逐一拆解，这里先给读者一张全局地图：
-
-- **`go.mod`** 把依赖与版本约束**显式写进**仓库,17.1.1 里「无从表达的约束」从此有了载体。每条
-  `require` 是模块图（module graph）上的一条边，标注「至少需要某依赖的某版本」。
-- **`go.sum`** 记录每个依赖内容的加密校验和,回应 17.1.2 的「可校验」：下载到的字节若与
-  `go.sum` 对不上，构建即拒绝，依赖无法被悄悄掉包。
-- **语义化版本**（[17.2](./semantics.md)）给「v1.2 与 v1.5 谁更新、是否兼容」一套各方都认的规则,
-  尤其是「主版本进导入路径」（`.../v2`）这条，让 C 的不兼容大版本拥有**不同的导入路径**，把
-  17.1.1 那种「同路径双版本撞车」从源头化解。
-- **最小版本选择**（MVS，[17.3](./minimum.md)）是那套独特的求解算法。它对模块图做一次确定性的
-  图遍历，对每个依赖取「所有要求里的**最高下界**」,既绕开了 SAT 的指数复杂度，又让结果天然
-  确定，于是 17.1.2 的可重现**不再依赖 lock 文件**：同样的 `go.mod` 在任何时间、任何机器上，
-  都解出同一组版本。
-
-这四块基石如何各自对应到前两节那两条难点，可以一图收束：
-
-```mermaid
-flowchart TD
-    GOMOD["go.mod<br/>显式写下 require 约束"]
-    SEMVER["语义化版本 + 导入版本<br/>v2 进路径"]
-    MVS["最小版本选择 MVS<br/>取最高下界的图遍历"]
-    GOSUM["go.sum<br/>内容加密校验和"]
-
-    SELECT["版本怎么选<br/>钻石依赖 / 约束求解（17.1.1）"]
-    REPRO["选定后怎么不漂移<br/>可重现构建（17.1.2）"]
-
-    GOMOD -->|"承载可表达的约束"| SELECT
-    SEMVER -->|"不兼容主版本可共存，<br/>消解二选一"| SELECT
-    MVS -->|"确定性遍历，无需 lock 文件"| REPRO
-    GOMOD -->|"版本约束写定不漂移"| REPRO
-    GOSUM -->|"校验下载字节不被掉包"| REPRO
-
-    classDef pillar fill:#dff0d8,stroke:#3c763d,stroke-width:2px;
-    classDef problem fill:#fcf8e3,stroke:#8a6d3b,stroke-width:2px;
-    class GOMOD,SEMVER,MVS,GOSUM pillar;
-    class SELECT,REPRO problem;
-```
-
-把这四块拼起来，依赖管理那两条主线就都有了着落:版本怎么选，交给 MVS 的确定性遍历；选定后
-怎么不漂移，交给写定的 `go.mod` 加校验的 `go.sum`。本章接下来便沿这条线铺开：先是语义化版本
-（[17.2](./semantics.md)）立下版本号的契约，再是最小版本选择（[17.3](./minimum.md)）给出求解的
-内核，最后回看那场决定 Go 走向的工具之争（[17.4](./fight.md)）,看清它为何最终选了这条路，
-而不是别人走熟的那条。
-
-依赖管理是少有的、答案看似简单而问题极难的工程领域。它没有「完美解」，每种方案都是在
-**求解复杂度**、**对作者意图的保真**、**可重现强度**与**使用者心智负担**之间重新分配权重。
-Go 模块也不例外，它的取舍，正是后续几节要逐一审视的。
-
-## 延伸阅读的文献
-
-1. Russ Cox. *Go & Versioning（"vgo" 系列，问题与方案的完整论述）.* 2018.
-   https://research.swtch.com/vgo （尤见 "Semantic Import Versioning" 与
-   "Minimal Version Selection" 两篇，分别对应钻石依赖与求解复杂度）
-2. Russ Cox. *Minimal Version Selection.* 2018. https://research.swtch.com/vgo-mvs
-   （论证 MVS 对应的约束同时是 2-SAT / Horn-SAT / Dual-Horn-SAT，故多项式可解；
-   并对比「取最新 + lock」的低保真）
-3. The Go Authors. *Go Modules Reference.* https://go.dev/ref/mod
-   （`go.mod`、`go.sum`、module graph、build list 与 MVS 的权威定义）
-4. Titus Winters, Tom Manshreck, Hyrum Wright. *Software Engineering at Google.*
-   O'Reilly, 2020. 第 21 章 "Dependency Management"（大规模依赖管理的难点与权衡）
-5. Sam Boyer. *So you want to write a package manager.* 2016.
-   https://medium.com/@sdboyer/so-you-want-to-write-a-package-manager-4ae9c17d9527
-   （`dep` 作者对版本求解与 SAT 复杂度的系统梳理）
-6. 本书 [17.2 语义化版本控制](./semantics.md)、[17.3 最小版本选择算法](./minimum.md)、
-   [17.4 vgo 与 dep 之争](./fight.md)。
+- <a id="ref-boyer-2016a"></a>[Boyer, 2016a] Sam Boyer. *So you want to write a package manager.* 2016.
+  https://medium.com/@sdboyer/so-you-want-to-write-a-package-manager-4ae9c17d9527
+  `dep` 作者对版本求解与 SAT 复杂度的系统梳理。
+- <a id="ref-boyer-2016b"></a>[Boyer, 2016b] Sam Boyer. *The Saga of Go Dependency Management.* Gopher
+  Academy Blog, 2016-12-13. https://blog.gopheracademy.com/advent-2016/saga-go-dependency-management/
+  `go get` 的隐含前提、`vendor` 的引入，以及 2016 年包管理委员会的成立与工作计划。
+- <a id="ref-cox-2010"></a>[Cox, 2010] Russ Cox. goinstall: an experiment in (external) package
+  installation. Go commit 3e4e4ec704, 2010. https://golang.org/cl/224043
+  随 2010 年 3 月 15 日的周发布版本提供，Go 1 之前移除。
+- <a id="ref-cox-2013"></a>[Cox, 2013] Russ Cox. doc/faq: add a FAQ about versioning. Go commit
+  dc8d903155, 2013. https://golang.org/cl/14283044
+  随 Go 1.2 发布。
+- <a id="ref-cox-2016"></a>[Cox, 2016] Russ Cox. *Version SAT.* 2016-12-13.
+  https://research.swtch.com/version-sat
+  版本选择 NP 完全性的证明、各包管理器的求解方式，以及避开 NP 完全的几个方向。
+- <a id="ref-cox-2018a"></a>[Cox, 2018a] Russ Cox. *Go & Versioning.* 2018. https://research.swtch.com/vgo
+  2018 年 2 月的七篇系列文章及后续文章的目录，尤见 *Semantic Import Versioning* 与 *Minimal Version
+  Selection* 两篇，分别对应钻石依赖与求解复杂度。
+- <a id="ref-cox-2018b"></a>[Cox, 2018b] Russ Cox. *Minimal Version Selection.* 2018-02-21.
+  https://research.swtch.com/vgo-mvs
+  论证 MVS 对应的约束同时属于 2-SAT、Horn-SAT 与 Dual-Horn-SAT，故可在多项式时间内求解；
+  低保真构建与高保真构建的对比。
+- <a id="ref-cox-2019"></a>[Cox, 2019] Russ Cox. *The Principles of Versioning in Go.* 2019-12-03.
+  https://research.swtch.com/vgo-principles
+  兼容性、可重复性、协作三条原则，以及 Go 模块与 `dep` 在设计上的差别。
+- <a id="ref-go-authors-2016a"></a>[Go Authors, 2016a] The Go Authors. *Go 1.6 Release Notes.* 2016.
+  https://go.dev/doc/go1.6
+  `vendor` 默认启用。
+- <a id="ref-go-authors-2016b"></a>[Go Authors, 2016b] The Go Authors. *Go 1.7 Release Notes.* 2016.
+  https://go.dev/doc/go1.7
+  移除 `GO15VENDOREXPERIMENT`，`vendor` 成为标准功能。
+- <a id="ref-go-authors-nd"></a>[Go Authors, n.d.] The Go Authors. *Go Modules Reference.*
+  https://go.dev/ref/mod
+  `go.mod`、`go.sum`、模块图、构建列表与 MVS 的权威定义。
+- <a id="ref-mancinelli-et-al-2006"></a>[Mancinelli et al., 2006] Fabio Mancinelli, Jaap Boender, Roberto
+  Di Cosmo, Jérôme Vouillon, Berke Durak, Xavier Leroy, Ralf Treinen. Managing the Complexity of Large
+  Free and Open Source Package-Based Software Distributions. *ASE 2006*, pp. 199–208.
+  https://doi.org/10.1109/ASE.2006.49
+  EDOS 项目的成果之一，把 Debian 的可安装性问题编码为 SAT 问题求解。
+- <a id="ref-niemeyer-2012"></a>[Niemeyer, 2012] Gustavo Niemeyer. cmd/goinstall: remove now that 'go get'
+  works. Go commit 1e5b7e706e, 2012. https://golang.org/cl/5572083
+  随 Go 1 发布。
+- <a id="ref-preston-werner-2013"></a>[Preston-Werner, 2013] Tom Preston-Werner.
+  *Semantic Versioning 2.0.0.* 2013. https://semver.org/
+  引言中「依赖地狱」的两个方向；第 3 条：已发布版本的内容不得修改。
+- <a id="ref-winters-et-al-2020"></a>[Winters et al., 2020] Titus Winters, Tom Manshreck, Hyrum Wright
+  (eds.). *Software Engineering at Google.* O'Reilly, 2020. 第 21 章「Dependency Management」（Titus
+  Winters 撰写）. https://abseil.io/resources/swe-book/html/ch21.html
+  大规模依赖管理的难点与权衡。
+- 本书 [17.2 语义化版本管理](./semantics.md)、[17.3 最小版本选择算法](./minimum.md)、
+  [17.4 vgo 与 dep 之争](./fight.md)。
