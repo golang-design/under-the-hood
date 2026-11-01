@@ -496,6 +496,11 @@ Go 的分配器是一套分层缓存：最常见的分配在每个 P 的本地�
   *TCMalloc: Thread-Caching Malloc.* 2005. http://goog-perftools.sourceforge.net/doc/tcmalloc.html
   `runtime/malloc.go` 引用的即是此文。gperftools 项目现在维护的版本：
   https://gperftools.github.io/gperftools/tcmalloc.html
+- <a id="ref-go-authors-2023"></a>[Go Authors, 2023] The Go Authors. go/types: specious "invalid recursive
+  type" error? Go issue #60130, 2023. https://github.com/golang/go/issues/60130
+  原条目：「runtime: use a per-object header for scanning (Go 1.22)」，注为指针位图从 arena
+  集中式改为对象内联头部的演进。该 issue 实为 go/types 的问题；对象头部的引入见
+  [Knyszek, 2023](#ref-knyszek-2023)。
 - <a id="ref-go-authors-2024"></a>[Go Authors, 2024] The Go Authors. *Go 1.22 Release Notes.* 2024.
   https://go.dev/doc/go1.22
   「Runtime」一节介绍分配头带来的变化。

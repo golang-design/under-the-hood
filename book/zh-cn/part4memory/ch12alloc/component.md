@@ -479,5 +479,9 @@ flowchart TD
 - <a id="ref-wilson-1995"></a>[Wilson et al., 1995] Paul R. Wilson, Mark S. Johnstone, Michael Neely,
   David Boles. "Dynamic Storage Allocation: A Survey and Critical Review." *IWMM 1995*, 1–116, 1995.
   https://doi.org/10.1007/3-540-60368-9_19
+- <a id="ref-zhang-2017"></a>[Zhang, 2017] Cherry Zhang. cmd/compile: use type information in Aux for
+  Store size. Go CL 38150, 2017. https://go-review.googlesource.com/c/go/+/38150
+  原条目：「Go 1.9 mcentral 重构（spanSet）相关讨论与提交」。该 CL 实为编译器的修改；`mcentral` 的重写见
+  [Knyszek, 2020a](#ref-knyszek-2020a) 与 [Knyszek, 2020b](#ref-knyszek-2020b)。
 - 本书 [12.1 设计原则](./basic.md)、[12.5 小对象分配](./smallalloc.md)、[13.5
   清扫与位图](../ch13gc/sweep.md)。
