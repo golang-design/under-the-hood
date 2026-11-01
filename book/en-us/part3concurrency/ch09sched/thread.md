@@ -5,282 +5,531 @@ title: "9.5 Thread Management"
 
 # 9.5 Thread Management
 
-[9.1](./model.md) laid down the three-layer GMP structure: G is the user-level unit of execution, P is the scheduling permit and the carrier of local resources, and M is the leg actually borrowed from the operating system. The previous sections dwelt mostly on G and P; this section turns its attention to M, and answers several questions we have kept deferring: what M actually is, where it comes from, why GOMAXPROCS caps P while the thread count is often larger, why a single blocking system call does not drag down the other G alongside it, and what price the runtime pays when a user wants to pin a goroutine to a specific thread (`LockOSThread`).
+The previous sections dealt mainly with G and P. This section turns to M, the thread that the
+runtime requests from the operating system. It answers these questions: how threads are created, how
+idle threads are reused, why there are often more threads than `GOMAXPROCS`, why a goroutine blocked
+in a system call does not hold up the other goroutines on the same P, and what it costs to lock a
+goroutine to a thread (`LockOSThread`).
 
-One judgment runs through the whole section: **a thread is an expensive resource**. Creating one means trapping into the kernel, allocating a stack, and registering a signal mask; destroying one is no cheaper. Many of the Go scheduler's designs, from reusing idle M, to handing off the P during a system call, to placing a ten-thousand fuse on the thread count, are all organized around one main line: create as few as possible, reuse as many as possible.
+The premise throughout is that threads are an expensive resource. Creating one requires a trap into
+the kernel, a stack allocation and a signal mask setup, and the operating system limits how many can
+exist. Many runtime designs, from reusing idle Ms and handing off the P during system calls to
+capping the total thread count, serve one goal: create few threads and reuse them.
 
-## 9.5.1 M Is the Operating System Thread
+## 9.5.1 M and the Operating System Thread
 
-M (machine) is the abstraction of a single operating system thread. When the process starts, the bootstrap thread is wrapped into `m0`, a global variable that exists for the life of the process and is not heap-allocated; from then on, every M corresponds to a kernel thread explicitly created by the runtime. The relationship between M and G is "the thread runs goroutines": once an M holds a P, it takes G from the P's local queue and executes them. The trimmed sketch below keeps only the fields related to thread management:
+Each M corresponds to one operating system thread. The main thread of the process is wrapped as
+`m0`, a global variable that is not allocated on the heap
+([3.5](../../part1overview/ch03life/boot.md)); every later M corresponds to a thread the runtime
+creates explicitly (except the extra M of 9.5.5). The fields relevant to thread management are:
 
 ```go
-// m: the runtime abstraction of one operating system thread (sketch)
+// m: fields relevant to thread management (sketch)
 type m struct {
-    g0   *g       // system-stack goroutine for scheduling: runs scheduler code, handles signals
-    curg *g       // the user goroutine currently executing on this M
-    p    puintptr // the P currently held; may be stripped away on entering a syscall
-    nextp puintptr // the P to be bound after being woken (used when stopm wakes up)
-    oldp  puintptr // the P held before entering the syscall, kept for exitsyscall to reclaim quickly
+	g0    *g       // the goroutine that owns the system stack, runs scheduling and runtime code
+	curg  *g       // the user goroutine currently executing
+	p     puintptr // the associated P
+	nextp puintptr // the P to associate with after being woken
+	oldp  puintptr // the P associated before entering a system call
 
-    park     note  // the thread sleeps/wakes on this "semaphore"; the core mechanism for reusing M
-    schedlink muintptr // links into the idle-M list / newmHandoff list
+	park      note     // sleeps here while parked
+	schedlink muintptr // links into the idle-M list or the newmHandoff list
 
-    lockedg  guintptr // mutually locked with some G (LockOSThread), see 9.5.6
-    lockedExt int32   // external (user) lock count
-    lockedInt int32   // internal (runtime) lock count
-    incgo    bool     // whether a cgo call is currently executing
-    isextra  bool     // whether this is an extra-M born for a cgo callback, see 9.5.5
+	lockedg   guintptr // the G locked to this M, see 9.5.6
+	lockedExt uint32   // nesting count of user calls to LockOSThread
+	lockedInt uint32   // nesting count of internal runtime locks
+	incgo     bool     // whether a cgo call is in progress
+	isextra   bool     // whether this is an extra M serving cgo callbacks, see 9.5.5
 }
 ```
 
-A new thread is created through `newm` -> `newm1` -> `newosproc`. On Linux, `newosproc` ultimately lands on a single `clone(2)` system call, whose flags spell out the dividing line between "thread" and "process":
+A new thread is created through `newm` → `newm1` → `newosproc`. On Linux, `newosproc` ends up
+issuing a `clone(2)` system call, and the flags it passes show how a thread differs from a process
+[[Go Authors, 2026b](#ref-go-authors-2026b)]:
 
 ```go
-// the clone flags used to create a new kernel thread on Linux (runtime/os_linux.go)
-cloneFlags = _CLONE_VM |     // share the address space
-    _CLONE_FS |              // share filesystem information (cwd, etc.)
-    _CLONE_FILES |           // share the file descriptor table
-    _CLONE_SIGHAND |         // share the signal handler table
-    _CLONE_SYSVSEM |         // share the SysV semaphore undo list
-    _CLONE_THREAD            // belong to the same thread group (share the PID)
+// clone flags used to create a thread, from runtime/os_linux.go
+cloneFlags = _CLONE_VM | // share the address space
+	_CLONE_FS | // share filesystem information (current directory and so on)
+	_CLONE_FILES | // share the file descriptor table
+	_CLONE_SIGHAND | // share the table of signal handlers
+	_CLONE_SYSVSEM | // share the System V semaphore undo list
+	_CLONE_THREAD // join the same thread group and share the process ID
 ```
 
-These shared items are exactly what distinguishes a thread from a process: the address space, the file descriptors, and the signal handling are all held in common, only the registers and the stack stay separate. Even so, creating a thread is not cheap: it must trap into the kernel for a round of `clone`, prepare a system stack for `g0`, and set the signal mask (`newosproc` disables signals with `sigprocmask` before the clone and restores them after, so the new thread starts from a clean state). After entering `mstart`, the new thread still has to run a round of `minit` initialization. This string of costs is the root of the later principle, "reuse rather than create lightly". The retry on `EAGAIN` in `newosproc`, with its "may need to increase max user processes" hint, also confirms that a thread is a scarce resource that the operating system places quotas on.
+The address space, file descriptors and signal handlers are shared; only the registers and the stack
+are private to a thread [[Linux man-pages, n.d.](#ref-linux-man-pages-nd)]. On Darwin and some other
+platforms, the runtime calls `pthread_create` instead. Even creating a thread is not cheap: around
+`clone`, `newosproc` blocks all signals with `sigprocmask` and then restores the mask, so that the
+new thread starts with signals blocked and unblocks them only after `minit` has finished
+initializing it. The new thread also needs a system stack to serve as the stack of its g0
+([9.3.3](./mpg.md)). If `clone` returns `EAGAIN`, the runtime retries; if it still fails, the
+program aborts with the message "may need to increase max user processes (ulimit -u)", which shows
+that threads are a resource subject to operating system quotas.
 
-## 9.5.2 Reuse: Idle M Parked on a Semaphore
+## 9.5.2 Reusing Idle Ms
 
-Since creation is expensive, the runtime does not discard an M once it is done. When an M finishes the work at hand and momentarily has no P to bind, it does not exit but **parks**, waiting to be dispatched again. This park-and-resume pair is performed by the two functions `stopm` and `startm`.
-
-`stopm` puts the current M back on the global idle list, then lets it sleep on its own `park`:
+The runtime does not destroy an M that has nothing to do. It parks the M and waits for the next use.
+Parking and resuming are done by `stopm` and `startm`:
 
 ```go
+// stopm: park the current M until a P is handed to it (sketch)
 func stopm() {
-    gp := getg()
-    // precondition: at this moment M holds no lock, holds no P, and is not spinning
-    lock(&sched.lock)
-    mput(gp.m)        // put into the sched.midle idle-M list
-    unlock(&sched.lock)
-    mPark()           // sleep on the m.park note, waiting to be woken
-    acquirep(gp.m.nextp.ptr()) // on waking, the waker has already placed the P to bind into nextp
-    gp.m.nextp = 0
+	gp := getg()
+	// precondition: the M holds no lock, holds no P and is not spinning
+	lock(&sched.lock)
+	mput(gp.m) // put it on the idle-M list sched.midle
+	unlock(&sched.lock)
+	mPark()                    // sleep on m.park
+	acquirep(gp.m.nextp.ptr()) // the waker has stored the P to hand over in nextp
+	gp.m.nextp = 0
 }
 ```
 
-The core of `mPark` is `notesleep(&gp.m.park)`. A `note` is the runtime's internal one-shot event primitive, which on each platform lands on a kernel sleep mechanism such as a futex or a semaphore. In other words, a parked M does not occupy the CPU; it sleeps inside the kernel, waiting for a `notewakeup` to call it back.
+At the core of `mPark` is `notesleep(&gp.m.park)`. A `note` is a one-shot event internal to the
+runtime. On Linux, FreeBSD and similar platforms it is built on futexes; on Darwin, Windows and
+others it is built on the per-M sleep primitives `semasleep` and `semawakeup`, which use a pthread
+mutex and condition variable on Darwin and an event object on Windows. A parked M sleeps in the
+kernel, uses no CPU, and stays asleep until `notewakeup` wakes it. For the semantics of futexes and
+the pitfalls of using them, see Drepper [[Drepper, 2011](#ref-drepper-2011)]. A `note` should not be
+confused with the semaphore in `runtime/sema.go`: the latter serves packages such as `sync` from Go
+code, and its design follows the semaphores of Plan 9
+[[Mullender and Cox, 2008](#ref-mullender-and-cox-2008)]; see [11.2](../ch11sync/mutex.md).
 
-The wake path goes through `startm`: when a P needs a thread to drive it (a new G becomes ready, a system call hands off its P, and so on), `startm` first uses `mget` to fish a parked M out of the idle list, records the target P into its `nextp`, and then `notewakeup`s its `park`; only when the idle list is empty does it fall back to `newm` and actually create a new thread. This order, "reuse first, create only when nothing can be fished out", is the key to keeping thread creation off the hot path.
+When a P needs a thread to run on (a new G becomes ready, a P is handed off during a system call,
+and so on), `startm` first takes an M from the idle list with `mget`, writes the P into its `nextp`
+and wakes it. Only when the idle list is empty does it call `newm` to create a new thread. Reusing
+before creating keeps thread creation on the cold path.
+
+An M has no explicit state field, but what it is doing falls into a few states:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Spinning: newm / woken
-    Spinning --> Running: grabbed a P and a G
-    Running --> Spinning: no local G, go steal
-    Running --> Syscall: enter a system call
-    Syscall --> Running: exitsyscall reclaims the P
-    Spinning --> Parked: no P to bind, stopm parks
-    Parked --> Spinning: startm wakes (mget + notewakeup)
-    Running --> [*]: mexit (rare, mostly triggered by LockOSThread)
+    [*] --> Spinning: newm or woken
+    Spinning --> Running: finds a G
+    Running --> Spinning: no local G, looks for work
+    Running --> Syscall: entersyscall
+    Syscall --> Running: exitsyscall acquires a P
+    Syscall --> Parked: exitsyscall gets no P
+    Spinning --> Parked: finds no work, stopm
+    Parked --> Spinning: woken by startm
+    Running --> [*]: mexit (when a locked G exits)
 ```
 
-Worth pointing out is that on the normal path an M almost never exits. `mexit` is triggered only in a few situations, the most typical being the case [9.5.6](#956-lockosthread) will discuss, "the G that locked the thread exits without unlocking". The normal state of an M is the loop "park, wake, park again", like a standing force always on call, rather than a temp worker hired once and dismissed once.
+On the usual execution paths, an M never exits. Only since Go 1.10 has the runtime been able to let
+a thread it created exit, and today this is used only when a G that locked its thread exits without
+unlocking it (9.5.6) [[Clements, 2017b](#ref-clements-2017b)]. A proposal to let idle threads exit
+on their own (issue #14592) remains unimplemented [[Lopez, 2016](#ref-lopez-2016)], so the threads a
+program creates at its peak stay around afterwards.
 
-## 9.5.3 GOMAXPROCS Caps P, Not M
+## 9.5.3 GOMAXPROCS Limits P
 
-Readers often hold a misconception: set `GOMAXPROCS` to 8 and there are only 8 threads. What it actually caps is the **number of P**, that is, the upper bound on the parallelism of executing Go code, not the number of M. The number of M is determined dynamically by "how many threads currently have something to do", and may well exceed GOMAXPROCS.
+`GOMAXPROCS` limits the number of Ps, that is, the upper bound on the parallelism of Go code, not
+the number of threads. The runtime creates threads on demand, and apart from the case in 9.5.6 they
+only grow in number (9.5.2), so the thread count can well exceed `GOMAXPROCS`. The most common cause
+is system calls: when an M blocks in a system call, its P is handed to another M (9.5.4), and the
+blocked M and the M that took over exist at the same time. `LockOSThread` and the extra Ms used by
+cgo callbacks also push the number of Ms above the number of Ps. With `GOMAXPROCS` set to 2, the
+following program blocks 10 goroutines in a system call that reads from an empty pipe:
 
-The most common overshoot comes from system calls. When an M is stuck in a blocking system call ([9.5.4](#954-system-calls-and-handing-off-the-p)), the P in its name is handed off to another M to run other G, so at the same instant there coexist "the M stuck in the syscall" and "the M that took over the P", and the thread count exceeds the P count. `LockOSThread` and the extra-M for cgo callbacks also make M outnumber P. Seen from another angle, P is "the permit to execute Go code", whose total is capped throughout; M is merely a leg borrowed to run code, and when one leg is tripped up by a syscall, another is borrowed to use the P, while the tripped one holds no permit.
+```go {run=true native=true}
+package main
 
-Leaving the thread count uncapped is dangerous: a runaway system call or cgo callback could make the runtime create threads without limit and eventually crush the entire process. Go therefore sets a fuse, `sched.maxmcount`, defaulting to **10000**:
+import (
+	"fmt"
+	"runtime"
+	"runtime/metrics"
+	"syscall"
+	"time"
+)
+
+// read reads two scheduler metrics added in Go 1.26.
+func read() (threads, inSyscall uint64) {
+	s := []metrics.Sample{
+		{Name: "/sched/threads/total:threads"},           // threads owned by the runtime
+		{Name: "/sched/goroutines/not-in-go:goroutines"}, // goroutines in system or cgo calls (approximate)
+	}
+	metrics.Read(s)
+	return s[0].Value.Uint64(), s[1].Value.Uint64()
+}
+
+func main() {
+	runtime.GOMAXPROCS(2)
+	t, n := read()
+	fmt.Printf("at start: %d threads, %d goroutines in system calls\n", t, n)
+
+	var fds [2]int
+	if err := syscall.Pipe(fds[:]); err != nil { // blocking pipe, bypasses the network poller
+		panic(err)
+	}
+	for range 10 {
+		go func() {
+			buf := make([]byte, 1)
+			syscall.Read(fds[0], buf) // the pipe is empty, so the thread blocks in the kernel
+		}()
+	}
+	time.Sleep(100 * time.Millisecond)
+	t, n = read()
+	fmt.Printf("later: %d threads, %d goroutines in system calls\n", t, n)
+}
+```
+
+```
+at start: 5 threads, 0 goroutines in system calls
+later: 13 threads, 10 goroutines in system calls
+```
+
+Each of the 10 goroutines occupies a thread blocked in the kernel, so the total thread count far
+exceeds `GOMAXPROCS`, yet main keeps running. Both metrics are new in Go 1.26
+[[Go Authors, 2026c](#ref-go-authors-2026c)]. The output above was produced on macOS; the exact
+thread counts vary with the platform and runtime version.
+
+Without a cap on the thread count, a large number of goroutines blocked in system calls could make
+the runtime create threads without bound. The runtime therefore sets a limit, `sched.maxmcount`,
+which defaults to 10000. The comment on `checkmcount` explains that the purpose of the limit is to
+keep millions of goroutines blocked in system calls from accidentally causing a "fork
+bomb" [[Go Authors, 2026a](#ref-go-authors-2026a)]:
 
 ```go
-// verify that the total number of M does not exceed the limit; fatal if it does (runtime/proc.go)
+// checkmcount: check whether the total number of Ms exceeds the limit (sketch)
 func checkmcount() {
-    // extra-M are not counted toward this limit (they serve cgo callbacks and are tallied separately)
-    count := mcount() - int32(extraMInUse.Load()) - int32(extraMLength.Load())
-    if count > sched.maxmcount {
-        print("runtime: program exceeds ", sched.maxmcount, "-thread limit\n")
-        throw("thread exhaustion")
-    }
+	// extra Ms are not counted: they serve callbacks from C-created threads
+	count := mcount() - int32(extraMInUse.Load()) - int32(extraMLength.Load())
+	if count > sched.maxmcount {
+		print("runtime: program exceeds ", sched.maxmcount, "-thread limit\n")
+		throw("thread exhaustion")
+	}
 }
 ```
 
-Once the thread count hits this line, the program crashes outright with `thread exhaustion`. It is not set for normal programs but is a guard rail that "blows early when something goes wrong, rather than dragging the machine to a halt". A user can adjust it through `debug.SetMaxThreads` (backed by `setmaxthreads`; passing -1 queries the current value). Note that `checkmcount` excludes extra-M: whether they exist depends on how many external threads want to call back into Go, which is a separate account from "how many threads Go code created itself".
+When the limit is exceeded, the program aborts with `thread exhaustion`. The limit is not meant for
+well-behaved programs but is a safeguard that keeps a runaway program from bringing down the whole
+machine, and it can be adjusted with `debug.SetMaxThreads`. Extra Ms are not counted because their
+number depends on how many C-created threads call back into Go, not on how many threads the Go
+program itself created. This exclusion was added during the development of Go 1.21: a change that
+binds an extra M to its C thread (9.5.5) meant the extra M was returned only when the C thread
+exited, so 10,000 distinct C threads each calling Go once would trigger `thread exhaustion`
+[[Pratt, 2023b](#ref-pratt-2023b)].
 
-## 9.5.4 System Calls and Handing Off the P
+## 9.5.4 System Calls and P Handoff
 
-This is the crux of the section. [9.1](./model.md) made a promise: a goroutine stuck in a blocking system call will not starve the other goroutines on the same P. The mechanism that delivers on it is exactly "hand off the P during the system call".
+[9.1](./model.md) noted that an M:N model must solve one problem: a goroutine blocked in a system
+call must not make the other goroutines on the same P wait. Go's solution is to hand the P to
+another M for the duration of the system call. The trade-off is that most system calls return
+quickly, so handing off the P on every call would cost too much, while for calls that really do
+block for a long time the P must promptly be put to work on other Gs. The runtime therefore handles
+system calls on two paths, a fast one and a slow one.
 
-The intuition runs like this: an M is about to enter a system call that may not return for a long time, during which it cannot run Go code, so the P in its name sits idle. Rather than letting the P wait along with it, better to detach the P and hand it to another M to drive the other G queued on it. After the system call returns, the original M tries to get a P back and continue. Around this intuition, the runtime distinguishes a fast path and a slow path.
-
-Entering a system call goes through `entersyscall` (built on `reentersyscall`). It sets the G to `_Gsyscall`, records the stack and PC for GC backtracing, records the current P's pointer into `m.oldp`, and copies `p.syscalltick` to later judge "whether the P was taken away". The key point is this: **entersyscall neither releases the P nor changes the P's state**. `m.p` still points at the original P, the P is still `_Prunning`, and the only change is that the G has entered `_Gsyscall`. The runtime optimistically assumes this system call will return quickly, so it leaves the P intact on the M, expecting to most likely use it right away on return. `oldp` is only a memo of "which P I was using before entering the system call", available to the slow path to try to reclaim it in case the P is taken.
+On entering a system call, `entersyscall` (the work is actually done by `reentersyscall`) sets the G
+to `_Gsyscall`, saves the stack pointer and program counter for use by the GC and stack tracebacks,
+records the current P in `m.oldp`, and notes the P's `syscalltick` so that it can later tell whether
+the P was taken away. The key point is that `entersyscall` neither releases the P nor changes its
+state: `m.p` still points to the original P, the P stays in `_Prunning`, and only the state of the G
+changes.
 
 ```go
+// reentersyscall: enter a system call (sketch)
 func reentersyscall(pc, sp, bp uintptr) {
-    gp := getg()
-    gp.m.locks++              // forbid preemption during this window: g is in Gsyscall but sched info may be inconsistent
-    gp.throwsplit = true      // forbid stack splitting during this window
-    gp.m.syscalltick = gp.m.p.ptr().syscalltick // record the tick, to later judge whether the P was taken
-    pp := gp.m.p.ptr()
-    gp.m.oldp.set(pp)         // only a memo of the P used before the syscall; m.p is not cleared, P state not changed
-    save(pc, sp, bp)          // leave stack info for GC and backtracing
-    casgstatus(gp, _Grunning, _Gsyscall) // "from here the P may be lost at any time, do not touch it again"
-    // ... only wake sysmon as needed (entersyscallWakeSysmon), do not release P
+	gp := getg()
+	gp.m.locks++                  // disable preemption: g.sched may be inconsistent, so the GC must not see it
+	gp.stackguard0 = stackPreempt // make any stack check fail
+	gp.throwsplit = true          // and tell newstack that stack growth here is fatal
+	gp.m.syscalltick = gp.m.p.ptr().syscalltick
+	gp.m.oldp.set(gp.m.p.ptr()) // only remember the P; m.p is not cleared and the P's state is unchanged
+	save(pc, sp, bp)            // save the context for the GC and stack tracebacks
+	casgstatus(gp, _Grunning, _Gsyscall) // the P must not be accessed after this
+	if sched.sysmonwait.Load() {
+		systemstack(entersyscallWakeSysmon) // wake sysmon if it is in deep sleep
+	}
+	gp.m.locks--
 }
 ```
 
-On return it goes through `exitsyscall`, which first optimistically switches the G back to `_Grunning`, then checks whether the P is still there (`pp := gp.m.p.ptr()`):
+On return, `exitsyscall` first switches the G back to `_Grunning`, then checks whether the P is
+still there:
 
-- **Fast path**: if `m.p` is still non-nil (this system call was so quick that sysmon had no chance to take the P away), use it right away, without touching even a single lock. The P never left, so naturally there is no rebinding cost.
-- **Slow path**: if the P was already taken by sysmon (`m.p == nil`), call `exitsyscallTryGetP(oldp)` to try to reclaim the original `oldp`; failing that, grab an idle P; failing even that, hang the G back on the global queue and `stopm` to park.
+- **Fast path**: `m.p` is still non-nil, which means the system call returned quickly and the P was
+  not taken. The G continues directly, with no lock and no need to reassociate the P.
+- **Slow path**: the P has been taken. `exitsyscallTryGetP` first tries to get back the original
+  `oldp`, and failing that tries to take an idle P. If neither works, the G is put on the global
+  queue and the M parks through `stopm`.
 
-So who exactly takes the P, and when? The answer is the **monitor thread sysmon** ([9.8](./sysmon.md)). sysmon periodically patrols all P, and in `retake` it compares the `syscalltick` of each `_Prunning` P: if it finds that the M in a P's name has been stuck in a system call for more than about one sysmon tick (at least 20us), it acts to take it away. Here a relatively new mechanism comes into play, `setBlockOnExitSyscall`: it first stalls that thread to ensure it cannot preemptively reclaim the P inside exitsyscall, then `takeP` detaches the P from that M, and finally `handoffp` hands this P to another M. This threshold spends the handoff cost only on system calls that "really did block for a while"; a short system call returns on the fast path well before sysmon ever acts.
+The one that takes the P is the monitor thread sysmon ([9.8](./sysmon.md)). In `retake` it examines
+the Ps one by one, and for a G in a system call it first calls `setBlockOnExitSyscall` to acquire
+the G's `_Gscan` bit. While it holds this bit, the G cannot leave `_Gsyscall`; even if the thread
+returns from the kernel, it can only wait in `exitsyscall` and does not compete with sysmon for the
+P. Under this protection, sysmon decides by the following rules whether to take the P, and lets the
+thread go immediately if it does not:
 
-> This design, "P keeps its state, sysmon forcibly takes it", is a recent evolution. In the earlier implementation, when a P entered a system call it was set to a dedicated `_Psyscall` state, and the returning M or sysmon contended for ownership by doing a CAS on that state. Go 1.26 removed `_Psyscall` (it is demoted to `_Psyscall_unused` in the source) and instead has sysmon take the P actively and explicitly through `setBlockOnExitSyscall`/`takeP`, no longer relying on the M to "discover" by itself that the P no longer belongs to it. The semantics are unchanged, but the state machine is simpler and the contention window clearer.
+- The first time sysmon observes a system call, it only records the `syscalltick` and the time, and
+  does not take the P. A P therefore stays in a system call for at least one sysmon period (at least
+  20 µs).
+- After that, if the P's local queue is empty, the system already has a spinning or idle P, and less
+  than 10 ms have passed since the first observation, sysmon still does not take it: taking the P
+  would not let more work run. The P is eventually taken anyway, because otherwise it would keep
+  sysmon from entering deep sleep.
+- The exception is a P whose `schedtick` has not changed for 10 ms, that is, the same time slice has
+  lasted too long (9.4.2). A preemption request sent to a G in a system call cannot be answered, so
+  only sysmon can take the P, and it need not wait for the second observation.
+
+Once it decides to take the P, `takeP` detaches the P from the M, and `handoffp` then hands it over
+[[Go Authors, 2026a](#ref-go-authors-2026a)].
 
 ```go
-// handoffp: hand a P to (or create) an M to run (runtime/proc.go, excerpted logic)
+// handoffp: arrange what happens next for a P (sketch)
 func handoffp(pp *p) {
-    // the P still has local or global runnable G, so immediately start an M to take over
-    if !runqempty(pp) || !sched.runq.empty() {
-        startm(pp, false, false)
-        return
-    }
-    // there is GC / trace work, likewise start an M immediately
-    // ...
-    // a spinning or idle M is already on call, no need to add another; otherwise start a spinning M
-    if sched.nmspinning.Load()+sched.npidle.Load() == 0 &&
-        sched.nmspinning.CompareAndSwap(0, 1) {
-        startm(pp, true, false)
-        return
-    }
-    // truly nothing to do, put the P back into the idle pool
-    pidleput(pp, 0)
+	// there is a G in the local or global queue: start an M to take over at once
+	if !runqempty(pp) || !sched.runq.empty() {
+		startm(pp, false, false)
+		return
+	}
+	// likewise start an M when there is GC or tracing work (omitted)
+	// with no spinning or idle P, start a spinning M to look for work
+	if sched.nmspinning.Load()+sched.npidle.Load() == 0 &&
+		sched.nmspinning.CompareAndSwap(0, 1) {
+		startm(pp, true, false)
+		return
+	}
+	// in the remaining cases (omitted), put the P back on the idle list
+	pidleput(pp, 0)
 }
 ```
 
-Drawing the whole chain as a timeline makes "one syscall blocks while the other G keep running" immediately clear:
+The whole process is shown below:
 
 ```mermaid
 sequenceDiagram
-    participant M1 as M1 (stuck in syscall)
-    participant P as P (holding G to run)
+    participant M1 as M1 (enters the system call)
+    participant P as P (has Gs in its queue)
     participant SM as sysmon
     participant M2 as M2 (takes over)
-    M1->>M1: entersyscall: G turns Gsyscall, P not released (m.p stays, oldp recorded as memo)
-    M1->>SM: wake sysmon as needed
-    Note over M1: slow system call, slow to return
-    SM->>P: retake patrol, compare syscalltick, stalled over about 20us
-    SM->>M1: setBlockOnExitSyscall (stall, forbid it from preemptively reclaiming the P)
-    SM->>P: takeP detaches the P from M1 (clears M1's m.p)
-    SM->>M2: handoffp to startm (reuse or create M2)
-    M2->>P: acquirep, then run the other G on the P
-    Note over M1: syscall finally returns
-    M1->>M1: exitsyscall slow path: m.p already empty, reclaim P via oldp or grab an idle P, failing that stopm parks
+    M1->>M1: entersyscall: G becomes _Gsyscall, P stays associated with M1
+    Note over M1: the system call does not return
+    SM->>M1: retake → setBlockOnExitSyscall: acquires the G's _Gscan bit
+    Note over SM: sees the same syscalltick a second time, and the P's queue has Gs
+    SM->>P: takeP: detaches the P from M1, then releases M1
+    SM->>M2: handoffp → startm: reuses or creates M2
+    M2->>P: acquirep, runs the other Gs on the P
+    Note over M1: the system call returns
+    M1->>M1: exitsyscall slow path: tries to get back oldp or an idle P, otherwise stopm
 ```
 
-If the timeline is changed to a "short system call", those sysmon steps never happen at all, M1's `m.p` is never cleared, and exitsyscall sees the P still there and continues to use it directly, with the whole fast path touching no lock. The two paths, one fast and one slow, make the common case nearly zero-cost while guaranteeing that the rare long block does not drag down parallelism. This is the mechanism that delivers on the promise in [9.1](./model.md).
+If the system call returns quickly, none of sysmon's steps take place, and `exitsyscall` finds the P
+still there and continues on the fast path. The fast path leaves the common case with almost no
+extra cost, and the slow path ensures that the rare long block does not reduce parallelism.
 
-> A different kind of blocking should be distinguished. Network I/O and timers do not go down the "block while holding the M" path above; they are handed to the network poller netpoll ([9.9](./poller.md)): the G is suspended, the M and the P immediately go run other G, and when the I/O is ready netpoll sets the G back to runnable. What truly trips up an M are synchronous system calls that cannot be made asynchronous, such as file I/O and `fork`/`exec`, and cgo calls; these are the ones that need the P handoff as a backstop.
+For calls known in advance to block, such as `notetsleepg`, with which the runtime sleeps on a user
+goroutine, the runtime uses `entersyscallblock`. It hands off the P with `handoffp(releasep())`
+before entering the system call, without waiting for sysmon.
 
-## 9.5.5 cgo Callbacks and extra-M
+The system call path was simplified in Go 1.26. Previously, a P was in a dedicated `_Psyscall` state
+during a system call, and the returning M and sysmon competed for ownership of the P with a CAS on
+the P's state. Go 1.26 removed `_Psyscall` (it remains in the source as `_Psyscall_unused`) and
+synchronizes on the G's `_Gsyscall` state instead, which saves one atomic write and one CAS on every
+system call [[Knyszek, 2025](#ref-knyszek-2025)]. The price is a brief window in which a G is
+`_Grunning` but has no P; see [9.3.4](./mpg.md).
 
-All the M created so far were `clone`d on the runtime's own initiative, and the runtime knows their origin and state. But there is another kind of thread that Go did not create: when C code calls back into Go on a thread that **Go did not create** (a cgo callback), this thread has no `g0`, no P, and the runtime knows nothing about it, yet Go code must run on it.
+Note that network I/O and timers do not take this path. They go to the network poller
+([9.9](./poller.md)): the G is parked, M and P immediately run other Gs, and once the I/O is ready
+the poller makes the G runnable again. What really ties up an M is a system call that cannot be made
+asynchronous, such as regular file I/O, `fork`/`exec`, and cgo calls.
 
-The runtime's response is to prepare a batch of **extra-M**. They are pre-allocated by `oneNewExtraM`, hung on a dedicated extra list, each extra-M carrying its own placeholder G in `_Gdeadextra` state and mutually locked through `lockedg`/`lockedm`. When an external thread calls back in, `needm` borrows an extra-M from this list and fits it onto itself, thereby obtaining the `g0` and context needed to run Go code; when the callback ends, `dropm` returns the extra-M. `mstartm0` calls `newextram` early in runtime startup to ready at least one, so that when a callback arrives the list is not empty and deadlocking.
+Java virtual threads face the same problem. JEP 444 states that some blocking operations are limited
+by the operating system (such as many filesystem operations) or by the JDK (such as `Object.wait()`)
+and cannot unmount a virtual thread from its carrier thread; the implementations of these operations
+compensate for the pinned thread by temporarily expanding the parallelism of the scheduler
+[[Pressler and Bateman, 2023](#ref-pressler-and-bateman-2023)]. This is the same idea as Go handing
+the P to a new M during a system call.
+
+## 9.5.5 cgo Callbacks and the Extra M
+
+The Ms discussed so far are all created by the runtime itself. In another situation, C code calls
+back into a Go function on a thread **not created by Go**: this thread has no g0 and no M, and the
+runtime knows nothing about it, yet Go code must run on it.
+
+The runtime prepares a number of **extra Ms** in advance. They are allocated by `oneNewExtraM` and
+kept on a dedicated list; each extra M carries a G in the `_Gdeadextra` state ([9.3.4](./mpg.md)),
+and the two lock each other through `lockedg` and `lockedm`. When an external thread calls back into
+Go, `needm` borrows an extra M from the list and gives the current thread the g0 and the context it
+needs to run Go code; when the callback ends, `dropm` returns it. With cgo enabled, `mstartm0` calls
+`newextram` early in the runtime's startup to prepare the first extra M.
 
 ```go
-// oneNewExtraM: prepare one extra-M for a cgo callback (excerpt)
+// oneNewExtraM: prepare one extra M for cgo callbacks (sketch)
 func oneNewExtraM() {
-    mp := allocm(nil, nil, -1) // allocate an M without binding a P
-    gp := malg(4096)           // set up a placeholder goroutine
-    casgstatus(gp, _Gidle, _Gdeadextra) // invisible to backtracing and stack scanning
-    mp.isextra = true
-    mp.lockedInt++             // an extra-M is naturally mutually locked with its g
-    mp.lockedg.set(gp)
-    gp.lockedm.set(mp)
-    allgadd(gp)
-    sched.ngsys.Add(1)         // counted as a system goroutine, not into gcount
-    addExtraM(mp)              // hang onto the extra list
+	mp := allocm(nil, nil, -1) // allocate an M with no associated P
+	gp := malg(4096)           // a G with a small stack
+	casgstatus(gp, _Gidle, _Gdeadextra)
+	gp.m = mp
+	mp.curg = gp
+	mp.isextra = true
+	mp.lockedInt++ // the extra M and its G are locked to each other
+	mp.lockedg.set(gp)
+	gp.lockedm.set(mp)
+	allgadd(gp)
+	sched.ngsys.Add(1) // count it as a system goroutine
+	addExtraM(mp)      // put it on the extra-M list
 }
 ```
 
-extra-M are not counted toward the `maxmcount` of [9.5.3](#953-gomaxprocs-caps-p-not-m), because their number is decided by the concurrency of external callbacks and does not belong to "threads Go code created itself". When the host process reuses the same C thread through a pthread key to call back repeatedly, `cgoBindM` also binds the extra-M to that C thread, saving the cost of borrowing and returning on every callback. This mechanism is the necessary glue layer between the Go and C worlds, and another source of the thread count exceeding GOMAXPROCS.
+If the same C thread calls Go repeatedly, borrowing and returning an extra M each time is a
+considerable cost. Since Go 1.21, on platforms that support pthreads (except Windows and Plan 9),
+the runtime binds the extra M to the C thread using pthread thread-specific data (`cgoBindM`) and
+returns it only when the thread exits, through a pthread destructor, which removes the borrow and
+return from every callback [[Pratt, 2023a](#ref-pratt-2023a)]. Extra Ms are also one source of
+thread counts above `GOMAXPROCS`.
 
 ## 9.5.6 LockOSThread
 
-Up to here, M are freely interchangeable: it does not matter which M runs which G. But some scenarios require a goroutine to always execute on the **same** OS thread, and `runtime.LockOSThread` is set for this. The need comes from two classes: first, certain C libraries (typically graphics libraries such as OpenGL and GLib) store state in thread-local storage (TLS) and must be called on a fixed thread; second, a program has modified the thread's kernel state through a system call (for example using `unshare` with `CLONE_NEWNS` to place the thread into an isolated Linux namespace), after which this thread has been "privatized" and is no longer fit for other goroutines to borrow.
+So far the Ms have been interchangeable: which M runs which G does not matter. Some situations,
+however, require a goroutine to always run on the **same** thread, and `runtime.LockOSThread` exists
+for this. Its documentation says a goroutine should call `LockOSThread` before calling operating
+system services or non-Go library functions that depend on per-thread state
+[[Go Authors, 2026d](#ref-go-authors-2026d)]. There are two typical needs. First, some C libraries
+(graphics libraries such as OpenGL) keep state in thread-local storage and must be called on a fixed
+thread. Second, the program has changed the kernel state of a thread through a system call, for
+example by putting the thread into a separate Linux namespace with `unshare(CLONE_NEWNS)`, after
+which no other goroutine should use that thread. The documentation also points out that all init
+functions run on the startup thread, and that calling `LockOSThread` in an init function makes the
+main function run on this thread as well; a library that must be called on the main thread can use
+this to meet its requirement.
 
-The runtime-private `lockOSThread` is simple: increment a count, then call `dolockOSThread` to make g and m point at each other:
+The locking itself is simple to implement: increment a count, and let G and M refer to each other.
 
 ```go
-//go:nosplit
-func lockOSThread() {
-    getg().m.lockedInt++
-    dolockOSThread()
+// LockOSThread: lock the caller to the current thread (sketch)
+func LockOSThread() {
+	if newmHandoff.haveTemplateThread == 0 && GOOS != "plan9" {
+		startTemplateThread() // start the template thread while thread state is still sound, see below
+	}
+	getg().m.lockedExt++ // the runtime-internal lockOSThread increments lockedInt instead
+	dolockOSThread()
 }
 
-//go:nosplit
 func dolockOSThread() {
-    gp := getg()
-    gp.m.lockedg.set(gp) // m remembers the g it locked
-    gp.lockedm.set(gp.m) // g remembers the m it locked
+	gp := getg()
+	gp.m.lockedg.set(gp) // the M remembers the G that locked it
+	gp.lockedm.set(gp.m) // the G remembers the M it locked
 }
 ```
 
-The user-facing public `LockOSThread` has one more step: it lazily starts a **template thread** on demand. This is the countermeasure to the hidden trouble that locking a thread brings. Once a thread is privatized by the user (namespace, signal mask, and so on are changed), its kernel state becomes "odd", and `clone`ing a new thread off it would copy that oddness along. The template thread is a backup thread always in a "known good state", which does not run user G and is responsible only for safely creating new threads. `newm` therefore has a check: if it finds itself on a locked M or a cgo thread, it does not clone by itself but hangs the thread-creation request onto the `newmHandoff` list, leaving it to the template thread to do on its behalf.
+`UnlockOSThread` decrements the count, and clears the two fields only when both `lockedExt` and
+`lockedInt` reach zero.
 
-So how do merely setting the two fields `lockedg`/`lockedm` guarantee that g runs only on this m? The answer hides in the scheduling loop ([9.4](./schedule.md)). `schedule` checks at the very start whether the current M has a locked g:
+The lock takes effect in the scheduling loop: the `schedule` function shown in
+[9.4.1](./schedule.md) checks `m.lockedg` at the very start, and a locked M only waits for and runs
+its own G; if `findRunnable` picks a G locked elsewhere, the current M hands its P to that M. When a
+locked G blocks, `stoplockedm` gives up the P through `handoffp` and then parks, and is woken only
+when the G becomes runnable again, at which point it gets a P back. This shows what locking costs:
+the M is monopolized by one G, and every time the G blocks or wakes, the P must be moved between
+threads, so a switch that would have stayed on one thread becomes a wakeup and a park across
+threads. The resulting significant slowdown is described in issue #18023
+[[Taylor, 2016](#ref-taylor-2016)]; issue #21827, which reports the same kind of problem
+[[Smelkov, 2017](#ref-smelkov-2017)], is still open.
 
-```go
-func schedule() {
-    gp := getg()
-    // m.lockedg becomes non-zero after LockOSThread
-    if gp.m.lockedg != 0 {
-        stoplockedm()                 // hand off the P, park itself
-        execute(gp.m.lockedg.ptr(), false) // on waking, directly execute that locked g, never returns
-    }
-    // ... otherwise find a G normally
-}
-```
+The present semantics were established in Go 1.10. In Clements's words, programs that needed to
+change the kernel state of a thread were "walking on thin ice" in Go
+[[Clements, 2017c](#ref-clements-2017c)]: locking could only keep other goroutines from running on
+the thread, but could not stop the runtime from spreading the modified state through the thread
+pool. Clements made three changes:
 
-Conversely, when the locked g cannot run right away for some reason (say it is blocked), `stoplockedm` hands this M's P to someone else through `handoffp`, parks itself and waits, until that g becomes runnable again and is then woken, with `acquirep` taking back a P to serve it exclusively. The cost thus shows itself: this M is monopolized by one g and cannot serve any other g; the P has to be handed back and forth while the g is blocked; and if the locked g forgets `UnlockOSThread` when it exits, the runtime simply lets this M exit along with the g (`mexit`), which is one of the few situations where an M exits on the normal path. `UnlockOSThread` merely decrements the count and, when it reaches zero, clears those two fields, with no special handling.
+- **Nesting**: previously the lock was a single flag, so one `UnlockOSThread` after two
+  `LockOSThread` calls released the lock. Issue #20458 showed this was almost never what users
+  intended; after the change, the lock is released only when `UnlockOSThread` has been called as
+  many times as `LockOSThread` [[Clements, 2017a](#ref-clements-2017a)].
+- **Terminate the thread on exit**: previously, a goroutine exiting implicitly released the lock and
+  the thread returned to the pool. After the change, if a goroutine exits while still holding the
+  lock, the runtime terminates the thread (`mexit`) so that no other goroutine reuses a thread whose
+  state may have been modified [[Clements, 2017d](#ref-clements-2017d)]. This first required the
+  runtime to be able to exit threads it created. The difficulty is reclaiming the g0 stack: a thread
+  cannot free the stack it is using, so the exiting M is first moved onto the `sched.freem` list,
+  and a later `allocm` reclaims the stack once the thread is certain to no longer use it
+  [[Clements, 2017b](#ref-clements-2017b)].
+- **Template thread**: `clone` carries part of the calling thread's kernel state over to the new
+  thread, so creating a thread from a locked thread could copy modified state into the pool. The
+  runtime therefore starts a **template thread** at the first call to `LockOSThread` (or at startup,
+  for programs that use cgo). The template thread is always in a known good state and runs no G. If
+  `newm` finds that the current thread is locked by the user (`lockedExt` is non-zero) or is
+  executing a cgo call and so may be a C-created thread, it does not create the thread itself but
+  queues the request on the `newmHandoff` list for the template thread to create
+  [[Clements, 2017c](#ref-clements-2017c)].
 
-Precisely because of these side effects, `LockOSThread` can hardly be called an excellent feature. It adds quite a bit of management trouble for the scheduler, and the only reason it exists is to provide support for the many legacy libraries written in C last century that depend on thread-local state. Were the ecosystem rich enough that those libraries no longer needed calling, this feature could well do without existing.
+The last two mechanisms are disabled on Plan 9: when a locked goroutine exits there, the thread has
+its lock cleared and is reused [[du Colombier, 2017](#ref-du-colombier-2017)].
 
-## 9.5.7 Who Manages the Threads: A Lineage
+Because of these side effects, `LockOSThread` is hard to call an ideal feature: it puts a
+considerable management burden on the scheduler, and exists mainly to support C libraries and
+operating system interfaces that depend on thread-local state.
 
-Placing Go's approach within a lineage makes its trade-offs easier to see. "How user code maps to kernel threads" has historically had several typical arrangements:
+## 9.5.7 Summary
 
-- **1:1 (each user thread corresponds to one kernel thread)**: POSIX threads and Java's early threading model belong here. Simple and direct, but the creation, switching, and memory (a fairly large stack per thread) of threads are all priced per kernel thread, and it cannot cope once concurrency rises.
-- **N:1 (many user threads crammed onto one kernel thread)**: early green threads were like this. Switching is extremely cheap, but it has a fatal flaw: any one user thread issuing a blocking system call stalls the entire kernel thread along with all user threads on it, and it cannot use multiple cores.
-- **Thread pool**: it does not solve the mapping model, only amortizes the creation cost by accumulating threads for reuse. It cannot answer "what if a task blocks"; a blocked task keeps occupying a thread in the pool.
-- **M:N dynamic management (Go's approach)**: M goroutines are multiplexed onto N kernel threads, with the runtime scheduler mediating between the two. It gains both the cheap switching of N:1 and the multicore use and blocking resistance of 1:1: user-level switching does not enter the kernel, saving the cost of 1:1; and relying on the P handoff of this section and the M reuse of [9.5.2](#952-reuse-idle-m-parked-on-a-semaphore), it dodges N:1's fatal flaw of "one block stalls all". The cost is a significant rise in runtime complexity, and the sections of this chapter, front and back, are the unfolding of that complexity.
-
-This line of thinking is not unique to Go. Erlang/BEAM long had a scheduler mapping lightweight processes onto a small number of OS threads; Google's internal fiber practice shares the same origin. Most worth mentioning is Java: it was long a 1:1 model, and the **virtual threads** officially delivered with JDK 21 in 2023 (Project Loom, JEP 444) are in essence a move toward Go's side, multiplexing a large number of virtual threads onto a small number of carrier threads, and unmounting a virtual thread from its carrier thread when it issues a blocking call so that the carrier thread can go run other virtual threads. This is the same engineering intuition as this section's P handoff and the goroutine yielding the M during a syscall. Two independently evolving lines converging on a similar design itself shows that, under the constraints of "wanting massive concurrency, cheap switching, and resistance to blocking all at once", M:N dynamic management is almost an unavoidable answer.
-
-The benefits of performance never come for free. Go gathers all the complexity of thread management into the runtime: parking and waking, the P handoff, sysmon's patrol, and the various special cases of extra-M and the template thread. The user is thereby able to remain almost unaware of threads, writing tens of thousands of goroutines without worrying about which thread they land on. Behind this convenience of "making threads invisible to the user" is the stack of mechanisms the runtime shoulders for you.
+The spectrum of threading models (1:1, N:1 and M:N) and the choices of various language runtimes
+were discussed in [9.1](./model.md). This section showed the engineering price Go pays for the M:N
+model: parking and resuming idle threads, handing off the P during system calls and the patrols of
+sysmon, the cap on the total thread count, and special cases such as the extra M and the template
+thread. These mechanisms are what keep users almost unaware of threads: they can create thousands of
+goroutines without caring which thread each runs on, and without worrying that one blocked system
+call will stop the others.
 
 ## Further Reading
 
-1. The Go Authors. *runtime/proc.go* (`newm`/`newm1`/`mstart`, `stopm`/`startm`/`mPark`,
-   `entersyscall`/`exitsyscall`/`reentersyscall`, `handoffp`/`retake`, `acquirep`/`releasep`,
-   `checkmcount`, and the extra-M related `newextram`/`oneNewExtraM`/`needm`/`dropm`).
-   https://github.com/golang/go/blob/master/src/runtime/proc.go
-2. The Go Authors. *runtime/os_linux.go* (`newosproc` and `cloneFlags`, thread creation landing on `clone`).
-   https://github.com/golang/go/blob/master/src/runtime/os_linux.go
-3. Linux man-pages. *clone(2)*. https://man7.org/linux/man-pages/man2/clone.2.html
-   (the semantics of flags such as `CLONE_VM`/`CLONE_THREAD`, the dividing line between thread and process)
-4. The Go Authors. *runtime.LockOSThread / UnlockOSThread documentation*.
-   https://pkg.go.dev/runtime#LockOSThread
-5. Go issue tracker: #20458 (clarifying `LockOSThread` semantics), #20395 (terminating its
-   locked thread when a goroutine exits), #21827 (the origin of the template thread), #22227 (disabling newmHandoff on plan9),
-   #18023 (the abnormal slowdown caused by `LockOSThread`), #14592 (letting idle OS threads exit).
-   https://github.com/golang/go/issues
-6. Ulrich Drepper. *Futexes Are Tricky.* Red Hat, 2011.
-   https://www.akkadia.org/drepper/futex.pdf (the futex semantics and pitfalls that M suspend/resume depends on)
-7. Sape Mullender, Russ Cox. *Semaphores in Plan 9.* 2008. https://swtch.com/semaphore.pdf
-   (the design origin of the runtime's `note` and `semaphore` primitives)
-8. Ron Pressler, Alan Bateman. *JEP 444: Virtual Threads.* OpenJDK, 2023.
-   https://openjdk.org/jeps/444 (Project Loom: Java's convergence toward the M:N model)
-9. This book: [9.1 The Scheduling Problem and the GMP Model](./model.md), [9.4 The Scheduling Loop](./schedule.md),
-   [9.8 System Monitoring](./sysmon.md), [9.9 The Network Poller](./poller.md).
+- <a id="ref-clements-2017a"></a>[Clements, 2017a] Austin Clements. runtime: make
+  LockOSThread/UnlockOSThread nested. Go commit c85b12b579, 2017. https://go.dev/cl/45752
+  Fixes issue #20458 (Bryan C. Mills, proposal: runtime: pair LockOSThread, UnlockOSThread calls).
+- <a id="ref-clements-2017b"></a>[Clements, 2017b] Austin Clements. runtime: make it possible to
+  exit Go-created threads. Go commit eff2b2620d, 2017. https://go.dev/cl/46037 The thread exit
+  mechanism and the reclamation of the g0 stack (`sched.freem`).
+- <a id="ref-clements-2017c"></a>[Clements, 2017c] Austin Clements. runtime: don't start new threads
+  from locked threads. Go commit 2595fe7fb6, 2017. https://go.dev/cl/46033 Introduces the template
+  thread; fixes issue #20676 (runtime: don't spawn threads from locked Ms).
+- <a id="ref-clements-2017d"></a>[Clements, 2017d] Austin Clements. runtime: terminate locked OS
+  thread if its goroutine exits. Go commit 4f34a52913, 2017. https://go.dev/cl/46038 Fixes issue
+  #20395.
+- <a id="ref-drepper-2011"></a>[Drepper, 2011] Ulrich Drepper. *Futexes Are Tricky*. Red Hat, 2011.
+  https://www.akkadia.org/drepper/futex.pdf
+  The futex semantics and pitfalls on which parking and resuming an M depend.
+- <a id="ref-du-colombier-2017"></a>[du Colombier, 2017] David du Colombier. runtime: crash on Plan
+  9 since CL 46033. Go issue #22227, 2017. https://go.dev/issue/22227
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `runtime/proc.go`.
+  https://github.com/golang/go/blob/master/src/runtime/proc.go
+  `newm`/`newm1`/`mstart`, `stopm`/`startm`/`mPark`, `entersyscall`/`exitsyscall`/`reentersyscall`,
+  `handoffp`/`retake`, `acquirep`/`releasep`, `checkmcount`, and the extra-M functions
+  `newextram`/`oneNewExtraM`/`needm`/`dropm` (this section follows Go 1.26).
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `runtime/os_linux.go`.
+  https://github.com/golang/go/blob/master/src/runtime/os_linux.go
+  `newosproc` and `cloneFlags`: thread creation ends in `clone`.
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. Go 1.26 Release Notes, 2026.
+  https://go.dev/doc/go1.26
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. Documentation of
+  `runtime.LockOSThread` and `runtime.UnlockOSThread`. https://pkg.go.dev/runtime#LockOSThread
+- <a id="ref-knyszek-2025"></a>[Knyszek, 2025] Michael Knyszek. runtime: eliminate _Psyscall. Go
+  commit 7244e9221f, 2025. https://go.dev/cl/646198
+- <a id="ref-linux-man-pages-nd"></a>[Linux man-pages, n.d.] The Linux man-pages project.
+  *clone(2)*. https://man7.org/linux/man-pages/man2/clone.2.html The semantics of flags such as
+  `CLONE_VM` and `CLONE_THREAD`, and the line between a thread and a process.
+- <a id="ref-lopez-2016"></a>[Lopez, 2016] Brian Lopez. runtime: let idle OS threads exit. Go issue
+  #14592, 2016. https://go.dev/issue/14592
+- <a id="ref-mullender-and-cox-2008"></a>[Mullender and Cox, 2008] Sape Mullender and Russ Cox.
+  *Semaphores in Plan 9*. 2008. https://swtch.com/semaphore.pdf
+  The origin of the design of the Go runtime semaphore (`runtime/sema.go`).
+- <a id="ref-pratt-2023a"></a>[Pratt, 2023a] Michael Pratt. runtime/cgo: store M for C-created
+  thread in pthread key. Go commit c426c87012, 2023. https://go.dev/cl/495855 A resubmission of CL
+  485500; the original implementation binding the extra M to the C thread came from doujiang24's
+  CL 481061.
+- <a id="ref-pratt-2023b"></a>[Pratt, 2023b] Michael Pratt. runtime: crash when >10k C threads call
+  Go after CL 485500. Go issue #60004, 2023. https://go.dev/issue/60004
+- <a id="ref-pressler-and-bateman-2023"></a>[Pressler and Bateman, 2023] Ron Pressler and Alan
+  Bateman. *JEP 444: Virtual Threads*. OpenJDK, 2023. https://openjdk.org/jeps/444 Project Loom:
+  Java's convergence on the M:N model.
+- <a id="ref-smelkov-2017"></a>[Smelkov, 2017] Kirill Smelkov. runtime: big performance penalty with
+  runtime.LockOSThread. Go issue #21827, 2017. https://go.dev/issue/21827
+- <a id="ref-taylor-2016"></a>[Taylor, 2016] Ian Lance Taylor. runtime: unexpectedly large slowdown
+  with runtime.LockOSThread. Go issue #18023, 2016. https://go.dev/issue/18023
+- Go issue tracker: #20458 (pairing `LockOSThread` with `UnlockOSThread`), #20395 (terminating the
+  thread of a goroutine that exits while locked), #21827 (large performance loss from
+  `LockOSThread`), #22227 (disabling `newmHandoff` on Plan 9), #18023 (unexpected slowdown caused by
+  `LockOSThread`), #14592 (letting idle operating system threads exit).
+  https://github.com/golang/go/issues
+- This book: [9.1 The Scheduling Problem and the GMP Model](./model.md),
+  [9.4 The Scheduling Loop](./schedule.md), [9.8 System Monitoring](./sysmon.md),
+  [9.9 The Network Poller](./poller.md).

@@ -18,10 +18,21 @@ bookCollapseSection: true
 </div>
 </div>
 
-Concurrency is Go's most distinctive hallmark, and also the part most easily misused.
-This widely circulated proverb captures Go's orientation: shift the burden of synchronization off the programmer's shoulders and onto channels managed by the language runtime,
-letting ownership of data flow along with messages rather than scattering it across shared state guarded by locks.
-This part lays out that picture from the bottom up: first we dissect how the goroutine scheduler multiplexes a vast number of coroutines onto a small number of system threads,
-then we go deep into the implementation of channels and select, seeing how the CSP model comes down to concrete sends, receives, and multi-way selection,
-and finally we return to the traditional synchronization primitives and common concurrency patterns offered by the sync package.
-Only by understanding both paths at once can we judge, in real engineering, when to use communication and when sharing is still called for.
+Go supports concurrency directly in the language: the `go` statement starts a goroutine, channels
+pass values between goroutines, and `select` picks one of several communication operations to
+proceed. These constructs descend from Hoare's Communicating Sequential Processes
+([1.3](../part1overview/ch01intro/csp.md)). The proverb above comes from Pike's talk at Gopherfest
+SV in 2015 and summarizes the matching programming style: let ownership of data move between
+goroutines along with messages, rather than having several goroutines access the same state under a
+lock.
+
+This part discusses the implementation of these constructs from the bottom up. Chapter 9 covers how
+the scheduler multiplexes a large number of goroutines onto a small number of operating system
+threads, together with the supporting mechanisms of preemption, system monitoring, network polling
+and timers. Chapter 10 covers the data structures behind channels and `select`, and the
+implementation of send, receive, close and multiway selection. Chapter 11 covers the synchronization
+primitives of the `sync` package (mutexes, condition variables, wait groups), as well as atomic
+operations, contexts and the Go memory model. Communication and shared memory are not mutually
+exclusive: a channel is itself protected by a lock, and in many situations a mutex remains the more
+direct choice. Only by understanding the implementation and cost of both can one choose well for a
+concrete problem.

@@ -5,228 +5,409 @@ title: "10.6 The Memory Model and the Lock-Free Evolution"
 
 # 10.6 The Memory Model and the Lock-Free Evolution
 
-The previous sections took the channel apart down to its parts: the direct handoff in [10.3](./sendrecv.md)
-lets the sending and receiving ends pass a value directly, bypassing the ring buffer, and `select` in
-[10.5](./select.md) makes a random choice among several ready branches. These mechanisms explain how a
-channel "runs". This section answers two higher-level questions: what **visibility guarantee** a channel
-offers to a concurrent program, and an engineering mystery that is often raised, why a channel is still
-"a lock plus a queue" to this day rather than the supposedly faster lock-free structure. The former reconnects
-the channel to the memory model in [11.9](../ch11sync/mem.md); the latter is a real trade-off about "how
-correctness and maintainability win out over peak performance".
+[10.1.3](./model.md) listed the four rules that the Go memory model gives for channels. This section
+discusses what exactly they mean and where they come from: why every rule rests on the completion of
+some operation (10.6.1); why an unbuffered channel is a two-way synchronization (10.6.2); how the
+fourth rule, about buffered channels, was written down only in 2014 (10.6.3); how the race detector
+turns these rules into executable checks (10.6.4); and why these rules, together with
+first-come-first-served service, `select` and closing, mean that a channel is still protected by a
+single lock today (10.6.5).
 
-## 10.6.1 The Channel's Memory Model Promise
+## 10.6.1 The Rules Rest on Completion
 
-A channel is not just a pipe for carrying data; it is at the same time a synchronization point that establishes
-happens-before. [11.9](../ch11sync/mem.md) gives the full picture of the Go memory model. Here we pull out the
-four rules in it that concern channels and read through each one for its meaning. The Go memory model
-(go.dev/ref/mem, version of June 2022) states the following about channels, and we follow the terminology
-revised in 1.19, *synchronized before* (written $<$):
+The Go memory model describes visibility between goroutines with three relations
+[[Go Authors, 2022](#ref-go-authors-2022)]: within one goroutine, an earlier statement is sequenced
+before a later one in program order; synchronizing operations are related by synchronized before;
+the transitive closure of the two is happens before. A write that happens before a read guarantees
+that the read sees the write. The four channel rules are all synchronized-before relations:
 
-1. A send **is synchronized before** the completion of the corresponding receive. This holds for any channel
-   (buffered or not).
-2. `close(ch)` **is synchronized before** a receive that returns a zero value because the channel is closed.
-3. For an **unbuffered** channel, a receive **is synchronized before** the completion of the corresponding send.
-4. For a buffered channel with capacity $C$, the $k$-th receive **is synchronized before** the completion of the
-   $(k+C)$-th send.
+1. A send on a channel is synchronized before the completion of the corresponding receive from that
+   channel.
+2. The closing of a channel is synchronized before a receive that returns because the channel is
+   closed.
+3. A receive from an unbuffered channel is synchronized before the completion of the corresponding
+   send on that channel.
+4. The $k$-th receive on a channel with capacity $C$ is synchronized before the completion of the
+   $(k+C)$-th send from that channel.
 
-The first rule is the most plain intuition: every write made before putting the data into the channel is visible
-to the receiver once it has taken that data. This is the formal basis of the maxim "do not communicate by sharing
-memory; instead, share memory by communicating". A minimal example:
+The second half of rules 1, 3 and 4 is the completion of some operation, and the receive in rule 2
+that returns because of the close likewise refers to the completion of that receive. A channel
+operation may block; it has a start and a completion, which may be arbitrarily far apart. What the
+rules promise is that once the operation has completed, that is, once the receive has obtained its
+value or the send has returned, the other side's writes made before the synchronization point are
+visible. The example in the memory model is:
 
 ```go
-var data int
-var done = make(chan struct{})
+var c = make(chan int, 10)
+var a string
 
-func producer() {
-	data = 42       // (1) ordinary write
-	close(done)     // (2) closing is a synchronization
+func f() {
+	a = "hello, world"
+	c <- 0
 }
 
-func consumer() {
-	<-done          // (3) receive completes
-	print(data)     // (4) guaranteed to read 42
+func main() {
+	go f()
+	<-c
+	print(a)
 }
 ```
 
-(1) is sequenced before (2); by rule 2, (2) is synchronized before (3); (3) is sequenced before (4). The transitive
-closure of these three segments gives (1) $<$ (4), so (4) must read 42. If we draw this chain, the cross-goroutine
-step (`close` synchronized before the receive) is exactly the edge that glues the two program orders together:
+The write to `a` precedes the send in `f`; the send is synchronized before the completion of the
+receive in `main` (rule 1); the receive precedes `print` in `main`. Chained together, the write
+happens before the read, and the program is guaranteed to print `hello, world`. Replacing `c <- 0`
+with `close(c)` gives the same guarantee by rule 2; the use of closing as a broadcast is covered in
+[10.4.3](./close.md). The word "completion" is not rhetoric; 10.6.4 shows its consequences.
 
-```mermaid
-flowchart LR
-    subgraph P["producer"]
-        A["(1) data = 42"] -->|program order| B["(2) close(done)"]
-    end
-    subgraph C["consumer"]
-        D["(3) &lt;-done completes"] -->|program order| E["(4) print(data) reads 42"]
-    end
-    B -.->|"synchronization order: rule 2"| D
-```
+## 10.6.2 Unbuffered Channels: Two-Way Synchronization
 
-Without this channel rule, all that remains between (1) and (4) is a data race, and the program in
-[11.9.1](../ch11sync/mem.md) that prints 0 is the counterexample.
-
-## 10.6.2 The "Inversion" of Unbuffered Send/Receive: The Send Is a Receipt
-
-The third rule is easy to overlook, yet it is the essence of unbuffered channel semantics. Notice that it **inverts**
-the direction: for a buffered channel, the send precedes the completion of the receive; for an unbuffered channel, the
-**receive** precedes the **completion** of the send.
-
-This inversion corresponds directly to the direct handoff described in [10.3](./sendrecv.md). An unbuffered channel
-has no buffer slot, so the sender must wait until a receiver is ready and hand the value to it directly before the send
-operation counts as complete. Thus the event "the send returns" is precisely proof that "someone has already received
-it". An unbuffered send therefore has the semantics of an **acknowledgement**:
+Rule 3 reverses the direction: on an unbuffered channel, the receive is also synchronized before the
+completion of the corresponding send. Swap the two sides of the example above and use an unbuffered
+channel:
 
 ```go
-ch := make(chan struct{}) // unbuffered
+var c = make(chan int)
+var a string
 
-go func() {
-	doWork()
-	ch <- struct{}{} // send: returns only after the other side takes it
-}()
+func f() {
+	a = "hello, world"
+	<-c
+}
 
-<-ch       // receive: at this point we can conclude doWork is done and its writes are visible
-useResult()
+func main() {
+	go f()
+	c <- 0
+	print(a)
+}
 ```
 
-Rule 3 guarantees that `<-ch` (the receive) is synchronized before the completion of `ch <- struct{}{}`, and the latter
-is in turn sequenced after `doWork()`. The reader thereby obtains a conclusion stronger than "the data has arrived": the
-sender has advanced past the send point. A buffered channel cannot give this guarantee, because a send may merely stuff
-the value into the buffer and return, while the receiver may not have acted at all. The real divide between unbuffered
-and buffered is not "whether a value can be cached" but this inversion in the direction of visibility.
+The send in `main` cannot complete until the receive in `f` arrives (the direct handoff of
+[10.3.2](./sendrecv.md)), and the write that `f` made before the receive is visible after the send
+returns, so the program is again guaranteed to print `hello, world`. If `c` is changed to
+`make(chan int, 1)`, the send returns as soon as it has put the value in the buffer, when `f` may
+not have run yet, and the program no longer has this guarantee
+[[Go Authors, 2022](#ref-go-authors-2022)].
 
-## 10.6.3 The Buffered Channel as a Semaphore
+Rules 1 and 3 together make a communication on an unbuffered channel a two-way synchronization: the
+writes each side made before the communication are visible to the other side after it completes.
+This is exactly the communication that Hoare defined in CSP: a matching input command and output
+command are executed "simultaneously", there is no automatic buffering, and whichever side arrives
+first waits for the other [[Hoare, 1978](#ref-hoare-1978)]. In the discussion part of the paper,
+Hoare gave two reasons for not providing automatic buffering: it is hard to implement on several
+unconnected processors, and when a buffer is needed it can be programmed from the existing
+primitives. Hoare also admitted that one could just as well argue the other way and express
+synchronization by a pair of buffered input and output. Go provides both, and the memory model
+states the difference precisely: with a buffer, the synchronization in the direction from receive to
+send no longer holds for every operation but only across a gap of $C$ operations, which is rule 4.
 
-The fourth rule, that the $k$-th receive is synchronized before the completion of the $(k+C)$-th send, looks abstract at
-first; it is in fact the formal basis of the idiom "a buffered channel is a counting semaphore". Read the rule backwards:
-for the $(k+C)$-th send to complete, the $k$-th receive must happen first. That is, the buffer holds at most $C$ unreceived
-values, and the $(C+1)$-th send blocks until someone takes one away and frees a slot. The capacity $C$ is exactly the upper
-bound on values "in flight at once".
+## 10.6.3 Buffered Channels: Synchronization Across C Operations
 
-This is the classic way to cap concurrency at $C$ with a single `chan struct{}`:
+The intuition behind rule 4 is the reuse of slots. A buffer of capacity $C$ has $C$ slots, and the
+$(k+C)$-th send uses exactly the slot freed by the $k$-th receive, so it can complete only after
+that receive. With $C = 0$, rule 4 is rule 3. The following program shows the correspondence:
+
+```go {run=true}
+package main
+
+import "fmt"
+
+func main() {
+	const C = 3
+	c := make(chan struct{}, C)
+	send := func(k int) {
+		select {
+		case c <- struct{}{}:
+			fmt.Printf("send %d completed\n", k)
+		default:
+			fmt.Printf("send %d cannot complete: the buffer is full\n", k)
+		}
+	}
+	for k := 1; k <= C+1; k++ {
+		send(k)
+	}
+	<-c
+	fmt.Println("receive 1 completed")
+	send(C + 1)
+}
+```
+
+```
+send 1 completed
+send 2 completed
+send 3 completed
+send 4 cannot complete: the buffer is full
+receive 1 completed
+send 4 completed
+```
+
+This rule lets a buffered channel serve as a counting semaphore
+([1.3](../../part1overview/ch01intro/csp.md)): a send acquires, a receive releases, and the capacity
+is the upper bound on concurrent holders. The memory model uses this idiom to limit the number of
+concurrently running tasks to 3; below it is rewritten with `sync.WaitGroup.Go`, added in Go 1.25:
 
 ```go
-// Limit the number of concurrently executing workers to C
-func bounded(tasks []Task, C int) {
-	sem := make(chan struct{}, C) // a buffered channel of capacity C serving as a semaphore
+var limit = make(chan struct{}, 3)
+
+func run(work []func()) {
 	var wg sync.WaitGroup
-	for _, t := range tasks {
-		sem <- struct{}{} // acquire a token: the C+1-th send blocks here
-		wg.Add(1)
-		go func(t Task) {
-			defer wg.Done()
-			defer func() { <-sem }() // release a token: one receive lets one waiting send through
-			t.Run()
-		}(t)
+	for _, w := range work {
+		wg.Go(func() {
+			limit <- struct{}{} // acquire
+			w()
+			<-limit // release
+		})
 	}
 	wg.Wait()
 }
 ```
 
-`sem <- struct{}{}` is the P operation (acquire), and `<-sem` is the V operation (release). At any moment the number of
-goroutines inside `t.Run()` does not exceed $C$: once $C$ tokens are taken, the $(C+1)$-th `sem <-` blocks until the
-`<-sem` receive of some finished worker frees a slot. Rule 4 nails this down as a guarantee at the level of the memory
-model, not just an empirical "happens to work". The element type is chosen as `struct{}` because it is zero bytes; the
-buffer is used only for counting, not for storing data.
+Besides limiting the number of concurrent tasks, rule 4 also guarantees that the writes a task made
+before releasing its slot are visible to the task that acquires the slot next.
 
-## 10.6.4 Why the Channel Is Not Lock-Free
+This rule was written into the memory model only in 2014. Before that there were only the first
+three rules, and to have the memory model's guarantee, a semaphore could only be written the other
+way round: fill the channel first, acquire with a receive and release with a send, so that between
+the receive that acquires a slot and the send by which the previous holder released it there is the
+guarantee of rule 1. That is how Effective Go wrote it at the time, with the explicit remark that,
+because data synchronization happens on receipt from a channel, the semaphore must be acquired by a
+receive, not by a send. Yet acquiring with a send is the more natural form, had long been in wide
+use, and appears in the standard library. In August 2013, Dan Kortschak filed an issue noting that
+the discussions on golang-nuts and golang-dev held that this form had no formal guarantee, although
+it worked correctly in the implementation of the time [[Kortschak, 2013](#ref-kortschak-2013)]. In
+March 2014, Cox wrote the rule into the memory model and rewrote the example in Effective Go at the
+same time; the commit message says: "This rule not existing has been the source of many discussions
+on golang-dev and on issues. We have stated publicly that it is true, but we have never written it
+down. Write it down." [[Cox, 2014](#ref-cox-2014)]. The rule written down then had the direction
+reversed: the $k$-th send happens before the completion of the $(k+C)$-th receive. A little over two
+months later, Vyukov corrected it, writing in the commit message: "The current wording is reversed
+in 2 places. Not sure how it got 4 LGTMs (mine was there as
+well)." [[Vyukov, 2014a](#ref-vyukov-2014a)]. The former shipped with Go 1.3, the correction with Go
+1.4.
 
-After reading the `hchan` structure in [10.1](./readme.md), the careful reader will have noticed that `lock mutex`. In a
-Go runtime that chases high concurrency, where even the allocator fast path
-([12.2](../../part4memory/ch12alloc/component.md)) and the scheduler's local queues are made lock-free, why does the
-channel alone keep a mutex? It is not that no one has tried.
+A rule in the memory model is a promise about behavior that the implementation had long provided.
+Writing a rule down does not change how any program runs, but it decides what programs may depend
+on. Stating the promise accurately is not easy: the reviewers all knew what the rule meant and still
+did not notice that the wording was reversed.
 
-In 2014, Dmitry Vyukov filed the proposal **golang/go#8899 "runtime: lock-free channels"**, with a design document and
-an implementation (CL 12544043). The proposal reported that on a real application that had once switched away from channels
-because of their performance, the lock-free channel brought an end-to-end speedup of about **23%**. The number is sizable
-and the direction tempting. Yet as of go1.26, `hchan` is still a single `lock mutex` protecting the ring buffer and the
-send/receive wait queues, and the proposal has long sat in Open / Unplanned status, **without landing**.
+## 10.6.4 The Rules in the Race Detector
+
+The way the runtime honors these rules on hardware is straightforward: almost all successful sends
+and receives complete while holding the channel's lock, and acquiring and releasing the lock itself
+orders the memory accesses; the lock-free fast path returns only when the operation fails, or when a
+receive finds a closed channel that has been drained, and the ordering argument for these cases is
+in [10.3.5](./sendrecv.md). A lock provides stronger ordering than the memory model promises.
+Whether a program depends only on what is promised is for the race detector to check.
+
+The race detector is based on ThreadSanitizer. It maintains a vector clock for each goroutine,
+recording the history of other goroutines that this goroutine already knows about; synchronizing
+operations store and load clocks in the synchronization object that corresponds to an address, and
+if two accesses are not related by happens-before, a race is reported. Every channel rule has a
+corresponding annotation in `chan.go` [[Go Authors, 2026](#ref-go-authors-2026)]:
+
+- On an unbuffered channel, the two sides exchange clocks with each other through `racesync`, which
+  corresponds to the two-way synchronization of rules 1 and 3;
+- On a buffered channel, the address of each slot serves as a synchronization object, and both send
+  and receive call `racereleaseacquire` on the slot used through `racenotify`; so do `bufsend` and
+  `bufrecv` in `select.go`;
+- On closing, `racerelease` is called on the channel, and a receive that returns because of the
+  close calls `raceacquire` on the same address, which corresponds to rule 2.
+
+`racereleaseacquire` first stores the current goroutine's clock into the synchronization object,
+overwriting its previous content, and then merges the clock that was previously in the object into
+its own [[LLVM Project, 2023](#ref-llvm-project-2023)]. Applied to a slot, it implements exactly
+rules 1 and 4: the $k$-th send leaves its history in the slot, to be taken by the $k$-th receive;
+the $k$-th receive in turn leaves its history, to be taken by the $(k+C)$-th send. What is stored is
+the clock from before the take, so the history obtained by the $(k+C)$-th send is not passed along
+with the value it puts in to the $(k+C)$-th receive. This is the meaning of "completion" in the
+rules: a send hands over its own history when it starts, and obtains the history of the previous
+user only when it completes.
+
+This order used to be reversed. In February 2020, Daniel S. Fava, reading `chan.go`, noticed that
+sends and receives on buffered channels took first and stored afterwards, and gave a program on
+which the detector misses a race [[Fava, 2020a](#ref-fava-2020a)]. The version below fixes the
+execution order with sleeps; a sleep does not establish a happens-before relation:
 
 ```go
-// hchan: as of go1.26 still protected entirely by a single mutex (sketch, cf. 10.1)
-type hchan struct {
-	qcount   uint   // number of elements currently in the buffer
-	dataqsiz uint   // ring buffer capacity C
-	sendx    uint   // send cursor
-	recvx    uint   // receive cursor
-	recvq    waitq  // queue of blocked receivers (FIFO)
-	sendq    waitq  // queue of blocked senders (FIFO)
-	// lock protects all fields of hchan, plus several fields of sudogs blocked on this channel
-	lock mutex
+var z int
+
+func main() {
+	c := make(chan bool, 1)
+	var wg sync.WaitGroup
+	wg.Go(func() { c <- true })                                      // t1: the 1st send
+	wg.Go(func() { z = 42; <-c })                                    // t2: the 1st receive
+	wg.Go(func() { time.Sleep(10 * time.Millisecond); c <- true })   // t3: the 2nd send
+	wg.Go(func() { time.Sleep(20 * time.Millisecond); <-c; z = 13 }) // t4: the 2nd receive
+	wg.Wait()
 }
 ```
 
-Why would a speedup proposal backed by data be shelved? Here we need to be careful: the project has not published a
-"list of rejection reasons", and what follows are inferable difficulties based on channel semantics, not a single
-confirmed cause. A channel is not an ordinary concurrent queue; under one lock it maintains several invariants that must
-move **in concert**: the **FIFO order** of the send/receive wait queues
-([10.6.5](#1065-the-engineering-account-of-fifo-fairness-and-select-fairness)), the **atomic choice** and fairness of
-`select` across multiple channels ([10.5](./select.md)), and the **broadcast** wakeup of all waiters on `close` (readying
-both `recvq` and `sendq` at once). Making all three lock-free at the same time while still guaranteeing linearizability is
-far harder than a pure MPMC queue. The cost of a mutex is contention; what it buys is that the implementation and
-verification of these invariants are far simpler. The Go team's leaning here shares the same temperament as its exposing
-only sequentially consistent atomics in the memory model ([11.9.10](../ch11sync/mem.md)): **when peak performance conflicts
-with correctness and maintainability, lean toward the latter**.
+The receive of t2 is the first receive and is synchronized before the completion of the send of t3
+(rule 4, $C = 1$); the send of t3 is synchronized before the completion of the receive of t4 (rule
+1). But the send of t3 starts before its completion, and the two relations do not connect, so there
+is no happens-before relation between `z = 42` and `z = 13`, and this is a data race:
 
-## 10.6.5 The Engineering Account of FIFO, Fairness, and select Fairness
-
-The two invariants that lock guards, FIFO and fairness, have themselves gone through some evolution, each worth a note.
-
-**FIFO of the blocking queue.** The proposal **golang/go#11506 "runtime: make sure blocked channels run operations in FIFO
-order"** (filed by Russ Cox, fixed early in Go 1.6) pointed out a hazard: when multiple goroutines are blocked on some channel
-and the channel becomes available, a running goroutine that happens to "pass by" may complete the operation ahead of those
-already blocked, leaving the blocked ones to suffer arbitrary delay. The fix is exactly the direct handoff of
-[10.3](./sendrecv.md): when the channel becomes available, the wakeup hands the value directly to the waiter at the head of
-`recvq`, and `recvq` is a first-in-first-out queue ordered by arrival (`enqueue` adds to the tail, `dequeue` removes from the
-head). First-come-first-served thereby becomes a guarantee rather than a probability.
-
-**Fairness of select.** When `select` faces several branches ready at the same time, it must pick one at random, otherwise the
-branches written earlier would starve the later ones over the long run. The proposal **golang/go#21806 "runtime: select is not
-fair"** reported that Go 1.9 lost its randomness under some channel configurations. Today's implementation
-([10.5](./select.md)) solves it with a single shuffle:
-
-```go
-// Before executing select, shuffle the polling order of branches (pollorder) for fairness (sketch, cf. src/runtime/select.go)
-for i := 1; i < ncases; i++ {
-	j := cheaprandn(uint32(i + 1)) // cheap random number
-	pollorder[i] = pollorder[j]    // Fisher-Yates shuffle
-	pollorder[j] = uint16(i)
-}
+```mermaid
+flowchart LR
+    subgraph T2["t2"]
+        A["z = 42"] --> B["1st receive"]
+    end
+    subgraph T3["t3"]
+        C["2nd send starts"] --> D["2nd send completes"]
+    end
+    subgraph T4["t4"]
+        E["2nd receive completes"] --> F["z = 13"]
+    end
+    B -.->|"rule 4"| D
+    C -.->|"rule 1"| E
 ```
 
-`pollorder` decides in what order each branch is checked for readiness, and the shuffle gives every ready branch an equal
-probability of being chosen. Note that it and `lockorder` are two separate orderings: `lockorder` sorts by channel address,
-ensuring that multiple `select` statements take locks in a consistent order to avoid deadlock; `pollorder` is the one
-responsible for fairness. Both live within the protocol of that lock, which is further evidence for the judgment in
-[10.6.4](#1064-why-the-channel-is-not-lock-free): invariants like FIFO and `select` fairness, "spanning multiple waiters and
-multiple channels", are the concrete reason for keeping the channel inside the lock.
+The old annotation had t3 first take the history that t2 left, and then store it, together with its
+own, in the slot; t4 thus learned of t2's write, and the detector no longer reported the race. In
+Go's implementation, the value of t3 can be put in only after t2 has freed the slot, and every
+access goes through the same lock, so the two writes are in fact ordered; but that is an order
+provided by the implementation, not promised by the memory model, and what the detector must check
+is the latter. Fava's change swapped the order, and for this added a new store-then-take operation
+to ThreadSanitizer [[Fava, 2020b](#ref-fava-2020b)] [[Fava, 2020c](#ref-fava-2020c)]; it shipped
+with Go 1.16. Running the program above with `-race` on Go 1.26 reports this race every time.
 
-## 10.6.6 Summary: The Trade-off Behind One Lock
+After the change landed, a piece of code in `cmd/go` that uses a buffered channel as a semaphore
+occasionally reported a race under race detection, although the code itself had none
+[[Mills, 2020](#ref-mills-2020)]. The cause is that a channel whose element size is zero (this code
+uses `chan token`, whose element type is `struct{}`) has no real buffer, and all slots have the same
+address and share one synchronization object, so exchanging history per slot does not match rule 4
+here. The Go team was for a while ready to roll the change back; Vyukov's reason was "False
+positives are much worse than false negatives." [[Vyukov, 2020](#ref-vyukov-2020)]. In the end, only
+for such channels was the cumulative form restored: each operation takes first and then stores,
+together with its own history [[Fava, 2020d](#ref-fava-2020d)]. For these channels, the detector
+assumes more happens-before relations than the memory model promises, so it may miss a race but
+never reports a false one; replace `chan bool` with `chan struct{}` in the program above and the
+detector no longer reports it. The element type of a channel used as a semaphore is usually exactly
+`struct{}`.
 
-The channel's memory model promise and the form of its implementation are two sides of the same trade-off. The four
-synchronized-before rules give the user a strong and clear visibility contract: a send establishes happens-before, an
-unbuffered send is a receipt, and the buffer capacity is a semaphore. To honor this contract reliably, on top of the
-interlocking invariants of FIFO, `select` fairness, and `close` broadcast, the most direct way is one lock. The lock-free
-channel (#8899) can indeed be faster on some workloads, but only at the cost of rewriting the correctness proofs of these
-invariants, a bill the Go team has not signed to this day. A performance gain never comes for free; here, what it buys is
-a concurrency semantics that can be read, maintained, and trusted. The next chapter [11.9](../ch11sync/mem.md) will place
-this channel contract back into the complete Go memory model, set side by side with the rules of mutex and atomic.
+## 10.6.5 Why a Channel Is Still a Lock
+
+[10.2.6](./impl.md) mentioned that in his design document of January 2014, Vyukov listed making
+channels entirely lock-free as a non-goal. What that design set out to do was to make the common
+paths take no lock [[Vyukov, 2014b](#ref-vyukov-2014b)]. In the ring buffer of a buffered channel,
+each slot carries a lap count; the slot is writable on even laps and readable on odd laps; a sender
+advances the send position with a CAS, whoever wins the position writes the slot and then adds one
+to the lap count, and a receiver reads symmetrically. Only when it must block does it take the lock,
+operate on the wait queue, and recheck the buffer after enqueueing, so as not to miss a peer that
+has just arrived. `select` also no longer locks all channels at once; it locks, enqueues and
+rechecks channel by channel, and uses one CAS to guarantee that it is woken only once. The lap count
+of a slot describes the same thing as rule 4: a slot can be used by the $(k+C)$-th send only after
+the $k$-th receive.
+
+In October of the same year, Vyukov filed issue #8899 with an implementation: on a real application
+that had given up channels for the sake of performance and switched to other synchronization
+primitives, it brought a 23% end-to-end speedup [[Vyukov, 2014c](#ref-vyukov-2014c)]. The issue has
+not been closed to this day, and its status is Unplanned. Vyukov himself gave two reasons. First, in
+that design, a woken receiver on a buffered channel competes on equal terms with other receivers and
+blocks again if it loses, which was exactly the protocol before Go 1.6; the change in Go 1.6
+[[Randall, 2015](#ref-randall-2015)] made the waker complete the woken party's operation directly,
+resolving issue #11506 raised by Cox [[Cox, 2015](#ref-cox-2015)], and the implementation has since
+provided first-come-first-served service ([10.3.6](./sendrecv.md)). Vyukov wrote in 2016 that after
+this change about fairness his algorithm no longer applied, because it lacked the fairness property
+that the existing code provides [[Vyukov, 2016a](#ref-vyukov-2016a)]. Second, the work "was
+constantly deprioritized over other runtime changes, thus constantly get outdated", Vyukov could not
+keep up, and the main problem became porting it onto the new runtime code
+[[Vyukov, 2017](#ref-vyukov-2017)].
+
+Later proposals met the same requirement. In 2016, someone showed a user-space lock-free channel in
+this issue, and Vyukov pointed out its problems: it is not first-in-first-out; sends and receives
+may fail for no reason; `len` may return -1; it cannot tell the scheduler when to block and when to
+wake a goroutine; and the same goes for `select` [[Vyukov, 2016b](#ref-vyukov-2016b)]. A similar
+proposal came in 2022, and Taylor replied: "Channels aren't just thread-safe queues; they also have
+to handle the `select` statement and the `close` function." [[Taylor, 2022](#ref-taylor-2022)].
+
+What the lock protects is not a queue but a set of interrelated properties: the order in which
+waiters are served (10.3.6); the atomic choice that `select` makes among several channels, together
+with its uniform random selection ([10.5](./select.md)), which failed in Go 1.9 because of a defect
+in the random numbers [[Chenebault, 2017](#ref-chenebault-2017)]; the waking of all waiters on close
+([10.4.1](./close.md)); and the four synchronization rules built on top of these. A lock-free
+implementation must prove each of them anew. Shenghou Ma suggested in the discussion that if more
+lock-free structures are to be added to the runtime, a formal model should be written first and kept
+in sync with the source at all times [[Ma, 2016](#ref-ma-2016)]. The runtime has a precedent: in
+2011 Cox wrote a Promela model of the scheduler and used SPIN to enumerate more than 1.1 million
+states [[Cox, 2011](#ref-cox-2011)]; a little over two years later, Vyukov deleted it with the
+explanation "It's entirely outdated today." [[Vyukov, 2014d](#ref-vyukov-2014d)].
 
 ## Further Reading
 
-1. The Go Authors. *The Go Memory Model* (Version of June 6, 2022). Section "Channel communication".
-   https://go.dev/ref/mem
-2. Dmitry Vyukov. *runtime: lock-free channels.* Go issue #8899 (with design document and CL 12544043;
-   reports about a 23% speedup; as of go1.26 still Unplanned, not merged).
-   https://github.com/golang/go/issues/8899
-3. Russ Cox. *runtime: make sure blocked channels run operations in FIFO order.* Go issue #11506
-   (fixed early in Go 1.6). https://github.com/golang/go/issues/11506
-4. The Go Authors. *runtime: select is not fair.* Go issue #21806.
-   https://github.com/golang/go/issues/21806
-5. The Go Authors. *src/runtime/chan.go, src/runtime/select.go.* (go1.26: `hchan` still protected by
-   `lock mutex`; `select` shuffles `pollorder` with `cheaprandn`.)
-   https://github.com/golang/go/tree/master/src/runtime
-6. C. A. R. Hoare. "Communicating Sequential Processes." *Communications of the ACM*, 21(8), 1978.
-   https://doi.org/10.1145/359576.359585
-7. This book: [10.3 Send/Receive and Direct Handoff](./sendrecv.md), [10.5 select and Fairness](./select.md),
-   [11.9 The Memory Consistency Model](../ch11sync/mem.md).
+- <a id="ref-chenebault-2017"></a>[Chenebault, 2017] Benjamin Chenebault. Go issue #21806. *runtime:
+  select is not fair.* 2017. https://github.com/golang/go/issues/21806
+- <a id="ref-cox-2011"></a>[Cox, 2011] Russ Cox. runtime: faster entersyscall, exitsyscall. Go
+  commit 025abd530e, 2011. https://github.com/golang/go/commit/025abd530e Adds the Promela model of
+  the scheduler, `src/pkg/runtime/proc.p`.
+- <a id="ref-cox-2014"></a>[Cox, 2014] Russ Cox. doc: allow buffered channel as semaphore without
+  initialization. Go commit 132e816734, 2014. https://github.com/golang/go/commit/132e816734 Fixes
+  issue #6242; shipped with Go 1.3; the change shows the semaphore idiom and its explanation in the
+  earlier Effective Go.
+- <a id="ref-cox-2015"></a>[Cox, 2015] Russ Cox. Go issue #11506. *runtime: make sure blocked
+  channels run operations in FIFO order.* 2015. https://github.com/golang/go/issues/11506 Fixed by
+  CL 16740 in Go 1.6 (see [Randall, 2015]).
+- <a id="ref-fava-2020a"></a>[Fava, 2020a] Daniel S. Fava. Go issue #37355. *runtime/race: running
+  with -race misses races (mismatch with memory model).* 2020.
+  https://github.com/golang/go/issues/37355
+- <a id="ref-fava-2020b"></a>[Fava, 2020b] Daniel S. Fava. runtime: swap the order of raceacquire()
+  and racerelease(). Go commit 35455fff0e, 2020. https://go.dev/cl/220419 Fixes issue #37355;
+  shipped with Go 1.16.
+- <a id="ref-fava-2020c"></a>[Fava, 2020c] Daniel S. Fava. tsan: Adding releaseAcquire() to
+  ThreadClock. LLVM review D76322, 2020. https://reviews.llvm.org/D76322
+- <a id="ref-fava-2020d"></a>[Fava, 2020d] Daniel S. Fava. runtime: check channel's elemsize before
+  calling race detector. Go commit df68e01b68, 2020. https://go.dev/cl/271987
+  Fixes issue #42598; shipped with Go 1.16.
+- <a id="ref-go-authors-2022"></a>[Go Authors, 2022] The Go Authors. *The Go Memory Model* (Version
+  of June 6, 2022). Section "Channel communication". https://go.dev/ref/mem
+- <a id="ref-go-authors-2026"></a>[Go Authors, 2026] The Go Authors. *src/runtime/chan.go,
+  src/runtime/select.go.* https://github.com/golang/go/tree/master/src/runtime In Go 1.26 `hchan` is
+  still protected by `lock`; this section uses `racesync` and `racenotify`, and `bufsend` and
+  `bufrecv` in `select.go`.
+- <a id="ref-hoare-1978"></a>[Hoare, 1978] C. A. R. Hoare. "Communicating Sequential
+  Processes." *Communications of the ACM*, 21(8), 1978. https://doi.org/10.1145/359576.359585
+  Section 2 defines the matching input and output commands; section 7.4 discusses automatic
+  buffering.
+- <a id="ref-kortschak-2013"></a>[Kortschak, 2013] Dan Kortschak. Go issue #6242. *spec: clarify the
+  guarantees for HB behaviour of buffered chans.* 2013. https://github.com/golang/go/issues/6242
+- <a id="ref-llvm-project-2023"></a>[LLVM Project, 2023] The LLVM Project.
+  *compiler-rt/lib/tsan/rtl/tsan_vector_clock.cpp* (`ReleaseStore`, `ReleaseStoreAcquire`).
+  https://github.com/llvm/llvm-project/blob/51bfeff0e4b0757ff773da6882f4d538996c9b04/compiler-rt/lib/tsan/rtl/tsan_vector_clock.cpp
+  On most platforms, the race detector runtime library of Go 1.26 is built from LLVM commit
+  51bfeff0e4; see `src/runtime/race/README`.
+- <a id="ref-ma-2016"></a>[Ma, 2016] Shenghou Ma. Comment on golang/go#8899, 2016.
+  https://github.com/golang/go/issues/8899#issuecomment-202166577
+  March 27, 2016: suggests writing a formal model first for lock-free structures in the runtime.
+- <a id="ref-mills-2020"></a>[Mills, 2020] Bryan C. Mills. Go issue #42598. *runtime: apparent
+  false-positive race report for a buffered channel after CL 220419.* 2020.
+  https://github.com/golang/go/issues/42598
+- <a id="ref-randall-2015"></a>[Randall, 2015] Keith Randall. runtime: simplify chan ops, take 2. Go
+  commit e410a527b2, 2015. https://go.dev/cl/16740
+  Shipped with Go 1.6.
+- <a id="ref-taylor-2022"></a>[Taylor, 2022] Ian Lance Taylor. Comment on golang/go#52652, 2022.
+  https://github.com/golang/go/issues/52652#issuecomment-1115348887
+  May 2, 2022: channels are not just thread-safe queues.
+- <a id="ref-vyukov-2014a"></a>[Vyukov, 2014a] Dmitry Vyukov. doc: fix happens-before rules for
+  buffered channels. Go commit 81a93ef24a, 2014. https://github.com/golang/go/commit/81a93ef24a
+  Shipped with Go 1.4.
+- <a id="ref-vyukov-2014b"></a>[Vyukov, 2014b] Dmitry Vyukov. *Go channels on steroids.* 2014.
+  https://docs.google.com/document/d/1yIAYmbvL3JxOKOjuCyon7JhW4cSv1wy5hC0ApeGMV9s
+- <a id="ref-vyukov-2014c"></a>[Vyukov, 2014c] Dmitry Vyukov. *runtime: lock-free channels.* Go
+  issue #8899 (with the design document and CL 12544043; reports a speedup of about 23%; still
+  Unplanned and not merged as of go1.26). https://github.com/golang/go/issues/8899
+- <a id="ref-vyukov-2014d"></a>[Vyukov, 2014d] Dmitry Vyukov. runtime: delete proc.p. Go commit
+  0e027fca42, 2014. https://github.com/golang/go/commit/0e027fca42
+- <a id="ref-vyukov-2016a"></a>[Vyukov, 2016a] Dmitry Vyukov. Comment on golang/go#8899, 2016.
+  https://github.com/golang/go/issues/8899#issuecomment-269321360
+  December 27, 2016: after the fairness change in Go 1.6, this algorithm no longer applies.
+- <a id="ref-vyukov-2016b"></a>[Vyukov, 2016b] Dmitry Vyukov. Comment on golang/go#8899, 2016.
+  https://github.com/golang/go/issues/8899#issuecomment-202024390
+  March 27, 2016: five objections to a user-space lock-free channel.
+- <a id="ref-vyukov-2017"></a>[Vyukov, 2017] Dmitry Vyukov. Comment on golang/go#8899, 2017.
+  https://github.com/golang/go/issues/8899#issuecomment-292491545
+  April 7, 2017: why this work was not merged.
+- <a id="ref-vyukov-2020"></a>[Vyukov, 2020] Dmitry Vyukov. Comment on golang/go#42598, 2020.
+  https://github.com/golang/go/issues/42598#issuecomment-731033819 November 20, 2020: argues for
+  rolling back CL 220419; false positives are much worse than false negatives.
+- This book: [10.3 Send, Receive, and Direct Handoff](./sendrecv.md),
+  [10.5 The Implementation of select](./select.md),
+  [11.9 Memory Consistency Models](../ch11sync/mem.md).

@@ -5,224 +5,370 @@ title: "9.4 The Scheduling Loop"
 
 # 9.4 The Scheduling Loop
 
-The previous sections laid out the materials: we know what G, M, and P are ([9.3](./mpg.md)), and we know how an M finds work ([9.2](./steal.md)). This section actually sets them spinning, watching how the scheduling loop ceaselessly picks and runs goroutines on a single thread, and how it strikes a balance between "letting a single goroutine run a little longer" (throughput and locality) and "not letting any goroutine starve" (fairness).
+[9.3](./mpg.md) introduced the representation of G, M and P and the stack switch between a G and g0,
+and [9.2](./steal.md) gave the full order in which an M looks for a runnable G. This section
+connects these parts into a whole: how each M repeatedly selects and runs goroutines in the
+scheduling loop, how Go bounds the time slice without timer interrupts, by which paths a goroutine
+returns to the scheduler, and how the scheduler trades locality against fairness. The code below
+consists of trimmed sketches that omit side branches such as GC, tracing and profiling; for the full
+implementation see `runtime/proc.go` in Go 1.26 [[Go Authors, 2026a](#ref-go-authors-2026a)].
 
-The code below is uniformly a **trimmed sketch**, keeping only the skeleton relevant to the design and dropping side branches such as GC, tracing, profiling, and thread locking. The full definitions can be cross-checked against `runtime/proc.go`; every version referenced below is go1.26.
+## 9.4.1 schedule, Which Never Returns
 
-## 9.4.1 A Loop That Never Returns
-
-Go's scheduling is **cooperative and run-to-yield**: once a goroutine is selected, it runs until it voluntarily yields, blocks, or is preempted ([9.7](./preemption.md)), rather than being switched out on a fixed time slice by a clock interrupt the way the kernel does. After each worker thread starts from `mstart`, it eventually enters the scheduling loop `schedule`, and from then on cycles within it until the thread exits. Stripped to the bare minimum, the skeleton is a two-step loop:
+Every M eventually enters `schedule` after it starts and loops there until the thread exits. With
+the side branches removed, the structure of `schedule` is as follows:
 
 ```go
-// Each M's scheduling loop (sketch): runs on the system stack g0, never returns
+// schedule: runs one round of scheduling, finds a runnable G and executes it, never returns (sketch)
 func schedule() {
-    // Find a runnable G (see the full order in 9.2); if none is found, block inside findRunnable until there is work
-    gp, inheritTime, _ := findRunnable()
+	mp := getg().m
+	if mp.lockedg != 0 { // this M is locked by a G and can only run that G
+		stoplockedm()
+		execute(mp.lockedg.ptr(), false)
+	}
 
-    // Switch to gp's stack and start running. Control returns here through the mcall below, not through a function return
-    execute(gp, inheritTime)
+top:
+	gp, inheritTime, tryWakeP := findRunnable() // blocks inside when no work is found
+	if mp.spinning {
+		resetspinning() // leave the spinning state, waking a new spinning M if needed (9.3.5)
+	}
+	if tryWakeP {
+		wakep() // a special G such as a GC worker was chosen; wake another P for ordinary Gs
+	}
+	if gp.lockedm != 0 { // gp is locked to another M: hand the P to that M and wait for a new P
+		startlockedm(gp)
+		goto top
+	}
+	execute(gp, inheritTime) // switch to gp, never returns
 }
 ```
 
-`findRunnable` never returns `nil`: if it cannot get work, it turns the M into spinning or sleeping, blocking internally until it is woken, so `schedule` need not handle a "nothing to do" branch. And `execute` also never returns; it jumps into the user G's stack, after which the stack space of this `schedule` frame is reused. For control to return to the scheduling logic, it relies on the stack switch of 9.4.2.
+`findRunnable` checks the local queue, the global queue, the network poller and the other Ps in the
+order described in [9.2.2](./steal.md). When all of these come up empty, it lets the M spin or park
+and retries after being woken, so it always returns a G and `schedule` need not handle the "nothing
+to do" case. `execute` does not return either: it jumps through the assembly routine `gogo` to the
+context saved in the G, and the stack frame of `schedule` is abandoned from then on. Control can
+return to the scheduler only when a G switches back to g0 and calls `schedule` again from the start,
+which is usually done through `mcall` (9.4.3). A function that never returns but is called over and
+over does not exhaust the g0 stack, because every switch starts again from the same position on it.
+When a thread starts, `mstart1` records its caller's stack pointer in `g0.sched.sp`; its comment
+notes that `mstart1` will never be returned to, so its stack frame can be reused. When `mcall`
+switches to g0, it always resets the stack pointer to `g0.sched.sp` before calling the callback
+[[Go Authors, 2026b](#ref-go-authors-2026b)]. Each round of scheduling therefore starts at the same
+position on the g0 stack, and the frames left by the previous round are simply overwritten. The
+`lockedg` and `lockedm` branches correspond to `runtime.LockOSThread`. A locked G can run only on
+its M, and that M can run no other G: if `findRunnable` picks a G that is locked elsewhere, the
+current M hands its own P to that M and then parks, waiting for a new P; a locked M, each time it
+enters `schedule`, only waits for and runs its G. This handoff involves waking and parking threads
+and costs far more than an ordinary G switch, so `LockOSThread` should be used only for cgo or where
+the operating system requires thread affinity.
 
 ```mermaid
 flowchart TD
-    MS[mstart thread starts] --> SC["schedule picks a G on g0"]
-    SC --> FR["findRunnable: runnext/local → global → network → steal"]
-    FR -->|got one| EX["execute: casgstatus to _Grunning"]
-    FR -->|none| PARK["spin / stopm sleep, retry after wakeup"]
+    MS[mstart starts the thread] --> SC["schedule (g0 stack)"]
+    SC --> FR["findRunnable: local → global → network poller → steal"]
+    FR -->|all come up empty| PARK["spin or park with stopm, retry after wakeup"]
     PARK --> FR
-    EX --> GOGO["gogo switches to that G's stack"]
+    FR -->|got a G| EX["execute: G becomes _Grunning"]
+    EX --> GOGO["gogo: restore the G's context"]
     GOGO --> RUN["G runs user code"]
-    RUN -->|block / Gosched / preempted| MC["mcall switches back to g0, runs callback"]
+    RUN -->|"yield, block, preempted, exit"| MC["mcall: switch back to g0 and run the callback"]
     MC --> SC
-    RUN -->|function returns| GE["goexit → goexit0: recycle G into gFree"]
-    GE --> SC
 ```
 
-The scheduling logic such as `schedule` and `findRunnable` runs on the M's dedicated system stack `g0` ([9.3](./mpg.md)), not on the user G's stack. This yields a clean division of labor: `g0` handles scheduling, the user G does the work. For the same reason, `schedule` never truly returns; it selects a G, jumps over to run it, and for control to return to the scheduling logic, it relies on the stack switch of the next section rather than a function return.
+## 9.4.2 execute and the Time Slice
 
-## 9.4.2 Two Switches: execute and mcall
-
-The scheduling loop holds two stack switches running in opposite directions. Together they form the **physical implementation** of the goroutine state machine from [9.3](./mpg.md): the state machine says "which transitions can occur," and these two routines say "how a transition happens."
-
-**Jumping from `g0` to the user G**: after `schedule` selects a G, it calls `execute`. It first switches the G to `_Grunning`, binds it to the current M, then calls the assembly routine `gogo`, which loads the G's saved context (the `gobuf` of [9.3](./mpg.md): `sp`, `pc`, `bp`, and so on) back into registers. Control then lands on the user G's stack, continuing from where it was last switched out.
+`execute` associates the selected G with the current M and then hands over control:
 
 ```go
-// Start running gp on the current M (sketch)
+// execute: runs gp on the current M (sketch)
 func execute(gp *g, inheritTime bool) {
-    mp := getg().m
-
-    mp.curg = gp                          // M and G reference each other
-    gp.m = mp
-    casgstatus(gp, _Grunnable, _Grunning) // state machine transition: runnable → running
-    gp.preempt = false
-    gp.stackguard0 = gp.stack.lo + stackGuard
-    if !inheritTime {
-        mp.p.ptr().schedtick++            // count only when starting a new time slice; inherited slices don't count (see 9.4.3)
-    }
-
-    gogo(&gp.sched)                       // load gobuf back, jump to gp's stack, never returns
+	mp := getg().m
+	mp.curg = gp // M and G refer to each other
+	gp.m = mp
+	casgstatus(gp, _Grunnable, _Grunning)
+	gp.preempt = false
+	gp.stackguard0 = gp.stack.lo + stackGuard // clear any leftover preemption request
+	if !inheritTime {
+		mp.p.ptr().schedtick++ // start a new time slice
+	}
+	gogo(&gp.sched) // restore gp's context, never returns
 }
 ```
 
-The cleverness of `gogo` lies in its being a "one-way trip": after loading the registers it directly `JMP`s to the G's `pc`, with no code to return to the scheduler. The first time a new G runs, its `pc` points at the user function `fn`, and `fn`'s "return address" was preset to `goexit` when `newproc1` built the stack (see 9.4.4). So once `fn` does `return`, it naturally lands on `goexit`, which is exactly the entry point through which control returns to the runtime.
+Unlike an operating system kernel, the Go runtime sets no timer interrupt for each goroutine; the
+time slice is bounded jointly by a counter and a background thread. `p.schedtick` is the P's
+time-slice number and is incremented each time a new time slice starts. The system monitor thread
+sysmon ([9.8](./sysmon.md)) periodically records each P's `schedtick`: if it finds that a P's number
+is the same as last time and 10 ms (`forcePreemptNS`) have passed since the record was made, it
+sends a preemption request to the G running on that P [[Go Authors, 2026a](#ref-go-authors-2026a)].
+The preempted G goes back to the global run queue, and the P turns to other Gs.
 
-**Jumping from the user G back to `g0`**: when a G is to yield (`Gosched`, blocking on a channel, being preempted, or the function finishing), it ultimately calls `mcall`. It saves the current context into the G's `gobuf`, switches to the `g0` stack, and runs a callback on `g0`:
+The `inheritTime` parameter decides whether the new G starts a new time slice or inherits the
+remainder of the current one. A G taken from `runnext` inherits the time slice; in all other cases a
+new time slice begins. The following program measures the actual duration of `time.Sleep(1ms)` with
+a single P:
 
-```go
-// mcall(fn) (semantic sketch): save the current G's context, switch to g0, run fn(gp) on g0
-//   1. save the caller's pc/sp into gp.sched
-//   2. switch SP to m.g0's stack
-//   3. call fn(gp); fn must never return (it eventually goes back to schedule)
+```go {run=true native=true}
+package main
+
+import (
+	"fmt"
+	"runtime"
+	"slices"
+	"time"
+)
+
+// latency measures the actual duration of time.Sleep(1ms), taking the median of 20 runs.
+func latency() time.Duration {
+	var d []time.Duration
+	for range 20 {
+		start := time.Now()
+		time.Sleep(time.Millisecond)
+		d = append(d, time.Since(start))
+	}
+	slices.Sort(d)
+	return d[len(d)/2]
+}
+
+func main() {
+	runtime.GOMAXPROCS(1)
+	fmt.Println("idle:", latency().Round(time.Millisecond))
+
+	go func() { // a computation that never yields
+		for {
+		}
+	}()
+	fmt.Println("with a compute-bound goroutine:", latency().Round(time.Millisecond))
+}
 ```
 
-The callback differs by the reason for yielding: a voluntary yield goes through `goschedImpl`, which re-enqueues the G and continues into `schedule`; a blocking wait goes through `park_m`, which sets the G to `_Gwaiting` and then enters `schedule`; finishing execution goes through `goexit0`. Whichever it is, once the callback is done it returns to `schedule`, and the loop closes. This round trip is precisely the physical implementation of the goroutine transitioning between "running" and its other states.
+On the author's macOS (arm64) machine, one run produced the following output:
 
-```mermaid
-sequenceDiagram
-    participant g0 as g0 (scheduling stack)
-    participant G as user G
-    g0->>G: execute → gogo (load gobuf, switch to G stack)
-    Note over G: G runs user code
-    G->>g0: mcall (save context, switch back to g0 stack)
-    Note over g0: run callback on g0<br/>goschedImpl / park_m / goexit0
-    g0->>g0: back to schedule, pick the next G
+```
+idle: 1ms
+with a compute-bound goroutine: 24ms
 ```
 
-## 9.4.3 Fairness: Letting No One Starve
+Once the compute-bound goroutine appears, main's timer expires after 1 ms but must wait until that
+goroutine is preempted before main can run. The actual latency exceeds 10 ms because sysmon wakes
+only once every 10 ms when it has nothing else to do, and a time slice must be observed in both
+samples before it is judged to have expired. With a single P, a goroutine that never yields
+therefore makes the response latency of other goroutines reach 10 ms to 20 ms or more, depending on
+the sleep precision of the platform.
 
-Cooperative scheduling carries an inherent risk: if the "most convenient" G in the local queue always runs first, some G may never get its turn. For this `schedule` installs several fairness valves, and together they keep cooperative scheduling from starving anyone in practice.
+## 9.4.3 Paths Back to the Scheduler
 
-**Periodic check of the global queue.** Before drawing on the local queue, every **61** scheduling rounds `findRunnable` first takes a G from the global queue:
+A goroutine can leave the CPU in five ways. Except for system calls, which have their own path, the
+other four switch back to g0 to run a corresponding callback, with synchronous preemption going
+through `morestack` and the rest through `mcall`:
+
+| Path | Entry | Callback on g0 | Where the G goes |
+| --- | --- | --- | --- |
+| Voluntary yield | `runtime.Gosched` | `gosched_m` | `_Grunnable`, put on the global queue |
+| Blocking | `gopark` | `park_m` | `_Gwaiting`, recorded in a wait queue |
+| Preemption | Function prologue or asynchronous signal | `gopreempt_m` | `_Grunnable`, put on the global queue |
+| System call | `entersyscall` | | `_Gsyscall`, see [9.5](./thread.md) |
+| Exit | `goexit` | `goexit0` | `_Gdead`, put back into `gFree` |
+
+Voluntary yield and preemption share `goschedImpl`: it sets the G to `_Grunnable`, puts it on the
+**global** queue rather than the local one, and then calls `wakep` and `schedule`. A yielding G
+therefore runs again only when some P's local queue is empty or the global queue check that happens
+once every 61 time slices (9.4.4) comes around, which is the point of yielding. The one exception is
+preemption initiated for stop-the-world (STW): there the G stays in the local `runnext`, so that it
+continues immediately after resuming. The two ways preemption is triggered (the check in the
+function prologue and signal-based asynchronous preemption) are covered in [9.7](./preemption.md).
+
+The blocking path is the most commonly used, and waits on channels, mutexes, timers and network I/O
+are all implemented through it. `gopark` takes a callback `unlockf` and a lock: `park_m` first sets
+the G to `_Gwaiting` and detaches it from the M, and only then calls `unlockf` on g0. Take a channel
+as an example: the receiver registers itself in the wait queue while holding the channel lock and
+then calls `gopark`, and `unlockf` releases the lock after the G has fully stopped. If the lock were
+released before stopping, a sender could find the receiver in that gap and try to wake a G that has
+not yet stopped. If `unlockf` returns `false`, the awaited condition has already been met, and
+`park_m` changes the G back to `_Grunnable` and resumes it immediately with `execute(gp, true)`.
+
+A blocked G is woken by `goready`. It calls `ready`, which sets the G to `_Grunnable`, puts it into
+the current P's `runnext`, and calls `wakep` to wake a possibly idle P (9.3.5). Because the woken G
+is in `runnext` and inherits the time slice, it runs immediately on the same P after the waker
+blocks.
+
+## 9.4.4 Fairness
+
+Scheduling purely on a "local first" principle produces two kinds of starvation, and the scheduler
+has a mechanism for each. In addition, to expose program bugs that depend on scheduling order, the
+race detector mode also randomizes the scheduling order.
+
+**Starvation of the global queue.** As long as the local queue is not empty, a P never looks at the
+global queue. If two goroutines keep creating each other, the local queue is never empty and the Gs
+in the global queue never run. For this reason `findRunnable` takes a G from the global queue once
+every 61 time slices, before checking the local queue:
 
 ```go
-// the fairness valve inside findRunnable (sketch)
+// the fairness check in findRunnable (sketch)
+// Check the global queue once in a while to ensure fairness;
+// otherwise two goroutines can occupy the local queue by constantly creating each other.
 if pp.schedtick%61 == 0 && !sched.runq.empty() {
-    lock(&sched.lock)
-    gp := globrunqget()   // take one from the global queue, bypassing the local queue
-    unlock(&sched.lock)
-    // ... if one is obtained, return it directly
+	lock(&sched.lock)
+	gp := globrunqget()
+	unlock(&sched.lock)
+	if gp != nil {
+		return gp, false, false
+	}
 }
 ```
 
-It addresses a concrete starvation scenario: two Gs that wake each other up will pass the baton back and forth in the local queue, filling it up and leaving the Gs in the global queue waiting indefinitely to run. Forcing a glance at the global queue at a fixed interval breaks this monopoly. Note that the counter used is `schedtick`, which increments only when a **new** time slice is started (see `execute` in 9.4.2); an inherited time slice through `runnext` is not counted, so "every 61" measures the schedules that actually start a new slice, not every G switch. The source comment only explains "to ensure fairness," and does not say why it is 61 in particular; the widely circulated claim that "61 is prime and avoids resonance" is folk speculation, and this book takes only the fact of "61."
+Vyukov added this check in 2013 to fix the starvation in issue #5639, and it shipped in Go 1.2
+[[Vyukov, 2013](#ref-vyukov-2013)]. The original C implementation used two multiplications instead
+of one division to compute `tick%61`, claiming this was faster on modern processors. Neither the
+commit nor the source explains why 61 was chosen; a common explanation is that a prime avoids
+resonance with the program's own periods, but that is only conjecture. The counter is `schedtick`,
+which increments only when a new time slice starts, so "61" counts time slices, not G switches.
 
-**The anti-starvation constraint on `runnext`.** A G that has just been woken, or just been spawned by `go`, is placed in the P's `runnext` slot to run first, and **inherits the remaining time of the current time slice** (`inheritTime`, the second value returned by `runqget` in 9.4.2). This lets a pair of "communicate-then-run" goroutines be scheduled compactly as a unit, which helps cache locality. But `runnext` can also be abused into two Gs `runnext`-ing each other and hogging the CPU. The runtime relies on `sysmon` ([9.8](./sysmon.md)) preempting by time slice as a backstop. There is an intriguing detail in the source: when the target platform has no `sysmon` (such as `wasm`), the runtime **disables `runnext` entirely**:
+**Starvation through `runnext`.** `runnext` and time-slice inheritance were introduced by Clements
+in 2015 [[Clements, 2015](#ref-clements-2015)]. The commit message gives an example: a P has three
+Gs, one a compute-bound G that never yields and the other two communicating alternately over an
+unbuffered channel. Previously, a woken G went to the tail of the queue, and the two communicating
+Gs got almost no CPU time; with `runnext`, the pair as a whole and the compute-bound G each get half
+of the CPU time, and the running time of the corresponding benchmark dropped by 99.88%. But this
+brings a new risk: if two Gs keep waking each other through `runnext`, they could occupy the P
+forever and starve the other Gs in the queue. Time-slice inheritance is the constraint on this. The
+pair shares one `schedtick`, so sysmon sees a time slice that has run longer than 10 ms, preempts
+whichever G is running and puts it on the global queue. The comment in sysmon states explicitly that
+what runs for a long time may be a single goroutine, or a chain of goroutines running through
+`runnext` and sharing one time slice.
+
+This constraint depends on sysmon. On the wasm platform there are no threads and hence no sysmon,
+and Bryan C. Mills reported starvation resulting from this [[Mills, 2024](#ref-mills-2024)]. Since
+Go 1.23 the runtime disables `runnext` entirely on platforms without sysmon, and a woken G is always
+put at the tail [[Pratt, 2024](#ref-pratt-2024)]:
 
 ```go
-// runqput (sketch): put gp into the local queue; if next is true, put it in the runnext slot
-func runqput(pp *p, gp *g, next bool) {
-    if !haveSysmon && next {
-        // runnext shares the same time slice with the current G (inheritTime).
-        // Without sysmon preemption as a backstop, a pair of mutually runnext-ing Gs
-        // would starve everyone else, so runnext must be abandoned here.
-        next = false
-    }
-    // ... if next is true, CAS into pp.runnext; otherwise enqueue at the tail; if the queue is full, overflow to the global queue
+// the start of runqput (sketch)
+if !haveSysmon && next {
+	// A runnext goroutine shares the same time slice as the current goroutine.
+	// To prevent a pair of goroutines that wake each other from starving the
+	// others, the runtime relies on sysmon to preempt long-running goroutines,
+	// that is, any group of goroutines sharing the same time slice. Without
+	// sysmon, runnext must be avoided entirely, or there is a risk of starvation.
+	next = false
 }
 ```
 
-This is a telling piece of design: fairness is not a single mechanism but the result of several working in concert. `runnext` brings throughput and locality at the cost of a potential ping-pong starvation; that cost is offset by `sysmon`'s preemption; and once that preemption leg is gone, the leg that brings throughput must be withdrawn too.
+The fix commit also notes that this does not solve the problem of a single goroutine that does not
+yield: without sysmon preemption it holds the run queue indefinitely. Fairness thus does not come
+from any single mechanism but from several mechanisms constraining one another: `runnext` buys
+locality, time-slice inheritance confines its cost to one time slice, and the time slice in turn
+depends on sysmon's preemption to be enforced.
 
-The full selection order is still the one given in [9.2](./steal.md), arranged from highest hit frequency to lowest and from lowest synchronization cost to highest:
+**Randomization.** `runnext` changed the scheduling order in Go 1.5, and many tests that depended on
+a particular execution order failed as a result. Cox then introduced randomization in race detector
+mode: with `-race` enabled, `runqput` does not use `runnext` with probability one half, and the
+woken or new G goes to the tail instead [[Cox, 2015](#ref-cox-2015)]. The source comment says that
+tests which pass stably under `-race` should not implicitly assume a scheduling order. Running the
+`runnext` example in [9.3.2](./mpg.md) with `go run -race` gives a different order each time, for
+example:
 
-```mermaid
-flowchart LR
-    A["runnext + local queue<br/>(per-P, lock-free)"] --> B["global queue<br/>(takes sched.lock)"]
-    B --> C["network poller netpoll<br/>(ready I/O goroutines)"]
-    C --> D["steal from other Ps<br/>(pick a random target P, steal half)"]
-    D --> E["all empty: spin / stopm sleep"]
+```
+8 0 1 3 4 2 6 5 7 9
+9 0 2 1 3 4 5 6 7 8
+9 1 2 0 4 5 6 3 7 8
 ```
 
-Only when all of these come up empty does the thread turn to spinning (a brief busy wait, betting work will arrive soon) or sleep via `stopm`. This "local first, then global, finally steal" order is itself a compromise between throughput and fairness: the earlier steps are cheap and favor locality, while the later steps guarantee that work will eventually be picked up by some idle M.
+## 9.4.5 Evolution
 
-## 9.4.4 The Birth and Death of a goroutine
+The basic structure of the scheduling loop has not changed since Go 1.1, and later modifications
+mostly address the fairness and latency problems above:
 
-There are two ends beyond the loop.
+| Version | Change | Motivation |
+| --- | --- | --- |
+| Go 1.1 | Per-P local queues, work stealing, spinning Ms ([9.1.4](./model.md)) | The scalability bottleneck of a single global queue and global lock [[Vyukov, 2012](#ref-vyukov-2012)] |
+| Go 1.2 | Check the global queue once every 61 time slices | Goroutines that create each other starve the global queue [[Vyukov, 2013](#ref-vyukov-2013)] |
+| Go 1.2 | Check for preemption requests at function entry; sysmon preempts a G that has run for more than 10 ms | An infinite loop starves other goroutines on the same thread [[Go Authors, 2013](#ref-go-authors-2013)] |
+| Go 1.5 | `runnext` and time-slice inheritance | A woken G queued behind a long queue made communication latency too high [[Clements, 2015](#ref-clements-2015)] |
+| Go 1.5 | Randomized scheduling order in `-race` mode | Tests implicitly assume a scheduling order [[Cox, 2015](#ref-cox-2015)] |
+| Go 1.14 | Signal-based asynchronous preemption ([9.7](./preemption.md)) | A loop with no function calls cannot be preempted and delays STW [[Clements, 2019](#ref-clements-2019)] |
+| Go 1.23 | Disable `runnext` on platforms without sysmon | `runnext` starvation on wasm [[Pratt, 2024](#ref-pratt-2024)] |
 
-**Birth.** `go f()` is translated by the compiler into a call to `newproc`, which does the work of building the G on the system stack:
+The overhead of the scheduling loop itself has also drawn attention. In 2016 Hofer reported that in
+a service dominated by network I/O, `findrunnable` and the functions it calls accounted for 35% of
+CPU samples, the main callees being `stopm`, `injectglist` and `runqsteal`
+[[Hofer, 2016](#ref-hofer-2016)]. The issue is still open today, and it shows that the spinning and
+wakeup policy described in 9.3.5 still has a considerable cost under workloads with frequent
+wakeups.
 
-```go
-// newproc (sketch): the landing of go f()
-func newproc(fn *funcval) {
-    gp := getg()
-    pc := sys.GetCallerPC()
-    systemstack(func() {
-        newg := newproc1(fn, gp, pc, false, waitReasonZero) // see below
+## 9.4.6 A Scheduling-Theory Perspective
 
-        pp := getg().m.p.ptr()
-        runqput(pp, newg, true) // next=true: put into runnext so the new G runs first and nearby
+On a single P, the scheduling loop is close to **round-robin** scheduling with a time quantum: the
+local queue is first in first out, each time slice is about 10 ms, and a G that overruns is
+preempted and moved to the global queue. Unlike classic round-robin, Go's time slice is only an
+upper bound, and the vast majority of goroutines leave the CPU, by blocking or yielding, long before
+using up their slice. The scheduler's main job is therefore not to divide CPU time among compute
+tasks but to pick the next G quickly in the gaps where goroutines block and wake.
 
-        if mainStarted {
-            wakep() // if there is an idle P and a sleeping M, wake one to add parallelism
-        }
-    })
-}
-```
+`runnext` corresponds to **handoff scheduling** in operating systems. Black described this technique
+in Mach: the current thread hands the processor directly to a specified thread, bypassing the
+scheduler's internal machinery, and Mach's message-passing subsystem uses it to let the receiver of
+a message run immediately [[Black, 1990](#ref-black-1990)]. Black also noted that one-way messages
+gain little from handoff, because without it the sender can send several messages in a row, and on a
+multiprocessor sender and receiver can run fully in parallel, so Mach uses handoff for RPC only when
+no processor is idle. Go's approach is similar: the woken G does not preempt the waker immediately
+but runs after the waker blocks; at the same time `ready` still calls `wakep`, giving an idle P the
+chance to steal and run other work in parallel.
 
-`newproc1` is where the G is actually built, and it embodies a **reuse-first** mindset: first take a used G (along with its stack) from the P's free list `gFree`, and only allocate a new one from the heap if none is available; then zero out its context, point `sched.pc` at the user function, and preset `fn`'s return address to `goexit` (this is exactly why in 9.4.2 the G can "naturally land on goexit" after `gogo` jumps in), and finally set the G to `_Grunnable`. `runqput(pp, newg, true)` puts the just-spawned G into `runnext`, making the common "spawn-then-run" pattern run compactly; `wakep` then wakes an M when there is spare parallelism, turning the new G into real parallelism as soon as possible.
-
-**Death.** When a G's function returns, it does not go directly back to the caller, but lands on the runtime-preset `goexit`, which through `goexit1 → mcall(goexit0)` switches back to `g0`, where `goexit0` does the cleanup:
-
-```go
-// goexit0 (sketch): recycle a finished G on g0
-func goexit0(gp *g) {
-    casgstatus(gp, _Grunning, _Gdead) // state machine transition: running → dead
-    // ... clean up gp's fields: defer, panic, label, the binding with M, and so on
-    dropg()                            // unbind M and G
-    gfput(pp, gp)                      // hang the G (along with its stack) back into the P's gFree for reuse
-    schedule()                         // back to the scheduling loop, never returns
-}
-```
-
-The G is not freed but recycled into `gFree`, avoiding repeated allocation of the G struct and the initial stack. This is one reason high-frequency goroutine creation remains cheap: from the second `go f()` on, it mostly plucks an old G from `gFree` and tweaks the entry point, rather than constructing one from scratch. Birth takes from `gFree`, death returns to `gFree`; the two ends symmetrically share the same per-P free pool, the same "layered contention reduction" move as the allocator's per-P cache ([12.2](../../part4memory/ch12alloc/component.md)).
-
-## 9.4.5 The Evolution of the Design
-
-This loop did not grow into its present shape from the start; each of its valves corresponds to a lesson from history. Laying out the thread of the evolution gives a provenance to the constants and constraints that earlier looked arbitrary.
-
-```mermaid
-flowchart LR
-    A["before Go 1.0<br/>single global runq + one big lock"]
-    A -->|"Vyukov redesign, 2012"| B["Go 1.1<br/>per-P local queue<br/>+ work stealing + spinning M"]
-    B -->|"runnext + the 61 valve"| C["added incrementally<br/>locality optimization + anti-starvation"]
-    C -->|"proposal 24543"| D["Go 1.14<br/>asynchronous signal preemption"]
-```
-
-The earliest scheduler (Go 1.0 and before) had only one global run queue paired with one global lock. Every M taking or putting a G had to contend for this lock, which became a bottleneck once the core count grew. In his 2012 design document, Vyukov started precisely from this pain point, proposing a per-P local queue assisted by work stealing and spinning Ms, a scheme that landed with Go 1.1. This step laid the entire foundation for 9.2 and this section: the local queue makes the vast majority of takes and puts lock-free, stealing ensures work is not stuck on some P, and a spinning M busy-waits a short while before the expensive operation of waking a new thread, betting that work will arrive soon.
-
-The local queue solved contention but introduced the fairness problem, which led to the two patches of 9.4.3: the `runnext` slot wins locality for a "communicate-then-run" pair of Gs, while the 61-round check of the global queue plugs the hole of a mutually waking pair of Gs monopolizing the local queue. They were applied incrementally to address the side effects after the local-queue scheme had taken hold.
-
-The last piece of the puzzle is preemption. Early preemption was cooperative, occurring only at the stack check in the function prologue, and a tight loop without function calls (such as `for {}`) would hold a P forever without yielding, stalling even STW indefinitely. Go 1.14 introduced signal-based **asynchronous preemption** (proposal 24543): the runtime sends a signal to the target thread and forcibly seizes control at a safe point. This filled the last hole in cooperative scheduling, and is exactly the backstop leg that `runnext` in 9.4.3 dares to rely on.
-
-## 9.4.6 Viewed Through Scheduling Theory
-
-Pulling together the several valves of `schedule`, Go's scheduling is a **hybrid** of "run-to-yield + cooperative yielding + signal preemption as a backstop." It falls in the middle ground of the spectrum of scheduling designs.
-
-Pure **cooperative** scheduling (early userspace threads, Node's event loop within a single task) has high throughput and cheap switching, because the yield point is held by the program itself, with no need to save a full interrupt context; the cost is that a task that does not yield can drag down everything, and fairness rests entirely on the program's conscience. Pure **time-slice preemption** (kernel threads) is fair and does not depend on task cooperation, at the cost of expensive switching and uncontrollable preemption points, which is unfavorable to locality.
-
-Go takes a place between the two: by default it obtains throughput and locality through cooperative yielding (channels, `Gosched`, the preemption check in the function prologue) and work stealing ([9.2](./steal.md)), and then uses `sysmon`-driven asynchronous preemption about once every 10ms ([9.7](./preemption.md)) as a fairness backstop, ensuring that even a pure-compute G with no yield point will eventually be switched out. The detail in 9.4.3 of "no sysmon means turn off runnext" is exactly the internal logic of this hybrid laid bare: once the preemption leg is absent, the cooperative optimizations that depend on it as a backstop must withdraw too.
-
-This rhymes with the **reduction-counting** preemption of Erlang/BEAM. BEAM gives each process a fixed reduction budget, deducting one on each operation such as a function call, and swaps the process out once the budget is exhausted. Both balance "the cheapness of cooperation" against "the fairness of preemption," differing only in where the preemption point sits: Go places it at the stack check of a function call and on asynchronous signals, while BEAM places it on reduction counting. BEAM's counting is deterministic and time-independent, with a more uniform fairness granularity; Go's signal preemption fires by real time, with a lighter implementation and a more natural fit with GC safe points. There is no "perfect" scheduling ([9.1](./model.md) discussed the competitive-ratio lower bound of online scheduling); the several valves of `schedule` are Go's concrete and restrained answer to the trade-off among throughput, latency, and implementation complexity.
+Go sits between cooperation and preemption. Purely cooperative scheduling has cheap switches, but a
+single task that does not yield can starve the others; purely time-slice preemption does not depend
+on the tasks' cooperation, but its switch points are uncontrolled, which hurts locality. The vast
+majority of Go's switches happen when a goroutine blocks or yields, and preemption serves only as a
+backstop: sysmon issues a request when it finds an expired time slice, and the check in the function
+prologue or an asynchronous signal carries it out. Erlang/BEAM instead uses a reduction count as a
+budget, and a process is swapped out when it exhausts its budget ([9.1.3](./model.md))
+[[Stenman, n.d.](#ref-stenman-nd)]. The two differ in where the preemption points lie: BEAM's count
+is independent of time, so the granularity of fairness is more uniform; Go triggers preemption by
+real time and parks the preemption request in `stackguard0`, the bound of the stack overflow check,
+because the function prologue already checks stack space, so synchronous preemption needs no extra
+counter. Load balancing across Ps is done by work stealing, whose theoretical guarantees are in
+[9.2.4](./steal.md) [[Blumofe and Leiserson, 1999](#ref-blumofe-and-leiserson-1999)].
 
 ## Further Reading
 
-1. Dmitry Vyukov. *Scalable Go Scheduler Design Doc*, 2012.
-   https://go.dev/s/go11sched (the origin of the work-stealing + spinning M design)
-2. The Go Authors. *runtime/proc.go* (`schedule`, `findRunnable`, `execute`, `mcall`,
-   `goschedImpl`, `newproc`, `goexit0`, `runqput`). go1.26.
-   https://github.com/golang/go/blob/master/src/runtime/proc.go
-3. The Go Authors. *runtime/asm_amd64.s* (the assembly implementations of `gogo` and `mcall`).
-   https://github.com/golang/go/blob/master/src/runtime/asm_amd64.s
-4. Robert D. Blumofe, Charles E. Leiserson. *Scheduling Multithreaded Computations by Work
-   Stealing.* JACM 46(5), 1999. https://doi.org/10.1145/324133.324234 (the theoretical foundation of work stealing)
-5. Erik Stenman. *The BEAM Book: Scheduling.*
-   https://blog.stenmans.org/theBeamBook/#CH-Scheduling (the comparison with reduction-counting preemption)
-6. Nimrod Aviram et al. / The Go Authors. *Goroutine preemption* (the asynchronous preemption design), Go 1.14.
-   https://github.com/golang/proposal/blob/master/design/24543-non-cooperative-preemption.md
-7. Phil Hofer et al. *runtime: scheduler is slow when goroutines are frequently woken*. Go
-   issue #18237, 2016. https://github.com/golang/go/issues/18237 (an empirical measurement of spinning-M wakeup latency)
-8. This book: [9.2 Scheduling Strategy](./steal.md), [9.3 G, M, P and the State Machine](./mpg.md),
-   [9.7 Preemption](./preemption.md), [9.8 System Monitoring](./sysmon.md).
+- <a id="ref-black-1990"></a>[Black, 1990] David L. Black. Scheduling Support for Concurrency and
+  Parallelism in the Mach Operating System. *Computer*, 23(5):35–43, 1990.
+  https://doi.org/10.1109/2.53353 Handoff scheduling in Mach.
+- <a id="ref-blumofe-and-leiserson-1999"></a>[Blumofe and Leiserson, 1999] Robert D. Blumofe and
+  Charles E. Leiserson. Scheduling Multithreaded Computations by Work Stealing. *Journal of the
+  ACM*, 46(5):720–748, 1999. https://doi.org/10.1145/324133.324234 The theoretical foundation of
+  work stealing.
+- <a id="ref-clements-2015"></a>[Clements, 2015] Austin Clements. runtime: yield time slice to most
+  recently readied G. Go commit e870f06c3f, 2015. https://go.dev/cl/9289
+- <a id="ref-clements-2019"></a>[Clements, 2019] Austin Clements. Proposal: Non-cooperative
+  goroutine preemption. Go design document, 2019-01-18.
+  https://github.com/golang/proposal/blob/master/design/24543-non-cooperative-preemption.md The
+  design of asynchronous preemption.
+- <a id="ref-cox-2015"></a>[Cox, 2015] Russ Cox. runtime: randomize scheduling in -race mode. Go
+  commit 2028077899, 2015. https://go.dev/cl/11795
+- <a id="ref-go-authors-2013"></a>[Go Authors, 2013] The Go Authors. Go 1.2 Release Notes.
+  https://go.dev/doc/go1.2
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `runtime/proc.go`.
+  https://github.com/golang/go/blob/master/src/runtime/proc.go The implementations of `schedule`,
+  `findRunnable`, `execute`, `mcall`, `goschedImpl`, `park_m`, `runqput` and `retake` (this section
+  follows Go 1.26).
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `runtime/asm_amd64.s`.
+  https://github.com/golang/go/blob/master/src/runtime/asm_amd64.s
+  The assembly implementations of `gogo` and `mcall`.
+- <a id="ref-hofer-2016"></a>[Hofer, 2016] Phil Hofer. runtime: scheduler is slow when goroutines
+  are frequently woken. Go issue #18237, 2016. https://github.com/golang/go/issues/18237
+- <a id="ref-mills-2024"></a>[Mills, 2024] Bryan C. Mills. runtime: scheduler sometimes starves a
+  runnable goroutine on wasm platforms. Go issue #65178, 2024. https://go.dev/issue/65178
+- <a id="ref-pratt-2024"></a>[Pratt, 2024] Michael Pratt. runtime: disable use of runnext on wasm.
+  Go commit a6a5c30d2b, 2024. https://go.dev/cl/559798
+- <a id="ref-stenman-nd"></a>[Stenman, n.d.] Erik Stenman. *The BEAM Book: Understanding the Erlang
+  Runtime System*. Scheduling. https://blog.stenmans.org/theBeamBook/#CH-Scheduling
+  Reduction-count preemption.
+- <a id="ref-vyukov-2012"></a>[Vyukov, 2012] Dmitry Vyukov. *Scalable Go Scheduler Design
+  Doc*. 2012. https://go.dev/s/go11sched The origin of work stealing and spinning Ms.
+- <a id="ref-vyukov-2013"></a>[Vyukov, 2013] Dmitry Vyukov. runtime: improve scheduler fairness. Go
+  commit 4bb491b12e, 2013. https://golang.org/cl/10042044
+- This book: [9.2 Work-Stealing Scheduling](./steal.md),
+  [9.3 The MPG Model and the Units of Concurrent Scheduling](./mpg.md),
+  [9.7 Cooperation and Preemption](./preemption.md), [9.8 System Monitoring](./sysmon.md).

@@ -5,346 +5,651 @@ title: "11.8 Context"
 
 # 11.8 Context
 
-A request entering a server seldom runs to completion inside a single goroutine. It fans out into
-a tree of goroutines: one queries the database, one calls a downstream RPC, one reads the cache,
-and each of these spawns smaller units of work in turn. Once the originator of the request no longer
-needs the result, say the client has disconnected, or the upstream has already timed out, all the
-work still running across that tree becomes pure waste, holding connections, locks, and memory while
-no one will ever read what it produces. The problem then becomes: **how do we propagate the signal
-"stop here" from the root of the tree out to every leaf, so each of them can stop on its own.**
+A request arriving at a server is rarely handled by a single goroutine. The handler starts further
+goroutines to query a database, call downstream services and read a cache, and these may spawn more,
+forming a tree rooted at the request. Once the requester no longer needs the result, for example
+because the client disconnected or the upstream timed out, the work still running in the tree is
+waste: it holds connections, locks and memory, and its output will never be read. The problem is how
+to deliver the signal "stop" from the root to every leaf and let each goroutine wind down on its
+own.
 
-The `context` package is Go's standard answer to this problem. It carries cancellation, deadlines,
-and request-scoped metadata explicitly along the call chain, so that a tree of goroutines can be
-cancelled as a unit. This section first makes clear why it is cooperative rather than forced, then
-walks through the implementation along the structure of the cancellation tree, and finally places it
-within the lineage of structured concurrency and its cross-language relatives.
+The `context` package is Go's standard answer. According to the package documentation, a `Context`
+carries deadlines, cancellation signals, and other request-scoped values across API boundaries and
+between processes [[Go Authors, 2026a](#ref-go-authors-2026a)]. It was developed inside Google and
+released in 2014 as `golang.org/x/net/context` [[Ajmani, 2014b](#ref-ajmani-2014b)]; in 2016 Brad
+Fitzpatrick and Sameer Ajmani proposed moving it into the standard library
+[[Fitzpatrick, 2016a](#ref-fitzpatrick-2016a)], and it shipped with Go 1.7
+[[Fitzpatrick, 2016b](#ref-fitzpatrick-2016b)]. In the same release, `net/http`'s `Request` gained a
+`Context` method, `net.Dialer` gained `DialContext`, and `os/exec` gained `CommandContext`.
 
-## 11.8.1 Why Cancellation Is a Signal, Not a Command
+This section first explains why cancellation is cooperative, then walks through the implementation
+along the cancellation tree, then covers deadlines and the interfaces added in Go 1.20 and 1.21,
+places `context` in the lineage of structured concurrency, and finally reviews the debate over
+passing values and passing arguments explicitly.
 
-The most naive idea is to give a goroutine a "kill it" API. Go pointedly has no such API, and this is
-not an oversight but a design lesson learned from those who came before.
+## 11.8.1 Cooperative Cancellation
 
-Java once offered `Thread.stop()`, which could forcibly terminate a thread from the outside. It was
-deprecated as far back as JDK 1.2, for the reason written in the official deprecation note: the
-stopped thread immediately throws `ThreadDeath` and **releases all the monitor locks it currently
-holds**. A lock is held to protect some invariant; if the holding thread is interrupted partway
-through and the lock is released anyway, other threads will see a shared object in an intermediate
-state with its invariant broken, and with no warning at all. Later JDKs simply made `Thread.stop()`
-throw `UnsupportedOperationException` outright, closing that door for good. Forced termination is
-dangerous at root because the outside has no way to know whether the target is, at that instant,
-inside some critical region that must not be interrupted.
+The most direct design would provide an operation that terminates a goroutine from outside. Go has
+no such operation, and Java's experience shows why. Java originally offered `Thread.stop`, which JDK
+1.2 deprecated. Oracle's explanation is that a stopped thread releases all the monitors it holds; if
+the objects those monitors protect were in an inconsistent state, other threads
+see "damaged" objects; and because the thread is killed silently, the program gets no warning, and
+the corruption may surface hours or even days later [[Oracle, 2023](#ref-oracle-2023)]. The
+invariants a lock protects hold only at the boundaries of the critical section, and from outside
+there is no way to know whether the target thread is inside one. JDK 20 made `Thread.stop` always
+throw `UnsupportedOperationException` [[OpenJDK, 2022](#ref-openjdk-2022)], and JDK 26 removes it
+[[OpenJDK, 2025](#ref-openjdk-2025)].
 
-Go therefore took the opposite path: the runtime offers no means to "kill a goroutine," and
-cancellation is a **signal** that the goroutine itself inspects at safe checkpoints and then decides
-on its own how to wind down. Undoing, rolling back, releasing resources: only the code itself knows
-how to do these correctly, so the decision is handed back to the code itself.
+Go never provided such an entry point: goroutines are anonymous and expose no identifier, name or
+data structure to the programmer [[Go Authors, 2026b](#ref-go-authors-2026b)], and the `go`
+statement returns no handle with which to control one. Cancellation can therefore only be a signal:
+the sender merely notifies, and the receiver checks the signal at checkpoints of its own choosing
+and decides how to undo, roll back and release resources. This is called **cooperative
+cancellation**, and it is not unique to Go. The .NET cancellation model states that "cancellation is
+cooperative and is not forced on the listener" [[Microsoft, 2026](#ref-microsoft-2026)]; the Kotlin
+documentation likewise states that coroutine cancellation is cooperative
+[[JetBrains, 2026b](#ref-jetbrains-2026b)]; and Java's structured concurrency only interrupts the
+threads of subtasks on cancellation and expects them to finish promptly when interrupted
+[[Bateman et al., 2026](#ref-bateman-et-al-2026)].
 
-Before `context` existed, this signal could be hand-written with a channel. Closing a channel wakes
-every receiver waiting on it ([10.4](../ch10chan/readme.md)), which is exactly the natural carrier
-for "broadcast a cancellation once":
-
-```go
-cancel := make(chan struct{})
-
-go func() {
-	done := make(chan struct{}, 1)
-	go func() {
-		defer func() { done <- struct{}{} }()
-		do() // perform the operation that needs to run
-	}()
-	select {
-	case <-cancel:
-		// cancelled early: wait for the started work to wind down, then undo its side effects
-		<-done
-		undo()
-	case <-done:
-		// finished cleanly
-	}
-}()
-
-// cancel for some reason
-close(cancel)
-```
-
-This code already contains everything that matters about `context`: the canceller is only responsible
-for sending the signal (`close(cancel)`), while the cancelled party waits in a `select` for the
-cancellation signal alongside normal completion, and on receiving the signal winds down at a safe
-point of its own choosing. What `context` does is abstract this hand-written pattern into an interface,
-and solve a problem the hand-written version does not: when work fans out into a tree, how to make a
-single cancellation propagate **automatically** along the tree to every descendant.
+Before `context`, Go programs propagated cancellation with a done channel: closing a channel wakes
+an unknown number of waiters, which makes it a broadcast ([10.4.3](../ch10chan/close.md))
+[[Ajmani, 2014a](#ref-ajmani-2014a)]. This technique works well within a single pipeline, but its
+limits show once work fans out into a tree. A done channel can only cancel the whole tree;
+cancelling one subtree on its own requires another channel; deadlines and the reason for
+cancellation must be passed separately; and each library has its own way of cancelling, so the
+caller's channel cannot be passed into someone else's function [[Štrba, 2017](#ref-strba-2017)].
+`context` solves these problems with one uniform interface and makes cancellation propagate down the
+tree automatically.
 
 ## 11.8.2 The Cancellation Tree
 
-The `context` interface is small, and only two of its methods relate to cancellation:
+The `Context` interface has only four methods (comments omitted):
 
 ```go
 type Context interface {
-	Deadline() (deadline time.Time, ok bool) // deadline, ok==false if none
-	Done() <-chan struct{}                    // channel closed on cancellation
-	Err() error                               // returns the cancellation reason after Done is closed
-	Value(key any) any                        // fetch a request-scoped value (see 11.8.6)
+	Deadline() (deadline time.Time, ok bool)
+	Done() <-chan struct{}
+	Err() error
+	Value(key any) any
 }
 ```
 
-The channel returned by `Done()` is the hub of the whole mechanism: it **carries no data and uses only
-the act of closing to broadcast cancellation**. The standard way to use it is to place it in a `select`
-alongside one's own normal work:
+`Done` returns a channel that is closed on cancellation; a context that can never be cancelled may
+return nil. Callers put it in a `select` alongside their normal work. Before `Done` is closed, `Err`
+returns nil; afterwards it returns `Canceled` or `DeadlineExceeded`, stating the reason. `Deadline`
+reports the deadline, and `Value` reads request-scoped values (11.8.6).
 
-```go
-select {
-case <-ctx.Done():
-	return ctx.Err() // upstream has cancelled; stop the work in hand and report the reason
-case res := <-work:
-	// got the result normally
+The interface has no `Cancel` method. Ajmani explains that this follows the same reasoning as `Done`
+being receive-only: a function that receives a cancellation signal is usually not the one that sends
+it, and when a parent operation starts goroutines for child operations, the children should not be
+able to cancel the parent [[Ajmani, 2014b](#ref-ajmani-2014b)]. The power to cancel therefore does
+not travel with the `Context`; it is handed to the creator as a separate `CancelFunc`. The .NET
+design is the same: a `CancellationTokenSource` issues cancellation requests, while the
+`CancellationToken` passed to each operation can only listen, which the documentation
+calls "separation of request and listening" [[Microsoft, 2026](#ref-microsoft-2026)].
+
+All contexts derive from a root. The root returned by `Background` is never cancelled, has no values
+and no deadline; `TODO` is identical and exists only to mark "it is not yet decided which context to
+use here". `WithCancel`, `WithDeadline`, `WithTimeout` and `WithValue` each take a parent context
+and return a derived child. The documentation specifies that when a context is cancelled, all
+contexts derived from it are cancelled too [[Go Authors, 2026a](#ref-go-authors-2026a)]; its parent
+and siblings are unaffected. The following program derives `a` and `b` from `root`, attaches a value
+below `a` and derives `a2` from it, and then cancels `a`:
+
+```go {run=true}
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+)
+
+type traceKey struct{}
+
+func main() {
+	root, cancelRoot := context.WithCancel(context.Background())
+	defer cancelRoot()
+
+	a, cancelA := context.WithCancelCause(root)
+	a1 := context.WithValue(a, traceKey{}, "trace-42")
+	a2, cancelA2 := context.WithCancel(a1)
+	defer cancelA2()
+	b, cancelB := context.WithCancel(root)
+	defer cancelB()
+
+	cancelA(errors.New("quota exhausted"))
+
+	for _, n := range []struct {
+		name string
+		ctx  context.Context
+	}{{"root", root}, {"a", a}, {"a2", a2}, {"b", b}} {
+		fmt.Printf("%-4s Err=%v Cause=%v\n", n.name, n.ctx.Err(), context.Cause(n.ctx))
+	}
+	fmt.Printf("trace ID in a2: %v\n", a2.Value(traceKey{}))
 }
 ```
 
-Every `context` derives from a root. `context.Background()` is the root of this tree and is never
-cancelled; `WithCancel`, `WithTimeout`, `WithDeadline`, and `WithValue` each take a parent `context`
-and return a derived child `context`. The cancellation capability is carried by the internal
-`cancelCtx`, sketched below:
+The output is:
+
+```
+root Err=<nil> Cause=<nil>
+a    Err=context canceled Cause=quota exhausted
+a2   Err=context canceled Cause=quota exhausted
+b    Err=<nil> Cause=<nil>
+trace ID in a2: trace-42
+```
+
+Cancellation propagates only downward along the derivation; `root` and `b` are unaffected. `Err` can
+only report the generic `context canceled`; the specific reason is retrieved with `Cause` (11.8.4).
+Values remain readable after cancellation. Note that the documentation of `Done` allows the close to
+happen asynchronously after `cancel` returns. The output above is deterministic because the standard
+library's own contexts have cancelled every descendant one by one before `cancel` returns; when the
+parent is a custom implementation the situation differs, as described below.
+
+A cancellable context is implemented by `cancelCtx`:
 
 ```go
-// cancelCtx: a cancellable context (trimmed sketch)
 type cancelCtx struct {
-	Context                       // embeds the parent context
+	Context
 
-	mu       sync.Mutex           // protects the fields below
-	done     atomic.Value         // chan struct{}, created lazily, closed on first cancel
-	children map[canceler]struct{} // set of descendants, set to nil after first cancel
-	err      atomic.Value         // cancellation reason, written on first cancel
-	cause    error                // finer-grained cancellation cause (see 11.8.4)
+	mu       sync.Mutex            // protects following fields
+	done     atomic.Value          // of chan struct{}, created lazily, closed by first cancel call
+	children map[canceler]struct{} // set to nil by the first cancel call
+	err      atomic.Value          // set to non-nil by the first cancel call
+	cause    error                 // set to non-nil by the first cancel call
 }
 ```
 
-A few design points are worth calling out. `done` is **created lazily**: the channel is allocated only
-when someone actually calls `Done()` to wait on it; a context that never listens for cancellation
-therefore spends not a cent on a channel. Both `err` and `done` are stored in `atomic.Value`, so that
-high-frequency queries like `Err()` can take a single atomic read and bypass the mutex; the source
-comment says this is "about 5x faster in tight loops."
+The embedded `Context` points to the parent, and `children` records the descendants that must be
+cancelled along with it. Several details of this structure come from later performance changes.
+`done` was originally allocated at creation; in 2017 Josh Bleecher Snyder changed it to be created
+on the first call to `Done`, because many contexts are never listened to, or are cancelled before
+anyone listens. In a benchmark of a cancellation tree of depth 1, allocation per operation dropped
+from 176 bytes to 80 bytes [[Snyder, 2017](#ref-snyder-2017)]. In 2021 `done` moved into an
+`atomic.Value` so that the fast path of `Done` takes no lock, prompted by a report that the mutex of
+`cancelCtx` suffered extreme contention under high concurrency; the corresponding benchmark dropped
+from 67.5 ns to 2.2 ns [[Snyder, 2021](#ref-snyder-2021)].
 
-Cancellation itself is a top-down recursion. Inside the lock, `cancel` does three things: it closes its
-own `done` channel (broadcasting to every goroutine waiting on it), then iterates over `children`
-calling each one's `cancel`, and finally sets `children` to `nil`. A single cancellation at the root
-spreads down the tree to every descendant this way:
+`err` went through the same change, and it introduced a subtle bug. Go 1.25 made `err` an atomic
+variable so that `Err` no longer locks; the source comment says an atomic load is about 5 times
+faster than a mutex, which can matter in tight loops [[Neil, 2025a](#ref-neil-2025a)]. But `cancel`
+writes `err` first and then closes `done`, publishing the two separately, so a lock-free reader may
+see `err` already non-nil while `done` is not yet closed, which violates the interface's promise
+that `Err` returns nil before `Done` is closed. Go 1.26 fixed this [[Neil, 2025b](#ref-neil-2025b)]:
+
+```go
+func (c *cancelCtx) Err() error {
+	// An atomic load is ~5x faster than a mutex, which can matter in tight loops.
+	if err := c.err.Load(); err != nil {
+		// Ensure the done channel has been closed before returning a non-nil error.
+		<-c.Done()
+		return err.(error)
+	}
+	return nil
+}
+```
+
+After reading a non-nil error, it waits for `done` to close before returning. The path that returns
+nil is unchanged; the path that returns an error is about 3 times slower but still faster than
+before Go 1.25, and a loop that polls `Err` ends the first time it gets a non-nil result, so this
+path is not critical. Two separately published pieces of state must be observed in a definite order,
+which is exactly the question the memory model addresses ([11.9](./mem.md)).
+
+The cancellation itself is done by `cancel` (argument checks removed):
 
 ```go
 func (c *cancelCtx) cancel(removeFromParent bool, err, cause error) {
+	// ……
 	c.mu.Lock()
 	if c.err.Load() != nil {
 		c.mu.Unlock()
-		return // already cancelled, return idempotently
+		return // already canceled
 	}
 	c.err.Store(err)
 	c.cause = cause
 	d, _ := c.done.Load().(chan struct{})
 	if d == nil {
-		c.done.Store(closedchan) // no one called Done() yet; store an already-closed sentinel
+		c.done.Store(closedchan)
 	} else {
-		close(d)                 // broadcast cancellation
+		close(d)
 	}
 	for child := range c.children {
-		child.cancel(false, err, cause) // recursively cancel descendants
+		// NOTE: acquiring the child's lock while holding parent's lock.
+		child.cancel(false, err, cause)
 	}
 	c.children = nil
 	c.mu.Unlock()
+
 	if removeFromParent {
-		removeChild(c.Context, c) // detach self from the parent's children to prevent leaks
+		removeChild(c.Context, c)
 	}
 }
 ```
 
-How a child is attached to its parent is arranged by `propagateCancel`, which must handle the different
-shapes a parent context can take:
+The check under the lock makes `cancel` idempotent, so `done` is closed at most once; if nobody has
+called `Done` yet, a shared pre-closed channel, `closedchan`, is stored to avoid an allocation.
+Then, while holding its own lock, it cancels the descendants one by one, and each descendant
+recursively cancels its own. The comment points out that the child's lock is acquired while the
+parent's lock is held; as cancellation propagates down the tree, locks are always acquired parent
+before child. Finally `children` is set to nil, and after releasing the lock the context removes
+itself from its parent's `children`.
+
+How a child attaches to its parent is decided by `propagateCancel`, which has to cope with every
+shape a parent can take:
+
+```mermaid
+flowchart LR
+    Q{"parent.Done()<br/>is nil?"} -->|no| S{"parent<br/>already cancelled?"}
+    S -->|no| U{"a *cancelCtx with a matching<br/>Done can be found?"}
+    U -->|no| W{"parent has an<br/>AfterFunc method?"}
+    Q -->|"yes: never cancelled"| R["return immediately"]
+    S -->|yes| T["cancel child at once"]
+    U -->|yes| V["add to its children"]
+    W -->|"yes (since Go 1.21)"| X["register a callback<br/>through AfterFunc"]
+    W -->|no| Y["start a watcher goroutine"]
+```
+
+The third test does not check whether the parent is a `*cancelCtx`; instead it queries the parent
+for a special key, `&cancelCtxKey`, to which `cancelCtx` answers with itself. However many layers of
+`WithValue` intervene, and whatever custom implementation wraps the parent, the nearest `*cancelCtx`
+is found; if its done channel equals the one returned by the parent's `Done`, the wrapper has not
+changed the cancellation semantics, and the child can be registered directly. This is Russ Cox's
+2019 change. Before it, the code climbed through known types layer by layer, and when users
+implemented `Context` themselves to manage values, `WithCancel` would start an extra goroutine for
+them [[Cox, 2019](#ref-cox-2019)]. In the earlier example, `a2` skips over `a1` in exactly this way
+and is registered directly in the `children` of `a`:
 
 ```mermaid
 flowchart TD
-    P["propagateCancel(parent, child)"] --> Q{"parent.Done() == nil?"}
-    Q -->|"yes, parent never cancels"| R["return directly, no attachment"]
-    Q -->|no| S{"parent already cancelled?"}
-    S -->|yes| T["child.cancel immediately"]
-    S -->|no| U{"parent is *cancelCtx?"}
-    U -->|yes| V["add child to parent.children<br/>cancel recursively with the parent"]
-    U -->|"no, a custom Context"| W["start a goroutine:<br/>select on parent.Done or child.Done"]
+    BG["Background()"] --> R["root: cancelCtx"]
+    R --> A["a: cancelCtx"]
+    R --> B["b: cancelCtx"]
+    A --> A1["a1: valueCtx"]
+    A1 --> A2["a2: cancelCtx"]
+    A -. "children" .-> A2
+    R -. "children" .-> A
+    R -. "children" .-> B
 ```
 
-The last branch is the one most worth discussing. When the parent is a user-defined `Context` rather
-than the standard library's `*cancelCtx`, there is no `children` table to attach to, so
-`propagateCancel` falls back to starting a goroutine that `select`s on both `parent.Done()` and
-`child.Done()` at once: if the parent cancels first, the cancellation is forwarded to the child; if the
-child finishes first, this goroutine exits on its own. This "watcher goroutine" fallback is a point
-many explanations miss, yet it is exactly what makes cancellation propagation hold for **any** parent
-that implements the `Context` interface, and its foundation is still the
-"closing a channel is a broadcast" idiom from [10.4](../ch10chan/readme.md).
+Solid lines in the figure show derivation, dashed lines show registrations in `children`, and
+cancellation propagates along the dashed lines.
 
-The shape of the whole tree is now clear:
+The last branch of the flowchart is the fallback. When the parent is a completely unknown
+implementation, the only option is to start a goroutine that waits for either side to finish. If the
+parent is cancelled first, it forwards the cancellation to the child; if the child finishes first,
+the goroutine exits. Here cancellation must pass through one goroutine scheduling step to reach the
+child, and this is what the documentation of `Done` means by closing that "may happen asynchronously
+after the call to cancel returns".
 
-```mermaid
-flowchart TD
-    BG["context.Background()<br/>root, never cancelled"]
-    BG --> C1["WithCancel<br/>cancelCtx"]
-    C1 --> C2["WithTimeout<br/>timerCtx"]
-    C1 --> V1["WithValue<br/>valueCtx (not in cancellation)"]
-    C2 --> C3["WithCancel<br/>cancelCtx"]
-    C2 --> C4["WithCancel<br/>cancelCtx"]
-    C1 -. "cancel() broadcasts down along the edges" .-> C2
-    C2 -. cancel .-> C3
-    C2 -. cancel .-> C4
-```
+## 11.8.3 Deadlines
 
-Cancellation flows in one direction down the parent-to-child edges: cancel a node, and it together with
-its entire subtree is cancelled, while its parent and siblings are unaffected.
-
-## 11.8.3 Deadlines: A Timer That Cancels Itself
-
-Timeouts and deadlines are, in essence, "a cancellation that fires automatically at a set time." The
-`timerCtx` returned by `WithDeadline` adds only a timer on top of `cancelCtx`:
+A deadline is a cancellation that fires automatically at a given time. `timerCtx` adds to
+`cancelCtx` only a timer and a point in time:
 
 ```go
-// timerCtx: a context with a deadline (sketch)
 type timerCtx struct {
-	cancelCtx               // reuses the full Done/Err/children cancellation machinery
-	timer    *time.Timer    // timer that triggers cancel when the time arrives
+	cancelCtx
+	timer *time.Timer // Under cancelCtx.mu.
+
 	deadline time.Time
 }
 ```
 
-`WithDeadline` uses `time.AfterFunc` ([9.10](../ch09sched/timer.md)) to register a callback that, when
-the time arrives, calls `cancel` with `DeadlineExceeded` as the reason. `WithTimeout(parent, d)` is
-nothing more than a thin wrapper over `WithDeadline(parent, time.Now().Add(d))`. There is also a sound
-optimization hidden here: if the parent's deadline is already earlier than the one being set,
-`WithDeadline` degrades directly into `WithCancel`, because the parent will cancel the child along with
-itself when its own time arrives, so installing a separate timer for the child would be redundant.
+`WithDeadline` calls `WithDeadlineCause` directly, which is implemented as follows (nil checks
+removed):
 
-Whether cancellation is triggered manually or by a timer, every `WithCancel` / `WithTimeout` returns a
-`cancel` function, and **the caller is obliged to call it**, even when the work has finished normally.
-There are two reasons. For `cancelCtx`, `cancel` detaches itself from the parent's `children` table;
-not calling it leaves this child node hanging off the parent until the parent itself is cancelled, which
-under a long-lived parent is a memory leak. For `timerCtx`, `cancel` also `Stop`s that timer, returning
-its resources promptly. The idiomatic form is `defer cancel()`, and `go vet` will warn when `cancel`
-is missed on some path of the control flow.
+```go
+func WithDeadlineCause(parent Context, d time.Time, cause error) (Context, CancelFunc) {
+	// ……
+	if cur, ok := parent.Deadline(); ok && cur.Before(d) {
+		// The current deadline is already sooner than the new one.
+		return WithCancel(parent)
+	}
+	c := &timerCtx{
+		deadline: d,
+	}
+	c.cancelCtx.propagateCancel(parent, c)
+	dur := time.Until(d)
+	if dur <= 0 {
+		c.cancel(true, DeadlineExceeded, cause) // deadline has already passed
+		return c, func() { c.cancel(false, Canceled, nil) }
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err.Load() == nil {
+		c.timer = time.AfterFunc(dur, func() {
+			c.cancel(true, DeadlineExceeded, cause)
+		})
+	}
+	return c, func() { c.cancel(true, Canceled, nil) }
+}
+```
 
-## 11.8.4 Three Additions in Go 1.21
+If the parent's deadline is earlier than the new one, the parent will cancel the child along with
+itself when its time comes, so installing a timer for the child is redundant and the call degrades
+to `WithCancel`. If the deadline has already passed, the context is cancelled at once with
+`DeadlineExceeded`. Otherwise a callback is registered with `time.AfterFunc`
+([9.10](../ch09sched/timer.md)) and cancels at the deadline. `WithTimeout(parent, d)` is just
+`WithDeadline(parent, time.Now().Add(d))`. `DeadlineExceeded` implements the `net.Error` interface,
+and its `Timeout` method returns true, so network code can handle it together with I/O timeouts. The
+`Deadline` method lets a callee judge, before starting work, whether the remaining time suffices,
+and decline to start if it does not [[Ajmani, 2014b](#ref-ajmani-2014b)].
 
-Go 1.21 added three tools to `context` that the community had long called for, filling several gaps in
-the original abstraction.
+Whoever triggers the cancellation, the `CancelFunc` returned by `WithCancel`, `WithDeadline` and
+`WithTimeout` must be called, even if the work has finished normally. The documentation says that
+calling it cancels the child and its descendants, removes the parent's reference to the child, and
+stops any associated timers; failing to call it leaks the child and its descendants until the parent
+is cancelled [[Go Authors, 2026a](#ref-go-authors-2026a)]. Under a long-lived parent this is a
+steadily growing memory leak. The idiom is to write `defer cancel()` immediately after creation. The
+lostcancel check of `go vet` was added in Go 1.7 together with `context`; it searches the
+control-flow graph for a path from `WithCancel` to `return` that does not use `cancel`. Alan Donovan
+ran it over a sample of 50,000 source files and found 2068 instances of `cancel` assigned to the
+blank identifier and 118 bugs where the function returned before calling `cancel`; he manually
+inspected 20 of them and found no false positives [[Donovan, 2016](#ref-donovan-2016)]. This check
+requires running `go vet` explicitly; it is not among the checks that `go test` runs automatically.
 
-`AfterFunc(ctx, f)` registers a callback: when `ctx` is cancelled (or times out), `f` runs in a new
-goroutine. It folds the repeatedly hand-written task of "listen on `Done()` and then clean up" into the
-standard library, sparing you from starting a dedicated `select` goroutine for every cleanup task. It
-returns a `stop` function and uses `sync.Once` to guarantee that at most one of `f` and `stop` takes
-effect, avoiding a double trigger.
+## 11.8.4 Cancellation Causes, Detaching and Callbacks
 
-`WithoutCancel(parent)` derives a context that **severs the cancellation chain while keeping the value
-chain**. Its `Done()` returns `nil` and `Err()` is always `nil`, but `Value` still passes through to the
-parent. The typical use is: the request has ended, yet under the request-scoped metadata (such as a
-trace ID) you want to start a wind-down task that should not be cancelled along with the request, such
-as writing an audit log asynchronously.
+`Err` can only distinguish "cancelled" from "timed out", which is often too little when debugging.
+In 2018 an issue asked for a way to find out where a context was cancelled; on that basis Ajmani
+proposed an interface for cancellation causes in 2022 [[Ajmani, 2022a](#ref-ajmani-2022a)]. The
+proposal lists the constraints imposed by Go 1 compatibility: no methods can be added to the
+`Context` interface, the type of `CancelFunc` and the signatures of existing functions cannot
+change, and `Err` can only return one of nil, `Canceled` and `DeadlineExceeded`. Go 1.20 therefore
+added `WithCancelCause`, whose `CancelCauseFunc` takes an error as the cause and records it in
+`cancelCtx.cause`; the cause is retrieved by the package-level function `Cause`, which also finds
+the nearest `cancelCtx` through `&cancelCtxKey`. The cause is decided by the first cancellation: if
+the parent is cancelled first with cause1, both parent and child have cause1; if the child is
+cancelled first with cause2, the child's cause stays cause2. Go 1.21 added `WithDeadlineCause` and
+`WithTimeoutCause`, which specify the cause for cancellation triggered at the deadline; the
+`CancelFunc` they return sets no cause [[Ajmani, 2022b](#ref-ajmani-2022b)].
 
-`WithDeadlineCause` / `WithTimeoutCause`, together with the companion `Cause(ctx)`, solve the problem
-that the original `Err()` could only distinguish the two coarse outcomes of "was cancelled" and "timed
-out." They allow attaching a specific **cause** error when a timeout occurs, and `Cause(ctx)` retrieves
-it, letting upper-layer logs state clearly "why it was cancelled" rather than stopping at
-`context deadline exceeded`.
+Go 1.21 also added two functions. `WithoutCancel` derives a context that keeps the values but cuts
+off cancellation: its `Done` returns nil, `Err` is always nil, and `Cause` also returns nil. The use
+cases listed by the proposer, Carlo Alberto Ferraris, are these: the triggering event (for example
+an HTTP request) has been cancelled or has already finished, yet rollback, cleanup or a long
+follow-up operation must still complete, and that operation needs the authentication, logging and
+tracing values attached to the request; switching to `Background` would lose them. The proposal also
+notes that similar functions had already been reimplemented many times, for example
+`xcontext.Detach` inside `x/tools` [[Ferraris, 2020](#ref-ferraris-2020)]. In the implementation,
+`Done` of `withoutCancelCtx` returns nil, so a child derived from it returns at the very first test
+of `propagateCancel` and is never registered in the original cancellation tree; it also returns nil
+when queried for `&cancelCtxKey`, since otherwise `Cause` would see through it, find the original
+`cancelCtx` and retrieve the parent's cause.
 
-## 11.8.5 Structured Concurrency: Placing It in the Lineage
+`AfterFunc(ctx, f)` runs `f` in a new goroutine after `ctx` is cancelled, and returns a `stop`
+function that revokes the registration. Damien Neil's proposal observes that to interrupt a blocking
+operation that does not know about contexts on cancellation, such as reads and writes on a
+`net.Conn` or a wait on a `sync.Cond`, the only way was to start a goroutine per operation to watch
+for cancellation, which is not worthwhile when the operation itself is cheap; `AfterFunc` only
+registers a callback, and in the common case where no cancellation happens, no goroutine is created
+[[Neil, 2023](#ref-neil-2023)]. It is implemented by an `afterFuncCtx` that embeds `cancelCtx` and
+hangs in the cancellation tree as a child, with a `sync.Once` choosing between "run
+`f`" and "revoked by `stop`". The standard library example uses it to make a condition variable wait
+cancellable (some comments removed):
 
-`context` solves "how cancellation propagates down a tree of goroutines," but it does not constrain the
-**shape** of that tree: the moment `go` runs, the new goroutine's lifetime escapes the code that started
-it, and nothing forces it to terminate before some scope ends. Nathaniel Smith made this point thoroughly
-in his 2018 article *Notes on structured concurrency, or: Go statement considered harmful*: a bare `go`
-(and `spawn` elsewhere) is to concurrency what `goto` is to control flow; it makes the lifetimes of
-concurrency no longer nest, so there is no way to reason at the lexical level about whether "all the work
-this code started has finished by the time it returns."
+```go
+waitOnCond := func(ctx context.Context, cond *sync.Cond, conditionMet func() bool) error {
+	stopf := context.AfterFunc(ctx, func() {
+		// We need to acquire cond.L here to be sure that the Broadcast
+		// below won't occur before the call to Wait, which would result
+		// in a missed signal (and deadlock).
+		cond.L.Lock()
+		defer cond.L.Unlock()
 
-His prescription is **structured concurrency**: let concurrency also obey lexical block structure, so
-that all tasks started within a scope must finish before that scope exits. His Trio library implements it
-with a nursery: a task can only be spawned inside a nursery, and the block containing the nursery does
-not exit until every task in the box has finished; if any task errors, the rest of the box is cancelled
-and the error is thrown outward. This line of thinking went on to influence several languages:
+		// ……
+		cond.Broadcast()
+	})
+	defer stopf()
 
-| System | Structured concurrency | Cancellation mechanism |
-| --- | --- | --- |
-| Python Trio / asyncio | nursery / TaskGroup | `Cancelled` exception injection |
-| Kotlin coroutines | `coroutineScope` scope | `Job` tree, cancellation propagates along the scope |
-| Java (JDK 21+, preview) | `StructuredTaskScope` | closing the scope cancels unfinished child tasks |
-| .NET | convention + compiler assistance | `CancellationToken` passed explicitly |
-| Go | no language-level primitive, approximated by libraries | `context` + `errgroup` |
+	for !conditionMet() {
+		cond.Wait()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
 
-Several comparisons are worth savoring. Kotlin's `Job` forms a cancellation tree almost isomorphic to
-`context`, with cancellation propagating along the scope's parent-child relationship; Java's
-`StructuredTaskScope` (through several rounds of JEP previews, and still a preview feature as of JDK 25)
-automatically cancels unfinished child tasks when the scope closes, building the nursery straight into the
-standard library; .NET's `CancellationToken` resembles Go's `context` most closely, likewise passing a
-cancellation token explicitly to be checked cooperatively by the callee, the difference being that .NET
-uses an `OperationCanceledException` to convey cancellation while Go gives only a channel that you must
-actively `select` on.
+	return nil
+}
+```
 
-Go did not introduce a nursery at the language level, but approximates it at the library layer with
-`golang.org/x/sync/errgroup`: `errgroup.WithContext` returns a group and a derived `context`, and when
-any goroutine in the group returns an error, this `context` is cancelled, thereby notifying the rest of
-the goroutines to stop, while `g.Wait()` blocks until the whole group finishes. This gives an
-approximation of "enter together, leave together, fall together," but it remains a convention rather than
-an enforcement, and the compiler will not stop you from bare-`go`-ing yet another goroutine outside the
-`errgroup` that escapes the scope. This is precisely Go's current trade-off: keep structured concurrency
-at the library and specification layer rather than casting it into the language.
+This code condenses several points of [11.4](./cond.md). The callback acquires `cond.L` before
+broadcasting; otherwise the broadcast could happen before the waiter calls `Wait`, losing the
+signal. A condition variable cannot wake one specific waiter, only broadcast, so each of N
+concurrent waiters causes O(N) needless wakeups for a total cost of O(N²); the original comment in
+the example points out this cost explicitly. A waiter may be woken because someone else's context
+was cancelled, so it must recheck the condition and `ctx.Err()` in a loop, which is exactly what
+Mesa semantics requires ([11.4.2](./cond.md)).
 
-## 11.8.6 The Controversy over Value Passing and the Case for Explicit Parameters
+`AfterFunc` also completes `propagateCancel` in the other direction: a custom context that provides
+an `AfterFunc(func()) func() bool` method takes the branch "register a callback through
+AfterFunc" in the flowchart when children are derived from it, using a callback in place of a
+watcher goroutine.
 
-The `Value` method of `Context` is another long-disputed design. `valueCtx` is minimal:
+## 11.8.5 Structured Concurrency
+
+`context` answers the question "how to make the work in a tree of goroutines stop", and places no
+constraint on the shape of the tree. The term "structured concurrency" was coined by Martin Sústrik
+in 2016 [[Sústrik, 2016](#ref-sustrik-2016)] and became widely known through Nathaniel J. Smith's
+2018 article [[Smith, 2018](#ref-smith-2018)]; for its meaning and motivation see
+[3.6.5](../../part1overview/ch03life/main.md). From its viewpoint, cancellation is only half of the
+problem; the other half is waiting.
+
+Dave Cheney pointed out in 2017 that the most important function of `Context` is broadcasting a
+cancellation signal, but that this function is incomplete, because there is no way to wait for the
+signal to be acknowledged [[Cheney, 2017](#ref-cheney-2017)]. Cheney's point of comparison is
+Gustavo Niemeyer's 2011 tomb package [[Niemeyer, 2011](#ref-niemeyer-2011)], which manages only the
+life cycle of goroutines: it can notify a target to stop, wait for the target to confirm that it has
+stopped, and collect the final error. The Trio library that Smith describes builds that other half
+into the scope: a nursery always waits for its tasks to exit, and even a task that is being
+cancelled is waited for until it has run its cleanup code; when a task raises an unhandled
+exception, the nursery first cancels the remaining tasks, waits for them to finish, and then
+propagates the exception outward. Smith also cautions that this requires the nursery to be tightly
+integrated with the language's cancellation mechanism, which may not be easy in languages such as C#
+or Go that manage cancellation through manually passed objects and conventions.
+
+The approaches of the various languages compare as follows:
+
+| System | Scope primitive | How cancellation is delivered | On leaving the scope |
+| --- | --- | --- | --- |
+| Trio | nursery | raises `Cancelled` at the next checkpoint | waits for all tasks to finish |
+| Python asyncio (since 3.11) | `TaskGroup` | raises `CancelledError` in the task | waits for all tasks to finish |
+| Kotlin | coroutine scope | throws `CancellationException` at the next cancellation check | the parent coroutine waits for its children |
+| Java | `StructuredTaskScope` | interrupts the subtask threads | `close` waits for the subtask threads to finish |
+| .NET | no corresponding primitive | `CancellationToken`, observed by polling, callbacks or wait handles | the caller waits on its own |
+| Go | no language primitive; errgroup approximates one | closes the `Done` channel, which code checks in a `select` | waits only when `Wait` is called |
+
+Python's `TaskGroup` has been available since 3.11
+[[Python Software Foundation, 2026](#ref-psf-2026)]. The Kotlin documentation says that a parent
+coroutine waits for its children to complete before it finishes, and that when the parent fails or
+is cancelled, all its children are cancelled recursively [[JetBrains, 2026a](#ref-jetbrains-2026a)],
+which is almost isomorphic to the cancellation tree of `context`. Java's `StructuredTaskScope`
+appeared as an incubator module in JDK 19 and 20, became a preview API in JDK 21, and was
+re-previewed several times in JDK 22 through 27, with the fifth preview in JDK 25 making major API
+changes [[Bateman et al., 2025](#ref-bateman-et-al-2025)]; the final version, JEP 543, proposes to
+finalize it without change in JDK 28, and its status is currently "Integrated". By its description,
+when a subtask fails the remaining subtasks are interrupted, when the owner thread is interrupted
+the subtasks are cancelled with it, and closing the scope waits for the subtask threads to finish
+[[Bateman et al., 2026](#ref-bateman-et-al-2026)].
+
+Two points stand out in the comparison. First, every system's cancellation is cooperative; they
+differ in how it is delivered. Trio, asyncio and Kotlin have the runtime raise an exception
+automatically at suspension points or checkpoints, because the runtime knows which scope each task
+belongs to. Go's cancellation is an explicitly passed value, and blocking operations that do not
+take a `ctx`, such as channel sends and receives, `Mutex.Lock` and `time.Sleep`, never notice it;
+every wait that must respond to cancellation has to be written as a `select`. This is why `ctx` has
+to appear in a long chain of function signatures (11.8.6). Second, waiting is guaranteed by the
+scope in Java, Trio and Kotlin, whereas in Go it is left to `WaitGroup` and errgroup: errgroup
+combines waiting, collecting the first error and a cancellation-derived context, and its
+implementation is in [10.7.4](../ch10chan/pattern.md); `WaitGroup.Go` makes "register at launch" the
+simplest form ([11.5.7](./waitgroup.md)); and the Go community's discussion about changing the `go`
+statement is in [10.7.6](../ch10chan/pattern.md). Smith later added a footnote to the article:
+someone had pointed out errgroup in Go as highly relevant.
+
+## 11.8.6 The Debate over Values and Explicit Arguments
+
+The `valueCtx` returned by `WithValue` is extremely simple:
 
 ```go
 type valueCtx struct {
-	Context     // parent
+	Context
 	key, val any
 }
 ```
 
-Its `Value(key)` returns when it hits its own key, and otherwise walks up the parent chain, so a single
-lookup is an $O(d)$ linked-list search, where $d$ is the derivation depth. This dictates that it is
-**suited only to shallow and sparse request-scoped data**, such as a trace ID or an authenticated
-principal, rather than being treated as an offhand global dictionary.
+`Value(key)` returns the value if the key matches its own, and otherwise searches up the parent
+chain, taking time proportional to the derivation depth. Since Go 1.18 this lookup is a loop rather
+than recursion: profiling of a production server showed that 2.3% of CPU time went to stack growth
+when `Value` was nested 12 or more levels deep in the call chain
+[[roudkerk, 2021](#ref-roudkerk-2021)]. Derivation never modifies the parent, so all contexts form
+an immutable persistent linked list in which siblings share ancestors, and concurrent reads need no
+synchronization. The documentation places several requirements on keys: a key must be comparable and
+should not be a built-in type such as `string`, to avoid collisions between packages; packages
+should define an unexported key type and provide type-safe accessor functions; and keys are often of
+type `struct{}`, which needs no allocation when assigned to an interface
+[[Go Authors, 2026a](#ref-go-authors-2026a)].
 
-The deeper controversy lies in "what should be passed via `Value`." The line drawn by the official
-documentation is: use it only for **request-scoped data that crosses API and process boundaries**, and
-do not use it to pass a function's optional parameters. Dave Cheney went further in *Context isn't for
-cancellation*, arguing that even value passing beyond cancellation is itself worth questioning, because
-`Value` is dynamically typed with both key and value as `any`, which bypasses compile-time checking and
-hides a dependency that should have been declared explicitly inside an opaque pocket, leaving the caller
-no way to know which keys in the `context` a given function actually depends on.
+The larger dispute is over what belongs in `Value` and whether `ctx` should appear in every function
+signature. The line the documentation draws is that values are only for request-scoped data that
+crosses process and API boundaries, and should not be used to pass optional parameters to functions.
+In a 2017 article, Michal Štrba criticized `context` as spreading like a virus: any library that
+might be used by a server must accept a `ctx` on its time-consuming functions; `Value` has no static
+types and resembles thread-local storage; and the whole of `context` is in most cases just an
+inefficient linked list. Štrba nevertheless conceded that it does solve cancellation, a rather hard
+problem in Go, and argued that Go 2 should solve it directly in the language
+[[Štrba, 2017](#ref-strba-2017)]; the corresponding proposal filed the next year was closed three
+weeks later [[Štrba, 2018](#ref-strba-2018)]. Damien Neil came from the other direction and asked
+whether goroutine-local storage could replace `Context` entirely [[Neil, 2017](#ref-neil-2017)]. Ian
+Lance Taylor closed that proposal, reasoning that the current explicit mechanism is a deliberate
+choice and appears to work well, and that copying local data for every goroutine created could also
+be costly [[Taylor, 2018b](#ref-taylor-2018b)]. The Go FAQ gives a more fundamental reason:
+goroutines are anonymous precisely so that computation is not bound to a particular goroutine; if
+`net/http` associated per-request state with a goroutine, clients could no longer use additional
+goroutines while handling a request [[Go Authors, 2026b](#ref-go-authors-2026b)].
 
-What draws the most question about `context`, though, is the convention itself that "every function's
-first parameter must explicitly carry `ctx`." The article *Context should go away for Go 2* represents
-the opposing side: cancellation and timeout are an almost ubiquitous cross-cutting concern, yet they have
-to be expressed through a parameter threaded manually layer by layer, which pollutes nearly every function
-signature and is all too easy to forget passing at some layer, quietly breaking the chain. The supporting
-side holds that explicitness is exactly Go's trade-off: having the cancellation capability appear in the
-signature, with propagation statically checked by `go vet`, beats hiding it in some implicit thread-local
-storage with no way to trace it. This debate remains unsettled to this day, and the explicit parameter
-passing of `context` is once again Go leaning toward the former over the latter, between "simple and
-visible" and "clean signatures."
+Cheney's position is the opposite of Štrba's: values are what `context` is really for, so it should
+be only a request-scoped, copy-on-write list of values, with lifetime management separated out
+[[Cheney, 2017](#ref-cheney-2017)]. In 2018 Taylor opened an issue for discussing a new version of
+`context`, collecting several complaints: the repetitive `ctx context.Context` spelling; `WithValue`
+accepting keys of any type, which invites misuse; the name `Context` being confusing because it is
+mainly used for cancellation; and the explicit passing of `ctx` everywhere
+[[Taylor, 2018a](#ref-taylor-2018a)]. The issue is still open.
+
+A companion to explicit passing is the rule not to store a `Context` in a struct but to pass it
+explicitly as the first argument to every function that needs it
+[[Barkhuysen and Proud, 2021](#ref-barkhuysen-proud-2021)]. In the proposal to move `context` into
+the standard library, Fitzpatrick had already said that the real advice is not to "save" a context;
+it should be passed like a parameter [[Fitzpatrick, 2016a](#ref-fitzpatrick-2016a)]. `http.Request`
+holding a context internally is an exception to this rule: when Go 1.7 introduced `context`, adding
+a parameter to methods such as `Client.Do` would have broken compatibility, so `net/http` put the
+context inside the request struct, with `WithContext` returning a request that carries a new
+context; the other compatible approach is to add new functions with the suffix `Context`, such as
+`DialContext` on `net.Dialer` [[Barkhuysen and Proud, 2021](#ref-barkhuysen-proud-2021)]. The cost
+of explicit passing is verbose signatures; in exchange, the path along which cancellation and
+deadlines travel is visible in the code and can be checked statically by tools. Between tidy
+signatures and visible data flow, Go once again chose the latter.
 
 ## Further Reading
 
-1. The Go Authors. *Package context.* https://pkg.go.dev/context ; source at
-   `src/context/context.go` (this section is checked against Go 1.26).
-2. Sameer Ajmani. *Go Concurrency Patterns: Context.* The Go Blog, 2014.
-   https://go.dev/blog/context
-3. Nathaniel J. Smith. *Notes on structured concurrency, or: Go statement considered harmful.*
-   2018. https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
-4. Oracle. *Java Thread Primitive Deprecation* (why `Thread.stop` was deprecated).
-   https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/doc-files/threadPrimitiveDeprecation.html
-5. JEP 505: *Structured Concurrency* (`StructuredTaskScope`, fifth preview in JDK 25).
-   https://openjdk.org/jeps/505
-6. Dave Cheney. *Context isn't for cancellation.* 2017.
-   https://dave.cheney.net/2017/08/20/context-isnt-for-cancellation
-7. Michael Hudson-Doyle. *Context should go away for Go 2.* faiface, 2017.
-   https://faiface.github.io/post/context-should-go-away-go2/
-8. Gustavo Niemeyer. *Death of goroutines under control* (tomb, an early practice of cooperative
-   cancellation). 2011. https://blog.labix.org/2011/10/09/death-of-goroutines-under-control ;
-   companion library `gopkg.in/tomb.v2`.
-9. Go proposal #14660 (*context: new package for standard library*, the original proposal for `context`
-   entering the standard library, https://github.com/golang/go/issues/14660); proposal #56661
-   (*context.AfterFunc / WithoutCancel / WithDeadlineCause*, Go 1.21).
-   This book [10.4 Closing](../ch10chan/readme.md), [9.10 Timers](../ch09sched/timer.md),
-   [11.9 Memory Consistency Model](./mem.md).
+- <a id="ref-ajmani-2014a"></a>[Ajmani, 2014a] Sameer Ajmani. *Go Concurrency Patterns: Pipelines
+  and cancellation.* The Go Blog, March 13, 2014. https://go.dev/blog/pipelines
+- <a id="ref-ajmani-2014b"></a>[Ajmani, 2014b] Sameer Ajmani. *Go Concurrency Patterns: Context.*
+  The Go Blog, July 29, 2014. https://go.dev/blog/context
+- <a id="ref-ajmani-2022a"></a>[Ajmani, 2022a] Sameer Ajmani. Go issue #51365. *context: add APIs
+  for writing and reading cancelation cause.* 2022. https://github.com/golang/go/issues/51365
+  Shipped with Go 1.20.
+- <a id="ref-ajmani-2022b"></a>[Ajmani, 2022b] Sameer Ajmani. Go issue #56661. *context: add APIs
+  for setting a cancelation cause when deadline or timer expires.* 2022.
+  https://github.com/golang/go/issues/56661 Shipped with Go 1.21.
+- <a id="ref-barkhuysen-proud-2021"></a>[Barkhuysen and Proud, 2021] Jean Barkhuysen, Matt T. Proud.
+  *Contexts and structs.* The Go Blog, February 24, 2021. https://go.dev/blog/context-and-structs
+- <a id="ref-bateman-et-al-2025"></a>[Bateman et al., 2025] Alan Bateman, Viktor Klang, Ron
+  Pressler. *JEP 505: Structured Concurrency (Fifth Preview).* OpenJDK, JDK 25.
+  https://openjdk.org/jeps/505
+- <a id="ref-bateman-et-al-2026"></a>[Bateman et al., 2026] Alan Bateman, Viktor Klang, Ron
+  Pressler. *JEP 543: Structured Concurrency.* OpenJDK, 2026. https://openjdk.org/jeps/543
+- <a id="ref-cheney-2017"></a>[Cheney, 2017] Dave Cheney. *Context isn't for cancellation.* August
+  20,
+  2017. https://dave.cheney.net/2017/08/20/context-isnt-for-cancellation
+- <a id="ref-cox-2019"></a>[Cox, 2019] Russ Cox. context: use fewer goroutines in
+  WithCancel/WithTimeout. Go commit 0ad368675b, 2019. https://go.dev/cl/196521 Shipped with Go 1.14.
+- <a id="ref-donovan-2016"></a>[Donovan, 2016] Alan Donovan. cmd/vet: -lostcancel: check for
+  discarded result of context.WithCancel. Go commit b65cb7f198, 2016. https://go.dev/cl/24150
+  Shipped with Go 1.7.
+- <a id="ref-ferraris-2020"></a>[Ferraris, 2020] Carlo Alberto Ferraris. Go issue #40221.
+  *context: add WithoutCancel.* 2020. https://github.com/golang/go/issues/40221
+  Shipped with Go 1.21.
+- <a id="ref-fitzpatrick-2016a"></a>[Fitzpatrick, 2016a] Brad Fitzpatrick. Go issue #14660.
+  *proposal: context: new package for standard library.* 2016.
+  https://github.com/golang/go/issues/14660 The original proposal to bring `context` into the
+  standard library.
+- <a id="ref-fitzpatrick-2016b"></a>[Fitzpatrick, 2016b] Brad Fitzpatrick. context: add the context
+  package from golang.org/x/net/context. Go commit 9db7ef5614, 2016. https://go.dev/cl/20346
+  Shipped with Go 1.7.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *Package context.*
+  https://pkg.go.dev/context ; source in `src/context/context.go` (this section follows Go 1.26).
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *Frequently Asked Questions:
+  Why is there no goroutine ID?* https://go.dev/doc/faq#no_goroutine_id
+- <a id="ref-jetbrains-2026a"></a>[JetBrains, 2026a] JetBrains. *Coroutines basics.* Kotlin
+  Documentation. https://kotlinlang.org/docs/coroutines-basics.html
+- <a id="ref-jetbrains-2026b"></a>[JetBrains, 2026b] JetBrains. *Cancellation and timeouts.* Kotlin
+  Documentation. https://kotlinlang.org/docs/coroutines-cancellation.html
+- <a id="ref-microsoft-2026"></a>[Microsoft, 2026] Microsoft. *Cancellation in Managed Threads.*
+  .NET Documentation.
+  https://learn.microsoft.com/en-us/dotnet/standard/threading/cancellation-in-managed-threads
+- <a id="ref-neil-2017"></a>[Neil, 2017] Damien Neil. Go issue #21355. *proposal: Replace Context
+  with goroutine-local storage.* 2017. https://github.com/golang/go/issues/21355
+- <a id="ref-neil-2023"></a>[Neil, 2023] Damien Neil. Go issue #57928. *context: add
+  AfterFunc.* 2023. https://github.com/golang/go/issues/57928 Shipped with Go 1.21.
+- <a id="ref-neil-2025a"></a>[Neil, 2025a] Damien Neil. context: use atomic operation in ctx.Err. Go
+  commit 0a0e6af39b, 2025. https://go.dev/cl/653795
+  Shipped with Go 1.25.
+- <a id="ref-neil-2025b"></a>[Neil, 2025b] Damien Neil. context: don't return a non-nil from Err
+  before Done is closed. Go commit 8ca209ec39, 2025. https://go.dev/cl/705235 Shipped with Go 1.26.
+- <a id="ref-niemeyer-2011"></a>[Niemeyer, 2011] Gustavo Niemeyer. *Death of goroutines under
+  control.*
+  2011. https://blog.labix.org/2011/10/09/death-of-goroutines-under-control ; companion library
+        `gopkg.in/tomb.v2`.
+  Archived:
+  https://web.archive.org/web/20250812232118/https://blog.labix.org/2011/10/09/death-of-goroutines-under-control
+  tomb, an early practice of cooperative cancellation.
+- <a id="ref-openjdk-2022"></a>[OpenJDK, 2022] OpenJDK. JDK-8289610. *Degrade Thread.stop.* JDK
+  20, 2022. https://bugs.openjdk.org/browse/JDK-8289610
+- <a id="ref-openjdk-2025"></a>[OpenJDK, 2025] OpenJDK. JDK-8368226. *Remove Thread.stop.* JDK
+  26, 2025. https://bugs.openjdk.org/browse/JDK-8368226
+- <a id="ref-oracle-2023"></a>[Oracle, 2023] Oracle. *Java Thread Primitive Deprecation.* Java
+  SE 21.
+  https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/doc-files/threadPrimitiveDeprecation.html
+  Why `Thread.stop` was deprecated.
+- <a id="ref-psf-2026"></a>[Python Software Foundation, 2026] Python Software Foundation.
+  *Coroutines and Tasks: Task Groups.* Python 3 Documentation.
+  https://docs.python.org/3/library/asyncio-task.html#task-groups
+- <a id="ref-roudkerk-2021"></a>[roudkerk, 2021] roudkerk. context: implement Context.Value using
+  iteration rather than recursion. Go commit afe43f1e5e, 2021. https://go.dev/cl/335790
+  Shipped with Go 1.18.
+- <a id="ref-smith-2018"></a>[Smith, 2018] Nathaniel J. Smith. *Notes on structured concurrency, or:
+  Go statement considered harmful.* April 25, 2018.
+  https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
+- <a id="ref-snyder-2017"></a>[Snyder, 2017] Josh Bleecher Snyder. context: lazily initialize
+  cancelCtx done channel. Go commit 986768de7f, 2017. https://go.dev/cl/34979 Shipped with Go 1.9.
+- <a id="ref-snyder-2021"></a>[Snyder, 2021] Josh Bleecher Snyder. context: reduce contention in
+  cancelCtx.Done. Go commit ae1fa08e41, 2021. https://go.dev/cl/288193
+  Shipped with Go 1.17.
+- <a id="ref-strba-2017"></a>[Štrba, 2017] Michal Štrba. *Context should go away for Go 2.* August
+  6,
+  2017. https://faiface.github.io/post/context-should-go-away-go2/
+- <a id="ref-strba-2018"></a>[Štrba, 2018] Michal Štrba. Go issue #27982. *proposal: Go 2: bake a
+  cooperative goroutine cancellation mechanism into the language.* 2018.
+  https://github.com/golang/go/issues/27982
+- <a id="ref-sustrik-2016"></a>[Sústrik, 2016] Martin Sústrik. *Structured Concurrency.* February
+  7, 2016. https://sustrik.github.io/250bpm/blog:71/index.html
+- <a id="ref-taylor-2018a"></a>[Taylor, 2018a] Ian Lance Taylor. Go issue #28342. *proposal:
+  context/v2: update context package.* 2018. https://github.com/golang/go/issues/28342
+- <a id="ref-taylor-2018b"></a>[Taylor, 2018b] Ian Lance Taylor. Comment on golang/go#21355, 2018.
+  https://github.com/golang/go/issues/21355#issuecomment-371308423
+- This book: [10.4 The Semantics of Closing](../ch10chan/close.md),
+  [10.7 Engineering Practice and Cross-Language Comparison](../ch10chan/pattern.md),
+  [9.10 Timers](../ch09sched/timer.md), [11.4 Condition Variables](./cond.md),
+  [11.5 Wait Groups](./waitgroup.md), [11.9 Memory Consistency Models](./mem.md).
