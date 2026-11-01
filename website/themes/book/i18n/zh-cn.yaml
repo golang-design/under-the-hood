@@ -30,6 +30,8 @@
 # Reading chrome (top bar, table of contents, page navigation, footer).
 - id: Wordmark
   translation: Go 语言原本
+- id: WordmarkShort
+  translation: Go 语言原本
 - id: PrevSection
   translation: 上一节
 - id: NextSection

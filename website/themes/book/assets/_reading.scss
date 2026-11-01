@@ -160,6 +160,8 @@ body { padding-top: $topbar-h; }
     color: var(--fg);
     letter-spacing: 0.01em;
   }
+  // The short form replaces a title too long for a phone's top bar.
+  .wm-short { display: none; }
   .wm-sub {
     font-family: var(--font-display);
     font-style: italic;
@@ -297,9 +299,11 @@ body { padding-top: $topbar-h; }
   .reading-crumb,
   .reading-divider,
   .reading-wordmark .wm-sub,
+  .reading-wordmark .wm-long,
   .reading-fontctl {
     display: none;
   }
+  .reading-wordmark .wm-short { display: inline; }
 
   // The language switcher stays, but collapses to its globe icon so it fits
   // beside the theme switch and TOC control. The current-language label and the
