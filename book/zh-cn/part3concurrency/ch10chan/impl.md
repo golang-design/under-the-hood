@@ -5,260 +5,311 @@ title: "10.2 hchan：通道的内部结构"
 
 # 10.2 hchan：通道的内部结构
 
-[10.1](./readme.md) 从 CSP 的角度交代了通道在语言里的位置：它是显式的消息信道，
-把「通信」与「同步」合二为一。这一节把它拆开来看。一个 channel 在运行时里就是一个名为 `hchan`
-的结构体，它的全部秘密不过是一把锁、一圈环形缓存、外加两条等待队列。结构虽小，每个字段的存在
-都对应一处设计上的考量，读懂这几样东西，后面收发与 select 的全部逻辑（[10.3](./sendrecv.md)–
-[10.6 内存模型与无锁演进](./lockfree.md)）就只是「在这张图上搬运数据、挂起与唤醒 goroutine」。
+在运行时中，一个 channel 是一个 `hchan` 结构，`make(chan T, n)` 返回的 channel 值只是指向它的指针。这与
+`make` 的一般做法一致：`make` 返回的值内部带有隐式的指针 [[Cox, 2009](#ref-cox-2009)]。因此 channel
+值可以随意复制、传递，所有副本指向同一个 `hchan`。本节先看 `runtime/chan.go` 开头写明的不变式，再依次介绍
+`hchan` 的字段、环形缓冲区、等待队列、`makechan` 的三种分配方式，以及保护这一切的锁。
+下文给出的结构体都删去了与讨论无关的字段，完整定义见 `runtime/chan.go` 与 `runtime/runtime2.go`
+[[Go Authors, 2026a](#ref-go-authors-2026a)]。
 
-沿用本书讲运行时数据结构的惯例，下文给出的结构体是**裁剪后的速写**，只留与设计相关的字段，
-并在注释里说明它为何存在。完整定义可对照 `runtime/chan.go` 与 `runtime/runtime2.go`。
+## 10.2.1 三条不变式
 
-## 10.2.1 三条不变式：先看「为什么」
+`chan.go` 的开头写着 channel 实现所维持的不变式：
 
-在逐字段拆解之前，先抄下 `chan.go` 开头那段注释立下的三条不变式，它们是整套结构的设计意图，
-比任何字段说明都更能说清「为何如此」：
+- `c.sendq` 与 `c.recvq` 至少有一个为空。唯一的例外是：一个 goroutine 用 `select` 语句同时在同一个无缓冲
+  channel 上发送和接收，并因此阻塞；这时两个队列的长度只受这条 `select` 语句大小的限制。
+- 对有缓冲 channel，`c.qcount > 0` 蕴含 `c.recvq` 为空。
+- 对有缓冲 channel，`c.qcount < c.dataqsiz` 蕴含 `c.sendq` 为空。
 
-- `c.sendq` 与 `c.recvq` 至少有一个为空（唯一的例外是：一个无缓冲 channel 上，某个
-  goroutine 用 select 同时在收和发两侧挂着）；
-- 对缓冲 channel，`c.qcount > 0` 蕴含 `c.recvq` 为空；
-- 对缓冲 channel，`c.qcount < c.dataqsiz` 蕴含 `c.sendq` 为空。
+这几条的含义很直接。缓冲区中有值时，不应有接收方在等待，因为它本可以取走这个值；缓冲区有空位时，
+不应有发送方在等待，因为它本可以放下自己的值；有接收方在等待时，新来的发送方会直接与它配对，
+所以发送方不会也去排队。例外来自 `select`：一个 goroutine 不能与自己配对，当它的 `select` 中同时有
+`case c <- v` 与 `case <-c` 时，它会同时出现在 `c` 的两个队列中。收发的实现（[10.3](./sendrecv.md)）
+处处维持这些不变式：能与等待者配对就配对，能使用缓冲区就使用缓冲区，两者都不行时才进入等待队列。
 
-这三条用日常语言说就是一句话：**缓存里还有货，就不该有接收方在干等；缓存还有空位，就不该有
-发送方在干等。** 一旦缓存与「干等的人」同时存在，说明本可以直接成交却没成交，那是 bug。整个
-收发实现（[10.3](./sendrecv.md)、[10.3](./sendrecv.md)）所做的，正是时刻维持这三条：能直接成交就
-直接成交，实在成交不了才把自己挂进等待队列。带着这个意图回看下面的字段，就不再是枯燥的清单。
-
-## 10.2.2 hchan 的速写
+## 10.2.2 hchan 的结构
 
 ```go
-// hchan：一个 channel 的运行时表示（速写）
 type hchan struct {
-    qcount   uint           // 缓存中现有的元素个数
-    dataqsiz uint           // 环形缓存的容量（make 的第二个参数）
-    buf      unsafe.Pointer // 指向一段可存 dataqsiz 个元素的连续数组
-    elemsize uint16         // 单个元素的大小（由元素类型推出，缓存于此免去反复查表）
-    closed   uint32         // 是否已 close
-    elemtype *_type         // 元素类型：拷贝元素、写屏障、给 buf 标注 GC 信息都要用它
-    sendx    uint           // 环形缓存的写游标（下一个待写入的槽）
-    recvx    uint           // 环形缓存的读游标（下一个待读出的槽）
-    recvq    waitq          // 阻塞的接收方队列（ <-ch ）
-    sendq    waitq          // 阻塞的发送方队列（ ch<- ）
+	qcount   uint           // 缓冲区中现有的元素个数
+	dataqsiz uint           // 缓冲区的容量，即 make 的第二个参数
+	buf      unsafe.Pointer // 指向可存放 dataqsiz 个元素的数组
+	elemsize uint16         // 元素的大小
+	closed   uint32         // 是否已关闭
+	timer    *timer         // 向这个 channel 发送时间的计时器（若有）
+	elemtype *_type         // 元素的类型
+	sendx    uint           // 下一次发送写入的位置
+	recvx    uint           // 下一次接收读出的位置
+	recvq    waitq          // 等待接收的 goroutine
+	sendq    waitq          // 等待发送的 goroutine
+	bubble   *synctestBubble
 
-    lock mutex              // 一把锁，守护以上所有字段
+	// lock 保护 hchan 的所有字段，以及阻塞在这个 channel 上的 sudog 的若干字段。
+	lock mutex
 }
 ```
 
-字段大体分作三组。`qcount`、`dataqsiz`、`buf`、`sendx`、`recvx` 五个合起来描述那圈**环形缓存**
-（10.2.3）；`recvq`、`sendq` 是两条**等待队列**（10.2.4）；`closed` 记录关闭状态，
-`elemsize` 与 `elemtype` 是为搬运元素备下的元信息。其中 `dataqsiz` 在创建之后再不写入，
-因此运行时可以无锁地读它来快速判断 channel 是否有缓存（`full` 等辅助函数依赖这一点）。
-至于 `elemtype`，它不只用于按值拷贝元素和触发写屏障，还在创建时被交给分配器，
-用来给 `buf` 标注「这段内存里哪些位置是指针」，这一点到 10.2.5 会再回来。
-（go1.26 的 `hchan` 还有 `timer` 与 `bubble` 两个字段，分别服务于 `time` 定时器与
-`testing/synctest`，与本节的主线无关，速写中略去。）
+字段可以分为几组。`qcount`、`dataqsiz`、`buf`、`sendx`、`recvx` 描述环形缓冲区（10.2.3）；`recvq` 与
+`sendq` 是两个等待队列（10.2.4）；`closed` 记录关闭状态（[10.4](./close.md)）；`elemsize` 与 `elemtype`
+用于复制元素，`elemtype` 还决定了复制时是否需要写屏障。`dataqsiz` 在创建之后不再改变，
+因此运行时可以不加锁地读取它；不加锁判断「发送是否会阻塞」的 `full` 与「接收是否会阻塞」的 `empty`
+就依赖这一点（[10.3](./sendrecv.md)）。
 
-## 10.2.3 环形缓存：sendx 与 recvx 是头尾游标
+另外两个字段服务于其他组件。`timer` 只在 `time.NewTimer` 等函数创建的 channel 上不为空：接收时，
+运行时借助它检查计时器是否已经到期，若已到期而尚未发送，就当场执行发送（[9.10](../ch09sched/timer.md)）。
+`bubble` 记录创建这个 channel 的 `testing/synctest` 气泡（Go 1.25）：气泡之外的 goroutine
+对它收发或关闭都会使程序终止，气泡之内阻塞在它上面的 goroutine 则被视为只能由气泡内的其他 goroutine 唤醒，
+`synctest` 据此判断何时推进虚拟时钟。
 
-缓冲 channel 的那段缓存是一个**环形队列**（ring buffer）。`buf` 指向一段能放 `dataqsiz` 个
-元素的连续内存，`sendx` 与 `recvx` 是两个游标：发送方把元素写到 `sendx` 处再让它前进，
-接收方从 `recvx` 处读出再让它前进，二者各自走到末尾就回绕到 0。`qcount` 记录当前存量，
-于是「队列满」就是 `qcount == dataqsiz`，「队列空」就是 `qcount == 0`。定位第 `i` 个槽不过是
-一次指针算术：
+## 10.2.3 环形缓冲区
+
+有缓冲 channel 的元素存放在一个**环形缓冲区**中。`buf` 指向一段能放下 `dataqsiz` 个元素的连续内存，
+`sendx` 与 `recvx` 是两个下标：发送把元素写到 `sendx` 处，然后让它前进一格；接收从 `recvx` 处读出，
+然后让它前进一格；二者到达末尾后回到 0。`qcount` 记录现有元素的个数，缓冲区满即 `qcount == dataqsiz`，
+空即 `qcount == 0`。第 `i` 个槽的地址由 `chanbuf` 计算：
 
 ```go
-// chanbuf(c, i)：取 buf 中第 i 个槽的地址
 func chanbuf(c *hchan, i uint) unsafe.Pointer {
-    return add(c.buf, uintptr(i)*uintptr(c.elemsize))
+	return add(c.buf, uintptr(i)*uintptr(c.elemsize))
 }
 ```
 
-为什么用环形而非线性队列？因为 channel 的收发是严格的 FIFO：先发的先被收。线性数组在头部出队
-后会留下空洞，要么搬移元素、要么浪费空间；环形队列让读写两端各自绕圈，出队入队都是 $O(1)$ 的
-游标自增加回绕，不搬一个字节。下图是一个容量为 6、已存 3 个元素的 channel，
-`recvx` 指向最早入队、即下一个被读走的元素，`sendx` 指向下一个空位：
+下图是一个容量为 6、存有 3 个元素的 channel。`recvx` 指向最早写入、下一个被读出的元素，`sendx`
+指向下一个空位；槽 5 之后是槽 0。
 
 ```mermaid
-flowchart LR
-    subgraph BUF["buf：环形缓存（dataqsiz = 6, qcount = 3）"]
-        direction LR
-        S0["槽0<br/>空"]
-        S1["槽1<br/>空"]
-        S2["槽2<br/>空"]
-        S3["槽3<br/>v0"]
-        S4["槽4<br/>v1"]
-        S5["槽5<br/>v2"]
-    end
-    SENDX["sendx = 0<br/>下一个写入处"] -.-> S0
-    RECVX["recvx = 3<br/>下一个读出处"] -.-> S3
-    S5 -.->|"绕回"| S0
+block-beta
+  columns 6
+  s0["槽 0：空"] s1["槽 1：空"] s2["槽 2：空"] s3["槽 3：v0"] s4["槽 4：v1"] s5["槽 5：v2"]
+  a0<["sendx = 0"]>(up) space:2 a3<["recvx = 3"]>(up) space:2
 ```
 
-发送时写入 `sendx`、`sendx = (sendx+1) % dataqsiz`、`qcount++`；接收时读出 `recvx`、
-`recvx = (recvx+1) % dataqsiz`、`qcount--`。运行时不用取模，而是写成 `if sendx == dataqsiz { sendx = 0 }`，
-省一次除法。回扣 10.2.1 的不变式：只要 `qcount` 在 $0$ 与 `dataqsiz` 之间，就说明缓存既没满也
-没空，收发都能就地完成，两条等待队列此刻必定是空的。
+下标前进时，运行时不取模，而是比较后归零：
 
-## 10.2.4 等待队列：sudog 的 FIFO 链表
+```go
+c.sendx++
+if c.sendx == c.dataqsiz {
+	c.sendx = 0
+}
+```
 
-当缓存帮不上忙，比如向满了的 channel 发送、从空的 channel 接收，或者 channel 根本没有缓存，
-当前 goroutine 就得挂起，等对面来人。它挂在哪里？挂进 `recvq` 或 `sendq`。这两条队列的类型是
-`waitq`，一个朴素的双向链表，记着头和尾：
+容量一般不是 2 的幂，取模需要一次除法，比较则不需要。channel 先进先出，
+环形缓冲区使入队与出队都只需移动一个下标，不必搬动元素。
+
+早期的实现并非如此。2011 年 4 月之前，缓冲区是一个环形链表，各元素虽然分配在同一块内存中，却靠指针相连。
+Russ Cox 把它改成了用下标访问的数组，省去了指针的跟随和存储；这一修改同时去掉了 channel
+指向自身内存块的指针。这个自引用构成一个环，而处在环中的内存块不保证能正确执行终结器；当时在一些系统上，
+channel 依靠终结器释放操作系统层面的锁，于是这样的 channel 无法被回收 [[Cox, 2011](#ref-cox-2011)]。
+
+无缓冲 channel 的 `dataqsiz` 为 0，没有缓冲区，值总是在两个 goroutine
+之间直接传递（[10.3](./sendrecv.md)）。
+
+## 10.2.4 等待队列与 sudog
+
+缓冲区无法完成操作时，例如向满的 channel 发送、从空的 channel 接收，或 channel 根本没有缓冲区，当前
+goroutine 就必须等待对方到来。无缓冲 channel 上的收发正是 Hoare 意义上的会合：先到的一方等待后到的一方
+[[Hoare, 1978](#ref-hoare-1978)]。等待者排在 `recvq` 或 `sendq` 中，二者都是 `waitq` 类型的双向链表：
 
 ```go
 type waitq struct {
-    first *sudog // 队头：最早挂入、最先被唤醒
-    last  *sudog // 队尾：最新挂入
+	first *sudog // 队头：最早进入、最先被唤醒
+	last  *sudog // 队尾
 }
 ```
 
-链表的节点是 `sudog`。理解 channel，`sudog` 是绕不开的一环：它代表**一个正阻塞在某 channel 上的
-goroutine，连同它想收发的那个元素槽**。裁剪后的速写：
+链表的节点是 `sudog`，它表示一个阻塞在某个 channel 上的 goroutine，以及它要发送或接收的元素
+[[Go Authors, 2026b](#ref-go-authors-2026b)]：
 
 ```go
-// sudog：一个挂在 channel 上的 goroutine + 它要收发的元素（速写）
 type sudog struct {
-    g *g                 // 被挂起的那个 goroutine
+	// 以下字段由该 sudog 所阻塞的 channel 的 hchan.lock 保护。
+	g    *g
+	next *sudog
+	prev *sudog
+	elem maybeTraceablePtr // 要发送或接收的元素，可能指向栈
 
-    next *sudog          // 在 waitq 中的后继
-    prev *sudog          // 在 waitq 中的前驱
-
-    elem maybeTraceablePtr // 待收发元素的地址，可能直接指向 g 自己的栈
-
-    isSelect bool        // 该 g 是否正参与一次 select（唤醒时需 CAS 抢占）
-    success  bool        // 唤醒原因：true=成功收发，false=channel 被 close
-    c        maybeTraceableChan // 它阻塞在哪个 channel 上
+	isSelect bool               // g 是否在执行 select
+	success  bool               // true：通信完成；false：因 channel 关闭而被唤醒
+	c        maybeTraceableChan // 阻塞在哪个 channel 上
+	...
 }
 ```
 
-为什么不直接把 `*g` 串进队列，而要套一层 `sudog`？因为「一个 goroutine 阻塞在一个 channel 上」
-不是一对一的：同一个 goroutine 可以在一条 select 语句里同时挂在多个 channel 上，
-同一个 channel 上也排着多个 goroutine。`sudog` 正是「(goroutine, channel) 这一次等待」的载体，
-一个 goroutine 因此可能同时拥有多个 `sudog`。`sudog` 不为 channel 独有，`sync` 包的信号量
-（[11.x](../ch11sync)）也用同一种结构排队，上面 `isSelect`、`success` 之外的若干字段就是为信号量
-准备的，速写已略去。运行时用一个每 P 的缓存来复用 `sudog`，省去频繁分配。
+队列的节点不直接是 `g`，是因为 goroutine 与 channel 之间不是一对一的关系：一条 `select` 语句可以让一个
+goroutine 同时阻塞在多个 channel 上，此时它为每个 channel 各准备一个 `sudog`。`elem`
+指向的内存往往在等待者自己的栈上，这使发送方可以把值直接写入等待中的接收方的栈，
+而不经过缓冲区（[10.3](./sendrecv.md)）。Go 1.26 中，`elem` 与 `c` 的类型是可以对 GC 隐藏的指针，供基于
+GC 的 goroutine 泄漏检测使用（[9.3](../ch09sched/mpg.md)）。
 
-`elem` 字段值得专门点出：它指向「这次要送出或接收的元素」，而这块内存**往往就在该 goroutine 自己
-的栈上**。这正是 channel 一项关键优化的基础：当发送方遇到一个已在 `recvq` 里干等的接收方时，
-可以把数据**直接拷进接收方栈上的 `elem`**，跳过环形缓存这道中转（[10.3](./sendrecv.md) 详述）。
-这也解释了为何 `sudog` 上这些字段要由 channel 的锁保护：唤醒一方、写它的栈，都得在持锁时进行。
+`sudog` 并非 channel 专用。运行时的信号量也用 `sudog` 排队，它支撑着 `sync.Mutex`
+等同步原语（[11.2](../ch11sync/mutex.md)），上面省略的字段大多是为信号量准备的。`sudog` 经由每个 P
+的缓存及一个全局缓存复用，不必每次分配。
 
-队列本身是严格的 FIFO。入队挂到尾部，出队从头部摘下：
+入队接在队尾，出队从队头取下。出队时有一处特殊情况：一个执行 `select` 的 goroutine 可能已被另一个 case
+唤醒，但还没来得及把自己从其他队列中移除。`dequeue` 遇到这样的节点时，用 `g.selectDone` 上的一次 CAS
+判断谁赢得了唤醒它的权利，失败就跳过这个节点：
 
 ```go
-func (q *waitq) enqueue(sgp *sudog) {
-    sgp.next = nil
-    x := q.last
-    if x == nil {            // 空队列
-        sgp.prev = nil
-        q.first = sgp
-        q.last = sgp
-        return
-    }
-    sgp.prev = x             // 接到队尾
-    x.next = sgp
-    q.last = sgp
-}
-
 func (q *waitq) dequeue() *sudog {
-    // 从队头摘；select 唤醒竞争下需跳过已被别处唤醒的节点，此处从略
-    sgp := q.first
-    // ... 更新 first / last，返回 sgp
-    return sgp
+	for {
+		sgp := q.first
+		if sgp == nil {
+			return nil
+		}
+		// ……把 sgp 从队头摘下……
+		if sgp.isSelect && !sgp.g.selectDone.CompareAndSwap(0, 1) {
+			continue // 这个 goroutine 已被别处唤醒
+		}
+		return sgp
+	}
 }
 ```
 
-先挂起的先被唤醒，这保证了通道收发的公平：没有哪个等待者会被无限期插队。10.2.1 那条
-「至少一个队列为空」的不变式在这里也有了直观解释：若缓存有空位或有货，新来的收发方当场就成交了，
-根本不会走到入队这一步，因此两条队列不会同时非空（select 双挂的特例除外）。
+队列原本是单向链表。被唤醒的 `select` 必须把自己的 `sudog` 从其余 channel 的队列中移除，在单向链表中，
+这需要从头查找。当一个 channel 上排着大量等待者时，逐个移除的总开销可能达到平方级。Keith Randall 在 Go
+1.5 中把它改为双向链表，使移除任意节点只需常数时间，在相应的基准测试中，耗时降低了 75.54%
+[[Randall, 2014](#ref-randall-2014)]。先进入队列的等待者先被唤醒，这一顺序的意义见
+[10.3.6](./sendrecv.md)。
 
-## 10.2.5 makechan：一次分配，noscan 优化
+## 10.2.5 makechan 的三种分配方式
 
-`make(chan T, n)` 被编译器翻译成 `makechan(t, n)`。它的本职工作是算出缓存所需内存、向堆申请、
-填好元信息。channel 总是分配在堆上，由 GC 负责回收，这也是为什么不显式 `close` 也不会泄漏内存
-（关闭与回收是两回事）。值得玩味的是它按元素类型分了三种分配策略：
+`make(chan T, n)` 由编译器翻译为对 `makechan` 的调用。它计算缓冲区的大小，向堆申请内存，并填写元素的信息。
+由于总是调用 `mallocgc`，channel 总是分配在堆上。删去调试与 `synctest` 相关代码之后：
 
 ```go
 func makechan(t *chantype, size int) *hchan {
-    elem := t.Elem
-    mem, overflow := math.MulUintptr(elem.Size_, uintptr(size)) // 缓存总字节数
-    if overflow || mem > maxAlloc-hchanSize || size < 0 {
-        panic(plainError("makechan: size out of range"))
-    }
+	elem := t.Elem
+	if elem.Size_ >= 1<<16 {
+		throw("makechan: invalid channel element type")
+	}
+	mem, overflow := math.MulUintptr(elem.Size_, uintptr(size))
+	if overflow || mem > maxAlloc-hchanSize || size < 0 {
+		panic(plainError("makechan: size out of range"))
+	}
 
-    var c *hchan
-    switch {
-    case mem == 0:
-        // 无缓存（size==0），或元素为零大小（如 struct{}）：根本不需要 buf
-        c = (*hchan)(mallocgc(hchanSize, nil, true))
-        c.buf = c.raceaddr()
-    case !elem.Pointers():
-        // 元素不含指针：hchan 与 buf 一次性分配在同一块内存里，且整块 noscan
-        c = (*hchan)(mallocgc(hchanSize+mem, nil, true))
-        c.buf = add(unsafe.Pointer(c), hchanSize)
-    default:
-        // 元素含指针：buf 必须单独分配，并带上 elemtype 让 GC 能扫描它
-        c = new(hchan)
-        c.buf = mallocgc(mem, elem, true)
-    }
-
-    c.elemsize = uint16(elem.Size_)
-    c.elemtype = elem
-    c.dataqsiz = uint(size)
-    lockInit(&c.lock, lockRankHchan)
-    return c
+	var c *hchan
+	switch {
+	case mem == 0:
+		// 无缓冲，或元素大小为 0：不需要缓冲区
+		c = (*hchan)(mallocgc(hchanSize, nil, true))
+		c.buf = c.raceaddr()
+	case !elem.Pointers():
+		// 元素不含指针：hchan 与缓冲区一次分配
+		c = (*hchan)(mallocgc(hchanSize+mem, nil, true))
+		c.buf = add(unsafe.Pointer(c), hchanSize)
+	default:
+		// 元素含指针：缓冲区单独分配，并带上元素类型
+		c = new(hchan)
+		c.buf = mallocgc(mem, elem, true)
+	}
+	c.elemsize = uint16(elem.Size_)
+	c.elemtype = elem
+	c.dataqsiz = uint(size)
+	lockInit(&c.lock, lockRankHchan)
+	return c
 }
 ```
 
-三条分支的分界，是「GC 要不要扫描这段缓存」：
+三个分支的区别在于 GC 是否需要扫描这块内存。
 
-- `mem == 0` 同时罩住了两种情形：无缓冲 channel（`size == 0`），以及元素是零大小类型
-  （`chan struct{}`，常用作纯信号）。两者都不需要 `buf`，只分配一个 `hchan`，`buf` 指向一个
-  仅供竞争检测器（`-race`）当同步地址用的占位。
-- `!elem.Pointers()`，元素里没有指针：`hchan` 和 `buf` 在**一次 `mallocgc` 调用**里一并分出，
-  `buf` 紧贴在 `hchan` 之后（`c.buf = add(c, hchanSize)`）。一次分配省去一次调用，更关键的是
-  传入的类型是 `nil`，整块内存被标为 **noscan**，GC 扫描时直接跳过这段缓存，对元素是
-  `int`、`byte` 之类的高频 channel 是实打实的开销节省。
-- 元素**含指针**：`buf` 只能**单独**分配，且分配时必须把 `elemtype` 传进去。原因正在于上一条的
-  反面，GC 必须扫描这段缓存里的指针，否则缓存中尚未取走的元素所引用的对象会被误回收。
-  把 `elemtype` 交给分配器，就是让它给这块内存登记好「哪些字（word）是指针」的位图。
-  此时 `hchan` 与 `buf` 分属两块内存，不能合并。
+- `mem == 0` 包括两种情况：无缓冲 channel，以及元素大小为 0 的 channel，如用作信号的 `chan struct{}`。
+  二者都不需要缓冲区，只分配一个 `hchan`；`buf` 指向 `hchan` 内部的一个地址，供竞态检测器作为同步地址。
+- 元素不含指针时，`hchan` 与缓冲区由一次 `mallocgc` 分配，缓冲区紧接在 `hchan` 之后。
+- 元素含指针时，缓冲区必须单独分配，并把元素类型交给分配器，GC 才能找到缓冲区中尚未取走的元素所引用的对
+  象。
 
-可见 `makechan` 不是简单地「分配一段内存」，它和 GC 是协同的：能 noscan 就 noscan，
-必须扫描就如实标注。这与 [12 内存分配](../../part4memory/ch12alloc) 里分配器对含指针 / 不含指针
-对象的区分是同一种思路，channel 只是它的一个使用者。
+前两个分支传给 `mallocgc` 的类型是 `nil`，整块内存不会被扫描。值得注意的是，`hchan` 本身也含有指针字段，
+它为什么可以不被扫描？源码的注释给出了三条理由：`buf` 指向同一块内存；`elemtype`
+指向的类型信息是永久存在的；等待队列中的 `sudog` 由它所属的 goroutine 引用，不会因此被回收。
+只有第三个分支用 `new(hchan)` 分配一个需要扫描的 `hchan`，再单独分配需要扫描的缓冲区。
 
-## 10.2.6 一把锁，与它撑起的同步语义
+分配次数可以直接观察：
 
-`hchan` 末尾那个 `lock mutex` 是整个结构的同步基石。它守护的不只是 `hchan` 自身的所有字段，
-还包括**挂在这个 channel 上的那些 `sudog` 里的若干字段**，源码注释为此特意标明。收、发、关闭、
-select，凡是要动到这些状态的操作，第一步都是 `lock(&c.lock)`，最后一步是 `unlock`。
-正因有这把锁串起全程，channel 的一次发送与对应接收之间才建立起内存模型里的发生序
-（happens-before，[11.9](../ch11sync/mem.md)），channel 由此既是通信手段，也是同步手段。
+```go {run=true}
+package main
 
-这把锁也带来一条微妙的纪律：**持有 `c.lock` 时不得去改变另一个 goroutine 的状态**
-（尤其不得 `goready` 唤醒它）。原因是唤醒可能触发栈收缩，而栈收缩又会去抢这把锁，二者交叉就会
-死锁。收发实现里那些「先在持锁时摘下 `sudog`、解锁后再 `goready`」的别扭写法，根源就在这里
-（[10.6 内存模型与无锁演进](./lockfree.md) 展开）。
+import (
+	"fmt"
+	"testing"
+)
 
-用一把大锁守护整个 channel，是一个有意的取舍：实现简单、正确性容易论证，代价是同一 channel 上的
-并发收发会在这把锁上串行化。社区与运行时作者很早就探讨过无锁 channel：Dmitry Vyukov 在 2014 年
-前后提交过一份无锁 channel 的实验设计，最终因「复杂度的增长远超它换来的收益」而未被合并。
-直到今天，标准 channel 仍是这把朴素的锁加环形缓存的组合。把这把锁看明白，
-收发与 select 的全部细节（[10.3](./sendrecv.md)–[10.6 内存模型与无锁演进](./lockfree.md)）就只是「在持锁的临界区里，
-按 10.2.1 的不变式搬数据、挂起与唤醒」而已。
+var (
+	sinkInt    chan int
+	sinkPtr    chan *int
+	sinkSignal chan struct{}
+)
 
-## 延伸阅读的文献
+func main() {
+	allocs := func(f func()) float64 { return testing.AllocsPerRun(100, f) }
+	fmt.Println("make(chan int)          ", allocs(func() { sinkInt = make(chan int) }))
+	fmt.Println("make(chan struct{}, 8)  ", allocs(func() { sinkSignal = make(chan struct{}, 8) }))
+	fmt.Println("make(chan int, 8)       ", allocs(func() { sinkInt = make(chan int, 8) }))
+	fmt.Println("make(chan *int, 8)      ", allocs(func() { sinkPtr = make(chan *int, 8) }))
+}
+```
 
-1. The Go Authors. *runtime/chan.go*（`hchan`、`waitq`、`makechan`、`chanbuf`，含开头的不变式注释）.
-   https://github.com/golang/go/blob/master/src/runtime/chan.go
-2. The Go Authors. *runtime/runtime2.go*（`sudog` 的定义与字段说明）.
-   https://github.com/golang/go/blob/master/src/runtime/runtime2.go
-3. Russ Cox. *Go Data Structures.* 2009.
-   https://research.swtch.com/godata
-4. Dmitry Vyukov. *Go channels on steroids*（无锁 channel 设计与未合并的实验）. 2014.
-   https://docs.google.com/document/d/1yIAYmbvL3JxOKOjuCyon7JhW4cSv1wy5hC0ApeGMV9s
-5. C. A. R. Hoare. *Communicating Sequential Processes.* Communications of the ACM, 21(8), 1978.
-   https://doi.org/10.1145/359576.359585
-6. 本书 [10.1 CSP 与通道](./readme.md)、[10.3 收发与直接传递](./sendrecv.md)、
-   [11.9 内存一致模型](../ch11sync/mem.md)、[12 内存分配](../../part4memory/ch12alloc)。
+```
+make(chan int)           1
+make(chan struct{}, 8)   1
+make(chan int, 8)        1
+make(chan *int, 8)       2
+```
+
+`elemsize` 是 16 位整数，所以元素必须小于 64 KiB。编译器在编译期检查这一点，`make(chan [1 << 16]byte)`
+会得到错误「channel element type too large (>64kB)」，`makechan` 中的检查只是保险。
+这一限制在实践中几乎碰不到：大的值应当以指针的形式经由 channel 传递。
+
+## 10.2.6 锁
+
+`hchan` 最后的 `lock` 保护 `hchan` 的所有字段，以及阻塞在这个 channel 上的 `sudog` 的 `g`、`next`、
+`prev`、`elem` 等字段。发送、接收、关闭与 `select` 在读写这些状态之前都要先获取它。内存模型对 channel
+的保证（[10.1](./model.md)）就是在这把锁的临界区中实现的，详见 [10.6](./lockfree.md)。
+
+这把锁带有一条纪律，写在它的注释中：持有它时不得改变另一个 goroutine 的状态，特别是不得唤醒一个
+goroutine，否则可能与栈收缩形成死锁。原因在于加锁的次序。运行时收缩一个阻塞在 channel 上的 goroutine
+的栈时，先通过状态中的扫描位锁住这个 goroutine，再获取它所等待的各个 channel 的锁，以便修正 `sudog.elem`
+中指向旧栈的指针。如果另一个 goroutine 持有 channel 的锁，又去改变这个 goroutine 的状态，
+它就要等待扫描位清除，两方各持一把、各等一把。Austin Clements 在 2016 年为实现并发的栈收缩确定了这一次序，
+并修正了当时唯一违反它的 `closechan` [[Clements, 2016](#ref-clements-2016)]。这项工作的起因是 Rhys
+Hiltner 报告的 issue #12967：在标记终止期间收缩栈，显著延长了停顿，涉及的正是
+[9.11](../ch09sched/numa.md) 中那个拥有大量 goroutine 的程序。因此，发送、
+接收与关闭都在持锁时把等待者从队列中摘下，释放锁之后才调用 `goready` 唤醒它们（[10.3](./sendrecv.md)、
+[10.4](./close.md)）。
+
+用一把锁保护整个 channel，实现简单，正确性容易论证，代价是同一个 channel 上的并发操作在这把锁上串行。
+Dmitry Vyukov 在 2014 年 1 月的设计文档中提出过一系列提速 channel 的办法，目标包括加快无竞争的操作、
+有竞争的生产者消费者场景、失败的非阻塞操作与 `select`；文档同时把「让 channel 完全无锁」列为非目标，
+理由是这会使实现复杂得多，并让常见情形变慢 [[Vyukov, 2014a](#ref-vyukov-2014a)]。同年 8 月，Vyukov
+为失败的非阻塞操作加入了不加锁的快速路径，在 `GOMAXPROCS` 为 4 时耗时降低了 97%
+[[Vyukov, 2014b](#ref-vyukov-2014b)]；今天的 `full` 与 `empty` 就是这条快速路径的组成部分。channel
+至今仍是一个有锁的结构，此后关于无锁 channel 的尝试见 [10.6](./lockfree.md)。
+
+## 延伸阅读
+
+- <a id="ref-clements-2016"></a>[Clements, 2016] Austin Clements. runtime: define lock order between G
+  status and channel lock. Go commit d45bf7228f, 2016. https://go.dev/cl/20041
+  关联 issue #12967，随 Go 1.7 发布。
+- <a id="ref-cox-2009"></a>[Cox, 2009] Russ Cox. *Go Data Structures.* 2009.
+  https://research.swtch.com/godata
+- <a id="ref-cox-2011"></a>[Cox, 2011] Russ Cox. runtime: drop chan circular linked list in favor of
+  circular buffer. Go commit 507df959e4, 2011. https://github.com/golang/go/commit/507df959e4
+  修复 issue #1676。
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *runtime/chan.go*（`hchan`、
+  `waitq`、 `makechan`、`chanbuf`，含开头的不变式注释）.
+  https://github.com/golang/go/blob/master/src/runtime/chan.go
+  本节对照 Go 1.26。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *runtime/runtime2.go*（`sudog`
+  的定义与字段说明）. https://github.com/golang/go/blob/master/src/runtime/runtime2.go
+- <a id="ref-hoare-1978"></a>[Hoare, 1978] C. A. R. Hoare. *Communicating Sequential Processes.*
+  Communications of the ACM, 21(8), 1978. https://doi.org/10.1145/359576.359585
+- <a id="ref-randall-2014"></a>[Randall, 2014] Keith Randall. runtime: use doubly-linked lists for channel
+  send/recv queues. Go commit 8eb8b40a49, 2014. https://github.com/golang/go/commit/8eb8b40a49
+  随 Go 1.5 发布。
+- <a id="ref-vyukov-2014a"></a>[Vyukov, 2014a] Dmitry Vyukov. *Go channels on steroids*（提速 channel
+  的设计，完全无锁被列为非目标）. 2014.
+  https://docs.google.com/document/d/1yIAYmbvL3JxOKOjuCyon7JhW4cSv1wy5hC0ApeGMV9s
+- <a id="ref-vyukov-2014b"></a>[Vyukov, 2014b] Dmitry Vyukov. runtime: add fast paths to non-blocking
+  channel operations. Go commit f6ceefa2bf, 2014. https://github.com/golang/go/commit/f6ceefa2bf
+  随 Go 1.4 发布。
+- 本书 [10.1 通道与 CSP 的工程化](./model.md)、[10.3 收发与直接传递](./sendrecv.md)、
+  [11.9 内存一致模型](../ch11sync/mem.md)、[12 内存分配](../../part4memory/ch12alloc)。

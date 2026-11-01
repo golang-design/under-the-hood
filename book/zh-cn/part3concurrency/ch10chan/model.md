@@ -8,232 +8,279 @@ title: "10.1 通道与 CSP 的工程化"
 > 本节内容提供一个线上演讲：[YouTube 在线](https://www.youtube.com/watch?v=d7fFCGGn0Wc)，
 > [Google Slides 讲稿](https://changkun.de/s/chansrc/)。
 
-CSP 给了 Go 一个主张：进程之间不共享状态，只靠传递消息来协调（[1.3](../../part1overview/ch01intro/csp.md)）。
-这一节关心的是另一个问题：一门工程语言要把这个主张落地，需要把「通信」做成什么样子，
-才能让普通程序员顺手用对。Go 的答案是 channel，一个一等的同步兼通信原语。本节先把它在
-语言表层的模型讲清楚，它的类型、收发语法、有无缓冲的两种语义、方向限定与 nil 行为，
-为后续各节深入运行时实现（[10.2](./impl.md)–[10.7](./pattern.md)）铺好直觉。
+[1.3](../../part1overview/ch01intro/csp.md) 追溯了 channel 的来历：从 Hoare 1978 年按进程名称通信的 CSP
+[[Hoare, 1978](#ref-hoare-1978)]，到 Newsqueak 中可以自由传递的 channel，再到 Go；
+那一节也演示了会合与缓冲的区别、素数筛和 `select` 的随机选择。本节不再重复这些内容，而是给出 channel
+在语言层面的确切语义：它的类型与方向，它在不同状态下对各种操作的反应，它提供的同步保证，以及 `select`
+的求值规则。后续各节讨论的运行时代码，实现的正是这些规则。本节最后回顾这些规则在 Go 1
+之前是如何确定下来的。
 
-## 10.1.1 把通信做成一等原语
+## 10.1.1 类型与方向
 
-「不要以共享内存的方式通信，而要以通信的方式共享内存。」这句格言常被引用，但它在 Go 里不是
-一句口号，而是由 channel 这个具体的语言构造兑现的。CSP 的渊源、它与 1978 年原始论文的异同，
-已在 [1.3](../../part1overview/ch01intro/csp.md) 交代，这里不再重复，只接着说 Go 在工程上做了
-什么取舍。
-
-把 CSP 的「通信」搬进一门通用语言，至少要回答三件事：通信经由什么载体、这个载体能否像普通值
-一样使用、它如何与类型系统咬合。Go 给出的载体是 channel，并且把它做成了**一等**（first-class）
-的：channel 是有类型的值，可以由 `make` 创建、用变量持有、作为参数传给函数、作为返回值传出、
-存进结构体字段、放进 slice 或 map。这一点与 Hoare 原始 CSP 按进程名直接通信的设计不同
-（[1.3.2](../../part1overview/ch01intro/csp.md)），也正是 Go 把抽象主张变为可组合工具的关键:
-既然 channel 是值，「把一个通信端口交给另一段代码」就退化成了普通的传参，无需任何特殊机制。
-
-channel 同时承担两件常被分开的事:**同步**与**数据传递**。一次收发既搬运了一个值，又在收发
-双方之间建立了一个发生序（happens-before）关系，后者保证了「发送方在发送前写下的内存，接收方
-在接收后一定看得见」。换句话说，channel 不仅是一根传值的管子，它还是同步原语。这条发生序
-保证是 channel 能替代显式加锁的根基，其精确条文留待 [10.6](./lockfree.md) 与
-[11.9](../ch11sync/mem.md) 展开，本节只需记住:**收发自带同步**。
-
-## 10.1.2 表层模型：从 make 到 select
-
-先用一组最小的代码把 channel 的表层 API 过一遍，建立操作直觉，细节在后续小节展开。
-
-创建用 `make`。无缓冲与有缓冲只差一个容量参数:
+Go 语言规范对 **channel** 的定义是：一种供并发执行的函数通过收发指定元素类型的值来通信的机制
+[[Go Authors, 2026a](#ref-go-authors-2026a)]。channel 是普通的值，可以存入变量、作为参数和返回值传递，
+也可以经由另一个 channel 发送。未初始化的 channel 的值为 `nil`，用 `make` 创建：
 
 ```go
-ch := make(chan int)      // 无缓冲：容量为 0
-buf := make(chan int, 8)  // 有缓冲：容量为 8
+ch := make(chan int)     // 无缓冲：只有收发双方都就绪时通信才能完成
+buf := make(chan int, 8) // 有缓冲：缓冲区未满时发送、非空时接收都不阻塞
 ```
 
-发送与接收都用箭头算符 `<-`，箭头指向数据流动的方向:
+channel 类型可以带有方向。`chan<- T` 只能用于发送，`<-chan T` 只能用于接收。双向 channel
+可以通过赋值或显式转换收窄为单向 channel，反之则不行。常见的写法是在一处用 `make` 创建双向 channel，
+再分别以只发与只收两种类型交给生产者与消费者：
 
 ```go
-ch <- 42        // 发送：把 42 送入 ch
-v := <-ch       // 接收：从 ch 取一个值
-```
+func produce(out chan<- int) { // out 只能发送
+	for i := range 10 {
+		out <- i
+	}
+	close(out)
+}
 
-接收还有一个双返回值形式，第二个布尔值 `ok` 用来区分「收到一个真实的值」与「channel 已关闭
-且缓冲已空，收到的是零值」:
-
-```go
-v, ok := <-ch   // ok == false 表示 ch 已关闭且无更多数据
-```
-
-`close` 关闭一个 channel，宣告不会再有发送。关闭之后，已在缓冲中的值仍可被接收，缓冲取空后
-继续接收则立即返回零值与 `ok == false`。关闭的完整语义（谁该关闭、向已关闭的 channel 发送或
-重复关闭会 panic）留到 [10.4](./close.md)，这里只取其表层行为。
-
-`range` 在 channel 上迭代，反复接收直到 channel 关闭并取空，是消费一条数据流的惯用写法:
-
-```go
-for v := range ch {   // 循环到 ch 关闭且缓冲取空后自动结束
-    use(v)
+func consume(in <-chan int) { // in 只能接收
+	for v := range in {
+		use(v)
+	}
 }
 ```
 
-`select` 在多路通信间择一而行。它同时盯住若干收发操作，挑一个就绪的执行；若多个同时就绪，
-随机选一个；若都不就绪，则阻塞，除非写了 `default` 分支:
+方向不改变运行时的行为，它是编译期的约束：从 `out` 接收、向 `in` 发送都无法通过编译。对只能接收的 channel
+调用 `close` 同样是编译错误，所以关闭 channel 的只能是持有发送端的一方，这与「由发送方关闭」
+的惯例（[10.4](./close.md)）一致。
 
-```go
-select {
-case v := <-in:        // in 可读则走这里
-    handle(v)
-case out <- x:         // out 可写则走这里
-    x = next()
-default:               // 上面都不就绪时立即返回，避免阻塞
-    idle()
+规范还规定了两条容易被忽略的性质：任意多个 goroutine 可以不加其他同步地对同一个 channel 发送、
+接收以及调用 `len` 与 `cap`；channel 是先进先出的队列，一个 goroutine 依次发送的值，会被另一个 goroutine
+按发送的次序收到。
+
+## 10.1.2 三种状态下的操作
+
+一个 channel 处于三种状态之一：为 `nil`、已创建且未关闭、已关闭。各种操作在这三种状态下的结果如下：
+
+| 操作 | `nil` | 未关闭 | 已关闭 |
+| --- | --- | --- | --- |
+| 发送 `ch <- v` | 永久阻塞 | 能完成时完成，否则阻塞 | panic |
+| 接收 `<-ch` | 永久阻塞 | 能完成时完成，否则阻塞 | 先取出缓冲区中剩余的值，取空后立即返回零值 |
+| `v, ok := <-ch` | 永久阻塞 | `ok` 为 `true` | 取出剩余值时 `ok` 为 `true`，之后为 `false` |
+| `close(ch)` | panic | 成功 | panic |
+| `len(ch)`、`cap(ch)` | 0 | 缓冲区中的元素数、缓冲区容量 | 同左 |
+| `for v := range ch` | 永久阻塞 | 逐个接收 | 取完剩余值后结束 |
+
+接收的双返回值形式中，`ok` 报告收到的值是否来自一次成功的发送；为 `false` 时，收到的是因 channel
+已关闭且已取空而产生的零值。`range` 循环反复接收，直到 channel 关闭且取空为止，
+是消费一个数据流的常用写法。三种 panic 在运行时中的位置及其错误信息，见 [10.4](./close.md)。
+
+## 10.1.3 同步保证
+
+channel 不只传递数据，也同步收发双方。Go 内存模型对 channel 给出了四条规则，前三条是：
+一次发送同步先于与之对应的接收完成；channel 的关闭同步先于因关闭而返回零值的接收；对于无缓冲 channel，
+一次接收同步先于与之对应的发送完成 [[Go Authors, 2022](#ref-go-authors-2022)]。
+第一条保证发送方在发送之前写入的数据，接收方在接收之后一定能看到；第三条说明无缓冲 channel 的发送返回时，
+值已经被对方取走。第四条针对有缓冲 channel，它使有缓冲 channel 可以用作计数信号量。
+这些规则的含义与它们在运行时中的落实，在 [10.6](./lockfree.md) 中讨论。
+
+容量的选择因此首先是语义的选择。需要「对方已经收到」这样的确认时，用无缓冲 channel，会合本身就是确认。
+需要让生产者与消费者在时间上解耦，或者为尚未处理的数据设定上限时，用有缓冲 channel，容量就是这个上限；
+`make(chan struct{}, k)` 配合「发送时占用、接收时释放」，可以把同时进行的任务数限制在 $k$ 以内
+[[Go Authors, 2026b](#ref-go-authors-2026b)]。缓冲区只能减少较快一方的等待，
+不能让较慢的一方变快（[1.3.5](../../part1overview/ch01intro/csp.md) 中的演示）。把容量设得很大，
+往往只是推迟了阻塞发生的时刻，同时让积压变得不易察觉。容量是需要论证的设计参数，而不是调大就能提速的开关。
+
+## 10.1.4 select 与 nil channel
+
+规范把 `select` 语句的执行分为几步 [[Go Authors, 2026a](#ref-go-authors-2026a)]。首先，按源码次序对所有
+case 中接收操作的 channel 操作数、发送语句的 channel 与待发送的值各求值一次，无论最终选中哪个 case，
+求值的副作用都会发生。然后，若有一个或多个通信可以进行，以均匀的伪随机方式选择其中一个；
+若都不能进行而存在 `default`，执行 `default`；否则阻塞，直到某个通信可以进行。随机选择的效果见
+[1.3.5](../../part1overview/ch01intro/csp.md)，它在运行时中的实现见 [10.5](./select.md)。
+
+nil channel 上的收发永远不能进行，因此 `select` 永远不会选中 nil channel 上的 case。把某个 case 所用的
+channel 变量置为 `nil`，就可以在运行中禁用这个 case，而不必改变 `select` 的结构
+[[Ajmani, 2013](#ref-ajmani-2013)]。下面的程序合并两路输入，这是 Pike 介绍过的扇入（fan-in）模式
+[[Pike, 2012a](#ref-pike-2012a)]；某一路关闭后，就把对应的变量置为 `nil`：
+
+```go {run=true}
+package main
+
+import "fmt"
+
+// gen 启动一个 goroutine，依次发送 n 个值后关闭 channel。
+func gen(n int) <-chan int {
+	ch := make(chan int)
+	go func() {
+		for i := range n {
+			ch <- i
+		}
+		close(ch)
+	}()
+	return ch
+}
+
+func main() {
+	a, b := gen(3), gen(5)
+	values, closes := 0, 0
+	for a != nil || b != nil {
+		select {
+		case _, ok := <-a:
+			if !ok {
+				a = nil // a 已关闭且取空：此后这个分支不会再被选中
+				closes++
+				continue
+			}
+			values++
+		case _, ok := <-b:
+			if !ok {
+				b = nil
+				closes++
+				continue
+			}
+			values++
+		}
+	}
+	fmt.Println("收到的值:", values, " 发现关闭:", closes)
 }
 ```
 
-`select` 是把 CSP 的「守卫与选择指令」工程化的产物，它的随机择一、公平性与两轮加锁实现是
-[10.5](./select.md) 的主题。至此，channel 的全部表层算符就是这几样:`make`、`<-`、`close`、
-`range`、`select`。接下来的几小节，逐一把其中容易用错的语义点讲透。
-
-## 10.1.3 无缓冲与有缓冲：会合还是排队
-
-容量参数把 channel 分成语义迥异的两类，理解这条分界是用对 channel 的前提。
-
-**无缓冲 channel**（容量 0）是一次**会合**（rendezvous）。发送方执行 `ch <- v` 时，若此刻
-没有接收方在等，发送方就地阻塞，直到某个接收方执行 `<-ch` 与之配对；配对成功的那一刻，值
-直接从发送方交到接收方，两者才各自继续。接收先到也对称地阻塞等发送。于是无缓冲 channel 的
-一次成功收发，意味着**收发双方在那一刻确实碰过头**:发送返回时，便可确知值已被某个接收方收走。
-
-```go
-done := make(chan struct{})
-go func() {
-    work()
-    done <- struct{}{}   // 通知：我做完了
-}()
-<-done                   // 阻塞到上面那行执行，二者在此会合
+```
+收到的值: 8  发现关闭: 2
 ```
 
-**有缓冲 channel**（容量 $n>0$）是一个**容量为 $n$ 的有界队列**。发送方执行 `ch <- v` 时，
-只要队列未满就把值放进队列、立即返回，不必等接收方到场；队列满了才阻塞。接收方从队头取值，
-队列空了才阻塞。这里的关键差别在于:**有缓冲发送返回时，值可能还躺在队列里，接收方尚未取走**。
-换来的是发送与接收在时间上的解耦，代价是失去了「发送返回即对方已收到」这条会合保证。
+循环恰好执行 10 次：8 次收到值，2 次发现关闭。如果发现关闭后不把变量置为 `nil`，已关闭的 channel
+每次都能立即返回零值，`select` 会反复选中它，循环既不会结束，也不会阻塞。
 
-```mermaid
-flowchart LR
-    subgraph U["无缓冲：会合"]
-        S1["发送方 ch&lt;-v"] -->|"双方就位才成交<br/>值直接交付"| R1["接收方 &lt;-ch"]
-    end
-    subgraph B["有缓冲 n：有界队列"]
-        S2["发送方 ch&lt;-v"] -->|未满则入队| Q["队列 0..n-1"]
-        Q -->|非空则出队| R2["接收方 &lt;-ch"]
-    end
-```
+「进入 `select` 时对所有 case 求值」这一条也有陷阱。Ajmani 的例子中，一个 goroutine 想把待发送队列
+`pending` 的第一个元素发出去，于是写下 `case out <- pending[0]`；队列为空时，即使这个 case 不会被选中，
+`pending[0]` 也会在进入 `select` 时求值，导致越界 panic。解决办法同样是 nil channel：没有数据可发时，
+让这个 case 使用一个为 `nil` 的 channel 变量 [[Ajmani, 2013](#ref-ajmani-2013)]。
 
-何时用哪种，可以归到几条朴素的判断上。需要「我做完、对方确认收到」这类强同步信号时，用无缓冲，
-它的会合语义恰好就是握手。需要让生产者与消费者在节奏上解耦、削平突发，或想给在途数据设一个
-明确的上限时，用有缓冲，队列容量就是这个上限。容量还能当一把**信号量**用:`make(chan struct{}, k)`
-配合「发送占位、接收释放」，就限制了同时进行的并发数不超过 $k$（[10.7](./pattern.md)）。
+```go {run=true}
+package main
 
-需要警惕的是一种常见的误解，把缓冲当作免费的提速旋钮。缓冲解耦的是**时机**，不是计算本身;
-它不会让总工作量变少，反而引入了新的问题:缓冲多大才合适、满了之后的背压如何处理、在途数据
-在崩溃时如何交代。一个拍脑袋设成很大的缓冲，往往只是把「何时阻塞」推后，并把队列堆积的风险
-藏了起来。容量是一个需要论证的设计参数，不是默认就该往大里调的性能开关。
+import "fmt"
 
-## 10.1.4 方向限定：让类型代为守约
-
-channel 类型可以带方向，把一个双向 channel 收窄为只发或只收:
-
-```go
-chan<- int   // 只能发送
-<-chan int   // 只能接收
-```
-
-方向写在函数签名里，是一种廉价而有力的 API 卫生手段。考虑一个生产者函数，它只该往 channel
-里写、绝不该读，把参数声明成只发，编译器就能拦住任何误读:
-
-```go
-func produce(out chan<- int) {   // out 只能发送
-    for i := 0; i < 10; i++ {
-        out <- i
-    }
-    close(out)                   // 由生产者关闭，符合「发送方负责关闭」的约定
+// naive 在 pending 为空时也会求值 pending[0]，即使 select 带有 default。
+func naive(out chan<- int, pending []int) (sent bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("naive:", r)
+		}
+	}()
+	select {
+	case out <- pending[0]:
+		return true
+	default:
+		return false
+	}
 }
 
-func consume(in <-chan int) {    // in 只能接收
-    for v := range in {
-        use(v)
-    }
+// guarded 在没有数据可发时把 channel 置为 nil，从而禁用发送分支。
+func guarded(out chan<- int, pending []int) bool {
+	var first int
+	var send chan<- int // nil
+	if len(pending) > 0 {
+		first, send = pending[0], out
+	}
+	select {
+	case send <- first:
+		return true
+	default:
+		return false
+	}
+}
+
+func main() {
+	out := make(chan int, 1)
+	naive(out, nil)
+	fmt.Println("guarded:", guarded(out, nil))
+	fmt.Println("guarded:", guarded(out, []int{42}), <-out)
 }
 ```
 
-双向 channel 可以隐式赋给单向类型，反之不行。于是惯常的写法是:在一处用 `make` 造出双向
-channel，再把它分别以只发、只收两种受限视图传给生产者与消费者。方向不改变运行时行为，它纯粹
-是编译期的约束，把「这一端只该发」「那一端只该收」的意图写进类型，让违约在编译时而非运行时
-暴露。这也顺手把「谁负责 `close`」这件容易出错的事钉在了类型上:只有持有发送端的一方才有资格
-调用 `close`，因为对只收视图调用 `close` 根本无法通过编译。
-
-## 10.1.5 nil channel：永久阻塞的妙用
-
-一个尚未 `make`、值为 `nil` 的 channel，对它收或发都会**永久阻塞**:
-
-```go
-var ch chan int   // nil channel
-ch <- 1           // 永久阻塞
-<-ch              // 永久阻塞
+```
+naive: runtime error: index out of range [0] with length 0
+guarded: false
+guarded: true 42
 ```
 
-孤立地看，这像是一个只会制造死锁的陷阱。但放进 `select`，它就成了一个干净的开关。`select`
-会忽略那些永远不会就绪的分支，而一个 nil channel 的分支正是永远不就绪。于是「把某个 case 的
-channel 置为 nil」就等于在运行时**动态关掉这个分支**，无需改动 `select` 的结构。
+## 10.1.5 Go 1 之前的演变
 
-这个技巧在「读完一路输入后不再监听它」的场景里尤其顺手。下面的循环同时消费两路输入，某一路
-关闭后，就把对应的 channel 变量置为 nil，从此 `select` 不再选中那条已耗尽的分支，避免了对
-已关闭 channel 反复收到零值的忙转:
+上面这些规则大多是在 2010 年至 2012 年间，即 Go 开源之后、Go 1 发布之前确定的。
+规范的修改记录显示了其中的考虑。
 
-```go
-for in1 != nil || in2 != nil {
-    select {
-    case v, ok := <-in1:
-        if !ok {
-            in1 = nil   // in1 耗尽，关掉这条分支
-            continue
-        }
-        handle(v)
-    case v, ok := <-in2:
-        if !ok {
-            in2 = nil   // in2 耗尽，关掉这条分支
-            continue
-        }
-        handle(v)
-    }
-}
-```
+最早的规范规定，发往已关闭 channel 的值将被忽略。运行时却对已关闭 channel 上的操作计数，累计约
+500 次之后便以「too many operations on a closed channel」终止程序，而且这一错误无法被 `recover` 捕获。
+Nigel Tao 指出，这样的程序在低负载下工作正常，到了高负载下却会莫名崩溃；向已关闭 channel
+发送要么应当立即失败，要么应当永远允许 [[Tao, 2011](#ref-tao-2011)]。2011 年 1 月，Russ Cox 选择了前者：
+向已关闭的 channel 发送、重复关闭都立即 panic，而从已关闭的 channel 接收无论多少次都不会 panic
+[[Cox, 2011a](#ref-cox-2011a)]。
 
-把 nil channel 的「永久阻塞」与 `select` 的「忽略不就绪分支」两条规则合起来，就得到了一个
-表达力很强的惯用法。这也提示我们，channel 的几条表层规则并非孤立，它们彼此组合才构成真正
-好用的工具，后续讲实现时会反复见到运行时如何精确兑现这些组合。
+当时判断 channel 是否关闭，用的是内建函数 `closed(c)`，按规范，它在至少收到一个因关闭而产生的零值之后才
+返回 `true`。接收与判断因此是两步操作：先 `v := <-c`，再检查 `closed(c)`。当时的 `v, ok := <-c` 另有含义，
+表示非阻塞接收；`ok := c <- v` 则表示非阻塞发送。2011 年 1 月底，这两种非阻塞形式被删除，
+因为同样的效果一直可以用带 `default` 的 `select` 写出；当周的发布说明写明，
+这一删除是为重新定义接收的双返回值形式做准备 [[Cox, 2011b](#ref-cox-2011b)]。2011 年 3 月，`closed`
+被删除，`v, ok := <-c` 改为在一次操作中同时给出收到的值以及它是否来自一次真实的发送
+[[Cox, 2011c](#ref-cox-2011c)]。
 
-## 10.1.6 本章的路线
+nil channel 的语义也改过一次。2010 年 7 月，Rob Pike 修改规范 [[Pike, 2010](#ref-pike-2010)]，把 `select`
+之外对 nil channel 的收发规定为 panic，同时规定没有可用 case 的 `select` 永久阻塞，并把多个 case
+就绪时的选择规定为「伪随机且公平」。2011 年 5 月，Robert Griesemer 改为「nil channel 永远不会就绪」，nil
+channel 上的收发因此永久阻塞；同一次修改让 nil map 在读取时表现得与空 map 一样
+[[Griesemer, 2011](#ref-griesemer-2011)]。这样，`select` 内外遵循同一条规则，上一小节的技巧也由此成立。
 
-有了表层模型，接下来逐层深入 channel 在运行时里的实现。各节的安排如下:
+其余的修改如下表所示。
 
-- [10.2 hchan：通道的内部结构](./impl.md)：一个 channel 在内存里长什么样，环形缓冲、
-  收发等待队列与那把锁。
-- [10.3 收发与直接传递](./sendrecv.md)：一次收发如何在两个 goroutine 间会合，以及绕过缓冲
-  把数据直接写入对方栈的优化。
-- [10.4 关闭的语义](./close.md)：`close` 如何向所有等待者广播，以及那几条会 panic 的边界。
-- [10.5 select 的实现](./select.md)：`selectgo` 如何在多路通信间随机、公平、无死锁地择一。
-- [10.6 内存模型与无锁演进](./lockfree.md)：收发建立的发生序保证，以及 channel 为何选择
-  有锁、又能否更进一步。
-- [10.7 工程实践与跨语言对照](./pattern.md)：常见的 channel 模式与陷阱，以及与别家并发原语
-  的对照。
+| 时间 | 修改 |
+| --- | --- |
+| 2011 年 10 月 | 对只能接收的 channel 调用 `close` 成为编译错误 [[Cox, 2011d](#ref-cox-2011d)] |
+| 2012 年 1 月 | 选择规则的措辞由「伪随机且公平」改为「均匀的伪随机」[[Pike, 2012b](#ref-pike-2012b)] |
+| 2012 年 2 月 | 向已关闭 channel 的发送算作「可以进行」，`select` 可能选中它并因此 panic [[Cox, 2012](#ref-cox-2012)] |
+| 2013 年 7 月 | 规范写明 channel 是先进先出的，并且可以不加同步地被多个 goroutine 并发使用 [[Pike, 2013](#ref-pike-2013)] |
 
-读完本节，读者应已能写出正确的 channel 代码;读完本章，则能讲清这些代码为何如此运转。
+Pike 在 2012 年那次修改的提交说明中写道，这一措辞上的斟酌是为了「安抚有理论倾向的读者」。
+2013 年的修改则把实践中一直依赖的两条性质写进了规范。此后，channel 的核心语义没有再改变；规范中与 channel
+相关的修改，都是措辞上的澄清，或泛型引入之后关于类型参数的规则。
 
-## 延伸阅读的文献
+## 延伸阅读
 
-1. The Go Authors. *The Go Programming Language Specification: Channel types, Send statements,
-   Receive operator, Close.* https://go.dev/ref/spec#Channel_types
-2. The Go Authors. *Effective Go: Channels.* https://go.dev/doc/effective_go#channels
-3. Rob Pike. *Go Concurrency Patterns.* Google I/O 2012.
-   https://go.dev/talks/2012/concurrency.slide
-4. Sameer Ajmani. *Advanced Go Concurrency Patterns.* Google I/O 2013.
-   https://go.dev/talks/2013/advconc.slide （nil channel 在 select 中关闭分支的技巧）
-5. C. A. R. Hoare. "Communicating Sequential Processes." *Communications of the ACM*,
-   21(8), 1978. https://doi.org/10.1145/359576.359585
-6. 本书 [1.3 顺序进程通讯](../../part1overview/ch01intro/csp.md)、
-   [10.6 内存模型与无锁演进](./lockfree.md)、[11.9 内存一致模型](../ch11sync/mem.md).
+- <a id="ref-ajmani-2013"></a>[Ajmani, 2013] Sameer Ajmani. *Advanced Go Concurrency Patterns.* Google I/O
+  2013. https://go.dev/talks/2013/advconc.slide （nil channel 在 select 中关闭分支的技巧）
+- <a id="ref-cox-2011a"></a>[Cox, 2011a] Russ Cox. spec, runtime, tests: send on closed channel panics. Go
+  commit 27c74d3499, 2011. https://github.com/golang/go/commit/27c74d3499
+  修复 issue #1349 与 #1419。
+- <a id="ref-cox-2011b"></a>[Cox, 2011b] Russ Cox. spec: remove non-blocking channel operators. Go commit
+  19d9a40845, 2011. https://github.com/golang/go/commit/19d9a40845
+  另见当周的发布说明：https://go.dev/doc/devel/weekly#2011-02-01
+- <a id="ref-cox-2011c"></a>[Cox, 2011c] Russ Cox. spec: remove closed from language, replaced by x, ok =
+  <-c. Go commit 9f2cb86fe2, 2011. https://github.com/golang/go/commit/9f2cb86fe2
+  另见当周的发布说明：https://go.dev/doc/devel/weekly#2011-03-15
+- <a id="ref-cox-2011d"></a>[Cox, 2011d] Russ Cox. gc: disallow close on receive-only channels. Go commit
+  f58ed4e641, 2011. https://github.com/golang/go/commit/f58ed4e641
+- <a id="ref-cox-2012"></a>[Cox, 2012] Russ Cox. spec: send on closed channel counts as "proceeding". Go
+  commit e7a138b856, 2012. https://github.com/golang/go/commit/e7a138b856
+- <a id="ref-go-authors-2022"></a>[Go Authors, 2022] The Go Authors. *The Go Memory Model.* Version of
+  June 6, 2022. https://go.dev/ref/mem
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *The Go Programming Language
+  Specification: Channel types, Send statements, Receive operator, Close.*
+  https://go.dev/ref/spec#Channel_types
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *Effective Go: Channels.*
+  https://go.dev/doc/effective_go#channels
+- <a id="ref-griesemer-2011"></a>[Griesemer, 2011] Robert Griesemer. go spec: clarify semantics of range
+  clause. Go commit 5473103666, 2011. https://github.com/golang/go/commit/5473103666
+  nil channel 永远不会就绪，nil map 等同于只读的空 map。
+- <a id="ref-hoare-1978"></a>[Hoare, 1978] C. A. R. Hoare. "Communicating Sequential Processes."
+  *Communications of the ACM*, 21(8), 1978. https://doi.org/10.1145/359576.359585
+- <a id="ref-pike-2010"></a>[Pike, 2010] Rob Pike. Go specification: Lock down some details about channels
+  and select. Go commit 041d11623f, 2010. https://github.com/golang/go/commit/041d11623f
+- <a id="ref-pike-2012a"></a>[Pike, 2012a] Rob Pike. *Go Concurrency Patterns.* Google I/O 2012.
+  https://go.dev/talks/2012/concurrency.slide
+- <a id="ref-pike-2012b"></a>[Pike, 2012b] Rob Pike. spec: change the wording regarding select statement
+  choice. Go commit 5f7337769c, 2012. https://github.com/golang/go/commit/5f7337769c
+- <a id="ref-pike-2013"></a>[Pike, 2013] Rob Pike. spec: clarify a couple of issues about channels. Go
+  commit bd65404eef, 2013. https://github.com/golang/go/commit/bd65404eef
+  修复 issue #5911。
+- <a id="ref-tao-2011"></a>[Tao, 2011] Nigel Tao. golang/go#1419. *Sending on a closed channel should fail
+  after 0 or ∞ times, not a finite N > 0.* 2011. https://github.com/golang/go/issues/1419
+- 本书 [1.3 通信顺序进程](../../part1overview/ch01intro/csp.md)、
+  [10.6 内存模型与无锁演进](./lockfree.md)、[11.9 内存一致模型](../ch11sync/mem.md)、
+  [10.4 关闭的语义](./close.md)、[10.5 select 的实现](./select.md)。
