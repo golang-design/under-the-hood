@@ -178,7 +178,7 @@ func passthrough(p *int) *int { return p }
 
 ## 15.5.4 与连续栈是同一个约束的两面
 
-逃逸分析为什么必须如此严格？答案藏在栈的实现里。Go 的栈是**连续栈**（[14.4](../../part4memory/ch14stack)）：
+逃逸分析为什么必须如此严格？答案藏在栈的实现里。Go 的栈是连续栈（[14.1](../../part4memory/ch14stack/design.md)）：
 栈会增长、会被整体搬到新的地址，搬动时运行时遍历并改写栈上所有指向栈内的指针。这个机制能成立，
 前提是**栈上对象的地址只在栈内部被引用**,运行时知道去哪里找它们、改它们。一旦某个栈地址被
 外部（堆对象、全局变量、别的 goroutine）长期持有，栈一搬动，那个外部引用就指向了错误的位置，
@@ -221,6 +221,6 @@ func passthrough(p *int) *int { return p }
    https://github.com/golang/go/blob/master/src/cmd/compile/internal/escape/leaks.go
 4. 本书 [13 垃圾回收](../../part4memory/ch13gc) 与
    [13.8 分代假设](../../part4memory/ch13gc/generational.md)（逃逸分析为何削弱分代红利）.
-5. 本书 [14.4 连续栈](../../part4memory/ch14stack)（栈会移动，故外部持有的地址必须逃逸）.
+5. 本书 [14.4 栈的拷贝与指针调整](../../part4memory/ch14stack/copy.md)（栈会移动，故外部持有的地址必须逃逸）.
 6. 本书 [15.3 优化器](./optimize.md)（逃逸分析在编译流水线中的位置）、
    [16.5 性能剖析](../ch16tools)（先测后调）.

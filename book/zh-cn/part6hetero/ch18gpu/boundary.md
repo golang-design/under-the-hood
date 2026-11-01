@@ -207,6 +207,6 @@ GPU 把 15.6 那条「少跨界」的告诫从一句经验提升成了一条设�
    https://github.com/ncruces/go-sqlite3
    （纯 Go、不含 cgo 的 Wasm 运行时，绕开 cgo 运行 C 库的代表作）
 7. 本书 [15.6 cgo](../../part5toolchain/ch15compile/cgo.md)、
-   [2.2 调用规范](../../part1overview/ch02asm/callconv.md)、
+   [2.3 调用约定与寄存器 ABI](../../part1overview/ch02asm/callconv.md)、
    [18.2 调度器与阻塞的外部调用](./sched.md)、
    [18.3 显存与垃圾回收的分界](./memory.md)。

@@ -155,7 +155,7 @@ func quantile(h *metrics.Float64Histogram, q float64) float64 {
 
 - `/gc/*` 与 `/memory/classes/*`：垃圾回收与内存的全景（[12](../../part4memory/ch12alloc)、
   [13](../../part4memory/ch13gc)）。`/gc/heap/live:bytes` 是上轮 GC 标记到的存活堆，
-  `/gc/heap/goal:bytes` 是本轮的目标堆大小，两者之比正是 GC 步调器（[13.4](../../part4memory/ch13gc/pacing.md)）
+  `/gc/heap/goal:bytes` 是本轮的目标堆大小，两者之比正是 GC 步调器（[13.3](../../part4memory/ch13gc/pacing.md)）
   在调节的量；`/gc/cycles/total:gc-cycles` 对时间求差就是 GC 频率；`/memory/classes/total:bytes`
   是运行时向系统映射的全部内存，它是 `GOMEMLIMIT` 软上限真正盯着的数字。
 - `/sched/*`：调度器的状态（[9](../../part3concurrency/ch09sched)）。`/sched/goroutines:goroutines`
@@ -257,5 +257,5 @@ Grafana 展示」几乎是默认装配。Go 在其中的位置很清楚：提供
    https://github.com/prometheus/client_golang （`/metrics` 端点与运行时指标采集器）
 6. The Go Authors. *Package log/slog.* https://pkg.go.dev/log/slog （结构化日志）
 7. 本书 [12.8 内存统计](../../part4memory/ch12alloc/mstats.md)、
-   [13.4 GC 步调](../../part4memory/ch13gc/pacing.md)、[16.3 性能追踪](./trace.md)、
+   [13.3 触发频率及其调步算法](../../part4memory/ch13gc/pacing.md)、[16.3 性能追踪](./trace.md)、
    [16.5 基准测试与画像](./perf.md)、[7.3 错误格式与上下文](../../part2lang/ch07errors/context.md).

@@ -98,7 +98,7 @@ syscall.Syscall(SYS_READ, uintptr(fd), uintptr(unsafe.Pointer(p)), uintptr(n))
 
 这意味着两件事。其一，如果一个对象只被某个 `uintptr` 持有的地址「指向」，垃圾回收不会因此认为它
 存活，该对象随时可能被回收。其二，如果垃圾回收移动了对象（栈拷贝就是典型，goroutine 栈增长时
-整段栈连同其上的对象会被搬到新位置，地址随之改变，见 [14.4](../../part4memory/ch14stack)），它会
+整段栈连同其上的对象会被搬到新位置，地址随之改变，见 [14.4](../../part4memory/ch14stack/copy.md)），它会
 更新所有真正的指针，却不会更新任何 `uintptr`，因为它根本不知道哪些整数其实是地址。于是一个曾经
 正确的 `uintptr` 会在某次垃圾回收后悄悄指向一片无效内存或别的对象。
 
@@ -242,4 +242,4 @@ Rust 没有垃圾回收，因而没有「算术期间对象被移动」这一类
 6. The Go Authors. *reflect.SliceHeader / StringHeader 的 Deprecated 说明.* https://pkg.go.dev/reflect#SliceHeader
 7. JEP 454: *Foreign Function & Memory API（Java 22 定稿，`MemorySegment` 作为 `sun.misc.Unsafe` 的受控替代）.*
    https://openjdk.org/jeps/454 ；C# `fixed` 语句与对象钉扎，https://learn.microsoft.com/dotnet/csharp/language-reference/statements/fixed
-8. 本书 [5.1 数组、切片与字符串](../../part2lang/ch05data/slice.md)、[12.2 组件](../../part4memory/ch12alloc/component.md)、[14.4 栈管理](../../part4memory/ch14stack)、[15.6 cgo](./cgo.md)、[16.2 竞态检测](../ch16tools/race.md).
+8. 本书 [5.1 数组、切片与字符串](../../part2lang/ch05data/slice.md)、[12.2 组件](../../part4memory/ch12alloc/component.md)、[14.4 栈的拷贝与指针调整](../../part4memory/ch14stack/copy.md)、[15.6 cgo](./cgo.md)、[16.2 竞态检测](../ch16tools/race.md).

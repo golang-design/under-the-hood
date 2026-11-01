@@ -18,7 +18,7 @@ Go 函数昂贵一两个数量级；运行时为这一次跨界究竟做了哪�
 
 要理解 cgo 的代价，先要看清桥的两端有多么不同。Go 与 C 在四件根本的事情上各行其是。
 
-**调用约定不同。** Go 有自己的寄存器调用约定（[2.2](../../part1overview/ch02asm/callconv.md)），
+**调用约定不同。** Go 有自己的寄存器调用约定（[2.3](../../part1overview/ch02asm/callconv.md)），
 参数与返回值的传递、栈帧的布局、哪些寄存器由调用方保存，都与 C 在该平台上的 ABI 不一致。
 跨界调用必须先把参数按 C 的 ABI 重新摆放，把栈指针对齐到 C 要求的边界。
 
@@ -226,6 +226,6 @@ cgo 与逃逸分析（[15.5](./escape.md)）、指针检查器（[15.4](./unsafe
 5. The Go Authors. *runtime.Pinner.* https://pkg.go.dev/runtime#Pinner
    与 *runtime/cgo.Handle.* https://pkg.go.dev/runtime/cgo#Handle
    （长期持有 Go 对象的两种受支持手法）
-6. 本书 [2.2 调用规范](../../part1overview/ch02asm/callconv.md)、
+6. 本书 [2.3 调用约定与寄存器 ABI](../../part1overview/ch02asm/callconv.md)、
    [9.5 线程管理](../../part3concurrency/ch09sched/thread.md)、
    [15.4 指针检查器](./unsafe.md)、[15.5 逃逸分析](./escape.md)。
