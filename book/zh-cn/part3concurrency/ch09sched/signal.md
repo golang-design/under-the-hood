@@ -5,218 +5,248 @@ title: "9.6 信号处理机制"
 
 # 9.6 信号处理机制
 
-操作系统信号是异步的、底层的：它可能在任意时刻打断任意线程，而处理器（signal handler）里
-能做的事又极其受限。Go 用户想要的，却往往是用 `signal.Notify` 把一个 channel 接上 `SIGINT`，
-在收到时优雅收尾。运行时要做的，正是在这两者之间搭一座桥：把凶险的异步信号，转化成可被
-goroutine 安然消费的事件。这座桥的每一处设计，都受「信号上下文里能做什么」这一硬约束支配。
-读懂了这条约束，本节其余的机制就都只是它的推论。
+信号是内核向进程发送异步通知的机制。对 Go 运行时而言，信号承担着三种不同的角色：一是用户关心的外部事件，
+例如终端上按下 Ctrl-C 产生的 `SIGINT`，程序通过 `os/signal` 包以 channel 的形式接收；二是程序自身的错误，
+例如解引用空指针引发的 `SIGSEGV`，运行时把它转换为可以 `recover` 的 panic；三是运行时自己使用的工具，例如
+CPU 性能剖析依赖的 `SIGPROF`，以及异步抢占（[9.7](./preemption.md)）依赖的 `SIGURG`。
 
-## 9.6.1 异步信号安全：处理器里几乎什么都不能做
+这三种用途共用同一套处理流程，而这套流程的设计受一个约束支配：信号处理函数（signal handler）
+运行在一个被打断的上下文中，能做的事情极为有限。本节先说明这一约束，再依次讨论信号处理所用的栈、
+处理函数的分流、信号如何送达用户的 channel，以及运行时如何与进程中的非 Go 代码共用信号。
 
-信号处理器运行在一个被打断的、不确定的上下文里。被打断的线程此刻可能正持有 `malloc` 的锁、
-正处在某个数据结构的中间状态，甚至正在分配器内部改写元数据。一旦处理器里再去调用
-`malloc` 或获取同一把锁，便会自我死锁，或读到半成品状态而崩溃。POSIX 因此规定，信号处理器
-里只能调用**异步信号安全**（async-signal-safe）的函数，这是一份很短的白名单（见
-`signal-safety(7)`）：`write`、`_exit`、`sigaction` 这类不碰锁、不碰分配器的系统调用在列，
-而 `malloc`、`printf`、绝大多数 `pthread` 加锁、乃至大部分 C 标准库都**不在**其列。
+## 9.6.1 异步信号安全
 
-这条约束逼出了所有支持信号的运行时共同遵守的一条铁律：
+信号可能在任意两条指令之间到达。内核选中一个线程，暂停它正在执行的代码，转而执行信号处理函数，
+处理函数返回后再恢复原来的执行。被打断的代码可能正持有某把锁，或者正处在修改某个数据结构的中途。
+如果处理函数再去获取同一把锁，线程就会与自己死锁；如果它读取那个数据结构，看到的就是不一致的中间状态。
 
-> 在处理器里只做不得不做的最少事，把真正的处理推迟到一个安全的地方去做。
+POSIX 因此只允许信号处理函数调用一小部分函数，称为**异步信号安全**（async-signal-safe）函数。
+这份名单不长：`write`、`_exit`、`sigaction` 等系统调用在列，`malloc` 不在列，stdio 中的函数则全部不安全，
+因为它们维护着静态分配的缓冲区与相应的计数器 [[Linux man-pages, n.d.a](#ref-linux-man-pages-nda)]。
+信号与可重入函数的一般原理，《UNIX 环境高级编程》中有系统的论述
+[[Stevens and Rago, 2013](#ref-stevens-and-rago-2013)]。
 
-这正是经典手法**自管道技巧**（self-pipe trick，W. R. Stevens 在 APUE 中给出的范式）的来由：
-处理器什么都不干，只往一个事先建好的管道写一个字节；主事件循环（`select`/`poll`）在管道另一头
-监听，于是「收到信号」被降格成一次普通的「管道可读」事件，后续处理便回到了不受限的常规上下文里。
-Linux 后来用 `signalfd(2)` 把这一手法收编进内核，让信号能直接以文件描述符的形式被 `epoll` 消费。
+由此形成的通行做法是：处理函数只做最少的必要工作，把真正的处理推迟到正常的上下文中完成。
+经典的例子是**自管道技巧**（self-pipe trick）。它针对的问题是，`select` 或 `poll` 无法与 `SIGCHLD`
+等信号安全地混用：信号可能恰好在 `select` 开始时到达，打断它为时过早，修改它的超时又为时已晚。
+解法是进程维护一个管道，在 `select` 中同时监听管道的读端，信号处理函数只向管道的写端写入一个字节。这样，
+信号就变成了一次普通的「管道可读」事件，后续处理回到了不受限制的事件循环中。
 
-Go 走的是同一思路的变体，只是把那根「管道」换成了运行时内部的一个**无锁队列**（[9.6.4](#964-sigsend无锁队列与专职接收-goroutine)）。
-理由也很 Go：自管道每次投递都要一次 `write` 系统调用，而 Go 的信号处理与调度器、垃圾回收
-深度耦合，用一个进程内的原子状态机来「写一个 bit、唤醒一个等待者」，比反复进出内核更省，也更
-可控。本节接下来的几小节，便是沿着这条铁律，看 Go 如何把它落实到处理器、备用栈、队列与
-专职 goroutine 这几样零件上。
+这一技巧由 Bernstein 在 1990 年前后提出，1991 年在新闻组中公开描述，数年后才得名。Bernstein
+在介绍这一技巧时，引用的正是 Stevens 在 1992 年出版的《UNIX 环境高级编程》初版对上述问题的论述
+[[Bernstein, n.d.](#ref-bernstein-nd)]。Linux 2.6.22 引入的 `signalfd(2)` 则把这一思路纳入内核，
+使信号可以直接作为文件描述符被 `poll` 或 `epoll` 读取
+[[Linux man-pages, n.d.a](#ref-linux-man-pages-nda)]。
 
-## 9.6.2 gsignal：处理器自带的一段安全栈
+Go 运行时遵循同样的原则。`runtime/sigqueue.go` 开头的注释写道，信号处理函数中不能阻塞、不能分配内存，
+也不能使用锁，因此它通过一个名为 `sig` 的结构与一个专门处理信号的 goroutine 通信
+[[Go Authors, 2026a](#ref-go-authors-2026a)]。运行时还会主动检查这些限制。Go 的信号处理函数本身也是 Go
+代码，它们以 `//go:nowritebarrierrec` 标注，编译器会检查其调用图中不出现写屏障；内存分配器则在入口处检查当
+前 goroutine 是否为信号处理所用的 `gsignal`（9.6.2），若是，就以 `malloc during signal` 终止程序。
 
-铁律的第一处落实，是给处理器一段**专门的栈**。信号可能在用户 goroutine 的栈快用尽时降临，
-若处理器还在这段紧绷的栈上运行，极易触发栈溢出；更麻烦的是，Go 的栈是可增长的（[14.6](../../part4memory/ch14stack)），
-而栈增长本身要分配、要加锁，正是处理器里碰不得的操作。解法是 POSIX 的 `sigaltstack(2)`：
-为线程预先登记一段**备用信号栈**，内核在分发信号时自动切到这段栈上执行处理器。
+## 9.6.2 备用信号栈
 
-Go 为**每个 M** 配一个名为 `gsignal` 的特殊 goroutine，它的栈就是这个 M 的备用信号栈。
-`gsignal` 在 `mcommoninit` 阶段经 `mpreinit` 创建，是除 `g0`（[9.3](./mpg.md)）之外每个 M
-最先拥有的 g，它不参与调度，没有用户代码意义上的 goid，存在的唯一目的就是「承载信号处理」：
+处理函数在哪个栈上执行，是第一个需要解决的问题。默认情况下，内核在被打断线程的当前栈上执行处理函数，而
+goroutine 的栈很小（初始为 2 KiB），并且按需增长（[第 14 章](../../part4memory/ch14stack)）。
+处理函数既不能假定栈上还有足够的空间，也不能触发栈增长，因为栈增长需要分配内存。POSIX 的 `sigaltstack(2)`
+为此提供了**备用信号栈**：线程预先登记一段内存，安装处理函数时指定 `SA_ONSTACK` 标志，
+内核在递送信号时就会切换到这段栈上执行处理函数。
+
+Go 为每个 M 准备了一个名为 `gsignal` 的特殊 goroutine，它的栈就是这个线程的备用信号栈
+（[9.3.3](./mpg.md)）。`gsignal` 由 `mcommoninit` 调用 `mpreinit` 创建，不参与调度，也不执行用户代码：
 
 ```go
-// 每个 M 初始化时为它创建 gsignal（速写，见 os_*.go 的 mpreinit）
+// runtime/os_linux.go
 func mpreinit(mp *m) {
-	mp.gsignal = malg(32 * 1024) // 备用信号栈，Darwin/AIX 要求 >= 8K
-	mp.gsignal.m = mp            // gsignal 永远绑定它所属的 M
+	mp.gsignal = malg(32 * 1024) // Linux wants >= 2K
+	mp.gsignal.m = mp
 }
 ```
 
-M 进入 `mstart` 后，`minit` 会调用 `minitSignalStack`，通过 `sigaltstack` 把
-`gsignal.stack` 登记为本线程的备用信号栈。这里有一处为 cgo 准备的细心：若该线程已被非 Go 的
-C 代码设过备用信号栈（非 Go 线程回调进 Go 的情形），运行时不会粗暴覆盖，而是把现成的那段栈
-接管为 `gsignal` 的栈，并在 `unminit` 时原样还回去。把「在哪段栈上处理信号」这件事每个 M
-各管一份，正是让信号处理与 goroutine 调度互不干扰的前提。
+macOS 上的注释则是「OS X wants >= 8K」。线程启动后，`minit` 调用 `minitSignalStack`，通过 `sigaltstack`
+把 `gsignal` 的栈登记为本线程的备用信号栈。唯一的例外出现在使用 cgo 的程序中：若一个由 C
+创建的线程已经设置了自己的备用信号栈，再回调 Go 代码，运行时不会覆盖它，而是让 `gsignal`
+借用这段已有的栈，并在 `unminit` 中恢复原状。自 Go 1.14 起，不使用 cgo 的程序总是使用 Go 分配的信号栈
+[[Zhang, 2019](#ref-zhang-2019)]。
 
-## 9.6.3 处理器只入队，goroutine 再分发
+备用信号栈也给运行时带来过意外的麻烦。Linux 5.2 引入的一个内核缺陷，会在信号栈所在的页尚未调入内存时，
+于信号返回后破坏向量寄存器。Go 1.14 为此在受影响的内核上用 `mlock` 锁定每个信号栈的顶页
+[[Clements, 2019b](#ref-clements-2019b)]，这一规避措施在 Go 1.16 中撤销。
 
-栈备好了，下一步是安装处理器并在信号到来时分流。Go 在 `initsig` 阶段为它关心的每个信号
-安装统一入口。值得注意，内核回调的并不是 `sighandler` 本身，而是一段汇编蹦床 `sigtramp`：
-信号到来时，内核以 C 的调用约定跳进 `sigtramp`，由它保存上下文、切换到 Go 运行时世界，
-再调用 `sigtrampgo`，后者把当前 g 切到本 M 的 `gsignal`，最后才进入真正的 `sighandler`。
-这一层蹦床的存在，是因为内核并不知道 Go 的 g/m/p 抽象，必须有人先把执行环境「翻译」过来。
+## 9.6.3 处理函数的入口与分流
+
+运行时在启动时调用 `initsig`，为它关心的每个信号安装处理函数。在 Linux 上，安装时使用的标志为
+`SA_SIGINFO | SA_ONSTACK | SA_RESTORER | SA_RESTART`；安装之前，原有的处理函数被记入数组 `fwdSig`，
+以便日后转发（9.6.5）。
+
+内核按照 C 的调用约定调用处理函数，并不了解 Go 的 G、M、P。因此内核实际调用的是一段汇编代码 `sigtramp`，
+它按 Go 的约定整理参数后调用 `sigtrampgo`。`sigtrampgo` 先调用 `sigfwdgo` 判断这个信号是否应当转交给非 Go
+的处理函数；然后取得被打断的 goroutine。若被打断的线程上没有 G，或者它是一个正在执行 C 代码的 extra M，
+就交给 `badsignal` 处理，后者借用一个 extra M 来运行 Go 代码（[9.5.5](./thread.md)）。通常情况下，
+`sigtrampgo` 把当前 G 切换为本线程的 `gsignal`，再调用 `sighandler`：
 
 ```go
-// 信号到来后的入口翻译（速写，见 signal_unix.go）
+// sigtrampgo：信号处理的 Go 入口（示意）
 func sigtrampgo(sig uint32, info *siginfo, ctx unsafe.Pointer) {
 	if sigfwdgo(sig, info, ctx) {
-		return // 该信号不归 Go 管：转发给 Go 之前已存在的 handler（cgo 场景）
+		return // 转交给 Go 之前安装的处理函数
 	}
-	gp := sigFetchG(&sigctxt{info, ctx})
-	setg(gp.m.gsignal)            // 切到本 M 的备用信号栈所对应的 g
-	// ...必要时按 sigaltstack 的实际值校正栈边界（非 Go 代码改过的情形）
+	c := &sigctxt{info, ctx}
+	gp := sigFetchG(c) // 被打断的 goroutine
+	setg(gp)
+	if gp == nil || (gp.m != nil && gp.m.isExtraInC) {
+		badsignal(uintptr(sig), c) // 非 Go 线程：借用 extra M 处理（略去细节）
+		return
+	}
+	setg(gp.m.gsignal)                  // 切换到 gsignal
+	// 若非 Go 代码修改过信号栈，由 adjustSignalStack 校正 gsignal 的栈边界（略）
 	sighandler(sig, info, ctx, gp)
-	setg(gp)                      // 处理完恢复被打断的 g
+	setg(gp)
 }
 ```
 
-`sigfwdgo` 是与本地库共存的关键：并非所有信号都该由 Go 处理，若某信号原本由用户的 C 库
-注册过处理器，Go 会把它转发回去，而不是据为己有。这一点在 [9.6.5](#965-与其他运行时的取舍以及一个实际副作用)
-还会回到。
+`sighandler` 根据信号的种类与来源分流。每个信号的默认处理方式记录在表 `sigtable` 中，以标志位表示：
 
-真正的分流发生在 `sighandler` 里。它迅速判明信号种类后，按**三类去向**处理：
+```go
+// runtime/runtime2.go
+const (
+	_SigNotify   = 1 << iota // let signal.Notify have signal, even if from kernel
+	_SigKill                 // if signal.Notify doesn't take it, exit quietly
+	_SigThrow                // if signal.Notify doesn't take it, exit loudly
+	_SigPanic                // if the signal is from the kernel, panic
+	_SigDefault              // if the signal isn't explicitly requested, don't monitor it
+	_SigGoExit               // cause all runtime procs to exit (only used on Plan 9).
+	_SigSetStack             // Don't explicitly install handler, but add SA_ONSTACK to existing libc handler
+	_SigUnblock              // always unblock; see blockableSig
+	_SigIgn                  // _SIG_DFL action is to ignore the signal
+)
+```
+
+例如在 Linux 上，`SIGINT`、`SIGTERM` 与 `SIGHUP` 标记为 `_SigNotify + _SigKill`，`SIGQUIT` 标记为
+`_SigNotify + _SigThrow`，`SIGSEGV` 标记为 `_SigPanic + _SigUnblock`，`SIGURG` 标记为
+`_SigNotify + _SigIgn`。`os/signal` 的文档据此总结了默认行为：同步信号转换为 panic；`SIGHUP`、`SIGINT`、
+`SIGTERM` 使程序退出；`SIGQUIT` 等信号使程序打印栈回溯后退出，因此在终端上按 Ctrl-\ 可以看到所有
+goroutine 的栈 [[Go Authors, 2026b](#ref-go-authors-2026b)]。分流的整体情况如下：
 
 ```mermaid
 flowchart TD
-    OS[操作系统发来信号] --> TR["sigtramp（汇编蹦床）<br/>翻译调用约定、切到 gsignal 栈"]
-    TR --> SH["sighandler<br/>在 gsignal 备用栈上分流"]
-    SH -->|"同步信号<br/>SIGSEGV / SIGFPE / SIGBUS"| PANIC["preparePanic：伪造成调用 sigpanic<br/>转为可 recover 的 panic"]
-    SH -->|SIGURG| PREE["doSigPreempt：触发异步抢占（见 9.7）"]
-    SH -->|SIGPROF| PROF["sigprof：采样 PC，供 pprof 使用"]
-    SH -->|"需用户处理<br/>SIGINT / SIGTERM ..."| Q["sigsend：写入无锁队列后立即返回"]
-    Q --> SG["专职 goroutine 阻塞在 signal_recv 取出"]
-    SG --> CH["送入 signal.Notify 注册的 channel"]
-    CH --> USER["用户用 select 优雅消费"]
+    OS[内核递送信号] --> TR["sigtramp（汇编）<br/>转换调用约定"]
+    TR --> TG["sigtrampgo<br/>sigfwdgo 判断是否转交，切换到 gsignal"]
+    TG --> SH[sighandler]
+    SH -->|SIGPROF| PROF["sigprof：记录一次采样"]
+    SH -->|SIGURG| PREE["doSigPreempt：注入异步抢占，然后继续分流"]
+    SH -->|"同步信号且来自内核<br/>SIGSEGV / SIGBUS / SIGFPE"| PANIC["preparePanic：伪造对 sigpanic 的调用"]
+    SH -->|"带 _SigNotify 标志或来自 kill"| Q["sigsend：写入 sig.mask 后返回"]
+    SH -->|其余| DIE["按 _SigKill / _SigThrow 退出或崩溃"]
+    Q --> RECV["signal_recv：专门的 goroutine 取出"]
+    RECV --> CH["送入 signal.Notify 注册的 channel"]
 ```
 
-**第一类，同步信号。** `SIGSEGV`（空指针解引用）、`SIGFPE`（除零）、`SIGBUS` 这些由当前线程
-自己的非法操作就地引发，与被打断的代码有直接因果关系。运行时不让进程默默崩溃，而是把它们
-转化为 Go 的 panic：`preparePanic` 改写被打断处的栈与 PC，伪装成「出错那一点调用了
-`sigpanic`」，待处理器返回、控制流回到用户 g 时，便从 `sigpanic` 处抛出一个可被 `recover`
-捕获的运行时错误。判定靠 `sigtable` 里的 `_SigPanic` 标志，且仅当信号确实来自内核（而非用户
-`kill`）、被打断的又确是用户 g 时才这么做，否则只能 throw：
+下面分别说明。
 
-```go
-// sighandler 的三段分流（裁剪自 signal_unix.go）
-func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
-	c := &sigctxt{info, ctxt}
+**同步信号。** `SIGSEGV`、`SIGBUS` 与 `SIGFPE` 由线程自己执行的指令直接引发，与被打断的代码之间有确定的因
+果关系。只要信号确实来自内核而非 `kill`，并且被打断的是一个正在执行用户代码的 goroutine，`sighandler`
+就把信号信息记入 G，然后调用 `preparePanic` 改写被打断的上下文：把出错位置的 PC 压栈，再把 PC 设为
+`sigpanic`，使得看起来像是出错的指令调用了 `sigpanic`。处理函数返回后，线程就从 `sigpanic` 开始执行，
+后者在普通的 goroutine 上下文中发起 panic。若信号发生在运行时内部或 C 代码中（被打断的不是 `m.curg`），
+或发生在禁止栈增长的区域，panic 无法安全进行，运行时只能直接崩溃。把除零与空指针解引用转换为 panic
+的做法始于 Cox 在 2010 年的修改，此前这类错误会直接使程序崩溃 [[Cox, 2010](#ref-cox-2010)]。
 
-	if sig == _SIGPROF {          // 运行时自用：性能采样
-		sigprof(c.sigpc(), c.sigsp(), c.siglr(), gp, getg().m)
-		return
-	}
-	if sig == sigPreempt && debug.asyncpreemptoff == 0 {
-		doSigPreempt(gp, c)       // 运行时自用：异步抢占（见 9.7），随后继续
-	}
+`sigpanic` 并不把所有的非法访存都转换为 panic。对于 `SIGSEGV` 与 `SIGBUS`，只有出错地址小于 0x1000
+时才视为空指针解引用，调用 `panicmem`；其他地址则打印「unexpected fault address」后终止程序，
+除非程序调用过 Go 1.3 引入的 `debug.SetPanicOnFault`。0x1000 这条界线与编译器的约定一致：
+编译器假定所有平台上低于 4096 的地址都不可访问（`minZeroPage`），因此对于偏移量足够小的内存访问，
+它省去显式的空指针检查，而依靠硬件触发的 `SIGSEGV` 来发现空指针。下面的程序展示了这一转换：
 
-	flags := sigtable[sig].flags
-	if !c.sigFromUser() && flags&_SigPanic != 0 {
-		// 同步信号：把现场伪造成调用了 sigpanic，转为可 recover 的 panic
-		gp.sig, gp.sigpc, gp.sigcode1 = sig, c.sigpc(), c.fault()
-		c.preparePanic(sig, gp)
-		return
-	}
-	if c.sigFromUser() || flags&_SigNotify != 0 {
-		if sigsend(sig) {         // 用户信号：放进无锁队列，立刻返回
-			return
-		}
-	}
-	// 剩下的是 _SigKill / _SigThrow：杀死或带栈崩溃
-	if flags&_SigKill != 0 {
-		dieFromSignal(sig)
-	}
-	// ... throw，打印栈并退出
+```go {run=true}
+package main
+
+import (
+	"fmt"
+	"runtime"
+)
+
+func main() {
+	defer func() {
+		err := recover().(runtime.Error) // 由 SIGSEGV 转换而来的运行时错误
+		fmt.Println("recover:", err)
+	}()
+	var p *int
+	fmt.Println(*p) // 访问零页，内核发出 SIGSEGV
 }
 ```
 
-**第二类，运行时自用的信号，就地处理。** `SIGPROF` 是 pprof 的定时采样源
-（[16 工具与可观测性](../../part5toolchain/ch16tools)），处理器在被打断处抓一份 PC 交给
-`sigprof` 记账即返回；`SIGURG` 是异步抢占的载体（[9.7](./preemption.md)），处理器调用
-`doSigPreempt` 在被打断的 g 上「注入一次抢占请求」便返回。注意抢占信号即便命中，处理器也不
-独吞，而是继续往下走完分流，因为一个 `SIGURG` 可能与别的信号合并到达。
-
-**第三类，需要交给用户的信号，才走那座桥。** `SIGINT`、`SIGTERM`、`SIGHUP` 这些带
-`_SigNotify` 标志、或确由用户 `kill` 发来的信号，处理器只调用 `sigsend` 把它塞进无锁队列就
-立刻返回，绝不在处理器里碰 channel、碰锁、碰分配。真正的投递交给队列另一头的专职 goroutine。
-
-这三类的判定，全部编码在 `sigtable` 的标志位里，每个信号一行：
-
-```go
-const (
-	_SigNotify   = 1 << iota // 允许 signal.Notify 收到它（哪怕来自内核）
-	_SigKill                 // Notify 不接则静默退出
-	_SigThrow                // Notify 不接则带栈崩溃
-	_SigPanic                // 来自内核时转为 panic（SIGSEGV/SIGFPE/SIGBUS）
-	_SigDefault              // 未显式请求则不监控
-	// _SigGoExit / _SigSetStack / _SigUnblock / _SigIgn ...
-)
-// 例：SIGSEGV 标 _SigPanic，SIGINT 标 _SigNotify+_SigKill，SIGQUIT 标 _SigNotify+_SigThrow
+```
+recover: runtime error: invalid memory address or nil pointer dereference
 ```
 
-## 9.6.4 sigsend：无锁队列与专职接收 goroutine
+**运行时自用的信号。** `SIGPROF` 由 CPU 性能剖析的定时器周期性地发出，处理函数在被打断处记录一次栈采样后立
+即返回，采样数据随后由 `runtime/pprof` 汇总（[16.5](../../part5toolchain/ch16tools/perf.md)）。`SIGURG`
+是异步抢占的载体：`doSigPreempt` 检查被打断的 G 是否需要被抢占，以及当前位置是否为异步安全点，
+满足条件时调用 `pushCall` 注入一次对 `asyncPreempt` 的调用。这与 `preparePanic` 使用的是同一种手法：
+处理函数本身不做任何复杂的工作，只改写被打断的上下文，使被打断的代码在恢复执行时「调用」一个函数，
+真正的工作在那个函数中、在普通的上下文里完成。由于一个 `SIGURG` 可能与应用程序自己发出的 `SIGURG`
+合并到达，`doSigPreempt` 之后分流还会继续。在不使用 cgo 的 Linux 程序中，运行时还借用 glibc 内部使用的
+`SIGSETXID`（`_SIGRTMIN + 1`），在所有线程上执行同一个系统调用，以实现 `syscall.AllThreadsSyscall`。
 
-桥的两端，是 `sigsend`（生产者，跑在处理器里）与 `signal_recv`（消费者，跑在专职 goroutine 里），
-中间是一个进程内全局的 `sig` 结构。因为生产端身处异步信号安全的牢笼，这个队列必须是**无锁**
-且**不分配**的，整张表是固定大小的位图，状态机用原子的 CAS 驱动：
+**交给用户的信号。** 带有 `_SigNotify` 标志的信号，以及经 `kill` 等系统调用发出的任何信号，都先交给
+`sigsend`。若程序已通过 `signal.Notify` 登记了这个信号，`sigsend` 只在 `sig` 结构中置一个位，
+然后立即返回，在处理函数中不涉及 channel、锁或内存分配，真正的递送由下一小节所述的 goroutine 完成。
+没有人登记的信号，则按 `sigtable` 中的 `_SigKill` 或 `_SigThrow` 使程序退出或崩溃。
+
+## 9.6.4 从 sigsend 到 channel
+
+`sigsend` 与 `signal_recv` 是这一路径的两端：前者在信号处理函数中执行，后者在一个普通的 goroutine 中执行。
+二者之间的 `sig` 结构是一组固定大小的位图，每个信号占一位：
 
 ```go
-// 信号队列：处理器与接收 goroutine 之间的无锁通道（速写，见 sigqueue.go）
+// runtime/sigqueue.go
 var sig struct {
-	note       note                          // 接收方睡眠/唤醒用
-	mask       [(_NSIG + 31) / 32]uint32      // 已入队、待接收方取走的信号位图
-	wanted     [(_NSIG + 31) / 32]uint32      // 用户经 Notify 声明关心的信号
-	ignored    [(_NSIG + 31) / 32]uint32      // 被 Ignore 的信号
-	recv       [(_NSIG + 31) / 32]uint32      // 接收方的本地副本
-	state      atomic.Uint32                  // sigIdle / sigSending / sigReceiving
-	delivering atomic.Uint32                  // 正在 sigsend 中的处理器计数
+	note       note
+	mask       [(_NSIG + 31) / 32]uint32 // 已到达、尚未被取走的信号
+	wanted     [(_NSIG + 31) / 32]uint32 // 经 Notify 登记的信号
+	ignored    [(_NSIG + 31) / 32]uint32 // 经 Ignore 忽略的信号
+	recv       [(_NSIG + 31) / 32]uint32 // 接收方的本地副本
+	state      atomic.Uint32             // sigIdle、sigReceiving 或 sigSending
+	delivering atomic.Uint32             // 正在执行 sigsend 的处理函数个数
 	inuse      bool
 }
 ```
 
-`sigsend` 做的事很克制：把信号对应的 bit 用 CAS 置进 `sig.mask`，再用一个三态状态机决定要不要
-唤醒接收方。`state` 这三个状态是整套同步的核心，它让「写一个 bit」与「唤醒一个睡眠者」这两件事
-不必各自加锁就能正确配合：
+位图的大小固定，置位通过 CAS 完成，因此 `sigsend` 不需要分配内存，也不需要加锁。另一个问题是如何唤醒正在休
+眠的接收方，同时避免不必要的唤醒。`sigqueue.go` 的注释说明，这依靠 `state` 的三个状态完成：`sigReceiving`
+表示接收方正在 `sig.note` 上休眠，且没有新的信号；`sigSending` 表示 `sig.mask` 中**可能**有新的信号，
+此时接收方不会休眠；`sigIdle` 表示没有新的信号，接收方也没有休眠。状态之间的迁移全部通过 CAS 完成。并发的
+`sigsend` 与 `signal_recv` 可能导致对 `sig.mask` 的多余检查，但不会丢失信号，也不会死锁
+[[Go Authors, 2026a](#ref-go-authors-2026a)]。
 
 ```go
+// sigsend：在信号处理函数中把信号放入队列（示意）
 func sigsend(s uint32) bool {
 	bit := uint32(1) << (s & 31)
-	if w := atomic.Load(&sig.wanted[s/32]); w&bit == 0 {
-		return false                          // 没人关心这个信号，直接放行
+	if atomic.Load(&sig.wanted[s/32])&bit == 0 {
+		return false // 没有人登记这个信号
 	}
-	// 把 bit 置进出队列；若已在队列里，省去重复唤醒
-	for {
+	for { // 把信号对应的位置入 sig.mask
 		mask := sig.mask[s/32]
 		if mask&bit != 0 {
-			return true
+			return true // 同一信号尚未被取走，合并为一次
 		}
 		if atomic.Cas(&sig.mask[s/32], mask, mask|bit) {
 			break
 		}
 	}
-	// 仅当接收方正睡眠（sigReceiving）时才 notewakeup，避免无谓的系统调用
-	for {
+	for { // 通知接收方
 		switch sig.state.Load() {
 		case sigIdle:
 			if sig.state.CompareAndSwap(sigIdle, sigSending) {
-				return true                   // 接收方醒着，它稍后自会来看
+				return true // 接收方未休眠，它会在休眠前看到新的信号
 			}
 		case sigSending:
-			return true                       // 已有待处理通知
+			return true // 已有一次通知尚未处理
 		case sigReceiving:
 			if sig.state.CompareAndSwap(sigReceiving, sigIdle) {
-				notewakeup(&sig.note)         // 唤醒睡眠的接收方
+				notewakeup(&sig.note) // 唤醒休眠的接收方
 				return true
 			}
 		}
@@ -224,56 +254,68 @@ func sigsend(s uint32) bool {
 }
 ```
 
-队列另一端，`signal_recv` 跑在一个普通的、不受异步信号安全约束的 goroutine 里，可以自由地
-睡眠与被唤醒。它先把 `sig.mask` 整体换进自己的本地副本 `recv`，逐位取出返回；本地空了就把
-状态切到 `sigReceiving` 并睡到 `sig.note` 上，等下一次 `sigsend` 唤醒。这一进一出，恰好对称：
+`signal_recv` 先从本地副本 `recv` 中逐个交出信号；本地副本为空时，把状态从 `sigIdle` 改为 `sigReceiving`
+并在 `sig.note` 上休眠，或者发现状态为 `sigSending` 而直接把它改回 `sigIdle`；之后用原子交换把 `sig.mask`
+整体取入本地副本，开始下一轮：
 
 ```go
+// signal_recv：在专门的 goroutine 中取出信号（示意）
 func signal_recv() uint32 {
 	for {
-		for i := uint32(0); i < _NSIG; i++ {  // 先把本地副本里的信号逐个交出
+		for i := uint32(0); i < _NSIG; i++ { // 先交出本地副本中的信号
 			if sig.recv[i/32]&(1<<(i&31)) != 0 {
 				sig.recv[i/32] &^= 1 << (i & 31)
 				return i
 			}
 		}
-		for {                                  // 本地空了：睡眠等 sigsend 唤醒
+	Receive:
+		for { // 等待 sigsend 的通知
 			switch sig.state.Load() {
 			case sigIdle:
 				if sig.state.CompareAndSwap(sigIdle, sigReceiving) {
-					notetsleepg(&sig.note, -1) // 在普通 goroutine 上下文里安全睡眠
+					notetsleepg(&sig.note, -1) // 在用户 goroutine 上休眠，期间交出 P
 					noteclear(&sig.note)
+					break Receive
 				}
 			case sigSending:
 				if sig.state.CompareAndSwap(sigSending, sigIdle) {
+					break Receive
 				}
 			}
-			break
 		}
-		for i := range sig.mask {              // 把出队列整体搬进本地副本
+		for i := range sig.mask { // 取走所有新到达的信号
 			sig.recv[i] = atomic.Xchg(&sig.mask[i], 0)
 		}
 	}
 }
 ```
 
-最后一段在用户态，由 `os/signal` 包接手。它在首次 `Notify` 时懒启动一个 goroutine 跑
-`loop`，循环调用 `signal_recv` 取信号，再 `process` 分发到用户注册的 channel 上：
+这里的唤醒本身也必须是异步信号安全的。在 Linux 上，`notewakeup` 最终是一次 futex 系统调用，
+可以在处理函数中使用。macOS 上的 `note` 却基于 pthread 的互斥锁与条件变量实现，而 `pthread_mutex_lock` 与
+`pthread_cond_signal` 都不是异步信号安全的。Taylor 在 Go 1.13 中为此单独给 `sig.note`
+实现了一个基于管道的版本：`sigsend` 向管道写入一个字节，`signal_recv` 阻塞在管道的读端
+[[Taylor, 2019](#ref-taylor-2019)]。也就是说，Go 在 macOS 上使用的正是 9.6.1 介绍的自管道技巧。
+
+最后一段由 `os/signal` 包完成。程序第一次调用 `Notify` 时，`os/signal` 启动一个 goroutine 循环调用
+`signal_recv`，再由 `process` 把信号分发给所有登记了它的 channel：
 
 ```go
-// os/signal：把运行时取出的信号投递到用户 channel（速写）
+// os/signal/signal_unix.go
 func loop() {
 	for {
 		process(syscall.Signal(signal_recv()))
 	}
 }
+
+// os/signal/signal.go 中的 process（示意）
 func process(sig os.Signal) {
+	n := signum(sig)
 	handlers.Lock()
 	defer handlers.Unlock()
-	for c, h := range handlers.m {            // 遍历所有经 Notify 注册的 channel
-		if h.want(signum(sig)) {
-			select {
-			case c <- sig:                    // 非阻塞投递，满了就丢，避免拖住 loop
+	for c, h := range handlers.m {
+		if h.want(n) {
+			select { // 发送，但不阻塞
+			case c <- sig:
 			default:
 			}
 		}
@@ -281,60 +323,163 @@ func process(sig os.Signal) {
 }
 ```
 
-到这里，那个在异步、受限上下文里诞生的信号，已经变成了一次普普通通的 channel 接收。用户
-只需 `signal.Notify(ch, os.Interrupt)` 再 `<-ch`，就能用最熟悉的 `select` 优雅地处理它。
-注意 `process` 的投递是**非阻塞**的：channel 满了就丢弃，这是刻意的取舍，宁可漏一个信号，
-也不让分发循环被一个迟钝的消费者拖死。这也是为何 `signal.Notify` 的 channel 通常应带缓冲。
+发送是非阻塞的：channel 已满时，这次信号对该 channel 而言就被丢弃，以免一个处理迟缓的接收者拖住整个分发循
+环。`Notify` 的文档因此要求调用者保证 channel 有足够的缓冲来跟上预期的信号速率，并指出只用于接收一种信号
+时，容量为 1 的缓冲就已足够 [[Go Authors, 2026b](#ref-go-authors-2026b)]。
 
-## 9.6.5 与其他运行时的取舍，以及一个实际副作用
+信号在到达 channel 之前也可能合并。内核中的标准信号本就不排队，只有实时信号可以排队
+[[Linux man-pages, n.d.b](#ref-linux-man-pages-ndb)]；运行时内部的 `sig.mask` 同样只为每个信号保留一位，
+在 `signal_recv` 取走之前到达的同种信号会合并为一次。下面的程序向自身连续发送 5 次 `SIGUSR1`：
 
-信号与托管运行时的关系一向微妙，根子在于：运行时想用信号，用户和本地库也想用信号，而一个
-进程里同一个信号的处理器只有一份。JVM 同样要接管 `SIGSEGV`（用于空检查与安全点轮询的页保护
-陷入）、`SIGBUS` 等，并为此提供**信号链**（signal chaining，`libjsig`）：把它接管之前已存在的
-处理器记下来，遇到不归自己管的情形再链式转发回去。Go 的 `sigfwdgo`（[9.6.3](#963-处理器只入队goroutine-再分发)）
-解决的是同一个问题，只是方向相反，它在 Go 安装自己的处理器前先把旧的存进 `fwdSig`，需要时
-转发。两套机制殊途同归，都是为了让运行时与本地库在同一个信号上和平共处。
+```go {run=true native=true}
+package main
 
-正因为信号是稀缺的共享资源，Go 给异步抢占挑「哪个信号」时格外讲究。运行时源码里列了一串
-启发式条件：要被调试器默认放行、不被 libc 在混合二进制里内部占用、能够无害地虚假触发、还要
-在没有实时信号的平台（如 macOS）上可用。`SIGUSR1`/`SIGUSR2` 因常被应用赋予真实含义而出局，
-`SIGALRM` 因无法分辨是不是真的定时器到点而出局。最终选中的是 `SIGURG`：它名义上报告
-socket 的带外数据，而带外数据近乎无人使用，且它连「是哪个 socket」都不说明，本就近乎废弃，
-应用即便用到也必须容忍它虚假到来。挑一个「无害到可以随便发」的信号，是这套设计的点睛之笔。
+import (
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+)
 
-这套选择带来一个常被忽视的**实际副作用**。自 Go 1.14 引入异步抢占（[9.7](./preemption.md)）后，
-一个忙碌的程序会频繁收到 `SIGURG`，而信号会中断阻塞中的慢速系统调用，使其以 `EINTR` 返回。
-POSIX 的 `SA_RESTART` 标志能让一部分被中断的系统调用自动重启，Go 安装处理器时也确实带上了
-它，但并非所有系统调用都可重启（如 `poll`、某些 `read`）。因此正确的 Go 代码以及它依赖的
-`syscall` 封装，必须能识别并重试 `EINTR`。这是「为了可抢占性」付出的一处看得见的代价，也提醒
-我们：信号机制里的每一个选择，都会沿着系统调用一路波及到用户可观察的行为。性能与能力的提升
-从不白来，它总在别处留下需要照看的角落。
+func main() {
+	c := make(chan os.Signal, 10)
+	signal.Notify(c, syscall.SIGUSR1)
+	syscall.Kill(os.Getpid(), syscall.SIGUSR1) // 向自身发送信号
+	fmt.Printf("收到：%v\n", <-c)
 
-## 9.6.6 小结
+	for range 5 {
+		syscall.Kill(os.Getpid(), syscall.SIGUSR1)
+	}
+	time.Sleep(100 * time.Millisecond)
+	fmt.Println("连续发送 5 次，收到", len(c), "次")
+}
+```
 
-把本节串起来：异步信号安全这一条硬约束（[9.6.1](#961-异步信号安全处理器里几乎什么都不能做)），
-逼出了「处理器里只做最少事」的铁律；铁律落到零件上，就是每个 M 自带的 `gsignal` 备用栈
-（[9.6.2](#962-gsignal处理器自带的一段安全栈)）、`sighandler` 的三类分流
-（[9.6.3](#963-处理器只入队goroutine-再分发)）、以及把用户信号「降格」成 channel 事件的
-无锁队列与专职 goroutine（[9.6.4](#964-sigsend无锁队列与专职接收-goroutine)）。这套两段式
-与 [9.7](./preemption.md) 的异步抢占同出一辙：在受限的信号上下文里只注入最小的一步，把真正
-的工作推回安全地带完成。理解了这一点，下一节的异步抢占便只是同一手法在调度上的又一次施展。
+```
+收到：user defined signal 1
+连续发送 5 次，收到 1 次
+```
 
-## 延伸阅读的文献
+以上是 macOS 上的运行结果。收到的次数取决于平台以及接收 goroutine 何时运行，但由于上述两层合并，
+它不能反映发送的次数。信号适合传达「发生了某种事件」，而不适合计数。
 
-1. W. Richard Stevens, Stephen A. Rago. *Advanced Programming in the UNIX Environment*,
-   3rd ed. Addison-Wesley, 2013.（异步信号安全、self-pipe 技巧，信号处理的权威论述）
-2. The Linux man-pages project. *signal-safety(7)*（异步信号安全函数白名单）;
-   *sigaltstack(2)*; *signalfd(2)*.
-   https://man7.org/linux/man-pages/man7/signal-safety.7.html
-3. The Go Authors. *runtime/signal_unix.go、runtime/sigqueue.go*（`sighandler`、`sigtramp`/
-   `sigtrampgo`、`sigsend`/`signal_recv`、`sigPreempt = _SIGURG` 的选型注释）.
-   https://github.com/golang/go/blob/master/src/runtime/signal_unix.go
-4. The Go Authors. *os/signal 包文档与 src/os/signal/signal_unix.go*（`Notify`/`loop`/`process`）.
-   https://pkg.go.dev/os/signal
-5. The Go Authors. *Proposal: Non-cooperative goroutine preemption*（#24543，`SIGURG` 与
-   异步抢占的设计动机）. https://go.googlesource.com/proposal/+/master/design/24543-non-cooperative-preemption.md
-6. Oracle / OpenJDK. *Signal Chaining（libjsig）*（托管运行时与本地库共享信号的工业实践）.
-   https://docs.oracle.com/en/java/javase/21/docs/specs/man/java.html
-7. 本书 [9.3 调度器组件](./mpg.md)、[9.7 协作与抢占](./preemption.md)、
-   [14.6 栈管理](../../part4memory/ch14stack).
+`os/signal` 的接口本身也经历过演变。Symonds 在 2009 年加入的最初版本只提供 `Incoming`：
+进程收到的所有信号都发往同一个 channel [[Symonds, 2009](#ref-symonds-2009)]。Go 1 发布前，Cox 以 `Notify`
+取代了它：调用者可以只请求特定的信号，信号也会递送给每一个请求者，而不只是其中一个
+[[Cox, 2012](#ref-cox-2012)]。此后又陆续加入了 `Stop`、`Ignore`、`Reset`、`Ignored`（Go 1.11）与
+`NotifyContext`（Go 1.16）等函数。运行时一侧的 `sigqueue` 则在 Go 1.4 中从 C 改写为 Go。
+
+## 9.6.5 与非 Go 代码共用信号
+
+一个进程中，每个信号只能有一个处理函数。当 Go 代码与 C 代码共处一个进程时，例如 Go 程序通过 cgo 调用 C
+库，或者 Go 代码以 `-buildmode=c-shared` 编译后被其他程序加载，双方都可能需要同一个信号，
+这就需要约定由谁处理。
+
+基本规则由 Go 1.5 的信号转发确立。Go 安装处理函数时记下原有的处理函数；实现者 Petrovic 在提交说明中写道，
+按照 Taylor 的建议，信号在同时满足以下条件时转交给原来的处理函数：Go 之前已存在一个非默认的处理函数；
+信号是同步信号；信号发生在非 Go 线程上，或发生在 Go 线程执行 C 代码期间
+[[Petrovic, 2015](#ref-petrovic-2015)]。今天的 `sigfwdgo` 仍遵循这一思路：Go 没有接管的信号一律转交；Go
+接管的信号中，只有发生在 Go 代码之外的同步信号与 `SIGPIPE` 才转交。macOS 是一个例外：它把 `SIGPIPE`
+递送给主线程而非写入管道的线程，运行时无法判断信号的来源，只能忽略它。
+
+反过来，非 Go 代码也需要遵守约定。`os/signal` 的文档要求：非 Go 代码安装的处理函数必须带有 `SA_ONSTACK`
+标志，否则 Go 线程在有限的栈上收到信号时很可能崩溃；若它为同步信号安装处理函数，应当记下 Go 的处理函数，
+并在信号发生于 Go 代码中时调用它，否则一些运行时 panic 将不会如预期发生
+[[Go Authors, 2026b](#ref-go-authors-2026b)]。以 `-buildmode=c-archive` 或 `c-shared` 编译的 Go
+代码默认只为同步信号与 `SIGPIPE` 安装处理函数，自 Go 1.18 起还包括抢占所用的 `SIGURG`；其余信号只有在调用
+`Notify` 之后才会接管。
+
+Java 虚拟机面对的是同样的问题。HotSpot 使用 `SIGSEGV`、`SIGBUS`、`SIGFPE` 等信号实现隐式空指针检查等功能，
+并以 `SIGQUIT` 打印 Java 线程的栈回溯，这两点都与 Go 相同 [[Oracle, n.d.b](#ref-oracle-ndb)]。
+它的**信号链**（signal chaining）机制在虚拟机创建时保存已有的处理函数，遇到不属于虚拟机的信号时调用它们；
+对于虚拟机创建之后才安装的处理函数，则需要预先加载 `libjsig.so`，由它拦截 `signal`、`sigaction` 等调用，
+把新的处理函数排在虚拟机的处理函数之后。嵌入虚拟机的程序若需要自己处理 `SIGINT`、`SIGTERM` 等信号，
+可以使用 `-Xrs` 选项减少虚拟机对信号的使用 [[Oracle, n.d.a](#ref-oracle-nda)]。
+
+## 9.6.6 抢占信号的选择与 EINTR
+
+信号是进程中稀缺的共享资源，因此 Go 1.14 为异步抢占选择信号时颇为谨慎。`signal_unix.go` 中 `sigPreempt`
+的注释列出了四条启发式规则 [[Go Authors, 2026a](#ref-go-authors-2026a)]：
+
+1. 调试器默认应当放行这个信号。在 Linux 上，这样的信号有 `SIGALRM`、`SIGURG`、`SIGCHLD`、`SIGIO`、
+   `SIGVTALRM`、`SIGPROF`、`SIGWINCH`，以及若干 glibc 内部信号。
+2. 在 Go 与 C 混合的程序中，它不应被 libc 内部使用，例如 `SIGCANCEL` 与 `SIGSETXID`。
+3. 它应当可以虚假地到达而不造成后果。`SIGALRM` 不合适，因为处理函数无法分辨它是否由真正的定时器引起；
+   `SIGUSR1` 与 `SIGUSR2` 也不合适，因为应用程序常赋予它们实际的含义。
+4. 它不能是实时信号，因为 macOS 等平台没有实时信号。
+
+`SIGURG` 满足全部条件。它原本用于报告套接字上的带外数据，而带外数据几乎无人使用，`SIGURG`
+甚至不说明是哪个套接字，本身就近乎无用；即便有应用程序使用它，也必须能够容忍虚假的 `SIGURG`。注释还提到，
+`SIGIO` 也不失为一个选择，只是更可能被实际使用。抢占机制的设计动机与实现见 [9.7](./preemption.md)
+及其设计文档 [[Clements, 2019a](#ref-clements-2019a)]。
+
+这一选择带来了一个用户可见的后果。信号会打断阻塞中的慢速系统调用，使其以 `EINTR` 失败。Go 1.14
+的发布说明指出，由于抢占的实现，Unix 系统上的 Go 程序将比以往收到更多的信号，使用 `syscall` 或
+`golang.org/x/sys/unix` 的程序会看到更多以 `EINTR` 失败的慢速系统调用，这些程序必须处理这类错误，
+最常见的做法是重试 [[Go Authors, 2020](#ref-go-authors-2020)]。Go 安装处理函数时虽然带有 `SA_RESTART`
+标志，但它只能使部分系统调用自动重启：按照 `signal(7)` 的说明，`poll`、`select`、`epoll_wait`、
+`nanosleep`，以及设置了超时的套接字操作，无论是否设置 `SA_RESTART`，被信号处理函数打断后都会以 `EINTR`
+失败 [[Linux man-pages, n.d.b](#ref-linux-man-pages-ndb)]。标准库在 `os` 与 `internal/poll` 中以
+`ignoringEINTR` 等辅助函数重试这类系统调用，直接调用 `syscall` 的代码则需要自己处理。
+若需要排查与抢占信号有关的问题，可以设置 `GODEBUG=asyncpreemptoff=1` 关闭异步抢占。
+
+## 9.6.7 小结
+
+异步信号安全这一约束决定了 Go 信号处理的结构：处理函数运行在每个线程专用的 `gsignal` 栈上，
+只做最少的工作。对同步信号与抢占信号，它改写被打断的上下文，把真正的工作交给 `sigpanic` 与
+`asyncPreempt`；对用户信号，它在位图中置一个位，把递送交给一个普通的 goroutine，最终以 channel
+的形式呈现给用户。与非 Go 代码共用信号时，运行时通过保存与转发原有的处理函数，与 C 库及其他运行时共存。
+
+## 延伸阅读
+
+- <a id="ref-bernstein-nd"></a>[Bernstein, n.d.] D. J. Bernstein. The self-pipe trick.
+  https://cr.yp.to/docs/selfpipe.html
+  自管道技巧的提出者对其来历的说明。
+- <a id="ref-clements-2019a"></a>[Clements, 2019a] Austin Clements. Proposal: Non-cooperative goroutine
+  preemption. Go design document #24543, 2019.
+  https://go.googlesource.com/proposal/+/master/design/24543-non-cooperative-preemption.md
+  `SIGURG` 与异步抢占的设计动机。
+- <a id="ref-clements-2019b"></a>[Clements, 2019b] Austin Clements. runtime: mlock top of signal stack on
+  Linux 5.2–5.4.1. Go commit 8174f7fb2b, 2019. https://go.dev/cl/209899
+- <a id="ref-cox-2010"></a>[Cox, 2010] Russ Cox. runtime: turn divide by zero, nil dereference into
+  panics. Go commit 5963dbac08, 2010. https://golang.org/cl/906041
+- <a id="ref-cox-2012"></a>[Cox, 2012] Russ Cox. os/signal: selective signal handling. Go commit
+  35586f718c, 2012. https://golang.org/cl/3749041
+- <a id="ref-go-authors-2020"></a>[Go Authors, 2020] The Go Authors. Go 1.14 Release Notes, 2020.
+  https://go.dev/doc/go1.14
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `runtime/signal_unix.go`、
+  `runtime/sigqueue.go`. https://github.com/golang/go/blob/master/src/runtime/signal_unix.go
+  `sighandler`、`sigtramp`/`sigtrampgo`、`sigsend`/`signal_recv`，以及 `sigPreempt = _SIGURG`
+  的选型注释（本节对照 Go 1.26）。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `os/signal` 包文档与
+  `src/os/signal/signal_unix.go`. https://pkg.go.dev/os/signal
+  `Notify`、`loop`、`process`，以及默认行为与 cgo 程序中的信号约定。
+- <a id="ref-linux-man-pages-nda"></a>[Linux man-pages, n.d.a] The Linux man-pages project.
+  *signal-safety(7)*; *sigaltstack(2)*; *signalfd(2)*.
+  https://man7.org/linux/man-pages/man7/signal-safety.7.html
+  异步信号安全函数的名单。
+- <a id="ref-linux-man-pages-ndb"></a>[Linux man-pages, n.d.b] The Linux man-pages project. *signal(7)*.
+  https://man7.org/linux/man-pages/man7/signal.7.html
+  标准信号与实时信号的排队语义，以及系统调用被信号打断后的重启规则。
+- <a id="ref-oracle-nda"></a>[Oracle, n.d.a] Oracle. *The java Command*（Java SE 21 工具规范）.
+  https://docs.oracle.com/en/java/javase/21/docs/specs/man/java.html
+  `-Xrs` 等与信号有关的选项：托管运行时与本地库共享信号的工业实践。
+- <a id="ref-oracle-ndb"></a>[Oracle, n.d.b] Oracle. *Java Platform, Standard Edition Troubleshooting
+  Guide*（Java SE 8），第 7 章 Handle Signals and Exceptions.
+  https://docs.oracle.com/javase/8/docs/technotes/guides/troubleshoot/signals003.html
+  信号链与 `libjsig`，以及 HotSpot 使用的信号。
+- <a id="ref-petrovic-2015"></a>[Petrovic, 2015] Srdjan Petrovic. runtime: signal forwarding. Go commit
+  5c8fbc6f1e, 2015. https://go.dev/cl/8712
+- <a id="ref-stevens-and-rago-2013"></a>[Stevens and Rago, 2013] W. Richard Stevens and Stephen A. Rago.
+  *Advanced Programming in the UNIX Environment*, 3rd ed. Addison-Wesley, 2013.
+  信号处理与异步信号安全的经典论述。Bernstein 在介绍自管道技巧时，引用了该书初版对 `select`
+  与信号无法安全混用的论述。
+- <a id="ref-symonds-2009"></a>[Symonds, 2009] David Symonds. os/signal: new package. Go commit
+  b5866494ea, 2009. https://golang.org/cl/162056
+- <a id="ref-taylor-2019"></a>[Taylor, 2019] Ian Lance Taylor. runtime: use a pipe to wake up signal_recv
+  on Darwin. Go commit c485e8b559, 2019. https://go.dev/cl/184169
+- <a id="ref-zhang-2019"></a>[Zhang, 2019] Cherry Zhang. runtime: always use Go signal stack in non-cgo
+  program. Go commit 73d20f8186, 2019. https://go.dev/cl/207445
+- 本书 [9.3 MPG 模型与并发调度单元](./mpg.md)、[9.7 协作与抢占](./preemption.md)、
+  [第 14 章 执行栈管理](../../part4memory/ch14stack)。

@@ -5,169 +5,248 @@ title: "9.2 工作窃取式调度"
 
 # 9.2 工作窃取式调度
 
-[9.1](./model.md) 留下一个问题：每个 P 各有一条本地队列，活儿难免分布不均，有的 P 忙不过来，
-有的 P 无所事事。如何在不引入中心瓶颈的前提下把负载摊匀，是并发调度的核心难题。Go 的答案，
-是一个有着三十年理论积累、并在整个工业界反复出现的设计：工作窃取（work stealing）。
+[9.1](./model.md) 中的每个 P 各有一条本地运行队列，负载因此难免分布不均：有的 P 积压了大量 G，有的 P
+无事可做。如何在不引入中心瓶颈的前提下平衡负载，是并发调度的核心问题。Go 采用的是**工作窃取**（work
+stealing），一种有着数十年理论积累、在工业界反复出现的设计。本节先讨论 Go 的具体做法，
+再介绍其背后的调度理论，然后对照它在 Cilk、Java、Rust 等系统中的不同形态，最后讨论仍未解决的问题。
 
-本节会比别处走得更深一些：先讲清 Go 怎么做，再追到它背后的调度理论（为什么它「可证明地好」），
-然后横看它在 Cilk、Java、Rust 等系统里的不同化身，最后停在仍然开放的问题上。
+## 9.2.1 工作共享与工作窃取
 
-## 9.2.1 共享还是窃取
+在处理器之间迁移任务，有两种基本范式。在**工作共享**（work sharing）中，处理器每产生新的任务，
+调度器就尝试把其中一部分迁移到负载较轻的处理器上。在**工作窃取**中，主动权在空闲的处理器一方：
+它到其他处理器那里窃取任务。Blumofe 与 Leiserson 指出了二者的直观差别：当所有处理器都有工作可做时，
+工作窃取调度器不迁移任何任务，而工作共享调度器总在迁移
+[[Blumofe and Leiserson, 1999](#ref-blumofe-leiserson-1999)]。负载越重，工作窃取的迁移反而越少，
+这是它相对工作共享的根本优势，后文的通信量界限为此提供了严格的依据。
 
-把任务在处理器间挪动，历史上有两种范式。**工作共享**（work sharing）：谁生出新任务，就主动把
-一部分推给空闲的处理器。**工作窃取**（work stealing）：空闲的处理器自己动手，去别人那里把任务
-偷过来。差别在迁移的频率。工作共享只要有新任务就可能触发迁移；工作窃取只在某个处理器真的
-没活干时才迁移，当所有处理器都忙，窃取者找不到下手的机会，迁移自然停止。**负载越重，
-工作窃取反而越安静**，这是它相对工作共享的根本优势，也有严格的通信量界限支撑（见 9.2.4）。
+工作窃取的思想至少可以追溯到 Burton 与 Sleep 在 1981 年对函数式程序并行执行的研究
+[[Burton and Sleep, 1981](#ref-burton-sleep-1981)]，以及 Halstead 在 1984 年对 Multilisp 的实现
+[[Halstead, 1984](#ref-halstead-1984)]。他们已经注意到这一策略在空间与通信上的好处，但为它建立严格保证的，
+是十年后 MIT 的 Cilk 项目。
 
-## 9.2.2 Go 的找活儿顺序
+## 9.2.2 Go 如何寻找可运行的 G
 
-一个绑定了 P 的 M 运行完手头的 G 后，并不直接去窃取，而是按一条由近及远、由廉价到昂贵的
-顺序搜索（运行时的 `findRunnable`）：
+M 执行完当前的 G 之后，并不立即去窃取，而是按照由近及远、由廉价到昂贵的顺序寻找下一个可运行的 G。这一过程
+由运行时的 `findRunnable` 完成 [[Go Authors, 2026](#ref-go-authors-2026)]：
 
 ```go
-// findRunnable：M 找下一个可运行的 G（伪代码）
-func findRunnable() *g {
-    if pp.schedtick%61 == 0 && !sched.runq.empty() { // 1. 每 61 次先看全局，保证公平
-        if gp := globrunqget(); gp != nil { return gp }
-    }
-    if gp := runqget(pp); gp != nil { return gp }     // 2. 本地队列（含 runnext）
-    if gp := globrunqget(); gp != nil { return gp }    // 3. 全局队列
-    if gp := netpoll(); gp != nil { return gp }        // 4. 网络轮询器
-    if gp := stealWork(); gp != nil { return gp }      // 5. 从其他 P 窃取一半
-    stopm()                                            // 6. 实在没有：自旋或休眠
-}
+// Go 1.26 runtime.findRunnable 的主干（有删节，注释为笔者所加）
+top:
+	// ……若 GC 正在等待则先暂停；运行本 P 上到期的计时器；必要时调度 GC 标记工作者
+	if pp.schedtick%61 == 0 && !sched.runq.empty() { // 每 61 次调度检查一次全局队列，保证公平
+		lock(&sched.lock)
+		gp := globrunqget()
+		unlock(&sched.lock)
+		if gp != nil {
+			return gp, false, false
+		}
+	}
+	if gp, inheritTime := runqget(pp); gp != nil { // 本地运行队列，含 runnext
+		return gp, inheritTime, false
+	}
+	if !sched.runq.empty() { // 全局运行队列：取出一批，转入本地队列
+		lock(&sched.lock)
+		gp, q := globrunqgetbatch(int32(len(pp.runq)) / 2)
+		unlock(&sched.lock)
+		// ……
+	}
+	if netpollinited() && netpollAnyWaiters() && sched.lastpoll.Load() != 0 && sched.pollingNet.Swap(1) == 0 {
+		list, delta := netpoll(0) // 非阻塞地检查网络轮询器
+		// ……
+	}
+	// 自旋的 M 不超过忙碌 P 数量的一半
+	if mp.spinning || 2*sched.nmspinning.Load() < gomaxprocs-sched.npidle.Load() {
+		if !mp.spinning {
+			mp.becomeSpinning()
+		}
+		gp, inheritTime, tnow, w, newWork := stealWork(now) // 从其他 P 窃取
+		// ……
+	}
+	// ……仍无工作：交出 P，再检查一次全局队列与各个 P，阻塞地等待网络事件，最终休眠（stopm）
 ```
 
-三个让窃取高效的细节。**本地队列有界**：每个 P 是一个定长 256 的环形缓冲，绝大多数入队出队
-无锁；放满时把一半搬到全局队列（`runqputslow`）兜底。**窃取目标随机且打散**：若所有空闲 P 都
-从同一起点按固定顺序去偷，会一窝蜂挤向同一目标。Go 让每个窃取者以随机起点加上一个与 P 总数
-**互质**的随机步长，走出覆盖全部 P 的伪随机排列，互质保证不重不漏，随机化避免羊群效应。
-**自旋线程**：允许少量 M 处于自旋态（上限 `GOMAXPROCS`，计于 `sched.nmspinning`）主动找活儿
-而不立刻休眠，新就绪的 G 能被迅速接住，免去频繁的线程休眠唤醒。
+这一过程有以下几个要点。
 
-## 9.2.3 一点必要的模型
+**本地运行队列。** 每个 P 的本地队列是一个容量为 256 的环形缓冲区，只有所属的 P 向其中放入 G，而所属的 P
+与窃取者都可以从中取出 G，因此可以用无锁的方式实现。队列已满时，`runqputslow` 把其中一半（128 个）
+连同新的 G 一起转移到全局队列。反过来，从全局队列取 G 时一次取出一批，数量不超过 128，
+也不超过全局队列长度除以 `GOMAXPROCS` 再加一，使全局队列中的 G 大致均匀地分给各个 P。
 
-要讲清楚工作窃取「好在哪」，先要有一把尺子。把一段并行计算抽象成一张有向无环图（DAG），
-每个结点是一条单位时间的指令，边是依赖关系。两个量刻画它：
+**runnext。** 本地队列之外，每个 P 还有一个 `runnext` 槽，存放下一个优先运行的 G。它由 Clements 在 Go 1.5
+中引入，所针对的问题是：一个 G 唤醒另一个 G 后，被唤醒者排在本地队列的末尾，如果队列中还有计算密集的 G，
+它要等待很久才能运行。改为把被唤醒者放入 `runnext`，并让它继承唤醒者剩余的时间片之后，通过无缓冲 channel
+来回通信的一对 G 便像一个整体那样获得 CPU 时间；在为此编写的基准测试中，耗时降低了 99.88%
+[[Clements, 2015](#ref-clements-2015)]。`runnext` 中的 G 刚刚由当前 P 唤醒，其数据很可能仍在缓存中，
+这同时也改善了局部性。
 
-- **总工作量** $T_1$：结点总数，即单处理器上的运行时间；
-- **关键路径长度**（span）$T_\infty$：最长依赖链的长度，即无穷多处理器下的运行时间。
+**窃取的方式。** `stealWork` 最多遍历全部 P 四轮，每次从目标 P 的本地队列中取走一半（向上取整）的 G。
+遍历的顺序是一个伪随机排列：以随机位置为起点，以一个与 P 的总数**互质**的随机数为步长。
+互质保证每一轮恰好访问每个 P 一次，随机化则避免所有窃取者涌向同一个目标。这一做法由 Vyukov 在 Go 1.7
+中引入，此前的实现随机挑选 4×`GOMAXPROCS` 次目标，由于伪随机数发生器的质量不高，常常有 P
+一次也没有被检查到 [[Vyukov, 2016](#ref-vyukov-2016)]。最后一轮还会运行其他 P 上到期的计时器，并窃取其他
+P 的 `runnext`；为了不与目标 P 争抢它刚刚唤醒、马上就要运行的 G，窃取 `runnext` 之前会先等待约 3 微秒。
 
-二者之比 $T_1/T_\infty$ 称为**并行度**，它是可能获得的加速比上限。任何调度器在 $P$ 个处理器上的
-运行时间 $T_P$ 都不可能低于 $\max(T_1/P,\ T_\infty)$。一个好的调度器，应当让 $T_P$ 尽量贴近这个
-下界。
+**自旋线程。** 找不到工作的 M 并不立即休眠，而是进入**自旋**状态继续寻找，使新就绪的 G 能被迅速接手，
+也避免线程频繁地休眠与唤醒。自旋要消耗 CPU，因此其数量受到限制。Vyukov 的设计文档规定自旋的 M 至多为
+`GOMAXPROCS` 个 [[Vyukov, 2012](#ref-vyukov-2012)]；而 2013 年的实现采用了更严格的条件，即自旋的 M
+不超过忙碌 P 数量的一半，以免在 `GOMAXPROCS` 很大而程序的并行度很低时浪费 CPU
+[[Vyukov, 2013](#ref-vyukov-2013)]，这一条件沿用至今。
 
-## 9.2.4 为什么工作窃取「可证明地好」
+## 9.2.3 计算模型
 
-**贪心调度的上界。** Graham（1969）证明，任何「不让处理器无故空闲」的贪心调度都不会差到哪里去：
+要讨论工作窃取有多好，需要先有一个衡量的标准。把一段并行计算抽象为一张有向无环图，每个结点是一条单位时间
+的指令，边表示依赖关系。刻画这张图的有两个量：
 
-$$T_P \le \frac{T_1 - T_\infty}{P} + T_\infty \le \frac{T_1}{P} + T_\infty.$$
+- **工作量** $T_1$：结点的总数，即在单个处理器上执行所需的时间；
+- **关键路径长度**（span）$T_\infty$：最长依赖链的长度，即在无穷多个处理器上执行所需的时间。
 
-这同时意味着贪心调度至多是最优解的 $2 - 1/P$ 倍。Brent（1974）对算术表达式求值给出了同型的
-$t + (q-t)/p$ 形式。这条界限常被笼统称作「Brent 定理」，但更一般、更早的其实是 Graham 的
-列表调度结果，值得正名。
+二者之比 $T_1/T_\infty$ 称为**并行度**，它是可能获得的加速比的上限。由于 $P$ 个处理器每一步至多执行 $P$ 条
+指令，且关键路径上的指令只能依次执行，任何调度在 $P$ 个处理器上的执行时间 $T_P$ 都满足
+$T_P \ge \max(T_1/P,\ T_\infty)$。好的调度器应当使 $T_P$ 尽量接近这一下界。
 
-**随机化工作窃取的界限。** 贪心上界只说「别让处理器闲着就不会太差」，没说怎么**分布式地**做到。
-Blumofe 与 Leiserson（FOCS 1994；JACM 1999）证明，对**完全严格**（fully-strict，即 join 边只
-指向父线程的 fork-join 计算）的计算，随机化工作窃取在期望意义上达到
+## 9.2.4 理论保证
+
+**贪心调度。** Brent [[Brent, 1974](#ref-brent-1974)]与 Graham [[Graham, 1969](#ref-graham-1969)]
+关于有向无环图调度的早期工作表明，存在执行时间不超过 $T_1/P + T_\infty$ 的调度。这一上界是两个下界之和，
+因此与最优调度至多相差一倍。所谓**贪心调度**，是指每一步若有至少 $P$ 条指令就绪则执行其中 $P$ 条，
+否则执行全部就绪的指令；Blumofe 与 Leiserson 以及 Eager 等人 [[Eager et al., 1989](#ref-eager-et-al-1989)]
+证明，任何贪心调度都能达到这一上界，Blumofe 与 Leiserson 称之为**贪心调度定理**
+[[Blumofe and Leiserson, 1999](#ref-blumofe-leiserson-1999)]：
+
+$$T_P \le \frac{T_1}{P} + T_\infty.$$
+
+**随机化工作窃取。** 贪心调度定理只说明不让处理器空闲就不会太差，并没有说明如何以分布式的方式做到这一点。
+Blumofe 与 Leiserson 证明，对于**完全严格**（fully strict）的计算，即每条同步边都从子线程指向其父线程的
+fork-join 式计算，随机化工作窃取的期望执行时间为
 
 $$\mathbb{E}[T_P] = \frac{T_1}{P} + O(T_\infty),$$
 
-并且所需空间不超过 $S_1 \cdot P$（$S_1$ 为串行执行的空间），处理器间通信的期望不超过
-$O(P \cdot T_\infty \cdot S_{\max})$。三个界限一起说明：只要计算本身并行度足够（$T_\infty \ll T_1$），
-工作窃取就能逼近线性加速，且空间与通信代价都有上界。
+所需空间不超过 $S_1 P$，其中 $S_1$ 为串行执行所需的空间；期望的总通信量不超过
 
-> 证明的精髓（面向有兴趣的读者）：给每个就绪结点按其在 DAG 中的深度赋一个**几何递减的势能**，
-> 计算推进时总势能下降。一个「balls into bins」式的引理表明，$P$ 个处理器各做一次随机窃取尝试，
-> 总有常数比例命中非空队列的顶端，于是 $\Theta(P)$ 次尝试就能让势能下降一个常数因子。而势能
-> 沿关键路径只能下降 $O(T_\infty)$ 次，因此**期望的成功窃取次数为 $O(P \cdot T_\infty)$**。把这些
-> 窃取与空闲时间摊到 $P$ 个处理器上，正好是 $O(T_\infty)$，叠加干活的 $T_1/P$ 即得上界。空间与
-> 通信界则依赖完全严格性带来的「busy-leaves」性质，每次窃取只迁移一个活动记录帧。
+$$O\big(P\,T_\infty\,(1 + n_d)\,S_{\max}\big),$$
 
-**窃取用的双端队列。** 这些界限要落地，靠的是一个精心设计的数据结构。经典做法里，每个处理器
-维护一个**双端队列**：所有者从**底端** push/pop（LIFO，刚产生的子任务最可能仍在缓存里，
-局部性好），窃取者从**顶端** steal（FIFO，偷走较早、通常较大的子计算，一次偷够本）。
+其中 $S_{\max}$ 是最大的活动记录，$n_d$ 是任一线程与其父线程同步的最多次数。
+三个界限都在常数因子内达到最优；通信量界限也印证了工作窃取比工作共享更节省通信这一经验之谈
+[[Blumofe and Leiserson, 1999](#ref-blumofe-leiserson-1999)]。时间界限的证明采用了一种记账方法：
+每个处理器在每一步要么执行一条指令，要么尝试一次窃取，相应地向「工作」或「窃取」两个桶之一放入一元；
+执行结束时工作桶中恰有 $T_1$ 元，执行时间则等于两桶总额除以 $P$。难点在于界定窃取桶，为此需要「延迟序列」
+论证：若窃取尝试的次数很多，就可以在图中找到一条指令序列，使每次窃取尝试发起时，序列中都有某条指令处于「关
+键」状态；而一条关键指令经过若干次窃取尝试后仍保持关键的概率很小，因此这样的序列不太可能出现，
+窃取尝试的期望次数为 $O(P\,T_\infty)$。两桶之和除以 $P$，即得上面的时间界限。由此可知，
+只要计算的并行度足够高，即 $T_\infty \ll T_1/P$，工作窃取就能逼近线性加速，而空间与通信的代价也都有上界。
+
+**窃取用的双端队列。** 理论界限的落地依赖于一种精心设计的数据结构。经典的做法是每个处理器维护一个
+**双端队列**：所有者在底端放入与取出任务，即后进先出，刚产生的子任务最可能仍在缓存中，局部性好；
+窃取者从顶端取走任务，即先进先出，取走的是较早产生、通常也较大的子计算，一次窃取便能获得足够多的工作。
 
 ```mermaid
 flowchart LR
-    OWNER["所有者 M"] -->|"push / pop 底端（LIFO，利于局部性）"| BOT
-    subgraph DQ["一个工作队列（双端队列）"]
+    OWNER["所有者"] -->|"在底端放入与取出（后进先出，利于局部性）"| BOT
+    subgraph DQ["一个处理器的双端队列"]
       direction TB
-      TOP["顶端：较旧的任务"]
+      TOP["顶端：较早的任务"]
       BOT["底端：较新的任务"]
     end
-    THIEF["空闲的窃取者 M"] -->|"steal 顶端（FIFO，取走较大的子计算）"| TOP
+    THIEF["空闲的窃取者"] -->|"从顶端窃取（先进先出，取走较大的子计算）"| TOP
 ```
 
-Arora、Blumofe 与 Plaxton（SPAA 1998）给出了无锁（non-blocking）的窃取双端队列，并把分析推广
-到了「多道程序」环境（操作系统未必持续给满 $P$ 个处理器）。Chase 与 Lev（SPAA 2005）进一步给出
-可增长的循环数组版本，是今天实践中最常被采用的设计。需要澄清一个常见误传：所谓 **THE 协议**
-与**工作优先原则**（work-first principle）出自 Cilk-5（Frigo、Leiserson、Randall，PLDI 1998），
-**并非** ABP 的贡献，ABP 贡献的是那个无锁双端队列。
+Arora、Blumofe 与 Plaxton 给出了这种双端队列的无锁（non-blocking）实现，并把分析推广到多道程序环境：
+操作系统内核被视为对手，未必持续提供 $P$ 个处理器；他们的分析采用基于结点权重的势函数
+[[Arora et al., 1998](#ref-arora-et-al-1998)]。Chase 与 Lev 进一步给出了以可增长的循环数组实现的版本
+[[Chase and Lev, 2005](#ref-chase-lev-2005)]，是今天实践中最常用的设计。需要澄清的是，
+常与工作窃取一并提及的 **THE 协议**与**工作优先原则**（work-first principle）出自 Cilk-5
+[[Frigo et al., 1998](#ref-frigo-et-al-1998)]，而不是 Arora 等人的工作。
 
-值得强调的是：**Go 的实现并不是这个经典 LIFO 双端队列**。Go 的本地队列是一个 FIFO 环形缓冲，
-外加一个 LIFO 的 `runnext` 槽来照顾刚派生的 G 的局部性（[9.3](./mpg.md)）；窃取仍是「偷一半」。
-这是工程对理论的一次改写。
+Go 的本地队列并不是这种经典的双端队列。它是一个先进先出的环形缓冲区，另以后进先出的 `runnext`
+槽照顾新唤醒的 G 的局部性（[9.3](./mpg.md)），窃取时也不是只取一个任务，而是取走一半。
+这是工程实现对理论模型的一次改造。
 
-## 9.2.5 同一个思想的众多化身
+## 9.2.5 其他系统中的工作窃取
 
-工作窃取不是 Go 的发明，它的思想最早可追溯到 Burton 与 Sleep（1981）对函数式程序并行执行的
-研究、Halstead（1984）的 Multilisp，而把它发展成有严格保证、可工程化的，是 MIT 的 Cilk 项目。
-此后它几乎成了并行运行时的标准件，但各家的取舍不尽相同：
+工作窃取几乎已成为并行运行时的标准组件，但各个系统的取舍不尽相同：
 
-- **Cilk / Cilk-5**：fork-join 的鼻祖，确立了工作优先原则与 THE 协议、两段克隆编译。
-- **Intel TBB**、**Java `ForkJoinPool`**（Doug Lea，2000，自称「Cilk 工作窃取框架的变体」）、
-  **.NET TPL**：都建立在 Cilk 式工作窃取之上；其中 TPL 刻意用「duplicating queue」而非 THE。
-- **Rust Rayon**：以 `join(a, b)` 为核心的 fork-join 数据并行；**Tokio** 的多线程异步运行时则
-  明确借鉴了 **Go 的**定长本地队列算法（带一个 LIFO 槽 + 全局队列）。
+- **Cilk-5**：fork-join 并行的代表，确立了工作优先原则与 THE 协议，并以「两个克隆」
+  的编译方式降低创建任务的开销 [[Frigo et al., 1998](#ref-frigo-et-al-1998)]；
+- **Java 的 Fork/Join 框架**：Lea 在论文中说明，其总体设计是 Cilk 工作窃取框架的一个变体
+  [[Lea, 2000](#ref-lea-2000)]；
+- **.NET 任务并行库**：同样以工作窃取调度任务 [[Leijen et al., 2009](#ref-leijen-et-al-2009)]；
+- **Tokio**：Rust 的多线程异步运行时。Lerche 在重写调度器时仔细阅读了 Go 的源码，采用了相同的设计：
+  每个处理器一条定长的本地队列，溢出时转入由互斥锁保护的全局队列，另有一个优先检查的「下一个任务」槽，
+  窃取时取走一半 [[Lerche, 2019](#ref-lerche-2019)]。
 
-而 Go 与上面这条 Cilk 谱系有一处根本不同，必须讲清楚：**Cilk 系是 fork-join 的任务 DAG 调度器，
-Go 是通用的 M:N goroutine 调度器**。goroutine 是任意的、会因 channel/系统调用/网络 I/O 而阻塞、
-还会被异步抢占（[9.7](./preemption.md)）的执行单元，它们**不构成完全严格的 fork-join DAG**。
-因此，9.2.4 那条漂亮的 $T_1/P + O(T_\infty)$ 保证，**对 Go 并不成立**。Go 的工作窃取是一个借鉴了
-这套理论的**负载均衡启发式**，而非可证明最优的调度器。理解这一点，才不会把理论的结论错套到
-goroutine 上。
+Go 与 Cilk 这一脉系统有一处根本的不同：Cilk 调度的是 fork-join 式的任务图，Go 调度的是通用的 goroutine。
+goroutine 可以因 channel、系统调用或网络 I/O 而阻塞，也可以被异步抢占（[9.7](./preemption.md)），
+它们一般并不构成完全严格的计算。因此，9.2.4 中 $T_1/P + O(T_\infty)$ 的保证对 Go 并不成立。Go
+的工作窃取是借鉴了这套理论的负载均衡策略，而不是可以证明其性能界限的调度器。认清这一点，
+才不会把理论结论错误地套用到 goroutine 上。
 
 ## 9.2.6 演进与开放问题
 
-Go 自己的工作窃取也在演进：Go 1.1 随 GMP 引入工作窃取（Vyukov 2012 设计文档），Go 1.5
-为每个 P 增设 `runnext` 槽以照顾新派生 G 的局部性与延迟，自旋线程的管理也几经打磨。
+Go 的工作窃取本身也在演进：Go 1.1 随 GMP 模型引入工作窃取 [[Vyukov, 2013](#ref-vyukov-2013)]，Go 1.5 加入
+`runnext` [[Clements, 2015](#ref-clements-2015)]，Go 1.7 改用互质步长遍历全部 P
+[[Vyukov, 2016](#ref-vyukov-2016)]。
 
-这套机制远未「完工」，前沿仍有不少开放问题。**NUMA 感知**：随机窃取对内存局部性视而不见，
-把任务偷到另一个 NUMA 节点会付远程访存的代价（[9.11](./numa.md)），如何在保留随机窃取的
-负载均衡最优性的同时引入局部性偏好，仍是活跃课题。**延迟与吞吐的张力**：LIFO 本地 + FIFO 窃取
-对吞吐与缓存友好，却可能饿死延迟敏感的任务，各家都在用 FIFO 槽、公平计数、抢占等手段打补丁。
-**高核数扩展性**：全局队列与无协调的随机窃取在核数很高时会产生争用与无效窃取，缓解手段
-（空闲线程 park、自旋阈值、分层队列）多是启发式的。**理论与实践的鸿沟**：干净的 $T_1/P+O(T_\infty)$
-只对 fork-join DAG 成立，如何为「会阻塞、有 I/O、可抢占」的通用调度给出可证明的界限，
-基本仍是开放的。
+这套机制仍有不少开放问题。其一是**NUMA 感知**：随机窃取不考虑内存的局部性，把任务窃取到另一个 NUMA
+节点上会带来远程访存的代价（[9.11](./numa.md)）；如何在保留负载均衡能力的同时偏向局部性，仍是活跃的课题。
+其二是**延迟与吞吐的张力**：后进先出的本地执行有利于吞吐与缓存，却可能使延迟敏感的任务长时间得不到运行，
+各个系统只能以公平计数、时间片继承与抢占等手段加以弥补，Go 每 61 次调度检查一次全局队列便是一例。
+其三是**高核数下的可扩展性**：核数很高时，每个空闲的 M 都要扫描全部 P，窃取的开销随之增大，这一问题自
+2018 年起就有讨论，至今尚未解决 [[Hines, 2018](#ref-hines-2018)]。其四是**理论与实践的差距**：简洁的
+$T_1/P + O(T_\infty)$ 只对完全严格的计算成立，如何为会阻塞、有 I/O、可被抢占的通用调度给出可证明的界限，
+基本上仍是开放的问题。
 
-## 延伸阅读的文献
+## 延伸阅读
 
-1. R. L. Graham. "Bounds on Multiprocessing Timing Anomalies." *SIAM J. Applied Math.*,
-   17(2), 1969. https://doi.org/10.1137/0117039 （贪心/列表调度的 2-近似界）
-2. Richard P. Brent. "The Parallel Evaluation of General Arithmetic Expressions."
-   *Journal of the ACM*, 21(2), 1974. https://doi.org/10.1145/321812.321815
-3. Robert D. Blumofe and Charles E. Leiserson. "Scheduling Multithreaded Computations
-   by Work Stealing." *FOCS 1994*；*Journal of the ACM*, 46(5), 1999.
-   https://doi.org/10.1145/324133.324234 （时间/空间/通信三大界限）
-4. Nimar S. Arora, Robert D. Blumofe, C. Greg Plaxton. "Thread Scheduling for
-   Multiprogrammed Multiprocessors." *SPAA 1998*. https://doi.org/10.1145/277651.277678
-   （无锁窃取双端队列）
-5. David Chase and Yossi Lev. "Dynamic Circular Work-Stealing Deque." *SPAA 2005*.
-   https://doi.org/10.1145/1073970.1073974
-6. Matteo Frigo, Charles E. Leiserson, Keith H. Randall. "The Implementation of the
-   Cilk-5 Multithreaded Language." *PLDI 1998*. https://doi.org/10.1145/277650.277725
-   （工作优先原则、THE 协议、两段克隆）
-7. Doug Lea. "A Java Fork/Join Framework." *ACM Java Grande 2000*.
-   https://doi.org/10.1145/337449.337465
-8. Daan Leijen, Wolfram Schulte, Sebastian Burckhardt. "The Design of a Task Parallel
-   Library." *OOPSLA 2009*. https://doi.org/10.1145/1640089.1640106
-9. F. Warren Burton and M. Ronan Sleep. "Executing Functional Programs on a Virtual
-   Tree of Processors." *FPCA 1981*. （工作窃取思想的早期源头）
-10. Carl Lerche. *Making the Tokio scheduler 10x faster*, 2019.
-    https://tokio.rs/blog/2019-10-scheduler （Tokio 借鉴 Go 的本地队列算法）
-11. Dmitry Vyukov. *Scalable Go Scheduler Design Doc*, 2012. https://go.dev/s/go11sched
-12. Chris Hines 等. *runtime: scheduler work stealing slow for high GOMAXPROCS*. Go issue
-    #28808, 2018. https://github.com/golang/go/issues/28808 （高并行度下窃取扫描的开销）
+- <a id="ref-graham-1969"></a>[Graham, 1969] R. L. Graham. "Bounds on Multiprocessing Timing Anomalies."
+  *SIAM Journal on Applied Mathematics* 17(2): 416–429, 1969. https://doi.org/10.1137/0117039
+  列表调度的近似界限。
+- <a id="ref-brent-1974"></a>[Brent, 1974] Richard P. Brent. "The Parallel Evaluation of General
+  Arithmetic Expressions." *Journal of the ACM* 21(2): 201–206, 1974.
+  https://doi.org/10.1145/321812.321815
+- <a id="ref-blumofe-leiserson-1999"></a>[Blumofe and Leiserson, 1999] Robert D. Blumofe, Charles E.
+  Leiserson. "Scheduling Multithreaded Computations by Work Stealing." *Journal of the ACM* 46(5):
+  720–748, 1999（会议版本见 FOCS 1994）. https://doi.org/10.1145/324133.324234
+  时间、空间与通信三个界限，以及贪心调度定理。
+- <a id="ref-arora-et-al-1998"></a>[Arora et al., 1998] Nimar S. Arora, Robert D. Blumofe, C. Greg
+  Plaxton. "Thread Scheduling for Multiprogrammed Multiprocessors." *SPAA 1998*, 119–129.
+  https://doi.org/10.1145/277651.277678
+  无锁的窃取双端队列，以及多道程序环境下的分析。
+- <a id="ref-chase-lev-2005"></a>[Chase and Lev, 2005] David Chase, Yossi Lev. "Dynamic Circular
+  Work-Stealing Deque." *SPAA 2005*, 21–28. https://doi.org/10.1145/1073970.1073974
+- <a id="ref-frigo-et-al-1998"></a>[Frigo et al., 1998] Matteo Frigo, Charles E. Leiserson, Keith H.
+  Randall. "The Implementation of the Cilk-5 Multithreaded Language." *PLDI 1998*, 212–223.
+  https://doi.org/10.1145/277650.277725
+  工作优先原则、THE 协议与两个克隆的编译方式。
+- <a id="ref-lea-2000"></a>[Lea, 2000] Doug Lea. "A Java Fork/Join Framework." *ACM Java Grande 2000*,
+  36–43. https://doi.org/10.1145/337449.337465
+- <a id="ref-leijen-et-al-2009"></a>[Leijen et al., 2009] Daan Leijen, Wolfram Schulte, Sebastian
+  Burckhardt. "The Design of a Task Parallel Library." *OOPSLA 2009*, 227–242.
+  https://doi.org/10.1145/1640089.1640106
+- <a id="ref-burton-sleep-1981"></a>[Burton and Sleep, 1981] F. Warren Burton, M. Ronan Sleep. "Executing
+  Functional Programs on a Virtual Tree of Processors." *FPCA 1981*, 187–194.
+  https://doi.org/10.1145/800223.806778
+  工作窃取思想的早期源头。
+- <a id="ref-lerche-2019"></a>[Lerche, 2019] Carl Lerche. "Making the Tokio scheduler 10x faster." Tokio
+  Blog, 2019-10-13. https://tokio.rs/blog/2019-10-scheduler
+  Tokio 借鉴 Go 的本地队列算法。
+- <a id="ref-vyukov-2012"></a>[Vyukov, 2012] Dmitry Vyukov. *Scalable Go Scheduler Design Doc*. 2012.
+  https://go.dev/s/go11sched
+- <a id="ref-hines-2018"></a>[Hines, 2018] Chris Hines. "runtime: scheduler work stealing slow for high
+  GOMAXPROCS." golang/go#28808, 2018-11-15. https://github.com/golang/go/issues/28808
+  高并行度下窃取扫描的开销。
+- <a id="ref-halstead-1984"></a>[Halstead, 1984] Robert H. Halstead. "Implementation of Multilisp: Lisp on
+  a Multiprocessor." *Proceedings of the 1984 ACM Symposium on LISP and Functional Programming*, 9–17.
+  https://doi.org/10.1145/800055.802017
+- <a id="ref-go-authors-2026"></a>[Go Authors, 2026] The Go Authors. `runtime/proc.go`.
+  https://github.com/golang/go/blob/master/src/runtime/proc.go
+  `findRunnable`、`stealWork`、`runqputslow` 与 `randomOrder` 的实现。
+- <a id="ref-clements-2015"></a>[Clements, 2015] Austin Clements. "runtime: yield time slice to most
+  recently readied G." Go commit e870f06c3f, 2015-04-22（Go 1.5）.
+  https://github.com/golang/go/commit/e870f06c3f
+- <a id="ref-vyukov-2013"></a>[Vyukov, 2013] Dmitry Vyukov. "runtime: improved scheduler." Go commit
+  779c45a507, 2013-03-01. https://github.com/golang/go/commit/779c45a50700bda0f6ec98429720802e6c1624e8
+- <a id="ref-vyukov-2016"></a>[Vyukov, 2016] Dmitry Vyukov. "runtime: improve randomized stealing logic."
+  Go commit ea0386f85f, 2016-03-18（Go 1.7）. https://github.com/golang/go/commit/ea0386f85f
+- <a id="ref-eager-et-al-1989"></a>[Eager et al., 1989] Derek L. Eager, John Zahorjan, Edward D. Lazowska.
+  "Speedup versus Efficiency in Parallel Systems." *IEEE Transactions on Computers* 38(3): 408–423, 1989.
+  https://doi.org/10.1109/12.21127

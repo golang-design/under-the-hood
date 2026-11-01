@@ -5,194 +5,215 @@ title: "9.11 NUMA 感知与调度器的未来"
 
 # 9.11 NUMA 感知与调度器的未来
 
-前面各节描述的调度器有一个从未明说的假设：任何 M 访问内存的速度都一样快，任何两个 P 之间
-搬动一个 G 的代价都相同。在笔记本和单路服务器上，这个假设近乎成立。可一旦把程序放到大型
-多路服务器上，它就开始失真，而且核数越多、失真越大。本节谈这道裂缝：它从何而来，Go 调度器
-为何至今对它视而不见，一份曾被认真设计却没有落地的 NUMA 感知方案，以及今天的用户该如何
-绕过去。
+前面各节描述的调度器隐含着一个假设：任何线程访问任何内存的代价都相同，把一个 goroutine 从一个 P
+移到另一个 P，除了缓存变冷之外没有别的损失。在笔记本和单路服务器上，这个假设大体成立；
+在多路服务器上则不然。本节讨论这一假设失效的原因、Go 运行时在这方面实际具有的局部性、Dmitry Vyukov 在
+2014 年提出却没有实现的 NUMA 感知调度设计，以及在运行时之外可以采取的做法。
 
-## 9.11.1 NUMA：内存不再是一块平地
+## 9.11.1 非均匀访存
 
-早年的对称多处理（SMP）机器里，所有 CPU 经一条共享总线访问同一块内存，访存延迟与是哪个核
-发起的无关。这种「一块平地」的内存模型简单，却随核数增长而失效：共享总线成了瓶颈，每多一个
-核就多一分争用。**NUMA（non-uniform memory access，非均匀访存）** 是工业界给出的答案。
-把机器拆成若干 **节点**（node），每个节点是一个 socket 加上直连在它身上的一片本地内存，
-节点之间用片间互连（Intel 的 UPI、AMD 的 Infinity Fabric）连成一张网。CPU 访问本节点的
-内存走最短路径，访问别节点的内存则要跨越互连，多一跳甚至多几跳。
+早期的对称多处理（SMP）机器中，所有 CPU 经同一条总线访问同一组内存，访存延迟与发起访问的 CPU 无关。
+核数增加之后，共享的总线与内存控制器成了瓶颈。**非均匀访存**（non-uniform memory access，NUMA）
+的做法是把机器分成若干节点，每个节点有自己的 CPU 和直接相连的本地内存，节点之间用处理器间的互连相连。
+访问本节点的内存路径最短；访问其他节点的内存要经过互连，延迟更高，带宽也更低
+[[Lameter, 2013](#ref-lameter-2013)]。Vyukov 在设计文档的开头写道：「随着 Intel QPI 与 AMD HT 技术的出现，
+即使是普通的 SMP 服务器也成了 NUMA。」[[Vyukov, 2014](#ref-vyukov-2014)]
 
 ```mermaid
 flowchart LR
-    subgraph N0["NUMA 节点 0"]
+    subgraph N0["节点 0"]
       direction TB
-      C0["CPU 0（多核 + LLC）"]
-      M0[("本地内存 0")]
-      C0 ---|"本地：快"| M0
+      C0["CPU 0"] ---|"本地访问"| M0[("本地内存 0")]
     end
-    subgraph N1["NUMA 节点 1"]
+    X{{"处理器间互连"}}
+    subgraph N1["节点 1"]
       direction TB
-      C1["CPU 1（多核 + LLC）"]
-      M1[("本地内存 1")]
-      C1 ---|"本地：快"| M1
+      C1["CPU 1"] ---|"本地访问"| M1[("本地内存 1")]
     end
-    C0 -. "远程：跨互连，更慢" .-> M1
-    C1 -. "远程：跨互连，更慢" .-> M0
+    N0 <-. "远程访问" .-> X <-. "远程访问" .-> N1
 ```
 
-代价是实打实的。本地与远程的访存延迟通常相差一到两倍，跨节点带宽也低于本地带宽，具体数字
-随平台而变，可在 Linux 上用 `numactl --hardware` 读出节点拓扑与节点间的相对距离矩阵。
-比延迟更隐蔽的是 **缓存一致性的开销**：当一个核要写一行被别的节点缓存着的数据时，一致性协议
-（MESI 一族）要先让远端那份副本失效，这条「失效消息」也得跨互连往返。于是 NUMA 上的伪共享
-（false sharing，[12.2](../../part4memory/ch12alloc/component.md)）比 SMP 上更疼：同一缓存行
-被两个节点的核反复争夺，每次写都要付一次跨节点的一致性往返。
+差距的大小取决于平台和节点之间的距离。Ulrich Drepper 在 2007 年引用的 AMD 数据中，
+隔一跳与隔两跳的读取分别比本地读取慢 9% 与 30%；Drepper 自己在隔一跳的远程内存上测量读取带宽，
+结果始终比本地低 20% [[Drepper, 2007](#ref-drepper-2007)]。缓存能缓解这一问题：
+远程的数据一旦进入本地缓存，再次访问就很快。所以 NUMA 的影响主要落在缓存装不下、
+或者需要在节点之间反复传递的数据上。Linux 上可以用 `numactl --hardware` 列出系统中的节点
+[[Linux man-pages, n.d.](#ref-linux-man-pages-nd)]。
 
-把这件事写成一个粗略的成本模型，更能看清它对调度的意义。设一个 G 在其生命周期里发起 $n$ 次
-访存，其中比例 $r \in [0,1]$ 落在远程节点，本地与远程的单次延迟分别为 $t_l$ 与 $t_r$
-（典型地 $t_r \approx 1.5 t_l \sim 2 t_l$），则它的访存总成本约为
+可以用一个粗略的模型表达它对调度的意义。设一个 goroutine 一生中有 $n$ 次未命中缓存的访存，其中比例为 $r$
+的访问落在远程节点，本地与远程的单次延迟分别为 $t_l$ 与 $t_r$，则访存的总代价约为
 
 $$
 T(r) = n\big[(1-r)\,t_l + r\,t_r\big] = n\,t_l\Big[1 + r\big(\tfrac{t_r}{t_l} - 1\big)\Big].
 $$
 
-理想的 NUMA 局部性是 $r \to 0$，成本逼近 $n\,t_l$；最坏是数据与执行核分属两端、$r \to 1$，
-成本翻到 $n\,t_r$。调度器的每一次跨节点迁移，做的正是把某个 G 的 $r$ 从近 0 推向更大的值。
-对访存密集（$n$ 大）的负载，这笔账可观；对 I/O 密集、$n$ 本就小的负载，则几乎可以忽略。
-这个简单的式子，已经预告了下文那份 NUMA 方案「收益高度依赖工作负载」的结论。
+把 goroutine 移到另一个节点的 CPU 上，会让它此前分配的数据都变成远程数据，$r$ 随之增大。对访存密集、$n$
+很大的程序，这笔代价可观；对大部分时间在等待 I/O 的程序，$n$ 本来就小，影响有限。NUMA
+优化的收益因程序而异，原因就在这里。
 
-一句话，一台 NUMA 机器更像一个内部就带着距离的小型分布式系统。对运行其上的运行时来说，
-「数据在哪个节点、执行它的核在哪个节点」不再是无关紧要的细节，而是直接写进延迟账单的一笔。
+数据落在哪个节点，由操作系统决定。Linux 的系统默认策略是「本地分配」：物理页优先从发生分配的 CPU
+所在的节点取得 [[Linux kernel, n.d.a](#ref-linux-kernel-nda)]。对匿名内存而言，
+分配发生在线程第一次访问这一页时 [[Linux man-pages, n.d.](#ref-linux-man-pages-nd)]。Go 的堆就是匿名内存，
+因此一页内存落在哪个节点，取决于哪个线程最先访问它，而不取决于哪个线程向内核申请了这段地址空间。
 
-## 9.11.2 局部性：Go 运行时有它，却是无意得来的
+## 9.11.2 Go 运行时中的局部性
 
-读到这里读者或许会问：既然 NUMA 影响这么大，Go 运行时是怎么活下来的？答案是它确实享受着
-相当一部分局部性，只不过这局部性是别的设计「顺手」带来的，而非冲着 NUMA 去的。
+Go 运行时没有节点的概念。Go 1.26 的运行时源码中找不到任何与 NUMA 相关的代码：
+工作窃取用一个与拓扑无关的伪随机顺序遍历所有 P（[9.2](./steal.md)），M 运行在哪个 CPU 上、属于哪个节点，
+运行时都不记录 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
 
-最重要的一处是 **每 P 一份的 mcache**（[9.3](./mpg.md)、[12.2](../../part4memory/ch12alloc/component.md)）。
-一个 G 在某个 P 上分配的小对象，来自这个 P 的本地缓存；只要这个 G 后续仍在同一个 P（多半是
-同一个核）上运行、仍碰它自己刚分配的对象，访存就大概率落在本地节点。工作窃取
-（[9.2](./steal.md)）「优先跑本地运行队列、本地空了才去偷」的策略，同样隐含地倾向于让一个 G
-连续在同一个 P 上推进。再加上 Linux 内核 CFS 调度器默认带的 CPU 亲和性，它不会无缘无故把一个
-线程从一个核弹到另一个核，于是「G 待在原 P、原 P 待在原核、原核守着本地内存」这条链在多数
-时候自然成立。
+尽管如此，运行时仍然保有一部分局部性，只是这些局部性来自其他设计，而不是为 NUMA 而做。Michael Pratt 在
+2024 年的 issue 中列举了运行时维持亲和性的几处做法 [[Pratt, 2024](#ref-pratt-2024)]：
 
-但「大概率」不是「保证」。这套局部性在三个地方会断：
+- goroutine 被换下时，通常放回本地 P 的运行队列，稍后在同一个 P 上继续运行，除非被其他 P 窃取；
+- P 在停止之前一直留在同一个 M 上；
+- M 本身不尝试维持 CPU 亲和性，但操作系统的调度器通常会这样做。
 
-- **工作窃取是拓扑无关的。** 偷 G 时，调度器在所有 P 里按一个伪随机顺序挨个试，挑中谁就偷谁，
-  完全不看目标 P 在哪个节点。一旦把一个 G 从它数据所在节点的核偷到另一个节点的核上，这个 G
-  接下来每次访问老数据都付远程的代价，而它新分配的对象又落到了新节点，局部性就此撕裂。
-- **内存分配不绑节点。** mcache 见底时向 mcentral、mheap 补货（[12.2](../../part4memory/ch12alloc/component.md)），
-  拿到的页来自全局堆，不保证落在当前 P 所在的节点。堆 arena 也没有按节点切分。
-- **M、P 与节点没有绑定关系。** P 只是逻辑处理器，M 是哪个 OS 线程、跑在哪个核、属于哪个节点，
-  运行时一概不记。
+Pratt 也指出了这条亲和链与 NUMA 的联系。goroutine 从所在 P 的内存分配缓存 mcache（[9.3](./mpg.md)、
+[12.2](../../part4memory/ch12alloc/component.md)）中分配对象；按照上一节的本地分配策略，
+新取得的页落在最先写入它的线程所在的节点上。只要亲和链不断，goroutine 写入的新页就在它运行的节点上；
+一旦它迁移到另一个节点的 CPU 上，访问这些对象就变成了远程访问。
 
-把这三点合起来，结论很直接：**Go 的调度器是 NUMA 无感（NUMA-oblivious）的。** 运行时源码里
-找不到一处节点、socket 或互连距离的概念，工作窃取的目标选择是一个与拓扑无关的伪随机枚举：
+这条链在几处会断开。Pratt 在同一个 issue 中指出：goroutine 偶尔会被放进全局运行队列，从而更可能换到另一个
+P 上；停止一切（[9.4](./schedule.md)）会停下所有 P，恢复运行时各个 P 被分给任意的 M；GC
+的标记工作者在停止一切期间启动，并以高优先级调度，往往占据原本运行着用户 goroutine 的 P，把那个 goroutine
+挤到别的 P 上。此外，工作窃取不区分目标 P 在哪个节点，运行时的空闲内存也不按节点划分。Pratt 同时强调，
+这些迁移对性能的影响从未被测量过：迁移的间隔通常在 10 毫秒以上，在这样的时间尺度上，
+缓存变冷的代价是否显著并不清楚。
 
-```go
-// 工作窃取的目标顺序：与 NUMA 拓扑完全无关（runtime/proc.go，速写）
-//
-// randomOrder 用「与 GOMAXPROCS 互质的步长」在所有 P 上做无重复的伪随机枚举：
-// 若 X 与 count 互质，则 (i + X) % count 恰好遍历 0..count-1 一次。
-func stealWork(now int64) (gp *g, ...) {
-	pp := getg().m.p.ptr()
-	const stealTries = 4
-	for i := 0; i < stealTries; i++ {
-		// 从一个随机位置起，按互质步长枚举全部 P。allp 里相邻的两个 P
-		// 可能分属不同 NUMA 节点，这里既不知道、也不在乎。
-		for enum := stealOrder.start(cheaprand()); !enum.done(); enum.next() {
-			p2 := allp[enum.position()]
-			if pp == p2 || idlepMask.read(enum.position()) {
-				continue
-			}
-			if gp := runqsteal(pp, p2, /*stealRunNextG=*/...); gp != nil {
-				return gp // 偷到就走，无论 p2 在近端还是远端节点
-			}
-		}
-	}
-	// ...
-}
-```
+操作系统也会主动调整数据的位置。Linux 的自动 NUMA 平衡（`numa_balancing`）周期性地解除页的映射，
+借随后的缺页来采样哪个线程在访问哪一页，再决定是否把这一页迁移到访问者所在的节点。内核文档提醒，
+解除映射与处理缺页本身有开销，未必能被局部性的改善抵消；工作负载已经绑定在节点上时，应当关闭这一功能
+[[Linux kernel, n.d.b](#ref-linux-kernel-ndb)]。
 
-这是一个清醒的取舍，而非疏漏。下一节就讲，更「正确」的那条路，其实有人完整设计过。
+它与 Go 运行时之间曾经产生过意外的相互作用。2016 年，Rhys Hiltner 报告一个有大量 goroutine 的程序在 GC
+标记终止阶段停顿很长，在含一百万个 goroutine 的复现程序中，停顿在 121 至 1010 毫秒之间。`perf`
+显示这期间有大量缺页，内核在处理缺页时调用 `do_numa_page` 与 `migrate_misplaced_page` 迁移页面：GC
+对内存的大量访问让内核以为这些页应当迁往 GC 工作者所在的节点，迁移恰好发生在标记终止期间时，停顿随之延长
+[[Hiltner, 2016](#ref-hiltner-2016)]。把进程的内存策略设为 `MPOL_BIND` 可以避开这种迁移，
+即使绑定的是全部节点也有效，因为在 `MPOL_BIND` 之下，已经位于允许节点上的页不会被移动。Austin Clements
+在讨论中表示，正确的解决办法是让运行时对 NUMA 更友好，但那是长期的工作。问题最终从另一个方向得到解决：
+Clements 的改动让标记终止只处理栈被改动过的 goroutine，不再逐一检查每个 goroutine
+[[Clements, 2016](#ref-clements-2016)]。Hiltner 的实际应用（约 6 万个 goroutine）的标记终止停顿由
+11 毫秒降到 1.3 毫秒，再加上 `MPOL_BIND` 是 1.0 毫秒。Clements 据此判断，迁移主要发生在对 goroutine
+描述符这类元数据的访问上，随后关闭了这个 issue。这些改动随 Go 1.7 发布。
 
-## 9.11.3 一份设计完整却没有落地的方案
+## 9.11.3 一份没有实现的设计
 
-针对 NUMA，Dmitry Vyukov 在 2014 年提交过一份 NUMA 感知调度器的设计（golang/go#14406
-的前身提案）。它的骨架沿用至今的 MPG（[9.3](./mpg.md)）没有推倒重来，而是在其上叠一层
-节点拓扑：
+2014 年 9 月，Vyukov 写了一份 NUMA 感知调度器的设计文档 [[Vyukov, 2014](#ref-vyukov-2014)]。它以 MPG
+模型（[9.3](./mpg.md)）为基础，在其上加入节点这一层；MPG 模型本身也出自 Vyukov 之手
+[[Vyukov, 2012](#ref-vyukov-2012)]。文档开宗明义地给出了前提：
 
-- **P 按 NUMA 节点分组。** 运行时在启动时探测拓扑，把 P 划归各节点，让「同节点的 P」成为一个
-  显式的集合。
-- **窃取与唤醒先就近。** 一个 P 空闲找活时，先在本节点的兄弟 P 里偷；本节点确实没有可偷的，
-  才升级到跨节点窃取。唤醒一个休眠的 M/P 时，同样优先唤醒本节点的，让相关的 G 尽量聚在一个
-  节点里跑。
-- **堆按节点本地化。** 内存分配尽量从当前 P 所在节点的本地内存出页，让 arena 与节点对齐，
-  使「在哪个节点上分配、就在哪个节点上访问」成为常态而非巧合。
+> 要获得最大的收益，必须在整个层次上保证亲和性：CPU 核与 M、M 与 P、P 与 G，以及内存。只要其中一层失效，
+> 收益就会大打折扣。
 
-思路并不神秘，真正难的是落地。它要在调度的 **快路径** 上引入节点这个新维度，牵动运行队列的
-组织、窃取与唤醒的策略、乃至内存分配器的出页逻辑（[12](../../part4memory/ch12alloc)），
-全局复杂度的上升是显著且永久的：此后每一处碰调度或分配的改动，都要多想一层拓扑。而收益
-高度依赖工作负载，访存密集、数据有清晰节点亲和性的程序受益明显，可大量 Go 服务是 I/O 密集、
-G 寿命短、数据本就在节点间流动的，对它们这层机制近乎只增成本不见回报。权衡之下，官方判断
-这笔投入在当时不划算，方案至今没有提上日程，也没有合并。
+围绕这一前提，设计做了以下安排：
 
-这件事值得和垃圾回收里的 **ROC（Request Oriented Collector，[13](../../part4memory/ch13gc)）**
-并置来看。两者都是理论上更优、设计也已相当成熟、最终却选择「不做」的方案。它们共同勾出
-Go 团队一以贯之的工程取向：一个更优的设计，若以全局复杂度的显著、持久上升为代价，而收益
-又不普惠，那么「暂不采纳」本身就是一个负责任的决定。这条原则在本书里会反复出现，它不是
-保守，而是把简单当作一种要长期偿还的资产来经营。
+- 全局资源按节点划分。堆、全局运行队列、空闲 M 的池都按节点分开；P 需要新的 span
+  时优先从本节点的堆中取得，保证分配到的是本地内存。网络轮询器与计时器改为每个 P 一份。
+- 线程绑定到节点，而不是绑定到核。文档的理由是：如果把线程绑定到具体的核，两个进程可能都选中同一个核，
+  各自只以一半的速度运行而浑然不觉；只绑定到节点，可以给操作系统留出协调进程间竞争的余地。P
+  严格分属各个节点，并记住上一次运行它的 M（`lastm`），以维持 P 与 M 之间的亲和性。
+- 调度策略偏向本地。窃取的顺序是本节点的全局队列、本节点其他 P 的队列、远程节点的全局队列、远程节点 P
+  的队列。本地队列由严格的先进先出改为大体上后进先出，以更好地利用缓存，同时每隔一段时间从另一端取出一个
+  goroutine，保证公平。被窃取的 goroutine 借助它登记过的网络轮询器与计时器回到原来的 P。
+- 垃圾回收与栈也按节点组织：每个节点有自己的 GC 工作者与待扫描对象队列；栈从本节点的缓存中分配，
+  长期在远程节点上运行的 goroutine 可以把栈迁移过去。
 
-## 9.11.4 Go 今天靠什么，用户今天怎么办
+文档也列出了风险，并承认即使是这样一个相对保守的亲和性方案，也可能让某些程序变慢。
+几个进程可能都把线程安排到同一个节点上，使这个节点过载而其他节点空闲；一个被所有 goroutine
+频繁访问的大型数据结构如果全部分配在一个节点上，这个节点的内存总线会成为瓶颈，
+这时把内存交错分布在各个节点上反而更好。
 
-既然运行时不管 NUMA，那这件事就被推到了它的上下两层：操作系统与用户。
+这份设计没有实现。其中的个别想法后来以独立的形式出现，例如 Go 1.5 的 `runnext` 让被唤醒的 goroutine
+紧接着唤醒者运行，它的数据因此很可能仍在缓存中（[9.2](./steal.md)）；Go 1.14 的计时器成了每个 P
+一份的结构（[9.10](./timer.md)）。但节点这一层从未进入运行时，也没有留下采纳或否决的正式记录。
+这与垃圾回收中的事务制导回收（ROC）不同：ROC 有原型与实测，因写屏障的开销而被放弃
+（[13.9](../../part4memory/ch13gc/roc.md)）。从设计文档本身也能看出实现的难度：调度、内存分配、
+垃圾回收与栈管理都要引入节点这一维度，而收益又因程序而异。
 
-运行时实际倚仗的，是这样几样「不必它操心」的机制。其一是 **OS 调度器的 CPU 亲和性**：Linux
-CFS 默认不会随意迁移线程，M 多半能守在原核附近，前述的隐式局部性才得以维持。其二是
-**透明大页（THP）**：运行时在 Linux 上对堆内存调用 `madvise(MADV_HUGEPAGE)`
-（`runtime/mem_linux.go`），让内核尽量用大页支撑堆，减少 TLB miss，这虽不是冲着 NUMA 去的，
-却顺带降低了访存的固定开销。其三就是上一节说的 **每 P 结构的隐式局部性**。三者叠加，让 Go
-在没有任何 NUMA 代码的情况下，仍能在多路机器上跑出可用的性能。
+## 9.11.4 运行时之外的做法
 
-需要更强 NUMA 局部性的用户，今天现实的做法是在 **进程外** 解决，而不是等运行时：
+运行时不处理 NUMA，需要更好局部性的程序只能在运行时之外解决。
 
-- **整进程绑定。** 用 `numactl --cpunodebind=0 --membind=0 ./server` 把整个进程钉在一个
-  节点上，CPU 与内存都不出节点。代价是只用了机器的一部分，适合单进程吃不满整机的场景。
-- **每节点一进程 + 分片。** 在每个 NUMA 节点上各起一个进程，各自绑定到本节点，并把
-  `GOMAXPROCS` 设成该节点的核数，再在应用层按节点把数据与请求分片（sharding）。这等于
-  在进程层面手工实现了「P 按节点分组」，是吃满大机器又保住局部性的常见架构。
-- **线程级 pinning。** `taskset` 之类工具可把进程限定在某组核上。但要留意：Go 不暴露「把某个
-  goroutine 钉在某个 OS 线程」的稳定接口，`runtime.LockOSThread` 只绑 G 与 M，不绑 M 与核，
-  所以纯 goroutine 级的精细 pinning 在 Go 里并不顺手，往往得退回到「每节点一进程」的粗粒度。
+- 把进程绑定到一个节点。`numactl --cpunodebind=0 --membind=0 ./server` 让进程只在节点 0 的 CPU 上运行，
+  只从节点 0 分配内存。Linux 上 `GOMAXPROCS` 的默认值取自进程 CPU 亲和性掩码中的 CPU 数目，
+  所以它会自动等于这个节点的 CPU 数 [[Go Authors, 2026a](#ref-go-authors-2026a)]；Go 1.25 起，
+  运行时还会在可用的 CPU 数目变化时定期更新 `GOMAXPROCS` [[Go Authors, 2025](#ref-go-authors-2025)]。
+  代价是只用了机器的一部分。
+- 每个节点运行一个进程。在每个节点上各启动一个绑定到本节点的进程，在应用层按节点划分数据与请求。
+  这相当于在进程层面实现了设计文档中的「按节点划分」，是既用满整台机器又保持局部性的常见做法。
+- 交错分配。对于被所有线程共同访问的大型数据，`numactl --interleave=all` 让内存按页轮流分布在各个节点上，
+  避免单个节点的内存总线成为瓶颈，这正是设计文档风险一节的建议。
+- 关闭自动 NUMA 平衡。进程已经绑定到节点时，按内核文档的建议关闭 `numa_balancing`，省去采样与迁移的开销。
 
-换句话说，Go 把 NUMA 的责任明确交给了部署者：运行时给出一台「假装均匀」的机器，再由部署者用
-`numactl` 和分片在它外面重新画出节点的边界。
+线程级的绑定在 Go 中并不方便。`runtime.LockOSThread` 只把 goroutine 固定在当前的线程上，
+并不把线程固定在某个 CPU 上；运行时也没有提供把 M 绑定到 CPU 或节点的接口。
 
-## 9.11.5 未尽的课题
+运行时对透明大页的使用同样与节点无关，并且已经收缩。在多数 Linux 发行版的默认设置下，
+`madvise(MADV_HUGEPAGE)` 会让线程阻塞在内核对内存的回收与整理中，最坏可达数百毫秒乃至数秒；因此 Go 1.21.1
+起，运行时不再把堆内存标记为 `MADV_HUGEPAGE`，目前只对堆索引、页分配器位图等少量元数据请求大页
+[[Knyszek, 2023](#ref-knyszek-2023)]。
 
-调度器自 GM 演进到 GMP（[9.3](./mpg.md)）之后，骨架长期稳定，足见当初设计的功力。但核数仍在
-增长，单机上百核、多节点已不罕见，超大规模并行下的几处压力点始终是活跃的关注对象：全局结构
-（全局队列、`sched.lock`）的争用、工作窃取的扩展性，以及本节的 NUMA 局部性。
+## 9.11.5 现状
 
-NUMA 感知会不会回归核心？没有定论。倾向于它回归的理由是核数与节点数还在涨，隐式局部性能
-兜住的工作负载比例在缩小；倾向于继续搁置的理由是云上「每节点一容器」的部署已经把问题在编排层
-解决了，且容器感知的 `GOMAXPROCS`（Go 1.25）让「按 cgroup 配额跑」更顺，反而削弱了运行时
-自己管拓扑的紧迫性。更可能的演进，仍是一系列不动骨架的渐进打磨，正如 `runnext`（1.5）、
-异步抢占（1.14）、容器感知的 `GOMAXPROCS`（1.25）那样，在 MPG 框架内持续改良，而不是又一次
-「质变」。NUMA 感知若真要回来，多半也会以「可选、就近、不破坏快路径」的克制形态回来，而非
-当年那份大而全的方案。
+2026 年 3 月，有用户报告 Go 程序在多 NUMA 节点的机器上性能下降，指出运行时的空闲内存与工作窃取都不区分
+节点。Pratt 在回复中写道，提升多节点机器乃至一般的高核数机器上的性能，「肯定在我们今年的计划之中」；Pratt
+还把 GC 在高核数下暴露出的几处争用列为自己的优先事项，并表示想要研究如何把内存分配与 GC
+的工作分布到各个节点上 [[Pratt, 2026](#ref-pratt-2026)]。同一方向上已经落地的改动是 Green Tea
+垃圾回收器（[13.11](../../part4memory/ch13gc/greentea.md)）：它在 Go 1.25 中作为实验加入，Go 1.26
+起默认启用，借助更好的局部性与 CPU 可扩展性改善小对象的标记与扫描
+[[Go Authors, 2026b](#ref-go-authors-2026b)]。
 
-## 延伸阅读的文献
+所以 NUMA 感知仍是一个开放的问题。从 Vyukov 的设计文档到今天，困难没有变：节点这一层要贯穿调度、
+分配与回收才能见效，而它的收益只在访存密集、局部性清晰的程序上明显。调度器的骨架自 Go 1.1
+以来没有根本的改变，此后的改进，从 `runnext`、每个 P 的计时器到容器感知的 `GOMAXPROCS`，都是在 MPG
+的框架内逐步进行的。
 
-1. Dmitry Vyukov. *NUMA-aware scheduler for Go.* Go design proposal, 2014.
-   https://github.com/golang/go/issues/14406 （把 P 按节点分组、就近窃取、堆本地化的完整设计）
-2. Dmitry Vyukov. *Scalable Go Scheduler Design Doc.* 2012.
-   https://golang.org/s/go11sched （MPG 与工作窃取的原始设计，本节局部性讨论的起点）
-3. Ulrich Drepper. *What Every Programmer Should Know About Memory.* Red Hat, 2007.
-   https://www.akkadia.org/drepper/cpumemory.pdf （NUMA、缓存一致性与访存延迟的权威长文，第 5 节专讲 NUMA）
-4. Christoph Lameter. *NUMA (Non-Uniform Memory Access): An Overview.* ACM Queue, 2013.
-   https://queue.acm.org/detail.cfm?id=2513149 （节点拓扑、距离矩阵与 Linux NUMA 接口）
-5. The Go Authors. *runtime/proc.go（`stealWork`、`randomOrder`）、runtime/mem_linux.go（`MADV_HUGEPAGE`）.*
-   https://github.com/golang/go/tree/master/src/runtime （拓扑无关的工作窃取与透明大页的实现现状）
-6. Linux man-pages project. *numactl(8)、numa(7)、set_mempolicy(2).*
-   https://man7.org/linux/man-pages/man8/numactl.8.html （进程外做 NUMA 绑定的工具与系统调用）
-7. 本书 [9.2 工作窃取式调度](./steal.md)、[9.3 MPG 模型](./mpg.md)、
-   [12.2 分配器组件](../../part4memory/ch12alloc/component.md)、[13 垃圾回收（ROC 取舍）](../../part4memory/ch13gc).
+## 延伸阅读
+
+- <a id="ref-clements-2016"></a>[Clements, 2016] Austin Clements. runtime: make stack re-scan O(# dirty
+  stacks). Go commit 2a889b9d93, 2016. https://go.dev/cl/20700
+  随 Go 1.7 发布。
+- <a id="ref-drepper-2007"></a>[Drepper, 2007] Ulrich Drepper. *What Every Programmer Should Know About
+  Memory.* Red Hat, 2007. https://www.akkadia.org/drepper/cpumemory.pdf
+  （NUMA、缓存一致性与访存延迟的权威长文，第 5 节专讲 NUMA）
+- <a id="ref-go-authors-2025"></a>[Go Authors, 2025] The Go Authors. Go 1.25 Release Notes, 2025.
+  https://go.dev/doc/go1.25
+  容器感知的 `GOMAXPROCS`。
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors.
+  *runtime/proc.go（`stealWork`、 `randomOrder`）、runtime/mem_linux.go（`MADV_HUGEPAGE`）.*
+  https://github.com/golang/go/tree/master/src/runtime （拓扑无关的工作窃取与透明大页的实现现状）
+  另含 `runtime/os_linux.go` 中由 `sched_getaffinity` 计算 CPU 数目的 `getCPUCount`（本节对照 Go 1.26）。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. Go 1.26 Release Notes, 2026.
+  https://go.dev/doc/go1.26
+  Green Tea 垃圾回收器默认启用。
+- <a id="ref-hiltner-2016"></a>[Hiltner, 2016] Rhys Hiltner. golang/go#14406. *runtime: GC's mark
+  termination STW time extended by Linux NUMA migration.* 2016. https://github.com/golang/go/issues/14406
+- <a id="ref-knyszek-2023"></a>[Knyszek, 2023] Michael Knyszek. runtime: avoid MADV_HUGEPAGE for heap
+  memory. Go commit 9f9bb26880, 2023. https://go.dev/cl/516795
+  修复 issue #61718，向后移植到 Go 1.21.1。
+- <a id="ref-lameter-2013"></a>[Lameter, 2013] Christoph Lameter. *NUMA (Non-Uniform Memory Access): An
+  Overview.* ACM Queue 11(7): 40-51, 2013. https://queue.acm.org/detail.cfm?id=2513149
+  （节点拓扑、距离矩阵与 Linux NUMA 接口）DOI: https://doi.org/10.1145/2508834.2513149
+- <a id="ref-linux-kernel-nda"></a>[Linux kernel, n.d.a] The Linux Kernel. *NUMA Memory Policy.*
+  https://www.kernel.org/doc/html/latest/admin-guide/mm/numa_memory_policy.html
+- <a id="ref-linux-kernel-ndb"></a>[Linux kernel, n.d.b] The Linux Kernel. *Documentation for
+  /proc/sys/kernel/*（`numa_balancing`）.
+  https://www.kernel.org/doc/html/latest/admin-guide/sysctl/kernel.html
+- <a id="ref-linux-man-pages-nd"></a>[Linux man-pages, n.d.] Linux man-pages project.
+  *numactl(8)、numa(7)、set_mempolicy(2).* https://man7.org/linux/man-pages/man8/numactl.8.html
+  （进程外做 NUMA 绑定的工具与系统调用）
+- <a id="ref-pratt-2024"></a>[Pratt, 2024] Michael Pratt. golang/go#65694. *runtime: stronger affinity
+  between G ↔ P ↔ M ↔ CPU?* 2024. https://github.com/golang/go/issues/65694
+- <a id="ref-pratt-2026"></a>[Pratt, 2026] Michael Pratt. Comment on golang/go#78044, 2026.
+  https://github.com/golang/go/issues/78044#issuecomment-4033364256
+- <a id="ref-vyukov-2012"></a>[Vyukov, 2012] Dmitry Vyukov. *Scalable Go Scheduler Design Doc.* 2012.
+  https://golang.org/s/go11sched （MPG 与工作窃取的原始设计，本节局部性讨论的起点）
+- <a id="ref-vyukov-2014"></a>[Vyukov, 2014] Dmitry Vyukov. *NUMA-aware scheduler for Go.* Go design
+  proposal, 2014. https://docs.google.com/document/u/0/d/1d3iI2QWURgDIsSR6G2275vMeQ_X7w-qxM2Vp7iGwwuM/pub
+  （把 P 按节点分组、就近窃取、堆本地化的完整设计）
+- 本书 [9.2 工作窃取式调度](./steal.md)、[9.3 MPG 模型与并发调度单元](./mpg.md)、
+  [12.2 组件](../../part4memory/ch12alloc/component.md)、
+  [13.9 请求假设与事务制导回收](../../part4memory/ch13gc/roc.md)、[9.10 计时器](./timer.md)、
+  [13.11 Green Tea：面向局部性的标记](../../part4memory/ch13gc/greentea.md)。

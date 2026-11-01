@@ -5,382 +5,465 @@ title: "9.5 线程管理"
 
 # 9.5 线程管理
 
-[9.1](./model.md) 立下 GMP 的三层结构：G 是用户态的执行单元，P 是调度的许可证与本地资源，
-M 才是真正向操作系统借来的那条腿。前几节谈 G 与 P 居多，这一节把目光落到 M 上，回答几个被
-一直搁置的问题：M 到底是什么、它从哪里来、为什么 GOMAXPROCS 限的是 P 而线程数常常多于它、
-一次阻塞的系统调用为何不会把别的 G 一同拖死，以及用户想把一个 Goroutine 钉死在某条线程上时
-（`LockOSThread`），运行时要为此付出什么代价。
+前几节讨论的主要是 G 与 P，本节转向 M，即运行时向操作系统申请的线程。需要回答的问题有：线程如何创建，
+空闲线程如何复用，为何线程数常常多于 `GOMAXPROCS`，一个阻塞在系统调用中的 goroutine 为何不会拖累同一 P
+上的其他 goroutine，以及把 goroutine 固定在某个线程上（`LockOSThread`）需要付出什么代价。
 
-贯穿全节的一个判断是：**线程是昂贵的资源**。创建它要陷入内核、要分配栈、要登记信号掩码；
-销毁它同样不便宜。Go 调度器的许多设计，从复用空闲 M、到把系统调用中的 P 交接出去、再到给
-线程数量设一道一万的保险丝，都是围绕「尽量少创建、尽量多复用」这一条主线展开的。
+贯穿全节的前提是：线程是昂贵的资源。创建线程需要陷入内核、分配栈并设置信号掩码，线程的数量还受操作系统的限
+制。运行时的许多设计，从复用空闲的 M、在系统调用期间移交 P，到为线程总数设置上限，都服务于「少创建、
+多复用」这一目标。
 
-## 9.5.1 M 即操作系统线程
+## 9.5.1 M 与操作系统线程
 
-M（machine）是对一条操作系统线程的抽象。进程启动时，引导线程被包装成 `m0`，它是全局变量，
-随进程一同存在，不经堆分配；此后每一个 M 都对应一条由运行时显式创建的内核线程。M 与 G 的关系
-是「线程跑 Goroutine」：M 持有一个 P 后，从 P 的本地队列里取 G 来执行。裁剪后的速写只看与
-线程管理相关的字段：
+每个 M 对应一个操作系统线程。进程启动时的主线程被包装为 `m0`，它是一个全局变量，不经堆分配
+（[3.5](../../part1overview/ch03life/boot.md)）；此后的每个 M 都对应一个由运行时显式创建的线程（9.5.5 的
+extra M 除外）。与线程管理有关的字段如下：
 
 ```go
-// m：一条操作系统线程的运行时抽象（速写）
+// m：与线程管理有关的字段（示意）
 type m struct {
-    g0   *g       // 调度用的系统栈 goroutine：跑调度器代码、处理信号
-    curg *g       // 当前正在此 M 上执行的用户 goroutine
-    p    puintptr // 当前持有的 P；进入系统调用时可能被剥离
-    nextp puintptr // 被唤醒后将要绑定的 P（stopm 醒来时用）
-    oldp  puintptr // 进入系统调用前持有的 P，留待 exitsyscall 快速取回
+	g0    *g       // 持有系统栈的 goroutine，执行调度与运行时代码
+	curg  *g       // 当前执行的用户 goroutine
+	p     puintptr // 关联的 P
+	nextp puintptr // 被唤醒后将要关联的 P
+	oldp  puintptr // 进入系统调用前关联的 P
 
-    park     note  // 线程在此「信号量」上睡眠/唤醒，复用 M 的核心机制
-    schedlink muintptr // 串入空闲 M 链表 / newmHandoff 链表
+	park      note     // 暂止时在此休眠
+	schedlink muintptr // 串入空闲 M 链表或 newmHandoff 链表
 
-    lockedg  guintptr // 与某个 G 互锁（LockOSThread），见 9.5.6
-    lockedExt int32   // 外部（用户）锁定计数
-    lockedInt int32   // 内部（运行时）锁定计数
-    incgo    bool     // 是否正执行 cgo 调用
-    isextra  bool     // 是否为 cgo 回调而生的 extra-M，见 9.5.5
+	lockedg   guintptr // 与之锁定的 G，见 9.5.6
+	lockedExt uint32   // 用户调用 LockOSThread 的嵌套计数
+	lockedInt uint32   // 运行时内部锁定的嵌套计数
+	incgo     bool     // 是否正在执行 cgo 调用
+	isextra   bool     // 是否为服务 cgo 回调的 extra M，见 9.5.5
 }
 ```
 
-新线程经由 `newm` → `newm1` → `newosproc` 创建。在 Linux 上，`newosproc` 最终落到一次
-`clone(2)` 系统调用，所用的标志位说明了「线程」与「进程」的分野：
+新线程经 `newm` → `newm1` → `newosproc` 创建。在 Linux 上，`newosproc` 最终执行一次 `clone(2)` 系统调用，
+所用的标志位体现了线程与进程的区别 [[Go Authors, 2026b](#ref-go-authors-2026b)]：
 
 ```go
-// Linux 上创建一条新内核线程所用的 clone 标志（runtime/os_linux.go）
-cloneFlags = _CLONE_VM |     // 共享地址空间
-    _CLONE_FS |              // 共享文件系统信息（cwd 等）
-    _CLONE_FILES |           // 共享文件描述符表
-    _CLONE_SIGHAND |         // 共享信号处理表
-    _CLONE_SYSVSEM |         // 共享 SysV 信号量 undo 列表
-    _CLONE_THREAD            // 属于同一线程组（共享 PID）
+// runtime/os_linux.go 中创建线程所用的 clone 标志
+cloneFlags = _CLONE_VM | // 共享地址空间
+	_CLONE_FS | // 共享文件系统信息（当前目录等）
+	_CLONE_FILES | // 共享文件描述符表
+	_CLONE_SIGHAND | // 共享信号处理函数表
+	_CLONE_SYSVSEM | // 共享 System V 信号量的撤销列表
+	_CLONE_THREAD // 加入同一线程组，共享进程号
 ```
 
-这些「共享」正是线程区别于进程之处：地址空间、文件描述符、信号处理一概共用，只有寄存器与栈
-各自独立。即便如此，创建一条线程仍不便宜：要陷入内核走一遭 `clone`，要为 `g0` 准备系统栈，
-要设置信号掩码（`newosproc` 在 clone 前后用 `sigprocmask` 关闭再恢复信号，使新线程从一个干净
-状态起步），新线程进入 `mstart` 后还要做一轮 `minit` 初始化。这一串开销，是后文「宁可复用也
-不轻易新建」的根由。`newosproc` 里那段对 `EAGAIN` 的重试与「may need to increase max user
-processes」的提示，也印证了线程是一种会被操作系统限额的稀缺资源。
+地址空间、文件描述符与信号处理函数都是共享的，各线程独有的只是寄存器与栈
+[[Linux man-pages, n.d.](#ref-linux-man-pages-nd)]。在 Darwin 等平台上，运行时改为调用 `pthread_create`。
+即便只是创建线程，开销也不小：`newosproc` 在 `clone` 前后以 `sigprocmask` 屏蔽并恢复全部信号，
+使新线程以屏蔽信号的状态启动，待它在 `minit` 中完成初始化后再开放；新线程还需要一个系统栈作为 g0
+的栈（[9.3.3](./mpg.md)）。若 `clone` 返回 `EAGAIN`，运行时会重试，仍失败则以「may need to increase max
+user processes (ulimit -u)」的提示终止程序，这说明线程是受操作系统配额限制的资源。
 
-## 9.5.2 复用：在信号量上停泊的空闲 M
+## 9.5.2 空闲 M 的复用
 
-既然创建昂贵，运行时就不会用完即弃。一个 M 跑完手头的活、暂时无 P 可绑时，并不退出，而是
-**停泊**起来等待下一次差遣。这套停与起，由 `stopm` 与 `startm` 一对函数完成。
-
-`stopm` 把当前 M 放回全局空闲链表，然后让它在自己的 `park` 上睡去：
+运行时不会在 M 无事可做时销毁它，而是让它暂止，等待下一次使用。暂止与复始由 `stopm` 与 `startm` 完成：
 
 ```go
+// stopm：暂止当前 M，直到有 P 交给它（示意）
 func stopm() {
-    gp := getg()
-    // 前置条件：此刻 M 不持有锁、不持有 P、不处于自旋
-    lock(&sched.lock)
-    mput(gp.m)        // 放入 sched.midle 空闲 M 链表
-    unlock(&sched.lock)
-    mPark()           // 在 m.park 这个 note 上睡眠，等待唤醒
-    acquirep(gp.m.nextp.ptr()) // 醒来时唤醒者已把要绑的 P 放进 nextp
-    gp.m.nextp = 0
+	gp := getg()
+	// 前提：M 不持有锁，不持有 P，也不处于自旋状态
+	lock(&sched.lock)
+	mput(gp.m) // 放入空闲 M 链表 sched.midle
+	unlock(&sched.lock)
+	mPark()                    // 在 m.park 上休眠
+	acquirep(gp.m.nextp.ptr()) // 唤醒者已把要交给它的 P 写入 nextp
+	gp.m.nextp = 0
 }
 ```
 
-`mPark` 的核心是 `notesleep(&gp.m.park)`，`note` 是运行时内部的一次性事件原语，底层在各平台上
-落到 futex 或信号量一类的内核休眠机制。换言之，停泊的 M 不占 CPU，它睡在内核里，等一记
-`notewakeup` 把它叫醒。
+`mPark` 的核心是 `notesleep(&gp.m.park)`。`note` 是运行时内部的一次性事件：在 Linux、FreeBSD 等平台上基于
+futex 实现，在 Darwin、Windows 等平台上基于每个 M 各自的睡眠原语 `semasleep` 与 `semawakeup` 实现，Darwin
+用的是 pthread 的互斥锁与条件变量，Windows 用的是事件对象。暂止的 M 在内核中休眠，不占用 CPU，直到被
+`notewakeup` 唤醒。futex 的语义及其使用中的陷阱，可参阅 Drepper 的论述
+[[Drepper, 2011](#ref-drepper-2011)]。`note` 不应与 `runtime/sema.go` 中的信号量混淆：后者供 `sync`
+等包在 Go 代码中使用，其设计参照了 Plan 9 的信号量
+[[Mullender and Cox, 2008](#ref-mullender-and-cox-2008)]，见 [11.2](../ch11sync/mutex.md)。
 
-唤醒走的是 `startm`：当有 P 需要一条线程来驱动时（新 G 就绪、系统调用交接出 P 等），
-`startm` 先用 `mget` 从空闲链表里捞一个停泊的 M，把目标 P 记入它的 `nextp`，再 `notewakeup`
-它的 `park`；只有当空闲链表为空时，才退而 `newm` 真正创建一条新线程。这条「先复用，捞不到才
-新建」的次序，是把线程创建挡在冷路径上的关键。
+当某个 P 需要一个线程来执行时（有新 G 就绪、系统调用期间移交 P 等），`startm` 先用 `mget`
+从空闲链表取一个 M，把 P 写入它的 `nextp`，再唤醒它；只有空闲链表为空时，才调用 `newm` 创建新线程。
+先复用、后创建的顺序，把线程创建留在了冷路径上。
+
+M 本身没有显式的状态字段，但可以按它在做什么归纳出几种状态：
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Spinning: newm / 被唤醒
-    Spinning --> Running: 抢到 P 与 G
-    Running --> Spinning: 本地无 G，去偷取
-    Running --> Syscall: 进入系统调用
-    Syscall --> Running: exitsyscall 取回 P
-    Spinning --> Parked: 无 P 可绑，stopm 停泊
-    Parked --> Spinning: startm 唤醒（mget + notewakeup）
-    Running --> [*]: mexit（极少，多由 LockOSThread 触发）
+    [*] --> 自旋: newm 或被唤醒
+    自旋 --> 执行: 找到 G
+    执行 --> 自旋: 本地无 G，寻找工作
+    执行 --> 系统调用: entersyscall
+    系统调用 --> 执行: exitsyscall 取得 P
+    系统调用 --> 暂止: exitsyscall 未取得 P
+    自旋 --> 暂止: 找不到工作，stopm
+    暂止 --> 自旋: startm 唤醒
+    执行 --> [*]: mexit（锁定的 G 退出时）
 ```
 
-值得点出的是，正常路径上 M 几乎从不退出。`mexit` 只在少数情形被触发，最典型的就是
-[9.5.6](#956-lockosthread) 要讲的「锁住线程的 G 退出却没有解锁」。M 的常态是「停泊、唤醒、再
-停泊」的循环，像一支随时待命的常备队，而非用一次裁一次的临时工。
+在通常的执行路径上，M 从不退出。运行时自 Go 1.10 起才具备让自己创建的线程退出的能力，
+目前它只用于锁定线程的 G 未解锁就退出的情形（9.5.6）[[Clements, 2017b](#ref-clements-2017b)]。
+让空闲线程自动退出的提议（issue #14592）至今仍未实现 [[Lopez, 2016](#ref-lopez-2016)]，
+因此一个程序在高峰期创建的线程，此后会一直保留。
 
-## 9.5.3 GOMAXPROCS 限的是 P，不是 M
+## 9.5.3 GOMAXPROCS 限制的是 P
 
-读者常有一个误解：`GOMAXPROCS` 设为 8，就只有 8 条线程。其实它限定的是 **P 的数量**，即同时
-执行 Go 代码的并行度上限，而非 M 的数量。M 的数量由「有多少线程当下确有事可做」动态决定，
-完全可能超过 GOMAXPROCS。
+`GOMAXPROCS` 限制的是 P 的数量，即同时执行 Go 代码的并行度上限，而不是线程数。线程由运行时按需创建，除
+9.5.6 所述的情形外只增不减（9.5.2），其数量完全可能超过 `GOMAXPROCS`。最常见的原因是系统调用：一个 M
+阻塞在系统调用中时，它的 P 会被移交给另一个 M（9.5.4），于是阻塞的 M 与接手的 M 同时存在。`LockOSThread`
+与 cgo 回调使用的 extra M 也会使 M 的数量多于 P。下面的程序在 `GOMAXPROCS` 为 2 时，让 10 个 goroutine
+阻塞在读取空管道的系统调用上：
 
-最常见的越界来自系统调用。当一个 M 陷在阻塞的系统调用里（[9.5.4](#954-系统调用与-p-的交接)），
-它名下的 P 会被交接给另一条 M 去跑别的 G，于是同一时刻便有「陷在 syscall 里的 M」与「接手 P
-的 M」并存，线程数超过 P 数。`LockOSThread`、cgo 回调的 extra-M 也都会让 M 多于 P。换个角度
-看，P 是「执行 Go 代码的许可证」，全程总数受限；M 只是借来跑代码的腿，一条腿被 syscall 绊住，
-就再借一条来用 P，绊住的那条不占许可证。
+```go {run=true native=true}
+package main
 
-线程数不设上限是危险的：失控的系统调用或 cgo 回调可能让运行时无节制地创建线程，最终拖垮整个
-进程。Go 为此设了一道保险丝，`sched.maxmcount`，默认 **10000**：
+import (
+	"fmt"
+	"runtime"
+	"runtime/metrics"
+	"syscall"
+	"time"
+)
+
+// read 读取若干个 Go 1.26 新增的调度器指标。
+func read() (threads, inSyscall uint64) {
+	s := []metrics.Sample{
+		{Name: "/sched/threads/total:threads"},           // 运行时拥有的线程数
+		{Name: "/sched/goroutines/not-in-go:goroutines"}, // 处于系统调用或 cgo 调用中的 goroutine 数（近似值）
+	}
+	metrics.Read(s)
+	return s[0].Value.Uint64(), s[1].Value.Uint64()
+}
+
+func main() {
+	runtime.GOMAXPROCS(2)
+	t, n := read()
+	fmt.Printf("启动时：线程 %d，系统调用中的 goroutine %d\n", t, n)
+
+	var fds [2]int
+	if err := syscall.Pipe(fds[:]); err != nil { // 阻塞模式的管道，不经过网络轮询器
+		panic(err)
+	}
+	for range 10 {
+		go func() {
+			buf := make([]byte, 1)
+			syscall.Read(fds[0], buf) // 管道中没有数据，线程阻塞在内核中
+		}()
+	}
+	time.Sleep(100 * time.Millisecond)
+	t, n = read()
+	fmt.Printf("之后：线程 %d，系统调用中的 goroutine %d\n", t, n)
+}
+```
+
+```
+启动时：线程 5，系统调用中的 goroutine 0
+之后：线程 13，系统调用中的 goroutine 10
+```
+
+10 个 goroutine 各自占据一个阻塞在内核中的线程，线程总数因此远超 `GOMAXPROCS`，而 main 仍能继续执行。
+这两个指标均为 Go 1.26 新增 [[Go Authors, 2026c](#ref-go-authors-2026c)]；以上是 macOS 上的运行结果，
+具体的线程数因平台与运行时版本而异。
+
+线程数若不设上限，大量阻塞在系统调用上的 goroutine 就可能使运行时无节制地创建线程。运行时为此设置了上限
+`sched.maxmcount`，默认为 10000。`checkmcount` 的注释说明，这一上限的目的是防止数以百万计阻塞在系统调用上
+的 goroutine 意外地造成「fork 炸弹」[[Go Authors, 2026a](#ref-go-authors-2026a)]：
 
 ```go
-// 校验 M 的总数未超过上限，超过则 fatal（runtime/proc.go）
+// checkmcount：检查 M 的总数是否超过上限（示意）
 func checkmcount() {
-    // extra-M 不计入此限（它们服务于 cgo 回调，数量另算）
-    count := mcount() - int32(extraMInUse.Load()) - int32(extraMLength.Load())
-    if count > sched.maxmcount {
-        print("runtime: program exceeds ", sched.maxmcount, "-thread limit\n")
-        throw("thread exhaustion")
-    }
+	// 不计入 extra M：它们服务于由 C 创建的线程回调
+	count := mcount() - int32(extraMInUse.Load()) - int32(extraMLength.Load())
+	if count > sched.maxmcount {
+		print("runtime: program exceeds ", sched.maxmcount, "-thread limit\n")
+		throw("thread exhaustion")
+	}
 }
 ```
 
-一旦线程数撞上这条线，程序直接以 `thread exhaustion` 崩溃。它不是为正常程序设的，而是一道
-「出事了早点炸、别把机器拖死」的护栏。用户可经 `debug.SetMaxThreads` 调整它（对应
-`setmaxthreads`，传 -1 即查询当前值）。注意 `checkmcount` 把 extra-M 排除在外：它们的存在与
-否取决于有多少外部线程要回调进 Go，与「Go 代码自己造了多少线程」是两笔账。
+超过上限时，程序以 `thread exhaustion` 终止。这一上限不是为正常程序设置的，而是一道防止失控程序拖垮整台机
+器的防线，可以通过 `debug.SetMaxThreads` 调整。extra M 不计入上限，因为它们的数量取决于有多少个由 C
+创建的线程回调进 Go，与 Go 程序自身创建了多少线程无关。这一排除是在 Go 1.21 的开发期间加入的：当时把
+extra M 与 C 线程绑定的改动（9.5.5）使 extra M 直到 C 线程退出才归还，一万个不同的 C 线程只要各回调 Go
+一次，就会触发 `thread exhaustion` [[Pratt, 2023b](#ref-pratt-2023b)]。
 
-## 9.5.4 系统调用与 P 的交接
+## 9.5.4 系统调用与 P 的移交
 
-这是全节的关键。[9.1](./model.md) 许下过一个承诺：一个 Goroutine 卡在阻塞的系统调用里，不会
-连累同一 P 上的其他 Goroutine 一同饿死。兑现它的，正是「系统调用期间把 P 交接出去」这套机制。
+[9.1](./model.md) 提到，M:N 模型必须解决的一个问题是：一个 goroutine 阻塞在系统调用中时，不能使同一 P
+上的其他 goroutine 一同等待。Go 的解决办法是在系统调用期间把 P 移交给另一个 M。基本的权衡在于，
+系统调用多数很快就会返回，为每次调用都移交 P 代价太高；而对真正长时间阻塞的调用，又必须及时让 P
+去执行其他 G。运行时因此把系统调用分为快、慢两条路径处理。
 
-直觉是这样的：M 即将进入一个可能长时间不返回的系统调用，期间它没法跑 Go 代码，那么它名下的 P
-就闲置了。与其让 P 跟着干等，不如把 P 解下来，交给另一条 M 去驱动 P 上排队的其他 G。系统调用
-返回后，原 M 再设法要回一个 P 继续。围绕这个直觉，运行时区分了快慢两条路。
-
-进入系统调用走 `entersyscall`（底层 `reentersyscall`）。它把 G 置为 `_Gsyscall`、记下栈与
-PC 以备 GC 回溯，并把当前 P 的指针记入 `m.oldp`，同时拷贝一份 `p.syscalltick` 用于事后判断
-「P 是否被夺走过」。关键之处在于：**entersyscall 既不释放 P，也不更动 P 的状态**。`m.p` 仍指着
-原来的 P，P 也仍是 `_Prunning`，唯一改变的是 G 进了 `_Gsyscall`。运行时只是乐观地认为这次系统
-调用会很快返回，于是把 P 原封留在 M 身上，等返回时大概率能径直接着用。`oldp` 只是留下一个
-「我进系统调用前用的是哪枚 P」的备忘，供万一 P 被夺走后的慢路径凭它去尝试取回。
+进入系统调用时，`entersyscall`（实际工作由 `reentersyscall` 完成）把 G 置为 `_Gsyscall`，
+保存栈指针与程序计数器以供 GC 与栈回溯使用，并把当前 P 记入 `m.oldp`，同时记下 P 的 `syscalltick`，
+以便事后判断 P 是否被取走过。关键在于，`entersyscall` 既不释放 P，也不改变 P 的状态：`m.p` 仍指向原来的
+P，P 仍处于 `_Prunning`，改变的只有 G 的状态。
 
 ```go
+// reentersyscall：进入系统调用（示意）
 func reentersyscall(pc, sp, bp uintptr) {
-    gp := getg()
-    gp.m.locks++              // 期间禁止抢占：g 处于 Gsyscall 但 sched 信息可能不一致
-    gp.throwsplit = true      // 期间禁止栈分裂
-    gp.m.syscalltick = gp.m.p.ptr().syscalltick // 记录 tick，事后据此判断 P 是否被夺
-    pp := gp.m.p.ptr()
-    gp.m.oldp.set(pp)         // 仅备忘进系统调用前用的 P；m.p 不清、P 状态不改
-    save(pc, sp, bp)          // 为 GC 与回溯留下栈信息
-    casgstatus(gp, _Grunning, _Gsyscall) // 「此后随时可能丢掉 P，不得再碰它」
-    // ... 仅按需唤醒 sysmon（entersyscallWakeSysmon），不 release P
+	gp := getg()
+	gp.m.locks++                  // 禁止抢占：此间 g.sched 可能不一致，不能让 GC 观察到
+	gp.stackguard0 = stackPreempt // 使任何栈检查都失败
+	gp.throwsplit = true          // 并告知 newstack：此时栈增长是致命错误
+	gp.m.syscalltick = gp.m.p.ptr().syscalltick
+	gp.m.oldp.set(gp.m.p.ptr()) // 只记下 P；m.p 不清除，P 的状态也不改变
+	save(pc, sp, bp)            // 为 GC 与栈回溯保存现场
+	casgstatus(gp, _Grunning, _Gsyscall) // 此后不得再访问 P
+	if sched.sysmonwait.Load() {
+		systemstack(entersyscallWakeSysmon) // sysmon 处于深度睡眠时唤醒它
+	}
+	gp.m.locks--
 }
 ```
 
-返回时走 `exitsyscall`，它先乐观地把 G 切回 `_Grunning`，再看 P 还在不在（`pp := gp.m.p.ptr()`）：
+返回时，`exitsyscall` 先把 G 切回 `_Grunning`，再检查 P 是否还在：
 
-- **快路径**：若 `m.p` 仍非空（这次系统调用太快，sysmon 还没来得及把 P 夺走），直接接着用，
-  连一次锁都不必碰。P 从未离身，自然没有重绑的开销。
-- **慢路径**：若 P 已被 sysmon 夺走（`m.p == nil`），就调用 `exitsyscallTryGetP(oldp)` 试着
-  取回当初那枚 `oldp`，取不回则去抢一个空闲 P；再抢不到，便把 G 挂回全局队列，自己 `stopm` 停泊。
+- **快路径**：`m.p` 仍不为空，说明系统调用很快返回，P 未被取走。G 直接继续执行，无须加锁，也无须重新关联
+  P。
+- **慢路径**：P 已被取走，`exitsyscallTryGetP` 先尝试取回原来的 `oldp`，失败则尝试取一个空闲的 P；
+  仍取不到，就把 G 放入全局队列，M 经 `stopm` 暂止。
 
-那么 P 究竟是谁、何时夺走的？答案是**监控线程 sysmon**（[9.8](./sysmon.md)）。sysmon 周期性
-巡视所有 P，在 `retake` 里对每个 `_Prunning` 的 P 比对它的 `syscalltick`：若发现某枚 P 名下的
-M 已陷在系统调用里超过约一个 sysmon tick（至少 20μs），就动手把它夺走。这里用到一个较新的
-机制 `setBlockOnExitSyscall`：它先卡住那条线程，确保它不会在 exitsyscall 里抢先把 P 取回，
-随后 `takeP` 把 P 从该 M 上摘下，再 `handoffp` 把这枚 P 交给另一条 M。这道门槛把交接的代价只
-花在「真的阻塞了一会儿」的系统调用上，短系统调用根本等不到 sysmon 出手就已从快路径返回。
+取走 P 的是系统监控线程 sysmon（[9.8](./sysmon.md)）。它在 `retake` 中逐个检查 P，对处于系统调用中的 G，
+先调用 `setBlockOnExitSyscall` 获取该 G 的 `_Gscan` 位。持有这一位期间，G 无法离开 `_Gsyscall`，
+线程即便从内核返回，也只能在 `exitsyscall` 中等待，不会与 sysmon 争夺 P。在这一保护下，sysmon
+按以下规则决定是否取走 P，不取走时立即放行线程：
 
-> 这套「P 不变状态、sysmon 强制夺取」的设计是近年的一次演进。早期实现里 P 进入系统调用时会被
-> 置为一个专门的 `_Psyscall` 状态，由返回的 M 或 sysmon 通过对该状态做 CAS 来争夺归属。Go 1.26
-> 删除了 `_Psyscall`（它在源码里降级为 `_Psyscall_unused`），改由 sysmon 经
-> `setBlockOnExitSyscall`/`takeP` 主动、明确地夺取，不再依赖 M 自己「发现」P 已不归它。语义未变，
-> 但状态机更简单、竞争窗口更清晰。
+- sysmon 第一次观察到某次系统调用时，只记下 `syscalltick` 与时间，不取走 P。因此 P
+  至少要在系统调用中停留一个 sysmon 周期（至少 20 µs）。
+- 此后，若该 P 的本地队列为空、系统中已有自旋或空闲的 P，且自首次观察起不足 10 ms，sysmon 仍不取走它：
+  此时取走 P 并不能让更多工作得到执行。但 P 最终仍要被取走，否则它会妨碍 sysmon 进入深度睡眠。
+- 例外是 P 的 `schedtick` 已有 10 ms 未变，即同一时间片持续过久（9.4.2）的情形。向系统调用中的 G
+  发出的抢占请求无法得到响应，只能由 sysmon 取走 P，因此它不必等到第二次观察。
+
+决定取走时，`takeP` 把 P 从该 M 上摘下，`handoffp` 再把 P 交出去
+[[Go Authors, 2026a](#ref-go-authors-2026a)]。
 
 ```go
-// handoffp：把一枚 P 交给（或新建）一条 M 去运行（runtime/proc.go，节选逻辑）
+// handoffp：为一个 P 安排后续（示意）
 func handoffp(pp *p) {
-    // P 上还有本地或全局可运行的 G，立刻起一条 M 接手
-    if !runqempty(pp) || !sched.runq.empty() {
-        startm(pp, false, false)
-        return
-    }
-    // 有 GC / trace 工作，同样立刻起 M
-    // ...
-    // 已有自旋或空闲的 M 在候命，无须再添；否则起一条自旋 M
-    if sched.nmspinning.Load()+sched.npidle.Load() == 0 &&
-        sched.nmspinning.CompareAndSwap(0, 1) {
-        startm(pp, true, false)
-        return
-    }
-    // 实在无事可做，把 P 放回空闲池
-    pidleput(pp, 0)
+	// 本地或全局队列中有 G，立即启动一个 M 接手
+	if !runqempty(pp) || !sched.runq.empty() {
+		startm(pp, false, false)
+		return
+	}
+	// 有 GC 或追踪工作时同样立即启动 M（略）
+	// 没有自旋或空闲的 P 时，启动一个自旋的 M 来寻找工作
+	if sched.nmspinning.Load()+sched.npidle.Load() == 0 &&
+		sched.nmspinning.CompareAndSwap(0, 1) {
+		startm(pp, true, false)
+		return
+	}
+	// 其余情况（略）下，把 P 放回空闲链表
+	pidleput(pp, 0)
 }
 ```
 
-把整条链路画成时序，「一个 syscall 阻塞而其他 G 照跑」就一目了然：
+整个过程如下图所示：
 
 ```mermaid
 sequenceDiagram
-    participant M1 as M1（陷入 syscall）
-    participant P as P（含待跑的 G）
+    participant M1 as M1（进入系统调用）
+    participant P as P（队列中有 G）
     participant SM as sysmon
     participant M2 as M2（接手）
-    M1->>M1: entersyscall：G 转 Gsyscall，P 不释放（m.p 仍在，记 oldp 备忘）
-    M1->>SM: 按需唤醒 sysmon
-    Note over M1: 慢系统调用，迟迟不返回
-    SM->>P: retake 巡视，比对 syscalltick，停留超过约 20μs
-    SM->>M1: setBlockOnExitSyscall（卡住，禁止其抢先取回 P）
-    SM->>P: takeP 把 P 从 M1 摘下（清空 M1 的 m.p）
-    SM->>M2: handoffp 到 startm（复用或新建 M2）
-    M2->>P: acquirep，接着跑 P 上的其他 G
-    Note over M1: syscall 终于返回
-    M1->>M1: exitsyscall 慢路径：m.p 已空，凭 oldp 取回 P 或抢空闲 P，再不济 stopm 停泊
+    M1->>M1: entersyscall：G 转为 _Gsyscall，P 仍关联在 M1 上
+    Note over M1: 系统调用迟迟不返回
+    SM->>M1: retake → setBlockOnExitSyscall：取得 G 的 _Gscan 位
+    Note over SM: 第二次观察到同一 syscalltick，且 P 的队列中有 G
+    SM->>P: takeP：把 P 从 M1 摘下，随后放行 M1
+    SM->>M2: handoffp → startm：复用或创建 M2
+    M2->>P: acquirep，执行 P 上的其他 G
+    Note over M1: 系统调用返回
+    M1->>M1: exitsyscall 慢路径：尝试取回 oldp 或空闲 P，失败则 stopm
 ```
 
-若把时间轴换成「短系统调用」，sysmon 那几步根本不会发生，M1 的 `m.p` 始终未被清空，exitsyscall
-一看 P 还在便径直接着用，整条快路径不碰锁。一快一慢两条路，把常见情形做到了几乎零开销，又保证
-了罕见的长阻塞不会拖垮并行度。这就是 [9.1](./model.md) 那句承诺的兑现机制。
+若系统调用很快返回，sysmon 的步骤都不会发生，`exitsyscall` 发现 P 仍在，便沿快路径继续执行。
+快路径使常见情形几乎没有额外开销，慢路径则保证罕见的长时间阻塞不会降低并行度。
 
-> 需要区分的是另一类阻塞。网络 I/O 与定时器并不走上面这条「占着 M 阻塞」的路，而是交给网络
-> 轮询器 netpoll（[9.9](./poller.md)）：G 被挂起、M 与 P 立刻去跑别的 G，待 I/O 就绪由
-> netpoll 把 G 重新置为可运行。真正会绊住 M 的，是文件 I/O、`fork`/`exec` 一类无法异步化的
-> 同步系统调用，以及 cgo 调用，这些才需要 P 交接来兜底。
+对于事先已知会阻塞的调用，例如运行时在用户 goroutine 上休眠的 `notetsleepg`，运行时使用
+`entersyscallblock`。它在进入系统调用之前就调用 `handoffp(releasep())` 交出 P，不必等待 sysmon。
 
-## 9.5.5 cgo 回调与 extra-M
+系统调用路径在 Go 1.26 中经历了一次简化。此前，P 在系统调用期间处于专门的 `_Psyscall` 状态，返回的 M 与
+sysmon 通过对 P 的状态做 CAS 争夺 P 的归属。Go 1.26 删除了 `_Psyscall`（源码中保留为
+`_Psyscall_unused`），改为以 G 的 `_Gsyscall` 状态来同步，从而在每次系统调用中省去一次原子写与一次 CAS
+[[Knyszek, 2025](#ref-knyszek-2025)]。代价是出现了 G 处于 `_Grunning` 却没有 P 的短暂窗口，见
+[9.3.4](./mpg.md)。
 
-前面创建的 M 都由 Go 运行时主动 `clone` 而来，运行时清楚它们的来历与状态。可还有一种线程不是
-Go 造的：当 C 代码在一条**非 Go 创建**的线程上回调进 Go（cgo callback），这条线程没有
-`g0`、没有 P、运行时对它一无所知，却要在它上面执行 Go 代码。
+需要区分的是，网络 I/O 与定时器并不走这条路径，而是交给网络轮询器（[9.9](./poller.md)）：G 被挂起，M 与 P
+立即去执行其他 G，I/O 就绪后再由轮询器把 G 重新置为可运行。真正会占住 M 的是无法异步化的系统调用，
+例如普通文件 I/O、`fork`/`exec`，以及 cgo 调用。
 
-运行时的应对是预备一批 **extra-M**。它们由 `oneNewExtraM` 预先分配，挂在一条专门的 extra 链表
-上，每个 extra-M 自带一个处于 `_Gdeadextra` 状态的占位 G，并被 `lockedg`/`lockedm` 互锁。
-外部线程回调进来时，`needm` 从这条链表借一个 extra-M 套在自己身上，借此获得跑 Go 代码所需的
-`g0` 与上下文；回调结束 `dropm` 再把 extra-M 归还。`mstartm0` 在运行时启动早期就会
-`newextram` 备好至少一个，保证回调到来时链表不至于空着而死锁。
+Java 虚拟线程面对同样的问题。JEP 444 指出，某些阻塞操作受操作系统（如许多文件系统操作）或 JDK（如
+`Object.wait()`）的限制，无法把虚拟线程从载体线程上卸下；这些操作的实现通过临时扩大调度器的并行度来弥补被
+占用的线程 [[Pressler and Bateman, 2023](#ref-pressler-and-bateman-2023)]。这与 Go 在系统调用期间把 P
+交给新的 M 是同一种思路。
+
+## 9.5.5 cgo 回调与 extra M
+
+前面的 M 都由运行时自己创建。另一种情形是 C 代码在一个**并非由 Go 创建**的线程上回调 Go 函数：
+这个线程没有 g0，也没有 M，运行时对它一无所知，却要在其上执行 Go 代码。
+
+运行时的做法是预先准备若干 **extra M**。它们由 `oneNewExtraM` 分配，挂在专门的链表上；每个 extra M
+带有一个处于 `_Gdeadextra` 状态的 G（[9.3.4](./mpg.md)），二者通过 `lockedg` 与 `lockedm` 相互锁定。
+外部线程回调 Go 时，`needm` 从链表中借出一个 extra M，使当前线程获得执行 Go 代码所需的 g0 与上下文；
+回调结束时，`dropm` 把它归还。启用 cgo 时，`mstartm0` 在运行时启动早期就调用 `newextram` 准备好第一个
+extra M。
 
 ```go
-// oneNewExtraM：为 cgo 回调预备一个 extra-M（节选）
+// oneNewExtraM：为 cgo 回调准备一个 extra M（示意）
 func oneNewExtraM() {
-    mp := allocm(nil, nil, -1) // 不绑 P 地分配一个 M
-    gp := malg(4096)           // 配一个占位 goroutine
-    casgstatus(gp, _Gidle, _Gdeadextra) // 对回溯与栈扫描隐身
-    mp.isextra = true
-    mp.lockedInt++             // extra-M 天然与其 g 互锁
-    mp.lockedg.set(gp)
-    gp.lockedm.set(mp)
-    allgadd(gp)
-    sched.ngsys.Add(1)         // 计入系统 goroutine，不计入 gcount
-    addExtraM(mp)              // 挂上 extra 链表
+	mp := allocm(nil, nil, -1) // 分配一个不关联 P 的 M
+	gp := malg(4096)           // 带一个小栈的 G
+	casgstatus(gp, _Gidle, _Gdeadextra)
+	gp.m = mp
+	mp.curg = gp
+	mp.isextra = true
+	mp.lockedInt++ // extra M 与它的 G 相互锁定
+	mp.lockedg.set(gp)
+	gp.lockedm.set(mp)
+	allgadd(gp)
+	sched.ngsys.Add(1) // 计为系统 goroutine
+	addExtraM(mp)      // 挂入 extra M 链表
 }
 ```
 
-extra-M 不计入 [9.5.3](#953-gomaxprocs-限的是-p不是-m) 的 `maxmcount`，因为它们的多寡由外部
-回调的并发度决定，不属于「Go 代码自己造的线程」。当宿主进程通过 pthread key 复用同一条 C 线程
-反复回调时，`cgoBindM` 还会把 extra-M 与该 C 线程绑定，省去每次回调都借还的开销。这套机制是
-Go 与 C 世界互通的必要黏合层，也是线程数会超出 GOMAXPROCS 的另一来源。
+若同一个 C 线程反复回调 Go，每次都借还 extra M 的开销相当可观。自 Go 1.21 起，在支持 pthread
+的平台上（Windows 与 Plan 9 除外），运行时借助 pthread 的线程特定数据把 extra M 与该 C
+线程绑定（`cgoBindM`），直到线程退出时才由 pthread 的析构函数归还，从而省去了每次回调的借还
+[[Pratt, 2023a](#ref-pratt-2023a)]。extra M 也是线程数超过 `GOMAXPROCS` 的来源之一。
 
 ## 9.5.6 LockOSThread
 
-到此，M 都是可以自由互换的：哪条 M 跑哪个 G 无关紧要。但有些场景要求一个 Goroutine 始终在
-**同一条** OS 线程上执行，`runtime.LockOSThread` 就是为此而设。需求来自两类：其一，某些 C 库
-（典型如 OpenGL、GLib 等图形库）把状态存在线程局部存储（TLS）里，必须在固定线程上调用；其二，
-程序通过系统调用修改了线程的内核态（例如用 `unshare` 配 `CLONE_NEWNS` 把线程放进独立的
-Linux namespace），此后这条线程已被「私有化」，不再适合让别的 Goroutine 借用。
+到目前为止，M 都是可以互换的：哪个 M 执行哪个 G 无关紧要。但有些场合要求一个 goroutine
+始终在**同一个**线程上执行，`runtime.LockOSThread` 即为此而设。其文档写道，goroutine
+在调用依赖线程状态的操作系统服务或非 Go 库函数之前，应当先调用 `LockOSThread`
+[[Go Authors, 2026d](#ref-go-authors-2026d)]。典型的需求有两类：一是某些 C 库（如 OpenGL 等图形库）
+把状态保存在线程局部存储中，必须在固定的线程上调用；二是程序通过系统调用修改了线程的内核状态，例如以
+`unshare(CLONE_NEWNS)` 把线程放入独立的 Linux 命名空间，此后这个线程不应再被其他 goroutine 使用。
+文档还指出，所有 init 函数都在启动线程上执行，在 init 函数中调用 `LockOSThread` 会使 main
+函数也在这个线程上执行；必须在主线程上调用的库可以借此满足要求。
 
-运行时私有的 `lockOSThread` 很简单，计数加一，再调 `dolockOSThread` 把 g 与 m 互指：
+锁定本身的实现很简单：把计数加一，再让 G 与 M 相互引用。
 
 ```go
-//go:nosplit
-func lockOSThread() {
-    getg().m.lockedInt++
-    dolockOSThread()
+// LockOSThread：把调用者固定在当前线程上（示意）
+func LockOSThread() {
+	if newmHandoff.haveTemplateThread == 0 && GOOS != "plan9" {
+		startTemplateThread() // 在线程状态尚属正常时启动模板线程，见下文
+	}
+	getg().m.lockedExt++ // 运行时内部使用的 lockOSThread 递增的是 lockedInt
+	dolockOSThread()
 }
 
-//go:nosplit
 func dolockOSThread() {
-    gp := getg()
-    gp.m.lockedg.set(gp) // m 记住它锁定的 g
-    gp.lockedm.set(gp.m) // g 记住它锁定的 m
+	gp := getg()
+	gp.m.lockedg.set(gp) // M 记住锁定它的 G
+	gp.lockedm.set(gp.m) // G 记住它锁定的 M
 }
 ```
 
-用户态的公开 `LockOSThread` 多一步：它会按需懒启动一个**模板线程**（template thread）。这是
-锁住线程带来的隐患的对策。一旦某条线程被用户私有化（改了 namespace、信号掩码等），它的内核态
-就「奇怪」了，再从它身上 `clone` 出新线程会把这份奇怪一并复制过去。模板线程是一条始终处于
-「已知良好状态」、不跑用户 G、只负责安全地造新线程的备用线程。`newm` 因此有一段判断：若发现
-自己正处在被锁定的 M 或 cgo 线程上，就不自行 clone，而是把建线程的请求挂到 `newmHandoff`
-链表，交由模板线程代劳。
+`UnlockOSThread` 把计数减一，只有 `lockedExt` 与 `lockedInt` 都归零时才清除这两个字段。
 
-那么仅仅设置 `lockedg`/`lockedm` 两个字段，凭什么就保证 g 只在这条 m 上跑？答案藏在调度循环
-（[9.4](./schedule.md)）里。`schedule` 一开头就检查当前 M 是否有锁定的 g：
+锁定之所以生效，在于调度循环：[9.4.1](./schedule.md) 所示的 `schedule` 一开始就检查 `m.lockedg`，被锁定的
+M 只等待并执行它的 G；若 `findRunnable` 选中了一个锁定在别处的 G，当前 M 就把 P 交给那个 M。锁定的 G
+阻塞时，`stoplockedm` 经 `handoffp` 交出 P，然后暂止，直到这个 G 重新可运行时才被唤醒并取回一个 P。
+由此可见锁定的代价：这个 M 被一个 G 独占；G 每次阻塞与唤醒，P 都要在线程之间移交，
+原本在同一线程上完成的切换变成了线程之间的唤醒与暂止。由此导致的显著性能下降见 issue #18023
+[[Taylor, 2016](#ref-taylor-2016)]；报告同类问题的 issue #21827 [[Smelkov, 2017](#ref-smelkov-2017)]
+至今仍未关闭。
 
-```go
-func schedule() {
-    gp := getg()
-    // m.lockedg 在 LockOSThread 后变为非零
-    if gp.m.lockedg != 0 {
-        stoplockedm()                 // 把 P 交出去，自己停泊
-        execute(gp.m.lockedg.ptr(), false) // 醒来后直接执行那个锁定的 g，永不返回
-    }
-    // ... 否则正常找 G
-}
-```
+现在的语义是在 Go 1.10 中确立的。用 Clements 的话说，此前需要修改线程内核状态的程序在 Go
+中「如履薄冰」[[Clements, 2017c](#ref-clements-2017c)]：锁定只能阻止其他 goroutine 在这个线程上执行，
+却不能阻止运行时把被修改的状态扩散到线程池中。Clements 为此做了三处修改：
 
-反过来，当锁定的 g 因某种原因不能立刻跑（比如它正阻塞），`stoplockedm` 会把这条 M 的 P 经
-`handoffp` 交给别人，自己停泊等待，直到那个 g 重新可运行时再被唤醒、`acquirep` 拿回一个 P 来
-专门伺候它。代价由此显形：这条 M 被一个 g 独占，无法服务别的 g；P 在 g 阻塞期间要来回交接；
-若锁定的 g 退出时忘了 `UnlockOSThread`，运行时索性让这条 M 随 g 一起退出（`mexit`），这也是
-正常路径上 M 会退出的少数情形之一。`UnlockOSThread` 则只是计数减一、到零时清空那两个字段，
-并无特别处理。
+- **可嵌套**：此前锁定只有一个标志位，两次 `LockOSThread` 之后一次 `UnlockOSThread` 就会解除锁定。issue
+  #20458 表明这几乎从不是使用者的本意；修改后，只有 `UnlockOSThread` 的调用次数与 `LockOSThread`
+  相同时才解除锁定 [[Clements, 2017a](#ref-clements-2017a)]。
+- **退出即终止线程**：此前 goroutine 退出会隐式解除锁定，线程随即回到线程池。修改后，若 goroutine
+  退出时仍锁定着线程，运行时就终止这个线程（`mexit`），不让一个状态可能已被修改的线程被其他 goroutine
+  复用 [[Clements, 2017d](#ref-clements-2017d)]。为此需要先让运行时能够退出自己创建的线程，难点在于回收
+  g0 栈：线程不能释放自己正在使用的栈，因此退出的 M 先被移入 `sched.freem` 链表，等线程确实不再使用这个栈
+  后，再由之后的 `allocm` 回收 [[Clements, 2017b](#ref-clements-2017b)]。
+- **模板线程**：`clone` 会把调用线程的部分内核状态带给新线程，从被锁定的线程创建新线程，
+  就可能把被修改的状态复制进线程池。为此，运行时在首次调用 `LockOSThread` 时（使用 cgo 的程序则在启动时）
+  启动一个**模板线程**（template thread），它始终处于已知良好的状态，不执行任何 G。`newm`
+  若发现当前线程被用户锁定（`lockedExt` 不为零），或正在执行 cgo 调用、因而可能是由 C 创建的线程，
+  就不自行创建线程，而是把请求挂到 `newmHandoff` 链表上，交由模板线程代为创建
+  [[Clements, 2017c](#ref-clements-2017c)]。
 
-正因这些副作用，`LockOSThread` 称不上一项优秀的特性。它给调度器添了不少管理上的麻烦，存在的
-理由仅仅是要为上个世纪用 C 写就、依赖线程局部状态的诸多遗产库提供支持。倘若生态足够丰富到
-无须再调那些库，这项特性大可不必存在。
+后两项机制在 Plan 9 上都被禁用：锁定的 goroutine 退出时，Plan 9 上的线程会被清除锁定后复用
+[[du Colombier, 2017](#ref-du-colombier-2017)]。
 
-## 9.5.7 谁来管理线程：一份谱系
+正因为这些副作用，`LockOSThread` 很难称为一项理想的特性：它给调度器带来了相当的管理负担，
+存在的理由主要是支持那些依赖线程局部状态的 C 库与操作系统接口。
 
-把 Go 的做法放进谱系里，更容易看清它的取舍。「用户代码与内核线程如何对应」，历史上有几种典型
-安排：
+## 9.5.7 小结
 
-- **1:1（每个用户线程对应一条内核线程）**：POSIX threads、Java 早期的线程模型属此。简单直接，
-  但线程的创建、切换、内存（每线程一个较大的栈）都按内核线程计价，并发量一上去就吃不消。
-- **N:1（多个用户线程挤在一条内核线程上）**：早期的绿色线程（green threads）如此。切换极廉，
-  却有一个致命缺陷：任何一个用户线程发起阻塞系统调用，整条内核线程连同其上所有用户线程一并
-  卡死，无法利用多核。
-- **线程池**：不解决映射模型，只摊薄创建成本，把线程攒起来复用。它回答不了「一个任务阻塞了
-  怎么办」，阻塞的任务会一直占着池里的线程。
-- **M:N 动态管理（Go 的做法）**：M 个 Goroutine 复用到 N 条内核线程上，由运行时调度器在二者
-  之间斡旋。它兼得 N:1 的廉价切换与 1:1 的多核与抗阻塞：用户态切换不进内核，省下了 1:1 的开销；
-  而靠本节的 P 交接与 [9.5.2](#952-复用在信号量上停泊的空闲-m) 的 M 复用，又躲开了 N:1 那个
-  「一阻塞全卡死」的死穴。代价是运行时复杂度的显著上升，本章前后各节正是这份复杂度的展开。
+线程模型的谱系（1:1、N:1 与 M:N）及各语言运行时的选择已在 [9.1](./model.md) 中讨论。本节展示了 Go 为 M:N
+模型付出的工程代价：空闲线程的暂止与复始，系统调用期间 P 的移交与 sysmon 的巡视，线程总数的上限，以及
+extra M 与模板线程等特殊情形。正是这些机制使用户几乎感知不到线程的存在：可以创建成千上万个 goroutine，
+而不必关心它们运行在哪个线程上，也不必担心一次阻塞的系统调用会让其他 goroutine 停下。
 
-这套思路并非 Go 独有。Erlang/BEAM 早有调度器把轻量进程映射到少数 OS 线程；Google 内部的纤程
-（fiber）实践亦同源。最值得一提的是 Java：它长期是 1:1 模型，2023 年随 JDK 21 正式交付的
-**虚拟线程**（Project Loom，JEP 444），本质上正是向 Go 这一侧的靠拢，把大量虚拟线程多路复用到
-少数载体线程（carrier thread）上，并在虚拟线程发起阻塞调用时把它从载体线程上卸下，让载体线程
-转去跑别的虚拟线程。这与本节的 P 交接、Goroutine 在 syscall 时让出 M 是同一种工程直觉。
-两条独立演化的路线收敛到相近的设计，本身就说明：在「既要海量并发、又要廉价切换、还要扛住阻塞」
-这组约束下，M:N 动态管理几乎是绕不开的答案。
+## 延伸阅读
 
-性能的好处从不白来。Go 把线程管理的全部复杂度收进了运行时：停泊与唤醒、P 的交接、sysmon 的
-巡视、extra-M 与模板线程的种种特例。用户因此得以几乎不感知线程的存在，写下成千上万个
-Goroutine 而不必操心它们落在哪条线程上。这份「让用户看不见线程」的便利，背后是运行时替读者扛下
-的那一摞机制。
-
-## 延伸阅读的文献
-
-1. The Go Authors. *runtime/proc.go*（`newm`/`newm1`/`mstart`、`stopm`/`startm`/`mPark`、
-   `entersyscall`/`exitsyscall`/`reentersyscall`、`handoffp`/`retake`、`acquirep`/`releasep`、
-   `checkmcount`、extra-M 相关的 `newextram`/`oneNewExtraM`/`needm`/`dropm`）。
-   https://github.com/golang/go/blob/master/src/runtime/proc.go
-2. The Go Authors. *runtime/os_linux.go*（`newosproc` 与 `cloneFlags`，线程创建落到 `clone`）。
-   https://github.com/golang/go/blob/master/src/runtime/os_linux.go
-3. Linux man-pages. *clone(2)*. https://man7.org/linux/man-pages/man2/clone.2.html
-   （`CLONE_VM`/`CLONE_THREAD` 等标志位的语义，线程与进程的分野）
-4. The Go Authors. *runtime.LockOSThread / UnlockOSThread 文档*.
-   https://pkg.go.dev/runtime#LockOSThread
-5. Go issue 跟踪：#20458（`LockOSThread` 语义澄清）、#20395（goroutine 退出时终止其
-   锁定的线程）、#21827（模板线程的由来）、#22227（plan9 上禁用 newmHandoff）、
-   #18023（`LockOSThread` 引发的异常放缓）、#14592（让空闲的 OS 线程退出）。
-   https://github.com/golang/go/issues
-6. Ulrich Drepper. *Futexes Are Tricky.* Red Hat, 2011.
-   https://www.akkadia.org/drepper/futex.pdf （M 暂止/复始所依赖的 futex 语义与陷阱）
-7. Sape Mullender, Russ Cox. *Semaphores in Plan 9.* 2008. https://swtch.com/semaphore.pdf
-   （Go 运行时 `note`、`semaphore` 原语的设计渊源）
-8. Ron Pressler, Alan Bateman. *JEP 444: Virtual Threads.* OpenJDK, 2023.
-   https://openjdk.org/jeps/444 （Project Loom：Java 向 M:N 模型的收敛）
-9. 本书 [9.1 调度问题与 GMP 模型](./model.md)、[9.4 调度循环](./schedule.md)、
-   [9.8 系统监控](./sysmon.md)、[9.9 网络轮询器](./poller.md)。
+- <a id="ref-clements-2017a"></a>[Clements, 2017a] Austin Clements. runtime: make
+  LockOSThread/UnlockOSThread nested. Go commit c85b12b579, 2017. https://go.dev/cl/45752
+  修复 issue #20458（Bryan C. Mills, proposal: runtime: pair LockOSThread, UnlockOSThread calls）。
+- <a id="ref-clements-2017b"></a>[Clements, 2017b] Austin Clements. runtime: make it possible to exit
+  Go-created threads. Go commit eff2b2620d, 2017. https://go.dev/cl/46037
+  线程退出机制与 g0 栈的回收（`sched.freem`）。
+- <a id="ref-clements-2017c"></a>[Clements, 2017c] Austin Clements. runtime: don't start new threads from
+  locked threads. Go commit 2595fe7fb6, 2017. https://go.dev/cl/46033
+  引入模板线程，修复 issue #20676（runtime: don't spawn threads from locked Ms）。
+- <a id="ref-clements-2017d"></a>[Clements, 2017d] Austin Clements. runtime: terminate locked OS thread if
+  its goroutine exits. Go commit 4f34a52913, 2017. https://go.dev/cl/46038
+  修复 issue #20395。
+- <a id="ref-drepper-2011"></a>[Drepper, 2011] Ulrich Drepper. *Futexes Are Tricky*. Red Hat, 2011.
+  https://www.akkadia.org/drepper/futex.pdf
+  M 暂止与复始所依赖的 futex 语义与陷阱。
+- <a id="ref-du-colombier-2017"></a>[du Colombier, 2017] David du Colombier. runtime: crash on Plan 9
+  since CL 46033. Go issue #22227, 2017. https://go.dev/issue/22227
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `runtime/proc.go`.
+  https://github.com/golang/go/blob/master/src/runtime/proc.go
+  `newm`/`newm1`/`mstart`、`stopm`/`startm`/`mPark`、`entersyscall`/`exitsyscall`/`reentersyscall`、
+  `handoffp`/`retake`、`acquirep`/`releasep`、`checkmcount`，以及 extra M 相关的
+  `newextram`/`oneNewExtraM`/`needm`/`dropm`（本节对照 Go 1.26）。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `runtime/os_linux.go`.
+  https://github.com/golang/go/blob/master/src/runtime/os_linux.go
+  `newosproc` 与 `cloneFlags`：线程的创建最终落到 `clone`。
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. Go 1.26 Release Notes, 2026.
+  https://go.dev/doc/go1.26
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. `runtime.LockOSThread` 与
+  `runtime.UnlockOSThread` 的文档. https://pkg.go.dev/runtime#LockOSThread
+- <a id="ref-knyszek-2025"></a>[Knyszek, 2025] Michael Knyszek. runtime: eliminate _Psyscall. Go commit
+  7244e9221f, 2025. https://go.dev/cl/646198
+- <a id="ref-linux-man-pages-nd"></a>[Linux man-pages, n.d.] The Linux man-pages project. *clone(2)*.
+  https://man7.org/linux/man-pages/man2/clone.2.html
+  `CLONE_VM`、`CLONE_THREAD` 等标志位的语义，线程与进程的分野。
+- <a id="ref-lopez-2016"></a>[Lopez, 2016] Brian Lopez. runtime: let idle OS threads exit. Go issue
+  #14592, 2016. https://go.dev/issue/14592
+- <a id="ref-mullender-and-cox-2008"></a>[Mullender and Cox, 2008] Sape Mullender and Russ Cox.
+  *Semaphores in Plan 9*. 2008. https://swtch.com/semaphore.pdf
+  Go 运行时信号量（`runtime/sema.go`）的设计渊源。
+- <a id="ref-pratt-2023a"></a>[Pratt, 2023a] Michael Pratt. runtime/cgo: store M for C-created thread in
+  pthread key. Go commit c426c87012, 2023. https://go.dev/cl/495855
+  重新提交 CL 485500；绑定 extra M 与 C 线程的最初实现来自 doujiang24 的 CL 481061。
+- <a id="ref-pratt-2023b"></a>[Pratt, 2023b] Michael Pratt. runtime: crash when >10k C threads call Go
+  after CL 485500. Go issue #60004, 2023. https://go.dev/issue/60004
+- <a id="ref-pressler-and-bateman-2023"></a>[Pressler and Bateman, 2023] Ron Pressler and Alan Bateman.
+  *JEP 444: Virtual Threads*. OpenJDK, 2023. https://openjdk.org/jeps/444
+  Project Loom：Java 向 M:N 模型的收敛。
+- <a id="ref-smelkov-2017"></a>[Smelkov, 2017] Kirill Smelkov. runtime: big performance penalty with
+  runtime.LockOSThread. Go issue #21827, 2017. https://go.dev/issue/21827
+- <a id="ref-taylor-2016"></a>[Taylor, 2016] Ian Lance Taylor. runtime: unexpectedly large slowdown with
+  runtime.LockOSThread. Go issue #18023, 2016. https://go.dev/issue/18023
+- Go issue 跟踪：#20458（`LockOSThread` 与 `UnlockOSThread` 的配对）、#20395（goroutine
+  退出时终止其锁定的线程）、#21827（`LockOSThread` 带来的显著性能损失）、#22227（Plan 9 上禁用
+  `newmHandoff`）、#18023（`LockOSThread` 引发的异常放缓）、#14592（让空闲的操作系统线程退出）。
+  https://github.com/golang/go/issues
+- 本书 [9.1 调度问题与 GMP 模型](./model.md)、[9.4 调度循环](./schedule.md)、[9.8 系统监控](./sysmon.md)、
+  [9.9 网络轮询器](./poller.md)。
