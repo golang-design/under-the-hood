@@ -205,7 +205,7 @@ goroutine。另一种做法是不用回调，改由 Go 一侧查询状态（`cud
 而是阻塞等待或查询命令缓冲区的状态，其文档也提醒，一旦加入第一个完成回调，Objective-C
 对象生命周期上的问题就会随之出现 [[Ou, 2026d](#ref-ou-2026d)]。
 
-## 18.2.5 钉住线程以拥有设备
+## 18.2.5 锁定线程以独占设备
 
 前两个方向的压力最终指向同一种设计，它还解决了一个尚未讨论的问题：**上下文的线程亲和性**。
 
@@ -317,7 +317,7 @@ sysmon 把稀缺的 P 取回；大量并发的阻塞调用会导致线程膨胀�
   P 的状态定义，其中 `_Psyscall_unused` 的注释。
 - <a id="ref-go-authors-nd"></a>[Go Authors, n.d.] The Go Authors. *runtime.LockOSThread.*
   https://pkg.go.dev/runtime#LockOSThread
-  把 goroutine 钉在一条 OS 线程上，用于线程亲和的设备与图形上下文。
+  把 goroutine 锁定在一条操作系统线程上，用于要求线程亲和的设备与图形上下文。
 - <a id="ref-knyszek-2025"></a>[Knyszek, 2025] Michael Knyszek. runtime: eliminate _Psyscall. Go commit
   7244e9221f, 2025. https://go.dev/cl/646198
   随 Go 1.26 发布。
@@ -365,4 +365,4 @@ sysmon 把稀缺的 P 取回；大量并发的阻塞调用会导致线程膨胀�
   [9.8 系统监控](../../part3concurrency/ch09sched/sysmon.md)、
   [15.6 cgo](../../part5toolchain/ch15compile/cgo.md)、
   [18.1 跨越 FFI 边界](./boundary.md)、[18.3 显存与垃圾回收的分界](./memory.md)、
-  [19.2 图形 API 绑定](../ch19graphics/bindings.md)。
+  [19.2 图形绑定与线程亲和](../ch19graphics/bindings.md)。

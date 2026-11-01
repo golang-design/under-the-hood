@@ -465,7 +465,7 @@ x 的地址已改变： true
 编译器就把这个变量分配在堆上（[15.5](../../part5toolchain/ch15compile/escape.md)）。堆对象不随栈移动，
 外部持有的地址始终有效。反过来，凡是运行时自己让栈外的结构指向栈内，都必须像 `sudog` 那样登记在 `g` 上，
 供 `copystack` 调整；交给操作系统的内存则不能位于可移动的栈上，Windows 上的重叠 I/O
-因此要在发起之前钉住缓冲区（[9.9](../../part3concurrency/ch09sched/poller.md)）。
+因此要在发起之前固定缓冲区（[9.9](../../part3concurrency/ch09sched/poller.md)）。
 
 第二条落在使用 `unsafe` 的程序上。Go 1.3 引入精确的栈扫描与按拷贝扩栈的同时，在发布说明中规定
 [[Go Authors, 2014](#ref-go-authors-2014)]：

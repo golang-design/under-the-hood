@@ -7,7 +7,7 @@ title: "9.5 线程管理"
 
 前几节讨论的主要是 G 与 P，本节转向 M，即运行时向操作系统申请的线程。需要回答的问题有：线程如何创建，
 空闲线程如何复用，为何线程数常常多于 `GOMAXPROCS`，一个阻塞在系统调用中的 goroutine 为何不会拖累同一 P
-上的其他 goroutine，以及把 goroutine 固定在某个线程上（`LockOSThread`）需要付出什么代价。
+上的其他 goroutine，以及把 goroutine 锁定在某个线程上（`LockOSThread`）需要付出什么代价。
 
 贯穿全节的前提是：线程是昂贵的资源。创建线程需要陷入内核、分配栈并设置信号掩码，线程的数量还受操作系统的限
 制。运行时的许多设计，从复用空闲的 M、在系统调用期间移交 P，到为线程总数设置上限，都服务于「少创建、
@@ -350,7 +350,7 @@ func oneNewExtraM() {
 锁定本身的实现很简单：把计数加一，再让 G 与 M 相互引用。
 
 ```go
-// LockOSThread：把调用者固定在当前线程上（示意）
+// LockOSThread：把调用者锁定在当前线程上（示意）
 func LockOSThread() {
 	if newmHandoff.haveTemplateThread == 0 && GOOS != "plan9" {
 		startTemplateThread() // 在线程状态尚属正常时启动模板线程，见下文

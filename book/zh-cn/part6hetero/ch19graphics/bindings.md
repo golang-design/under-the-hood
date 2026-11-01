@@ -29,12 +29,12 @@ OpenGL 围绕**上下文**（context）组织。上下文是一个庞大的隐�
 这些调用就失去了它们所依赖的状态，结果不受 OpenGL 保证。
 
 线程亲和并不是所有图形 API 的共性。19.1.3 讨论的 Vulkan 没有「当前上下文」，对象以句柄的形式显式传入每个
-命令，规范只要求部分参数由调用者做外部同步，并不要求调用固定在某一条线程上。本节第一层约束针对的是 OpenGL
+命令，规范只要求部分参数由调用者做外部同步，并不要求调用限定在某一条线程上。本节第一层约束针对的是 OpenGL
 这类以线程局部状态组织的 API；第二层约束则对所有图形 API 都成立，因为它来自窗口系统。
 
 ## 19.2.2 goroutine 会迁移，因此要锁定线程
 
-Go 的调度器不把 goroutine 固定在某个线程上。一个 goroutine 因系统调用、通道操作或抢占而让出之后，
+Go 的调度器不把 goroutine 绑定在某个线程上。一个 goroutine 因系统调用、通道操作或抢占而让出之后，
 下一次很可能在另一个 M 上继续执行（第 9 章）。对纯 Go 代码，这种迁移不可见；对 OpenGL，
 它意味着两次调用之间，goroutine 可能已经换到一条没有当前上下文的线程上。
 
@@ -255,7 +255,7 @@ CPU 上计算像素，并行由 goroutine 与 SIMD 提供，不再经过图形�
   哪些调用只能在主线程进行，上下文在线程之间移动的规则。
 - <a id="ref-go-authors-2026"></a>[Go Authors, 2026] The Go Authors. *runtime.LockOSThread.*
   https://pkg.go.dev/runtime#LockOSThread
-  把 goroutine 固定在一条操作系统线程上的语义，以及在 `init` 中锁定使 `main` 运行在主线程上的用法。
+  把 goroutine 锁定在一条操作系统线程上的语义，以及在 `init` 中锁定使 `main` 运行在主线程上的用法。
   实现见 Go 1.26 的 `src/runtime/proc.go`。
 - <a id="ref-go-gl-nd"></a>[go-gl, n.d.] go-gl. *github.com/go-gl/glfw: Usage.*
   https://github.com/go-gl/glfw
