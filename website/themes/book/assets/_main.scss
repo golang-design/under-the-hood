@@ -471,6 +471,7 @@ aside nav,
     background: transparent;
     color: $body-font-color;
     font-size: $font-size-14;
+    font-family: var(--font-sans, system-ui, sans-serif);
     cursor: pointer;
     transition: background-color 0.2s ease;
 
@@ -612,9 +613,12 @@ aside nav,
     background: $gray-100;
   }
   .viz-title {
-    font-size: $font-size-12 + 1;
+    // 14px. Not `$font-size-12 + 1`: Sass adds a unitless 1 to 0.75rem and
+    // gives 1.75rem.
+    font-size: $font-size-14;
+    font-family: var(--font-sans, system-ui, sans-serif);
     font-weight: 600;
-    color: $body-font-color;
+    color: var(--viz-ink);
     margin-bottom: $padding-8;
   }
   .viz-canvas { display: block; width: 100%; }
@@ -672,7 +676,7 @@ aside nav,
   .viz-note {
     min-height: 1.5em;
     margin-top: $padding-8;
-    font-size: $font-size-12 + 1;
+    font-size: 0.8125rem; // 13px
     line-height: 1.55;
     color: var(--viz-muted);
     &:empty { display: none; }
