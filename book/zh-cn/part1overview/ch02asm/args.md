@@ -45,8 +45,8 @@ func F(a1 uint8, a2 [2]uintptr, a3 uint8) (r1 struct{ x uintptr; y [2]uintptr },
 其代价是栈空间的占用有所增加。据 ABI 规范估计，这部分空间的浪费中位数为每次调用 16 字节；规范把完全
 去掉预留的溢出区列为长期目标 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
 
-调用之后哪些寄存器的值保持不变，也是调用约定的一部分。C 的调用约定规定了一组**被调方保存寄存器**
-（callee-saved register），被调函数若使用它们，必须在返回前恢复原值。ABIInternal 没有这类寄存器：
+调用之后哪些寄存器的值保持不变，也是调用约定的一部分。C 的调用约定规定了一组**被调方保存寄存器**（callee-saved
+register），被调函数若使用它们，必须在返回前恢复原值。ABIInternal 没有这类寄存器：
 除下表所列具有固定含义的寄存器外，任何寄存器都可能在调用中被改写，调用方若在调用之后仍需要某个值，
 须自行将其保存到栈上。ABI 规范指出，这一设计显著简化了垃圾回收器与编译器的寄存器分配器，
 代价是损失一部分性能 [[Go Authors, 2026a](#ref-go-authors-2026a)]。对垃圾回收器而言，
@@ -175,8 +175,8 @@ func main() {
 递归 989 层时栈被移动，比上次多 512 层
 ```
 
-相邻两次移动之间增加的递归层数依次翻倍：64、128、256、512。在这台机器上，`down` 每层占用 32 字节，
-64 层恰好是 2 KiB。栈共移动 5 次，依次增长为 4 KiB、8 KiB、16 KiB、32 KiB 与 64 KiB；每次新增的空间等于
+相邻两次移动之间增加的递归层数依次翻倍：64、128、256、512。在这台机器上，`down` 每层占用 32 字节，64
+层恰好是 2 KiB。栈共移动 5 次，依次增长为 4 KiB、8 KiB、16 KiB、32 KiB 与 64 KiB；每次新增的空间等于
 旧栈的大小，正好对应下一段多出的层数。在网页上运行时，程序被编译为 WebAssembly，每层只占 16 字节，
 输出变为 58、186、442、954 层，间隔同样是 128、256、512 层，逐次翻倍。由于栈的大小每次翻倍，历次复制
 的字节数之和不会超过最终栈的大小，扩栈的总开销与栈的最终大小成正比。
@@ -254,9 +254,9 @@ Linux 上的 C 与 C++ 程序遵循同一套平台调用约定，可以直接相
 - <a id="ref-go-authors-2022"></a>[Go Authors, 2022] The Go Authors. *Go 1.19 Release Notes*, "Runtime".
   https://go.dev/doc/go1.19#runtime
   新 goroutine 的初始栈大小改为依据历史平均用量确定。
-- 本书 [2.1 Plan 9 汇编语言](./asm.md)、[2.3 调用约定与寄存器 ABI](./callconv.md)、
-  [6.1 函数调用](../../part2lang/ch06func/func.md)、
-  [14 执行栈管理](../../part4memory/ch14stack)、
-  [9.7 协作与抢占](../../part3concurrency/ch09sched/preemption.md)、
-  [15 编译器](../../part5toolchain/ch15compile)。
+- 本书 [2.1 Plan 9 汇编语言](./asm.md)、[2.3 调用约定与寄存器 ABI](./callconv.md)、[6.1
+  函数调用](../../part2lang/ch06func/func.md)、[14
+  执行栈管理](../../part4memory/ch14stack)、[9.7
+  协作与抢占](../../part3concurrency/ch09sched/preemption.md)、[15
+  编译器](../../part5toolchain/ch15compile)。
 

@@ -29,8 +29,8 @@ algorithm）[[Lamport, 1974](#ref-lamport-1974)]：进程像在面包店里取�
 
 有了原子指令，等待的方式仍有两种。一种是自旋：在循环中反复尝试，直到成功。锁很快就会释放时，
 自旋的代价最小；但等待者一直占着处理器，而且所有等待者反复读写同一个变量，
-使它所在的缓存行在处理器之间来回传递。票号锁（ticket lock）用取后加发号，使等待者按顺序获得锁；
-Mellor-Crummey 与 Scott 的 MCS 锁让每个等待者在自己的变量上自旋，交接时只写后继者的变量
+使它所在的缓存行在处理器之间来回传递。票号锁（ticket lock）用取后加发号，使等待者按顺序获得锁；Mellor-Crummey
+与 Scott 的 MCS 锁让每个等待者在自己的变量上自旋，交接时只写后继者的变量
 [[Mellor-Crummey and Scott, 1991](#ref-mellor-crummey-scott-1991)]。另一种是阻塞：等待者让出处理器去睡眠，
 由释放者唤醒。过去这意味着每次加锁都要进入内核，Linux 的 futex 改变了这一点
 [[Franke et al., 2002](#ref-franke-et-al-2002)]：锁的状态放在用户空间，无竞争时只需原子操作，
@@ -135,8 +135,8 @@ if atomic.CompareAndSwapInt32(&m.state, old, new) {
 相关；每个桶由一把运行时内部的锁保护，桶内是一棵以地址为键的树堆（treap），每个节点代表一个地址，挂着
 在这个地址上等待的 goroutine 链表。同一地址上的入队与出队是 O(1)，在不同地址间查找是 O(log n)
 [[Go Authors, 2026a](#ref-go-authors-2026a)]。这一结构是逐步形成的。2011 年，Vyukov 把原先集中的一张
-等待表换成按地址散列的分布式表，并使释放者在没有等待者时无需加锁 [[Vyukov, 2011a](#ref-vyukov-2011a)]。
-2017 年，Cox 发现多把锁散列到同一个桶时，查找某把锁的等待者要扫过另一把锁的全部等待者，n 次获取锁的
+等待表换成按地址散列的分布式表，并使释放者在没有等待者时无需加锁 [[Vyukov, 2011a](#ref-vyukov-2011a)]。2017
+年，Cox 发现多把锁散列到同一个桶时，查找某把锁的等待者要扫过另一把锁的全部等待者，n 次获取锁的
 总开销是 O(n²)（#17953）；于是先把桶内的单链表改成按地址分组的两级链表，又把顶层换成树堆
 [[Cox, 2017a](#ref-cox-2017a)] [[Cox, 2017b](#ref-cox-2017b)]。
 
@@ -335,8 +335,8 @@ Go 不提供选择：只有一种 `Mutex`，它以 1 ms 为界在两种模式之
 ## 11.2.6 读写锁
 
 读者与写者问题由 Courtois、Heymans 与 Parnas 于 1971 年提出
-[[Courtois et al., 1971](#ref-courtois-et-al-1971)]：多个读者可以同时访问数据，写者则必须独占。
-`sync.RWMutex` 的结构如下 [[Go Authors, 2026d](#ref-go-authors-2026d)]：
+[[Courtois et al., 1971](#ref-courtois-et-al-1971)]：多个读者可以同时访问数据，写者则必须独占。`sync.RWMutex`
+的结构如下 [[Go Authors, 2026d](#ref-go-authors-2026d)]：
 
 ```go
 type RWMutex struct {
@@ -373,12 +373,12 @@ const rwmutexMaxReaders = 1 << 30
 
 2010 年，Cox 在解释 Go 的互斥锁为何不可重入的同一封邮件中写道，「我相信我们终究会需要
 TryLock」[[Cox, 2010](#ref-cox-2010)]。它真正加入却是在 11 年之后。2021 年的提案 #45435 起初遭到 Cox
-本人的反对：锁是用来保护不变式的（[11.1.3](./basic.md)），锁被别人持有时，关于不变式就什么也说不出来，
-TryLock 会助长对锁的不精确思考 [[Cox, 2021a](#ref-cox-2021a)]。改变看法的理由来自竞态检测器：
+本人的反对：锁是用来保护不变式的（[11.1.3](./basic.md)），锁被别人持有时，关于不变式就什么也说不出来，TryLock
+会助长对锁的不精确思考 [[Cox, 2021a](#ref-cox-2021a)]。改变看法的理由来自竞态检测器：
 在库外用一个互斥锁加一个原子变量也能实现 TryLock，但这样的实现在失败时也会给竞态检测器制造虚假的先行发生关
 系，从而掩盖真实的数据竞争；内建在 `sync` 中的 TryLock 则不会。实现它的提交说明写道，
-使用这些函数「几乎（但并非总）是个坏主意」[[Cox, 2021b](#ref-cox-2021b)]。`Mutex.TryLock`、
-`RWMutex.TryLock` 与 `RWMutex.TryRLock` 随 Go 1.18 发布。
+使用这些函数「几乎（但并非总）是个坏主意」[[Cox, 2021b](#ref-cox-2021b)]。`Mutex.TryLock`、`RWMutex.TryLock`
+与 `RWMutex.TryRLock` 随 Go 1.18 发布。
 
 `Mutex.TryLock` 的实现只有一次 CAS（省略了与竞态检测器有关的代码）：
 

@@ -9,8 +9,8 @@ title: "6.1 函数调用"
 这一能力的实现涉及两个问题：函数值（尤其是闭包）在内存中如何表示，以及调用一个函数值时，
 被调函数如何找到它所捕获的变量。本节讨论这两个问题，并讨论由此派生的几项特性：Go 1.22
 对循环变量语义的修改、方法值与方法表达式、变参，以及 Go 1.23 引入的对函数的 `range`。
-函数调用的参数传递与栈帧布局已在第 2 章讨论（[2.3](../../part1overview/ch02asm/callconv.md)、
-[2.4](../../part1overview/ch02asm/args.md)），本节只在需要时引用其结论。
+函数调用的参数传递与栈帧布局已在第 2 章讨论（[2.3](../../part1overview/ch02asm/callconv.md)、[2.4](../../part1overview/ch02asm/args.md)），
+本节只在需要时引用其结论。
 
 ## 6.1.1 函数值与闭包
 
@@ -223,8 +223,8 @@ func main() {
 
 Go 1.23 允许对函数使用 `range`：若 `f` 的类型为 `func(yield func(T) bool)`，则 `for x := range f { ... }`
 会反复执行循环体，每次的 `x` 由 `f` 通过调用 `yield` 提供 [[Cox, 2023](#ref-cox-2023)]
-[[Go Authors, 2024b](#ref-go-authors-2024b)]。标准库的 `iter.Seq` 与 `iter.Seq2` 就是这种函数类型，
-`maps.Keys`、`slices.Values` 等函数都返回这样的迭代器 [[Taylor, 2024](#ref-taylor-2024)]。
+[[Go Authors, 2024b](#ref-go-authors-2024b)]。标准库的 `iter.Seq` 与 `iter.Seq2` 就是这种函数类型，`maps.Keys`、`slices.Values`
+等函数都返回这样的迭代器 [[Taylor, 2024](#ref-taylor-2024)]。
 
 这一特性完全由编译器通过改写实现，运行时没有为它提供专门的机制。`cmd/compile/internal/rangefunc` 包的注释
 [[Go Authors, 2026b](#ref-go-authors-2026b)]说明，其基本思路是把
@@ -244,8 +244,8 @@ f(func(x T) bool {
 })
 ```
 
-即把循环体变成一个闭包，作为 `yield` 传给 `f`。循环体中的 `continue` 改写为 `return true`，告诉 `f` 继续；
-`break` 改写为 `return false`，告诉 `f` 停止。循环体中的 `return`、带标签的 `break`、`continue` 与 `goto`
+即把循环体变成一个闭包，作为 `yield` 传给 `f`。循环体中的 `continue` 改写为 `return true`，告诉 `f` 继续；`break`
+改写为 `return false`，告诉 `f` 停止。循环体中的 `return`、带标签的 `break`、`continue` 与 `goto`
 则较为复杂：编译器引入一个隐藏变量 `#next` 记录闭包返回后应执行的控制流，由闭包设置该变量并返回 `false`，
 待 `f` 返回之后，再根据 `#next` 执行相应的跳转或返回。
 
@@ -308,8 +308,8 @@ panic 的调用栈中，循环体所在的函数名为 `main.main-range1`，这�
 件直接互操作，这一约定一经公开便难以更改。Go 则为内部调用定义了自己的 ABI，放弃了与外部目标文件的直接互通
 （cgo 调用须跨越 ABI 边界，代价见 [15.6](../../part5toolchain/ch15compile/cgo.md)），
 换取了按自身需要演进调用约定的自由，Go 1.17 从栈传参到寄存器传参的切换
-[[Clements, 2020](#ref-clements-2020)] [[Go Authors, 2021](#ref-go-authors-2021)]
-（[2.3](../../part1overview/ch02asm/callconv.md)）正得益于此。
+[[Clements, 2020](#ref-clements-2020)] [[Go Authors, 2021](#ref-go-authors-2021)]（[2.3](../../part1overview/ch02asm/callconv.md)）
+正得益于此。
 
 ## 延伸阅读
 
@@ -363,7 +363,7 @@ panic 的调用栈中，循环体所在的函数名为 `main.main-range1`，这�
 - <a id="ref-rust-project-nd"></a>[Rust Project, n.d.] The Rust Project. *The Rust Reference*, "Closure
   types". https://doc.rust-lang.org/reference/types/closure.html
   Rust 闭包的捕获模式与 `Fn`、`FnMut`、`FnOnce` 三个 trait。
-- 本书 [4.2 接口](../ch04type/interface.md)、[5.1 切片](../ch05data/slice.md)、
-  [14 执行栈管理](../../part4memory/ch14stack)、
-  [15.5 逃逸分析](../../part5toolchain/ch15compile/escape.md).
+- 本书 [4.2 接口](../ch04type/interface.md)、[5.1 切片](../ch05data/slice.md)、[14
+  执行栈管理](../../part4memory/ch14stack)、[15.5
+  逃逸分析](../../part5toolchain/ch15compile/escape.md).
 

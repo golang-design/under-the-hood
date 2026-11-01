@@ -49,8 +49,8 @@ goroutine：共 6 个，NumGoroutine 只报告 1 个
 ```
 
 CPU 数、线程数和内存用量随机器而异；即使在同一台机器上，线程数（我们观察到 4 至 6 个）和堆的大小
-也会随每次运行变化。在网站上运行时，程序运行于浏览器中的 js/wasm 环境，只有一个线程，CPU 数、
-GOMAXPROCS 和线程数均为 1，堆为 384 KiB，栈为 128 KiB。
+也会随每次运行变化。在网站上运行时，程序运行于浏览器中的 js/wasm 环境，只有一个线程，CPU 数、GOMAXPROCS
+和线程数均为 1，堆为 384 KiB，栈为 128 KiB。
 
 6 个 goroutine 中只有 1 个在执行用户的 `main`，其余 5 个是运行时的后台 goroutine，例如垃圾回收的
 清扫与内存归还，`NumGoroutine` 不把它们计算在内。这些 goroutine 以及多出的几个线程，都是在调用
@@ -152,8 +152,8 @@ TEXT runtime·rt0_go(SB),NOSPLIT|NOFRAME|TOPFRAME,$0
 ```
 
 第 3 步解决「线程如何找到当前 goroutine」的问题。同一进程中的线程共享全部地址空间，
-为每个线程提供一个私有的位置需要操作系统的支持，即**线程本地存储**（thread-local storage，
-TLS）[[Drepper, 2013](#ref-drepper-2013)]。在 Linux 的 x86-64 上，段寄存器 FS 的基址指向当前线程的 TLS
+为每个线程提供一个私有的位置需要操作系统的支持，即**线程本地存储**（thread-local storage，TLS）[[Drepper,
+2013](#ref-drepper-2013)]。在 Linux 的 x86-64 上，段寄存器 FS 的基址指向当前线程的 TLS
 区域；运行时通过系统调用 `arch_prctl` 设置这一基址，再在固定偏移处存放指向当前 goroutine 的指针。
 前文提到的 `R14` 是 Go 1.17 引入基于寄存器的调用约定（[2.3](../ch02asm/callconv.md)）之后的优化：执行 Go
 代码期间，当前 goroutine 的指针同时保存在 `R14` 中 [[Go Authors, 2026a](#ref-go-authors-2026a)]，
@@ -345,10 +345,10 @@ Linux 上不依赖 C 库，而是直接发起系统调用（Linux 保证系统�
   64 位平台上默认随机化堆的基址，以及关闭这一功能的 `GOEXPERIMENT`。
 - <a id="ref-uber-nd"></a>[Uber, n.d.] Uber. *automaxprocs.* https://github.com/uber-go/automaxprocs
   在启动时依据容器的 CPU 限额设置 `GOMAXPROCS` 的库。
-- 本书 [1.2 Go 语言综述](../ch01intro/go.md)（二进制内含微型操作系统的视角）、
-  [9.1 调度问题与 GMP 模型](../../part3concurrency/ch09sched/model.md)（P 列表与调度循环）、
-  [9.6 信号处理机制](../../part3concurrency/ch09sched/signal.md)。
-- 本书 [第 12 章 内存分配器](../../part4memory/ch12alloc/)、
-  [第 13 章 垃圾回收器](../../part4memory/ch13gc/)（`mallocinit`、`gcinit` 所建起的结构）、
-  [3.6 主 Goroutine 的生与死](./main.md)。
+- 本书 [1.2 Go 语言综述](../ch01intro/go.md)（二进制内含微型操作系统的视角）、[9.1
+  调度问题与 GMP 模型](../../part3concurrency/ch09sched/model.md)（P 列表与调度循环）、[9.6
+  信号处理机制](../../part3concurrency/ch09sched/signal.md)。
+- 本书 [第 12 章 内存分配器](../../part4memory/ch12alloc/)、[第
+  13 章 垃圾回收器](../../part4memory/ch13gc/)（`mallocinit`、`gcinit` 所建起的结构）、[3.6
+  主 Goroutine 的生与死](./main.md)。
 

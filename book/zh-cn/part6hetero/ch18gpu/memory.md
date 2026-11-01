@@ -120,8 +120,8 @@ accel 的 Metal 后端提供了一个实例 [[Ou, 2026a](#ref-ou-2026a)]。它�
 因此它在调用前先 `Pin(&data[0])`，调用后 `Unpin`。与 cgo 不同，经 `uintptr`
 的调用不会让参数自动逃逸到堆上，也没有隐式固定，这一步必须由代码自己完成。
 
-**其二，操作系统意义上的固定：页锁定内存**（page-locked memory，又称 pinned memory，由 `cudaMallocHost`、
-`cudaHostAlloc` 分配，或由 `cudaHostRegister` 把已有的内存页锁定）[[NVIDIA, n.d.a](#ref-nvidia-nda)]。
+**其二，操作系统意义上的固定：页锁定内存**（page-locked memory，又称 pinned memory，由 `cudaMallocHost`、`cudaHostAlloc`
+分配，或由 `cudaHostRegister` 把已有的内存页锁定）[[NVIDIA, n.d.a](#ref-nvidia-nda)]。
 它与垃圾回收无关，作用于操作系统的分页。CUDA 编程指南写道 [[NVIDIA, n.d.b](#ref-nvidia-ndb)]：
 
 ```text
@@ -268,8 +268,8 @@ goroutine 的并发三者之间的关系。
   https://github.com/golang-design/accel, 2026.
   `internal/mtl/queue_darwin.go` 中的 `SetBytes`、`transfer.go` 中的 `WriteBuffer`、`memory.go` 中的
   `MemoryShared`。项目处于早期阶段。
-- 本书 [12 内存分配](../../part4memory/ch12alloc/readme.md)、
-  [13 垃圾回收](../../part4memory/ch13gc/readme.md)、
-  [14.4 栈的拷贝与指针调整](../../part4memory/ch14stack/copy.md)、
-  [15.6 cgo 指针传递规则](../../part5toolchain/ch15compile/cgo.md)、
-  [18.1 跨越 FFI 边界](./boundary.md)、[18.2 调度器与阻塞的外部调用](./sched.md)。
+- 本书 [12 内存分配](../../part4memory/ch12alloc/readme.md)、[13
+  垃圾回收](../../part4memory/ch13gc/readme.md)、[14.4
+  栈的拷贝与指针调整](../../part4memory/ch14stack/copy.md)、[15.6
+  cgo 指针传递规则](../../part5toolchain/ch15compile/cgo.md)、[18.1
+  跨越 FFI 边界](./boundary.md)、[18.2 调度器与阻塞的外部调用](./sched.md)。

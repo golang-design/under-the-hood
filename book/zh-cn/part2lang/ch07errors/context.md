@@ -27,12 +27,12 @@ load config: open /etc/app.conf: permission denied
 ```
 
 Effective Go 还建议 [[Go Authors, 2009](#ref-go-authors-2009)]，错误消息应当尽可能标明来源，
-例如以产生错误的操作或包名作为前缀：`image` 包因格式未知而解码失败时，错误消息是 `image: unknown format`。
-`os.PathError` 是这一建议的范例，它的消息包含操作、文件路径与系统调用返回的错误，如
+例如以产生错误的操作或包名作为前缀：`image` 包因格式未知而解码失败时，错误消息是 `image: unknown format`。`os.PathError`
+是这一建议的范例，它的消息包含操作、文件路径与系统调用返回的错误，如
 `open /etc/passwx: no such file or directory`，即使在远离出错位置的地方打印，也能看出发生了什么。
 
-这条约定过去由 `golint` 检查。Ian Lance Taylor 于 2020 年 5 月提议冻结并弃用 `golint`
-（go.dev/issue/38968），其仓库随后归档 [[Taylor, 2020](#ref-taylor-2020)]；同样的检查现在由 Staticcheck
+这条约定过去由 `golint` 检查。Ian Lance Taylor 于 2020 年 5 月提议冻结并弃用 `golint`（go.dev/issue/38968），
+其仓库随后归档 [[Taylor, 2020](#ref-taylor-2020)]；同样的检查现在由 Staticcheck
 的 ST1005 提供 [[Honnef, n.d.](#ref-honnef-nd)]。`go vet` 不检查错误消息的写法。
 
 ## 7.3.2 在每个边界补充上下文
@@ -244,8 +244,8 @@ true
 ## 7.3.5 结构化日志：错误作为字段
 
 以 `: ` 拼接的消息是写给人看的，不便于机器检索与统计。错误进入日志系统、需要按字段过滤与告警时，
-一行字符串就显得不够。Go 1.21 加入的 `log/slog`（Jonathan Amsterdam，
-2023 年）[[Amsterdam, 2023](#ref-amsterdam-2023)]把日志从格式化的字符串改为键值对构成的记录，
+一行字符串就显得不够。Go 1.21 加入的 `log/slog`（Jonathan Amsterdam，2023
+年）[[Amsterdam, 2023](#ref-amsterdam-2023)]把日志从格式化的字符串改为键值对构成的记录，
 错误可以作为一个字段记录下来。
 
 `slog` 的 JSON 处理程序在输出一个值时，若该值是错误且没有实现 `json.Marshaler`，就输出它的
@@ -343,8 +343,8 @@ main.go:7:20: slog.Warn arg "42" should be a string or a slog.Attr (possible mis
 ## 7.3.6 比较与小结
 
 Java 与 Python 的异常在创建或抛出时自动记录调用栈，上下文的获得不需要额外的代码，代价是每个异常都要付出采
-集调用栈的开销，并且栈中充满实现细节，不表达业务语义。Rust 的 `Result` 与 Go 的错误一样默认不带调用栈；
-Rust 1.65（2022 年）稳定了 `std::backtrace::Backtrace` [[Rust, 2022](#ref-rust-2022)]，社区常用的
+集调用栈的开销，并且栈中充满实现细节，不表达业务语义。Rust 的 `Result` 与 Go 的错误一样默认不带调用栈；Rust
+1.65（2022 年）稳定了 `std::backtrace::Backtrace` [[Rust, 2022](#ref-rust-2022)]，社区常用的
 `anyhow` 与 `thiserror` 则分别提供不透明的错误与结构化的错误类型，按需附加上下文与调用栈，思路与 Go 的
 `pkg/errors` 相近。
 
@@ -363,8 +363,8 @@ Go 的选择可以概括为三层：
 - <a id="ref-neil-amsterdam-2019"></a>[Neil and Amsterdam, 2019] Damien Neil, Jonathan Amsterdam. *Working
   with Errors in Go 1.13.* The Go Blog, 2019. https://go.dev/blog/go1.13-errors
   （`%w`、`Is`/`As`/`Unwrap` 的设计与取舍）
-- <a id="ref-cheney-2016d"></a>[Cheney, 2016d] Dave Cheney. *github.com/pkg/errors*（`Wrap`/`WithStack`、
-  `%+v` 带栈打印）. https://github.com/pkg/errors ；
+- <a id="ref-cheney-2016d"></a>[Cheney, 2016d] Dave Cheney. *github.com/pkg/errors*（`Wrap`/`WithStack`、`%+v`
+  带栈打印）. https://github.com/pkg/errors ；
   <a id="ref-cheney-2016c"></a>[Cheney, 2016c] Dave Cheney. *Stack traces and the errors package.* 2016.
   https://dave.cheney.net/2016/06/12/stack-traces-and-the-errors-package
   （`pkg/errors` 栈轨迹设计的作者自述）
@@ -386,5 +386,5 @@ Go 的选择可以概括为三层：
   https://go.dev/issue/38968
 - <a id="ref-rust-2022"></a>[Rust, 2022] The Rust Release Team. *Announcing Rust 1.65.0.* 2022.
   https://blog.rust-lang.org/2022/11/03/Rust-1.65.0/
-- 本书 [7.1 问题的演化](./value.md)、[7.2 错误值检查](./inspect.md)、
-  [16 工具与可观测性](../../part5toolchain/ch16tools).
+- 本书 [7.1 问题的演化](./value.md)、[7.2 错误值检查](./inspect.md)、[16
+  工具与可观测性](../../part5toolchain/ch16tools).

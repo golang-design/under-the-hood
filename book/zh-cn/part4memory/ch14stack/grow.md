@@ -65,8 +65,8 @@ similar):
 中已没有 `morearg` 字段，大栈帧的函数也同样执行比较，[2.4](../../part1overview/ch02asm/args.md)
 中帧大小为 8208 字节的 `Huge` 即是一例。
 
-标为 `//go:nosplit` 的函数不做检查，它们只能使用警戒线以下预留的空间，这一约束由链接器在构建时核对。
-Russ Cox 在 2011 年为链接器加入了这项检查，提交时就借此发现并修正了若干超出预留的运行时函数
+标为 `//go:nosplit` 的函数不做检查，它们只能使用警戒线以下预留的空间，这一约束由链接器在构建时核对。Russ
+Cox 在 2011 年为链接器加入了这项检查，提交时就借此发现并修正了若干超出预留的运行时函数
 [[Cox, 2011](#ref-cox-2011)]。今天的检查位于 `cmd/link/internal/ld/stackcheck.go`
 [[Go Authors, 2026e](#ref-go-authors-2026e)]：
 
@@ -117,8 +117,8 @@ main.f<1>
 ```
 
 链接器报告的是最深的一条调用链。`buf[i]` 需要下标检查，越界时调用 `runtime.panicBounds`，后者又调用
-`runtime.panicBounds64`；`panicBounds64` 做栈检查，可能调用 `morestack`，而 `morestack` 也必须放得下。
-1040 + 160 + 8 = 1208 字节，超出限额 416 字节。在 darwin/arm64 上，最后一次调用不压栈，输出为
+`runtime.panicBounds64`；`panicBounds64` 做栈检查，可能调用 `morestack`，而 `morestack` 也必须放得下。1040 +
+160 + 8 = 1208 字节，超出限额 416 字节。在 darwin/arm64 上，最后一次调用不压栈，输出为
 「grows 0 bytes」与「408 bytes over limit」。
 
 ## 14.3.2 从 morestack 到 newstack
@@ -233,8 +233,8 @@ func newstack() {
 保持原有大小。
 
 复制期间，goroutine 处于 `_Gcopystack` 状态。并发运行的回收器不会扫描这样的栈；需要暂停这个 goroutine 的
-`suspendG` 遇到这一状态时，也会等待复制完成。`copystack` 结束后，`g.sched` 中保存的 SP 已经指向新栈，
-`gogo` 据此回到 f 中 `morestack` 调用之后的位置，f 随即取回溢出到栈上的参数，
+`suspendG` 遇到这一状态时，也会等待复制完成。`copystack` 结束后，`g.sched` 中保存的 SP 已经指向新栈，`gogo`
+据此回到 f 中 `morestack` 调用之后的位置，f 随即取回溢出到栈上的参数，
 跳回开头重新执行序言中的检查，这一次检查通过。
 
 ## 14.3.4 栈的上限
@@ -350,8 +350,8 @@ flowchart TD
 - <a id="ref-randall-2020"></a>[Randall, 2020] Keith Randall. runtime: grow stack more than 2x if the new
   frame is large. Go commit b1760f3a27, 2020. https://go.dev/cl/225800
   随 Go 1.15 发布。
-- 本书 [2.4 参数传递与栈帧布局](../../part1overview/ch02asm/args.md)（stackguard0 的设立）、
-  [2.2 汇编中的栈帧与符号](../../part1overview/ch02asm/frame.md)、
-  [9.3 MPG 模型与并发调度单元](../../part3concurrency/ch09sched/mpg.md)、
-  [9.7 协作与抢占](../../part3concurrency/ch09sched/preemption.md)（stackPreempt 借道序言检查）、
-  [14.1 连续栈的设计](./design.md)、[14.4 栈的拷贝与指针调整](./copy.md)（copystack 与指针修正）。
+- 本书 [2.4 参数传递与栈帧布局](../../part1overview/ch02asm/args.md)（stackguard0 的设立）、[2.2
+  汇编中的栈帧与符号](../../part1overview/ch02asm/frame.md)、[9.3
+  MPG 模型与并发调度单元](../../part3concurrency/ch09sched/mpg.md)、[9.7
+  协作与抢占](../../part3concurrency/ch09sched/preemption.md)（stackPreempt 借道序言检查）、[14.1
+  连续栈的设计](./design.md)、[14.4 栈的拷贝与指针调整](./copy.md)（copystack 与指针修正）。

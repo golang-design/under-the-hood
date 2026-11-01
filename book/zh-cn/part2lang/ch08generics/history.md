@@ -47,8 +47,8 @@ func Max(a, b interface{}) interface{} {
 ```
 
 这种写法失去了静态类型检查，类型错误要到运行时才暴露，每次调用还要付出装箱与类型断言的开销
-（[4.2](../ch04type/interface.md)）。第三种是代码生成：先写一份模板，再由工具为每种类型生成具体的代码。
-`genny` 是当时较常用的工具之一，它的模板本身就是可以编译的 Go 代码：
+（[4.2](../ch04type/interface.md)）。第三种是代码生成：先写一份模板，再由工具为每种类型生成具体的代码。`genny`
+是当时较常用的工具之一，它的模板本身就是可以编译的 Go 代码：
 
 ```go
 package maxgen
@@ -138,8 +138,8 @@ var y = Max(3.0, 5.0)  // 由实参推断，等价于 Max[float64](3.0, 5.0)
 操作）之间如何取舍，则留给实现决定 [[Taylor and Griesemer, 2021](#ref-taylor-griesemer-2021)]。
 
 2020 年，Keith Randall 在三份设计文档中比较了可能的实现。第一种是**单态化**（monomorphization），Go
-的文档称之为模板化（stenciling）：编译器为每一组类型实参复制一份函数体，代入具体的类型后再编译，
-`Max[int]` 与 `Max[float64]` 是两份独立的机器码 [[Randall, 2020a](#ref-randall-2020a)]。C++ 的模板与 Rust
+的文档称之为模板化（stenciling）：编译器为每一组类型实参复制一份函数体，代入具体的类型后再编译，`Max[int]`
+与 `Max[float64]` 是两份独立的机器码 [[Randall, 2020a](#ref-randall-2020a)]。C++ 的模板与 Rust
 的泛型都采用这种做法。它没有额外的运行时开销，每份代码都可以针对具体类型充分优化；代价是代码膨胀、
 编译变慢，即两难中「缓慢的编译器与臃肿的二进制文件」。第二种是**字典**（dictionary）：
 每个泛型函数只生成一份代码，与具体类型有关的信息由调用方以一个额外的参数传入
@@ -166,8 +166,8 @@ flowchart LR
 实际的实现采用了更细的划分。Go 1.18 的实现文档写道，两个类型属于同一形状，当且仅当它们的底层类型相同，
 或者二者都是指针类型；这样划分是为了保证字典中永远不需要放入运算符的实现：`int` 与 `float64`
 的运算是不同的机器指令，`int16` 与 `int32` 的移位运算也各不相同，因此它们都属于不同的形状
-[[Scales, 2022](#ref-scales-2022)]。Randall 的文档还指出了另一个原因：在基于寄存器的调用约定下，
-`struct{ x, y int }` 与 `[2]int` 大小与指针布局相同，分配到寄存器的方式却不同，仅凭大小与指针布局无法确定
+[[Scales, 2022](#ref-scales-2022)]。Randall 的文档还指出了另一个原因：在基于寄存器的调用约定下，`struct{ x, y int }`
+与 `[2]int` 大小与指针布局相同，分配到寄存器的方式却不同，仅凭大小与指针布局无法确定
 参数放在哪里。
 
 在 Go 1.26 中，确定形状的是 `cmd/compile/internal/noder` 包中的 `shapify` 函数
@@ -313,8 +313,8 @@ CALL  CX         // 间接调用
 形状模板化生成的代码多数与完全单态化相同，例外是对类型参数的方法调用无法在编译期确定，
 可能导致更多的堆分配，也会错过本可以进行的内联 [[Randall, 2020c](#ref-randall-2020c)]。
 
-把这一机制与 [4.2](../ch04type/interface.md) 中 Haskell 类型类的**字典传递**比较，可以看出二者一脉相承：
-Haskell 编译受 `Ord a` 约束的函数时，把 `Ord` 的方法实现打包成一个字典，作为隐式参数传入
+把这一机制与 [4.2](../ch04type/interface.md) 中 Haskell 类型类的**字典传递**比较，可以看出二者一脉相承：Haskell
+编译受 `Ord a` 约束的函数时，把 `Ord` 的方法实现打包成一个字典，作为隐式参数传入
 [[Wadler and Blott, 1989](#ref-wadler-blott-1989)]；Go 的字典同样是一个隐藏参数，只是其内容在编译期按形状
 实例的需要确定，并且只在形状不足以决定操作时才被使用。
 
@@ -326,8 +326,8 @@ Haskell 编译受 `Ord a` 约束的函数时，把 `Ord` 的方法实现打包�
 
 ## 8.1.4 理论渊源与跨语言对照
 
-以类型为参数的思想有很长的历史。Christopher Strachey 在 1967 年的讲义中区分了两种多态：
-**参数多态**（parametric polymorphism）指一个函数以统一的方式作用于任意类型，例如把一个函数依次作用于列表
+以类型为参数的思想有很长的历史。Christopher Strachey 在 1967 年的讲义中区分了两种多态：**参
+数多态**（parametric polymorphism）指一个函数以统一的方式作用于任意类型，例如把一个函数依次作用于列表
 中每个元素的 `map`；**特设多态**（ad hoc polymorphism）则没有统一的规则，同一个名字在不同类型上有不同的实
 现，算术运算符即属此类 [[Strachey, 2000](#ref-strachey-2000)]。1978 年，Robin Milner 为 ML
 语言给出了参数多态的类型系统与类型推断算法 [[Milner, 1978](#ref-milner-1978)]。1989 年，David Musser 与
@@ -348,8 +348,8 @@ Alexander Stepanov 提出 **泛型编程**（generic programming）：从具体�
 | Haskell | 类型类与字典传递 | 由字典提供 | 经字典的间接调用 |
 | Go | GC 形状模板化加字典 | 由字典提供 | 经字典的间接调用，部分调用无法内联 |
 
-Java 的泛型源于 Bracha、Odersky、Stoutamire 与 Wadler 在 1998 年提出的 GJ。为了与已有的类库和虚拟机兼容，
-GJ 在编译后擦除类型参数，泛型代码与原有的非泛型代码可以互相调用
+Java 的泛型源于 Bracha、Odersky、Stoutamire 与 Wadler 在 1998 年提出的 GJ。为了与已有的类库和虚拟机兼容，GJ
+在编译后擦除类型参数，泛型代码与原有的非泛型代码可以互相调用
 [[Bracha et al., 1998](#ref-bracha-et-al-1998)]。C# 走了另一条路：Andrew Kennedy 与 Don Syme 在 .NET
 公共语言运行时中保留类型实参，所有以引用类型实例化的代码共用一份，以值类型实例化时则由 JIT
 编译器在运行时按需生成特化的代码，值类型因此无须装箱 [[Kennedy and Syme, 2001](#ref-kennedy-syme-2001)]。
@@ -391,8 +391,8 @@ Go 1.27 才以受限的形式解除，经过见 [8.4.2](./future.md)。提案认
 - <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors.
   `cmd/compile/internal/noder/reader.go`.
   https://github.com/golang/go/blob/master/src/cmd/compile/internal/noder/reader.go
-  （Go 1.26：<https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/noder/reader.go>）
-  `readerDict` 与 `shapify`：字典条目与形状归并的实际实现。
+  （Go 1.26：<https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/noder/reader.go>）`readerDict`
+  与 `shapify`：字典条目与形状归并的实际实现。
 - <a id="ref-go-authors-2022"></a>[Go Authors, 2022] The Go Authors. Go 1.18 Release Notes.
   https://go.dev/doc/go1.18
   泛型的正式发布。

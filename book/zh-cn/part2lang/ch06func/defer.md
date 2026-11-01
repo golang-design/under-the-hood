@@ -392,8 +392,8 @@ func main() {
 
 ## 6.2.4 `deferreturn` 与 panic：同一套机制
 
-栈上分配与堆上分配的记录都在 `g._defer` 链表上，开放编码的 `defer` 则没有记录。这带来一个必须回答的问题：
-panic 沿调用栈向上展开、需要执行每一帧中已登记的延迟调用时，如何找到开放编码的 `defer`？
+栈上分配与堆上分配的记录都在 `g._defer` 链表上，开放编码的 `defer` 则没有记录。这带来一个必须回答的问题：panic
+沿调用栈向上展开、需要执行每一帧中已登记的延迟调用时，如何找到开放编码的 `defer`？
 
 答案是编译器为使用开放编码的函数生成一份额外的元数据 `FUNCDATA_OpenCodedDeferInfo`，记录 `deferBits`
 以及各个延迟调用的函数值在栈帧中的位置 [[Scales et al., 2019](#ref-scales-et-al-2019)]。panic
@@ -470,8 +470,8 @@ Go 选择了另一条路：`defer` 不与类型绑定，也不需要额外的语
   Go 1.22 中统一 `gopanic`、`Goexit` 与 `deferreturn` 的重构。
 - <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `runtime/panic.go`.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/panic.go
-  （开发版本：<https://github.com/golang/go/blob/master/src/runtime/panic.go>）
-  `deferproc`、`deferprocStack`、`newdefer`、`deferreturn` 与 `nextDefer` 的实现。
+  （开发版本：<https://github.com/golang/go/blob/master/src/runtime/panic.go>）`deferproc`、`deferprocStack`、`newdefer`、`deferreturn`
+  与 `nextDefer` 的实现。
 - <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *The Go Programming Language
   Specification*, "Defer statements". https://go.dev/ref/spec#Defer_statements
 - <a id="ref-go-authors-2019"></a>[Go Authors, 2019] The Go Authors. Go 1.13 Release Notes.

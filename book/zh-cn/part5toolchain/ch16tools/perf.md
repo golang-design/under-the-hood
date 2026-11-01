@@ -210,8 +210,8 @@ allocs/op 往往比 ns/op 更稳定，也更容易解释。每次堆分配都会
 
 ### `benchstat` 的统计方法
 
-`benchstat` 最初由 Russ Cox 编写，2017 年并入 `golang.org/x/perf` [[Cox, 2017b](#ref-cox-2017b)]。
-2023 年，Clements 重写了它的统计方法 [[Clements, 2023a](#ref-clements-2023a)]。
+`benchstat` 最初由 Russ Cox 编写，2017 年并入 `golang.org/x/perf` [[Cox, 2017b](#ref-cox-2017b)]。2023
+年，Clements 重写了它的统计方法 [[Clements, 2023a](#ref-clements-2023a)]。
 旧版先按四分位距剔除离群值，再报告剩余样本的均值与范围；而任何剔除离群值的做法都要先假设数据的分布，
 这里假设的是正态分布，基准数据通常并不满足。新版不再剔除任何样本，因此也必须改用对离群值不敏感的统计量：
 每组报告中位数及其 95% 置信区间。两组之间的比较仍使用 **Mann–Whitney U 检验**，但改在完整的样本上进行，
@@ -304,8 +304,8 @@ geomean                ²               -82.04%                ²
 ```
 
 这次运行时，机器上同时有大量其他进程，耗时的置信区间因此格外宽，这也正好说明了统计检验的作用。`Join`
-的两组样本完全没有重叠，即便噪声如此之大，p 值也接近 0；`Count` 的中位数相差约 12%，p 值却是 0.631，
-`benchstat` 据此判定这一差异无法与噪声区分。`± 35%` 是中位数 95% 置信区间相对中位数的幅度，
+的两组样本完全没有重叠，即便噪声如此之大，p 值也接近 0；`Count` 的中位数相差约 12%，p 值却是 0.631，`benchstat`
+据此判定这一差异无法与噪声区分。`± 35%` 是中位数 95% 置信区间相对中位数的幅度，
 而不是样本的离散程度。每张表末行的几何平均汇总了全部基准的变化：若 n 个基准中有一个变为原来的 2 倍，
 几何平均变为原来的 $\sqrt[n]{2}$ 倍。几何平均要求每个值都大于 0，`Count` 不分配内存，
 后两张表的几何平均因此带有警告。分配的统计则没有噪声：旧版拼接 32 个单词要分配
@@ -329,8 +329,8 @@ Count-18   17.17n ± ∞ ¹   14.75n ± ∞ ¹  ~ (p=0.400 n=3) ²
 
 ## 16.5.5 运行时如何采集剖面
 
-基准测试告诉我们一段代码有多快，剖析则回答一个运行中的程序把时间与内存花在了哪些调用栈上。
-`runtime/pprof` 预定义了以下几种剖面 [[Go Authors, 2026c](#ref-go-authors-2026c)]：
+基准测试告诉我们一段代码有多快，剖析则回答一个运行中的程序把时间与内存花在了哪些调用栈上。`runtime/pprof`
+预定义了以下几种剖面 [[Go Authors, 2026c](#ref-go-authors-2026c)]：
 
 ```go
 //	goroutine      - stack traces of all current goroutines
@@ -389,11 +389,11 @@ Michael Matloob 在 Go 1.8 中引入，取代此前的旧 pprof 格式：protobu
 
 定时器的选择经历过一次修正。`setitimer` 按整个进程消耗的 CPU 时间计时，而 Linux 定期（通常每 4 ms）
 才结算一次进程的 CPU 时间；若两次结算之间应当发出不止一次信号（默认的 100 Hz 下每 10 ms 一次），
-内核往往只能送达其中一次。其结果是，程序中并行运行的 goroutine 超过约 2.5 个时，CPU 剖面就会系统地少计。
-Rhys Hiltner 在 Go issue #35057 中报告了这一问题，并在 Go 1.18 中改为用 `timer_create`
+内核往往只能送达其中一次。其结果是，程序中并行运行的 goroutine 超过约 2.5 个时，CPU 剖面就会系统地少计。Rhys
+Hiltner 在 Go issue #35057 中报告了这一问题，并在 Go 1.18 中改为用 `timer_create`
 为运行时管理的每个线程各建一个定时器，各自按本线程的 CPU 时间计时，信号直接送往该线程
-[[Hiltner, 2021](#ref-hiltner-2021)]。cgo 创建的线程不归运行时管理，仍需进程级的 `setitimer` 覆盖，
-`validSIGPROF` 据信号的来源去重：有 M 且有本线程定时器的线程只接受来自 `timer_create` 的信号，没有 M
+[[Hiltner, 2021](#ref-hiltner-2021)]。cgo 创建的线程不归运行时管理，仍需进程级的 `setitimer` 覆盖，`validSIGPROF`
+据信号的来源去重：有 M 且有本线程定时器的线程只接受来自 `timer_create` 的信号，没有 M
 的线程只接受来自 `setitimer` 的信号 [[Go Authors, 2026c](#ref-go-authors-2026c)]。
 每线程计时又带来一种新的偏差：短寿的线程，或只偶尔运行片刻的线程（例如空闲系统上的垃圾回收工作线程），
 可能在第一次信号到来之前就已停止运行。为此，每个定时器的首次触发时间在零到一个完整采样周期之间均匀随机选
@@ -401,8 +401,8 @@ Rhys Hiltner 在 Go issue #35057 中报告了这一问题，并在 Go 1.18 中�
 
 ### 阻塞剖面与锁竞争剖面
 
-这两种剖面都默认关闭。它们需要在同步原语的慢路径上计时，开销高于 CPU 与堆的抽样，是否值得由使用者决定：
-`runtime.SetBlockProfileRate` 打开阻塞剖面，`runtime.SetMutexProfileFraction` 打开锁竞争剖面。阻塞剖面由
+这两种剖面都默认关闭。它们需要在同步原语的慢路径上计时，开销高于 CPU 与堆的抽样，是否值得由使用者决定：`runtime.SetBlockProfileRate`
+打开阻塞剖面，`runtime.SetMutexProfileFraction` 打开锁竞争剖面。阻塞剖面由
 Dmitriy Vyukov 在 Go 1.1 中加入 [[Vyukov, 2012](#ref-vyukov-2012)]，锁竞争剖面由 Peter Weinberger 在 Go
 1.8 中加入 [[Weinberger, 2016](#ref-weinberger-2016)]。
 
@@ -560,8 +560,8 @@ goroutine 剖面需要所有 goroutine 在同一时刻的调用栈，早期的�
 
 ## 16.5.6 从剖面到结论
 
-剖面的标准格式是 gzip 压缩的 protobuf，由 `go tool pprof` 读取。`runtime/pprof` 把剖面写入文件，
-`net/http/pprof` 则在 `/debug/pprof/` 下以 HTTP 提供同样的数据，可以从运行中的服务直接取得
+剖面的标准格式是 gzip 压缩的 protobuf，由 `go tool pprof` 读取。`runtime/pprof` 把剖面写入文件，`net/http/pprof`
+则在 `/debug/pprof/` 下以 HTTP 提供同样的数据，可以从运行中的服务直接取得
 [[Cox, 2011](#ref-cox-2011); [Go Authors, 2026e](#ref-go-authors-2026e)]：
 
 ```go
@@ -573,8 +573,8 @@ func main() {
 }
 ```
 
-`/debug/pprof/profile?seconds=30` 采集 30 秒的 CPU 剖面；对 `heap`、`block`、`mutex` 等累计型剖面，
-`seconds` 参数则返回这段时间内的增量。Go 1.22 起这些路径只接受 GET 请求
+`/debug/pprof/profile?seconds=30` 采集 30 秒的 CPU 剖面；对 `heap`、`block`、`mutex` 等累计型剖面，`seconds`
+参数则返回这段时间内的增量。Go 1.22 起这些路径只接受 GET 请求
 [[Go Authors, 2026e](#ref-go-authors-2026e)]。这些端点暴露了程序的内部状态，
 通常只应监听本地地址或经过鉴权。
 
@@ -589,8 +589,8 @@ graph）[[Go Authors, 2026a](#ref-go-authors-2026a)]。火焰图由 Brendan Greg
 的原始画法把根放在底部，调用栈向上生长，顶部边缘的帧是采样时正在 CPU 上执行的函数；pprof
 网页界面中的火焰图则把根放在顶部，被调用者向下生长，方向正好相反
 [[Go Authors, 2026c](#ref-go-authors-2026c)]。无论哪种方向，高度只反映调用栈的深度，
-寻找热点时应当看叶端一侧又宽又平的「平台」，即自身占用了大量样本的函数。火焰图并不依赖特定的剖析器，
-DTrace、Linux `perf` 采到的调用栈同样可以这样呈现。
+寻找热点时应当看叶端一侧又宽又平的「平台」，即自身占用了大量样本的函数。火焰图并不依赖特定的剖析器，DTrace、Linux
+`perf` 采到的调用栈同样可以这样呈现。
 
 剖面还可以离开开发者的机器，成为基础设施的一部分。Google 的 Google-Wide Profiling 在数据中心的机器上持续、
 低频地采集剖面并集中存储，使性能分析可以覆盖整个机群的长期数据 [[Ren et al., 2010](#ref-ren-et-al-2010)]。
@@ -606,8 +606,8 @@ DTrace、Linux `perf` 采到的调用栈同样可以这样呈现。
 ## 16.5.7 小结
 
 基准测试、统计检验与剖析分别回答「多快」「是否真的变了」「花在哪里」。`testing`
-包以指数增长再外推的方式确定迭代次数，`B.Loop` 把这一过程搬进循环内部，并以编译器变换防止被测代码被删除，
-Go 1.26 又让这一变换不再妨碍内联。`benchstat` 以中位数、置信区间与 Mann–Whitney U
+包以指数增长再外推的方式确定迭代次数，`B.Loop` 把这一过程搬进循环内部，并以编译器变换防止被测代码被删除，Go
+1.26 又让这一变换不再妨碍内联。`benchstat` 以中位数、置信区间与 Mann–Whitney U
 检验处理不服从正态分布的基准数据，名次检验的性质决定了每组至少需要 4 个样本，中位数的置信区间至少需要
 6 个。运行时以 100 Hz 的定时信号采集 CPU 剖面，Linux 上改用每线程的定时器以避免多核时少计；
 阻塞剖面与锁竞争剖面分别把同一次等待记在等待者与持有者名下，并都按抽样概率加权以保持无偏。
@@ -664,13 +664,12 @@ Go 1.26 又让这一变换不再妨碍内联。`benchstat` 以中位数、置信
   src/testing/benchmark.go（`predictN`、`launch`、`runN`、`Loop`、`StartTimer`、`StopTimer`）. Go 1.26
   源码. https://github.com/golang/go/blob/release-branch.go1.26/src/testing/benchmark.go
 - <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors.
-  src/runtime/pprof/pprof.go（预定义剖面、`StartCPUProfile`、`profileWriter`）、src/runtime/cpuprof.go、
-  src/runtime/profbuf.go、src/runtime/os_linux.go（`validSIGPROF`）、
-  src/cmd/vendor/github.com/google/pprof/internal/driver/html/stacks.js（火焰图的绘制方向）. Go 1.26 源码.
+  src/runtime/pprof/pprof.go（预定义剖面、`StartCPUProfile`、`profileWriter`）、src/runtime/cpuprof.go、src/runtime/profbuf.go、src/runtime/os_linux.go（`validSIGPROF`）、src/cmd/vendor/github.com/google/pprof/internal/driver/html/stacks.js（
+  火焰图的绘制方向）. Go 1.26 源码.
   https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
 - <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors.
-  src/runtime/mprof.go（`blocksampled`、`mutexevent`、`saveBlockEventStack`）、
-  src/runtime/sema.go（`semrelease1`）. Go 1.26 源码.
+  src/runtime/mprof.go（`blocksampled`、`mutexevent`、`saveBlockEventStack`）、src/runtime/sema.go（`semrelease1`）.
+  Go 1.26 源码.
   https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
 - <a id="ref-go-authors-2026e"></a>[Go Authors, 2026e] The Go Authors.
   *Package runtime/pprof、 net/http/pprof.* https://pkg.go.dev/runtime/pprof
@@ -690,8 +689,8 @@ Go 1.26 又让这一变换不再妨碍内联。`benchstat` 以中位数、置信
   59(6): 48–57, 2016. https://doi.org/10.1145/2909476
   火焰图的提出者对这种表示法的系统介绍。
 - <a id="ref-gregg-nd"></a>[Gregg, n.d.] Brendan Gregg. *Flame Graphs.*
-  https://www.brendangregg.com/flamegraphs.html ；
-  *Systems Performance.* 2nd ed. Pearson, 2020.
+  https://www.brendangregg.com/flamegraphs.html ；*Systems
+  Performance.* 2nd ed. Pearson, 2020.
 - <a id="ref-hiltner-2021"></a>[Hiltner, 2021] Rhys Hiltner. runtime: profile with per-thread timers on
   Linux. Go commit 8cfd8c3db8, 2021. https://go.dev/cl/324129
   随 Go 1.18 发布，对应 Go issue #35057。
@@ -728,6 +727,6 @@ Go 1.26 又让这一变换不再妨碍内联。`benchstat` 以中位数、置信
   随 Go 1.8 发布。
 - <a id="ref-wilcoxon-1945"></a>[Wilcoxon, 1945] Frank Wilcoxon. "Individual Comparisons by Ranking
   Methods." *Biometrics Bulletin*, 1(6): 80–83, 1945. https://doi.org/10.2307/3001968
-- 本书 [15.3 优化器（PGO）](../ch15compile/optimize.md)、[16.3 性能追踪](./trace.md)、
-  [16.1 死锁检测](./deadlock.md)、[13 垃圾回收](../../part4memory/ch13gc)、
-  [15.5 逃逸分析](../ch15compile/escape.md).
+- 本书 [15.3 优化器（PGO）](../ch15compile/optimize.md)、[16.3 性能追踪](./trace.md)、[16.1
+  死锁检测](./deadlock.md)、[13 垃圾回收](../../part4memory/ch13gc)、[15.5
+  逃逸分析](../ch15compile/escape.md).

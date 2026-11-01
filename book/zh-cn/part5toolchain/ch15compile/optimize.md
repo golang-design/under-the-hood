@@ -7,8 +7,8 @@ title: "15.3 优化器"
 
 Go 编译器的优化分两层进行。第一层在 `ir` 节点树上，包括内联、去虚化与逃逸分析（[15.5](./escape.md)）。
 这几项决策需要同时看到调用者与被调者，只能在各函数的函数体仍然彼此可见时进行。第二层在 SSA 上，每个函数
-独立地经过数十趟变换（[15.2](./ssa.md)），这些趟只处理单个函数的内部，因而可以并行。
-[3.2.3](../../part1overview/ch03life/compile.md) 已经介绍了内联预算 80 与 PGO 下的预算 2000，本节讨论这些
+独立地经过数十趟变换（[15.2](./ssa.md)），这些趟只处理单个函数的内部，因而可以并行。[3.2.3](../../part1overview/ch03life/compile.md)
+已经介绍了内联预算 80 与 PGO 下的预算 2000，本节讨论这些
 数字所属的成本模型及其演变，去虚化与性能制导优化如何扩大内联的作用范围，以及 SSA 上的 `prove` 趟如何删去
 边界检查。
 
@@ -122,8 +122,8 @@ SSA 上；SSA 阶段各函数并行编译，内联却要求按调用关系定序
 **内联树**，记录每次内联调用的文件、行号与函数名，再生成一张 PC 值表，把每条指令映射到内联树中的节点。
 运行时据此在回溯中还原出被内联掉的「逻辑栈帧」，`runtime.Callers` 等函数改为按逻辑栈帧工作；
 方案还计划为调试器生成 DWARF 内联信息。方案报告的初步结果是 Go1 基准测试提速 9%，二进制文件增大 15%。
-这些表格随 Go 1.9 发布 [[Lazar, 2017](#ref-lazar-2017)]，中栈内联本身仍须以 `-l=4` 显式开启。到 Go 1.12，
-Keith Randall 把一次调用的加计成本从 80 降到 60，「足以容纳函数体中的一次调用，
+这些表格随 Go 1.9 发布 [[Lazar, 2017](#ref-lazar-2017)]，中栈内联本身仍须以 `-l=4` 显式开启。到 Go 1.12，Keith
+Randall 把一次调用的加计成本从 80 降到 60，「足以容纳函数体中的一次调用，
 但容纳不下两次」[[Randall, 2018b](#ref-randall-2018b)]，David Chase 随后又把它降到 57
 [[Chase, 2018](#ref-chase-2018)]。Go 1.12 的发布说明提醒用户，内联范围扩大之后，应当用
 `runtime.CallersFrames` 解析调用栈，而不要直接遍历 `runtime.Callers` 返回的程序计数器
@@ -166,16 +166,16 @@ Clements 在 2023 年的方案中对这套模型的评价相当直率：Go 编�
 动态类型时，把间接调用改写为对具体方法的直接调用，这个调用随即成为内联的候选。
 
 去虚化最早出现在 Go 1.9。Philip Hofer 为 SSA 加入了一条重写规则：如果接口值中的 itab
-是一个已知的静态符号，接口调用就改为直接调用。典型情形是内联 `sha1.New()` 这样的构造函数之后，
-`h.Write(buf)` 的接收者类型变得已知 [[Hofer, 2017](#ref-hofer-2017)]。这条规则运行在逃逸分析之后，
+是一个已知的静态符号，接口调用就改为直接调用。典型情形是内联 `sha1.New()` 这样的构造函数之后，`h.Write(buf)`
+的接收者类型变得已知 [[Hofer, 2017](#ref-hofer-2017)]。这条规则运行在逃逸分析之后，
 去虚化的结果帮不上逃逸分析。Go 1.16 中，Matthew Dempsky 在 `ir` 层、内联之后、
 逃逸分析之前加入了一个去虚化步骤，使逃逸分析能看到具体的方法 [[Dempsky, 2020](#ref-dempsky-2020)]。
 但这个步骤只运行一次，去虚化产生的直接调用已经错过了内联。Go 1.22 起，去虚化与内联在同一个循环中交替进行，
-新暴露的调用点再次经过去虚化与内联，直至不再变化 [[Dempsky, 2023](#ref-dempsky-2023)；
-[Go Authors, 2024](#ref-go-authors-2024)]。
+新暴露的调用点再次经过去虚化与内联，直至不再变化 [[Dempsky, 2023](#ref-dempsky-2023)；[Go
+Authors, 2024](#ref-go-authors-2024)]。
 
-静态分析能看穿的情形取决于它如何确定动态类型。Go 1.26 之前，编译器只处理只赋值过一次的局部变量。
-Mateusz Poliwczak 的改写使分析能够追踪一个局部接口变量的全部赋值
+静态分析能看穿的情形取决于它如何确定动态类型。Go 1.26 之前，编译器只处理只赋值过一次的局部变量。Mateusz
+Poliwczak 的改写使分析能够追踪一个局部接口变量的全部赋值
 [[Poliwczak, 2025](#ref-poliwczak-2025)]：`concreteType1` 先沿接口转换、类型断言与内联结果追溯到某个
 局部变量，再逐一检查它的每次赋值（节选）[[Go Authors, 2026b](#ref-go-authors-2026b)]：
 
@@ -385,8 +385,8 @@ $ go build -gcflags=-m . 2>&1 | grep main.go:21
 直接调用的分支又被内联。
 
 PGO 在 Go 1.20 中以预览形式发布，只用于热点内联，发布说明报告的典型收益为 3% 至 4%
-[[Go Authors, 2023a](#ref-go-authors-2023a)；[Pratt, 2023a](#ref-pratt-2023a)]。Go 1.21 将其转为正式功能，
-`-pgo` 标志默认为 `auto`，并加入了接口调用的按剖面去虚化，典型收益为 2% 至 7%
+[[Go Authors, 2023a](#ref-go-authors-2023a)；[Pratt, 2023a](#ref-pratt-2023a)]。Go 1.21 将其转为正式功能，`-pgo`
+标志默认为 `auto`，并加入了接口调用的按剖面去虚化，典型收益为 2% 至 7%
 [[Go Authors, 2023b](#ref-go-authors-2023b)；[Pratt, 2023b](#ref-pratt-2023b)]。Go 1.22
 扩大了去虚化的覆盖面，典型收益提高到 2% 至 14% [[Go Authors, 2024](#ref-go-authors-2024)]。编译器自身从
 Go 1.21 起也以 PGO 构建：`src/cmd/compile` 目录中存放着一份在编译标准库与工具链时采集的剖面
@@ -449,8 +449,8 @@ Go 保证切片、数组与字符串的下标访问不会越界，编译器在�
 值在一个以编号为下标的切片中记录有符号与无符号的上下界 [[Randall, 2024](#ref-randall-2024)]。
 
 事实表的注释写道，它的逻辑是可靠的，但并不完备：除少数特例外，它不做推演，也不做算术；存在完备的判定
-过程，但这种就事论事的做法对真实代码已经有效，而且非常高效 [[Go Authors, 2026c](#ref-go-authors-2026c)]。
-`prove` 推不出的事实，可以由程序员写进代码。下面的程序中，`le32` 与 `le32hint` 计算相同的结果，后者在开头
+过程，但这种就事论事的做法对真实代码已经有效，而且非常高效 [[Go Authors, 2026c](#ref-go-authors-2026c)]。`prove`
+推不出的事实，可以由程序员写进代码。下面的程序中，`le32` 与 `le32hint` 计算相同的结果，后者在开头
 多访问了一次 `b[3]`（输出以 Go 1.26.10 为准）：
 
 ```go
@@ -518,13 +518,13 @@ guarantee safety of writes below：越界的切片在写入任何字节之前就
 ## 15.3.6 小结
 
 Go 编译器的优化有一个一致的轮廓。跨函数的决策在 `ir` 层做出，依靠简单的成本模型与固定的预算；函数内的
-化简在 SSA 上进行，依靠可靠但不完备、开销接近线性的分析。教科书中的许多变换因此迟迟没有进入编译器：
-Go 1.26 的趟列表中没有循环不变量外提，也没有自动向量化。循环不变量外提的一个实现早在 2016 年就以
+化简在 SSA 上进行，依靠可靠但不完备、开销接近线性的分析。教科书中的许多变换因此迟迟没有进入编译器：Go
+1.26 的趟列表中没有循环不变量外提，也没有自动向量化。循环不变量外提的一个实现早在 2016 年就以
 CL 27656 提交，未被合入，十年后才经大幅修改进入 Go 1.27 [[Tocar, 2026](#ref-tocar-2026)]。这种克制换来的是
 编译速度（[1.1](../../part1overview/ch01intro/history.md)）。
 
-内联是这些优化的枢纽：中栈内联、去虚化与 PGO 的演进，都是在不放宽总体预算的前提下扩大内联的有效范围。
-PGO 把更激进的预算只给剖面证明值得的调用点，这与编译速度的取向并不冲突，编译器本身也因 PGO 而编译得更快。
+内联是这些优化的枢纽：中栈内联、去虚化与 PGO 的演进，都是在不放宽总体预算的前提下扩大内联的有效范围。PGO
+把更激进的预算只给剖面证明值得的调用点，这与编译速度的取向并不冲突，编译器本身也因 PGO 而编译得更快。
 
 ## 延伸阅读
 
@@ -568,15 +568,15 @@ PGO 把更激进的预算只给剖面证明值得的调用点，这与编译速�
   PGO 转为正式功能，`default.pgo` 自动启用。
 - <a id="ref-go-authors-2024"></a>[Go Authors, 2024] The Go Authors. *Go 1.22 Release Notes*: Compiler.
   2024. https://go.dev/doc/go1.22
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. cmd/compile/internal/inline
-  （内联预算与 PGO 热点内联）. Go 1.26 源码.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. cmd/compile/internal/inline（内
+  联预算与 PGO 热点内联）. Go 1.26 源码.
   https://github.com/golang/go/tree/master/src/cmd/compile/internal/inline
-- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. cmd/compile/internal/devirtualize
-  （静态与 PGO 去虚化）. Go 1.26 源码.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. cmd/compile/internal/devirtualize（静
+  态与 PGO 去虚化）. Go 1.26 源码.
   https://github.com/golang/go/tree/master/src/cmd/compile/internal/devirtualize
 - <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors.
-  src/cmd/compile/internal/gc/main.go、src/cmd/compile/internal/ssa/prove.go、src/internal/sync/mutex.go、
-  src/encoding/binary/binary.go. Go 1.26 源码. https://github.com/golang/go/tree/release-branch.go1.26/src
+  src/cmd/compile/internal/gc/main.go、src/cmd/compile/internal/ssa/prove.go、src/internal/sync/mutex.go、src/encoding/binary/binary.go.
+  Go 1.26 源码. https://github.com/golang/go/tree/release-branch.go1.26/src
 - <a id="ref-hofer-2017"></a>[Hofer, 2017] Philip Hofer. cmd/compile: de-virtualize interface calls. Go
   commit 4e0c7c3f61, 2017. https://go.dev/cl/37751
   随 Go 1.9 发布。
@@ -617,6 +617,6 @@ PGO 把更激进的预算只给剖面证明值得的调用点，这与编译速�
 - <a id="ref-tocar-2026"></a>[Tocar, 2026] Ilya Tocar. cmd/compile: add loop invariant code motion. Go
   commit f9f351b130, 2026. https://go.dev/cl/697235
   提交说明称其由 2016 年的 CL 27656 大幅修改而来。随 Go 1.27 发布。
-- 本书 [15.2 中间表示](./ssa.md)、[15.5 逃逸分析](./escape.md)、
-  [16.5 基准测试与性能剖析](../ch16tools/perf.md)、[4.2 接口](../../part2lang/ch04type/interface.md)、
-  [3.2 Go 程序编译流程](../../part1overview/ch03life/compile.md)。
+- 本书 [15.2 中间表示](./ssa.md)、[15.5 逃逸分析](./escape.md)、[16.5
+  基准测试与性能剖析](../ch16tools/perf.md)、[4.2 接口](../../part2lang/ch04type/interface.md)、[3.2
+  Go 程序编译流程](../../part1overview/ch03life/compile.md)。

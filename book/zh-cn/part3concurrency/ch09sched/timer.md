@@ -426,10 +426,10 @@ Reset 返回: true
 ```
 
 计时器在 `Sleep` 期间到期，但没有 goroutine 在等待它，它不在堆中，回调没有执行，channel 中没有值。`Reset`
-因此认为自己拦下了这次触发，返回 `true`。在 Go 1.22 及之前的版本中，同一个程序输出 `len, cap: 1 1`、
-`Reset 返回: false` 与「收到一个陈旧的值」：值在 `Sleep` 期间就进入了缓冲区，`Reset`
-返回之后依然可以收到。这正是 Cox 在提交说明中用来说明行为变化的例子，它最初来自 2015 年的 issue #11513。
-Cox 同时指出，检查 `Reset` 返回值的正确写法在两种语义下都能工作。
+因此认为自己拦下了这次触发，返回 `true`。在 Go 1.22 及之前的版本中，同一个程序输出 `len, cap: 1 1`、`Reset 返回: false`
+与「收到一个陈旧的值」：值在 `Sleep` 期间就进入了缓冲区，`Reset`
+返回之后依然可以收到。这正是 Cox 在提交说明中用来说明行为变化的例子，它最初来自 2015 年的 issue #11513。Cox
+同时指出，检查 `Reset` 返回值的正确写法在两种语义下都能工作。
 
 周期计时器还体现了 9.10.5 中跳过错过周期的规则：
 
@@ -548,12 +548,11 @@ I/O 完成端口，`Sleep` 等的精度由 15.6 毫秒提高到 0.5 毫秒 [[Go 
 - <a id="ref-go-authors-2024"></a>[Go Authors, 2024] The Go Authors. Go 1.23 Release Notes, 2024.
   https://go.dev/doc/go1.23
   计时器无缓冲 channel、可被立即 GC；Windows 上计时器精度的改善。
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *runtime/time.go*（`type timers`、
-  `addHeap`、`check`、`take`）. https://github.com/golang/go/blob/master/src/runtime/time.go
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *runtime/time.go*（`type timers`、`addHeap`、`check`、`take`）.
+  https://github.com/golang/go/blob/master/src/runtime/time.go
   另含 `time/sleep.go`、`time/tick.go` 与 `runtime/chan.go` 中的计时器 channel 部分（本节对照
   Go 1.26）。
-- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `runtime/proc.go`（`findRunnable`、
-  `stealWork`、`checkTimersNoP`、`wakeNetPoller`、`pidleput`）.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `runtime/proc.go`（`findRunnable`、`stealWork`、`checkTimersNoP`、`wakeNetPoller`、`pidleput`）.
   https://github.com/golang/go/blob/master/src/runtime/proc.go
 - <a id="ref-griesemer-2026"></a>[Griesemer, 2026] Robert Griesemer. runtime: remove asynctimerchan
   GODEBUG setting. Go commit a5bc606a68, 2026. https://go.dev/cl/781580
@@ -582,8 +581,8 @@ I/O 完成端口，`Sleep` 等的精度由 15.6 毫秒提高到 0.5 毫秒 [[Go 
   https://github.com/openjdk/jdk/blob/master/src/java.base/share/classes/java/util/concurrent/ScheduledThreadPoolExecutor.java
 - <a id="ref-pratt-2021"></a>[Pratt, 2021] Michael Pratt. Comment on golang/go#44343, 2021.
   https://github.com/golang/go/issues/44343#issuecomment-780845628
-  原因分析见同一 issue 的 https://github.com/golang/go/issues/44343#issuecomment-780894325 。
-  Windows 上的问题由 Quim Muntal 的 Go commit cf52e70997（<https://go.dev/cl/488675>）在 Go 1.23 中
+  原因分析见同一 issue 的 https://github.com/golang/go/issues/44343#issuecomment-780894325 。Windows
+  上的问题由 Quim Muntal 的 Go commit cf52e70997（<https://go.dev/cl/488675>）在 Go 1.23 中
   修复。
 - <a id="ref-sokolov-2013"></a>[Sokolov, 2013] Sokolov Yura. *time: make timers heap 4-ary.* 2013.
   https://golang.org/cl/13094043

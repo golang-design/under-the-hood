@@ -26,8 +26,8 @@ title: "结束语：Go 去向何方？"
 ## 它面临的挑战
 
 Go 的取舍也有代价，书中多次指出过它们的另一面。回收器不移动堆上的对象，碎片只能在分配时依靠按尺寸隔离
-加以控制（[12.1](./part4memory/ch12alloc/basic.md)）；大量的 `if err != nil`
-（[第 7 章](./part2lang/ch07errors/readme.md)）是「错误即值」的必然代价，而缩短它的几次语法尝试均未被
+加以控制（[12.1](./part4memory/ch12alloc/basic.md)）；大量的 `if err != nil`（[第
+7 章](./part2lang/ch07errors/readme.md)）是「错误即值」的必然代价，而缩短它的几次语法尝试均未被
 采纳，Go 团队已在 2025 年宣布不再寻求这类语法改变（[7.5](./part2lang/ch07errors/future.md)）；泛型代码
 对类型参数的方法调用要经字典间接完成，在热路径上有时比针对具体类型手写的代码更慢
 （[8.4](./part2lang/ch08generics/future.md)）；cgo 调用的开销使 Go 与 C 之间的互操作远谈不上廉价

@@ -68,8 +68,8 @@ one's bootstraps）。
 5. **toolchain3**：用 toolchain2 再编译一遍。
 6. 用 toolchain3 编译标准库和其余命令。
 
-关键在第 4 步。一个编译器生成什么样的代码，只取决于它的源码，与它自身由哪个编译器编译无关。
-toolchain1 的行为由新源码决定，因此 toolchain2 是「新编译器编译新源码」的结果，旧 Go 的影响至此
+关键在第 4 步。一个编译器生成什么样的代码，只取决于它的源码，与它自身由哪个编译器编译无关。toolchain1
+的行为由新源码决定，因此 toolchain2 是「新编译器编译新源码」的结果，旧 Go 的影响至此
 消失。
 
 `make.bash -d` 会把每一轮的编译器另存为 `compile1`、`compile2`、`compile3`。两份构建的结果如下：
@@ -182,8 +182,8 @@ double-compiling，DDC）[[Wheeler, 2005](#ref-wheeler-2005)]：另选一个独�
 - <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. "Installing Go from source."
   https://go.dev/doc/install/source
   起点版本的规则，以及以 gccgo 为起点的方法。
-- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `cmd/dist/build.go`、
-  `buildtool.go`、`notgo124.go`（Go 1.26）.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `cmd/dist/build.go`、`buildtool.go`、`notgo124.go`（Go
+  1.26）.
   https://github.com/golang/go/tree/release-branch.go1.26/src/cmd/dist
   https://github.com/golang/go/tree/master/src/cmd/dist
   toolchain1 至 3 的构建过程、`requiredBootstrapVersion` 与版本检查。
@@ -195,8 +195,8 @@ double-compiling，DDC）[[Wheeler, 2005](#ref-wheeler-2005)]：另选一个独�
   提出此后每年把起点前移到上一年发布的版本。
 - <a id="ref-thompson-1984"></a>[Thompson, 1984] Ken Thompson. "Reflections on Trusting Trust."
   *Communications of the ACM*, 27(8): 761–763, 1984. https://doi.org/10.1145/358198.358210 （ACM
-  数字图书馆：<https://dl.acm.org/doi/10.1145/358198.358210>）
-  1983 年的图灵奖演讲，描述了能够代代相传的编译器后门。
+  数字图书馆：<https://dl.acm.org/doi/10.1145/358198.358210>）1983
+  年的图灵奖演讲，描述了能够代代相传的编译器后门。
 - <a id="ref-wheeler-2005"></a>[Wheeler, 2005] David A. Wheeler. "Countering Trusting Trust through
   Diverse Double-Compiling." *Proceedings of the 21st Annual Computer Security Applications Conference
   (ACSAC)*, 2005. https://dwheeler.com/trusting-trust/

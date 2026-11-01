@@ -109,8 +109,8 @@ GODEBUG=""，循环不调用函数：main 回到了 P 上
 这份信息由编译器以栈映射（stack map）的形式生成，但不可能逐条指令生成：
 栈帧中哪些槽存放指针随执行不断变化，逐条记录会使元数据极其庞大。Agesen 在 1998 年总结 Sun 的 Java 虚拟机
 EVM 的实现时写道，为了降低存储开销，栈帧映射通常只为每个方法中若干所谓的 GC 点（GC point）保存，
-因此只有当所有线程都处于 GC 点时才能进行垃圾回收 [[Agesen, 1998](#ref-agesen-1998)]。在此之前，Diwan、
-Moss 与 Hudson 已经讨论过编译器为精确回收生成这类表格的方法及其空间开销
+因此只有当所有线程都处于 GC 点时才能进行垃圾回收 [[Agesen, 1998](#ref-agesen-1998)]。在此之前，Diwan、Moss
+与 Hudson 已经讨论过编译器为精确回收生成这类表格的方法及其空间开销
 [[Diwan et al., 1992](#ref-diwan-et-al-1992)]。Go 的编译器在每个调用点记录栈映射
 [[Clements, 2019b](#ref-clements-2019b)]。Agesen 还提到，Peyton Jones 与 Ramsey 把可以安全地暂停执行、
 检查和修改变量并进行垃圾回收的程序点称为**安全点**（safe point），这是对 GC 点的推广。
@@ -118,8 +118,8 @@ Moss 与 Hudson 已经讨论过编译器为精确回收生成这类表格的方�
 
 单线程程序中，GC 点不带来额外开销：触发回收的总是那个分配内存失败的线程，而分配点本身就是 GC 点。
 多线程程序则不同。Agesen 指出，此时只有触发回收的线程处在 GC 点上，其他线程必须先前滚（roll
-forward）到各自的下一个 GC 点，回收才能开始。所有线程都到达安全点所需的时间称为**到达安全点的时间**
-（time to safepoint，TTSP）[[Wakart, 2015](#ref-wakart-2015)]。停止一切（STW）的时长因此由最慢的
+forward）到各自的下一个 GC 点，回收才能开始。所有线程都到达安全点所需的时间称为**到达安全点的时间**（time
+to safepoint，TTSP）[[Wakart, 2015](#ref-wakart-2015)]。停止一切（STW）的时长因此由最慢的
 那个线程决定：只要有一个线程长时间不经过安全点，其余已经停下的线程都要随它等待。Go 的非协作式抢占提案
 把这一点列为抢占不及时造成的首要问题，其余几项是调度延迟、栈扫描延迟，以及极端情况下的程序停止响应
 [[Clements, 2019a](#ref-clements-2019a)]。
@@ -174,8 +174,8 @@ slow:
 ```
 
 要发出抢占请求，运行时只需把目标 goroutine 的 `stackguard0` 设为一个比任何合法栈指针都大的值
-`stackPreempt`。下一次函数调用的检查必然失败，执行流进入 `morestack`，切换到 g0 上调用 `newstack`。
-`newstack` 首先判断这是否是一次抢占请求：
+`stackPreempt`。下一次函数调用的检查必然失败，执行流进入 `morestack`，切换到 g0 上调用 `newstack`。`newstack`
+首先判断这是否是一次抢占请求：
 
 ```go
 // runtime.newstack（runtime/stack.go），只保留与抢占有关的部分
@@ -241,8 +241,8 @@ func canPreemptM(mp *m) bool {
 
 Vyukov 的设计文档把是否在**回边**（back edge，控制流图中从循环体跳回循环头的边）上编译额外的抢占检查
 留作后续工作，理由是函数入口的检查应当足以应付大多数实际情况 [[Vyukov, 2013](#ref-vyukov-2013)]。
-在回边上插入检查是采用协作式抢占的运行时的标准做法，因为几乎没有代码能在不经过回边的情况下长时间运行；
-EVM 与 HotSpot 都这样做（9.7.7）。函数入口的检查不够用的例子在 Go 中陆续出现，Austin Clements 在 2015 年
+在回边上插入检查是采用协作式抢占的运行时的标准做法，因为几乎没有代码能在不经过回边的情况下长时间运行；EVM
+与 HotSpot 都这样做（9.7.7）。函数入口的检查不够用的例子在 Go 中陆续出现，Austin Clements 在 2015 年
 开设的 issue #10958「runtime: tight loops should be preemptible」汇集了这类问题
 [[Clements, 2015](#ref-clements-2015)]。
 
@@ -286,8 +286,8 @@ Go 最终采用了第二个子提案。设计文档给出的理由是：它的�
 使二进制文件缩小约 5%。保守扫描通常的问题是使本应回收的对象存活更久，但这里的范围被严格限制在最内层的
 一帧，而最内层帧变化很快，一个对象因此被错误保留的时间很少超过一个回收周期。Go 1.14 实现了这一方案，
 称为**异步抢占**（asynchronous preemption）[[Clements, 2019c](#ref-clements-2019c)]；Go 1.15 删除了
-寄存器映射，栈映射重新只在调用点生成 [[Clements, 2020a](#ref-clements-2020a)]。Go 1.14 的发布说明写道：
-goroutine 现在可以被异步抢占，因此不含函数调用的循环不再可能使调度器死锁，或者显著推迟垃圾回收
+寄存器映射，栈映射重新只在调用点生成 [[Clements, 2020a](#ref-clements-2020a)]。Go 1.14 的发布说明写道：goroutine
+现在可以被异步抢占，因此不含函数调用的循环不再可能使调度器死锁，或者显著推迟垃圾回收
 [[Go Authors, 2020](#ref-go-authors-2020)]。
 
 在使用信号的平台上，一次异步抢占经过以下几步：
@@ -360,15 +360,15 @@ func asyncPreempt2() {
 区域，因为被打断时它可能正在准备一次调用（[13.7](../../part4memory/ch13gc/safe.md)）。保守扫描并非把每个
 看起来像地址的字都当作指针：只有指向堆中已分配对象的字才会使该对象被标记，而标记阶段新分配的对象本来
 就是黑色的，会被跳过；指向本 goroutine 栈内的字则使相应的栈对象也被保守地扫描
-[[Go Authors, 2026](#ref-go-authors-2026)]。由于这两帧的指针信息不精确，运行时此时也不能移动栈：
-`isShrinkStackSafe` 在 `gp.asyncSafePoint` 为真时拒绝收缩，回收器只设置 `preemptShrink`，把收缩推迟到
+[[Go Authors, 2026](#ref-go-authors-2026)]。由于这两帧的指针信息不精确，运行时此时也不能移动栈：`isShrinkStackSafe`
+在 `gp.asyncSafePoint` 为真时拒绝收缩，回收器只设置 `preemptShrink`，把收缩推迟到
 下一个同步安全点，也就是 9.7.3 中 `newstack` 的那段代码（[14.5](../../part4memory/ch14stack/shrink.md)）。
 
 寄存器保存在哪里同样需要考虑。通用寄存器可能含有指针，必须保存在 goroutine 的栈上，供保守扫描找到。在 Go
 1.26 之前，所有寄存器都保存在栈上，amd64 的 `asyncPreempt` 为此需要 368 字节的栈空间，其中大部分用于 XMM
 寄存器；而 AVX-512 的寄存器状态有 2.5 KiB，超过了 `nosplit` 的上限。Go 1.26 因此在 amd64、arm64 与
-loong64 上把向量寄存器等非通用寄存器保存到栈外：`asyncPreempt` 先把它们写入当前 P 的暂存区，
-`asyncPreempt2` 再在 g0 上把它们移入按需分配给该 G 的扩展寄存器状态
+loong64 上把向量寄存器等非通用寄存器保存到栈外：`asyncPreempt` 先把它们写入当前 P 的暂存区，`asyncPreempt2`
+再在 g0 上把它们移入按需分配给该 G 的扩展寄存器状态
 [[Clements, 2025](#ref-clements-2025)]。在 amd64 上，AVX2 与 AVX-512 的状态目前只在 `GOEXPERIMENT=simd`
 下保存，默认构建只保存 XMM 寄存器。Go 1.26 假定这部分状态只含标量数据，并不扫描它。这一假定并不总是成立：
 编译器可能用向量寄存器完成小块内存的复制，复制中途被抢占时，某个指针可能只存在于向量寄存器中。Go 1.27
@@ -401,9 +401,9 @@ func preemptone(pp *p) bool {
 }
 ```
 
-调用 `preemptone` 的有两处。一是系统监控 sysmon 中的 `retake`：如果一个 P 的调度计数在 10 ms
-（`forcePreemptNS`）内没有变化，说明同一个时间片已经运行得过久，sysmon 就请求抢占该 P 上的 goroutine
-（判定规则见 [9.4.2](./schedule.md)，sysmon 本身见 [9.8](./sysmon.md)）。二是 `preemptall`，它对每个
+调用 `preemptone` 的有两处。一是系统监控 sysmon 中的 `retake`：如果一个 P 的调度计数在 10 ms（`forcePreemptNS`）
+内没有变化，说明同一个时间片已经运行得过久，sysmon 就请求抢占该 P 上的 goroutine（判
+定规则见 [9.4.2](./schedule.md)，sysmon 本身见 [9.8](./sysmon.md)）。二是 `preemptall`，它对每个
 正在运行的 P 调用 `preemptone`。执行 STW 的 `stopTheWorldWithSema` 先调用一次 `preemptall`，此后
 每隔 100 µs 再调用一次，直到所有 P 都停下；`forEachP` 也借助它促使每个 P 尽快执行指定的操作。这两类
 请求都不设置 `preemptStop`，被抢占的 goroutine 经 `gopreempt_m` 回到运行队列，稍后可以在任何一个 P 上
@@ -411,8 +411,8 @@ func preemptone(pp *p) bool {
 
 第三个来源是 `suspendG`。回收器扫描 goroutine 的栈（`markroot` 中的栈根任务）以及执行跟踪器需要读取
 goroutine 的栈时，并不停止一切，而是逐个暂停 goroutine。对于正在运行的 goroutine，`suspendG` 设置
-`preemptStop`、`preempt` 与 `stackPreempt`，以至多每 5 µs 一次的频率调用 `preemptM`，然后自旋等待。
-goroutine 在同步或异步安全点上进入 `preemptPark`，状态变为 `_Gpreempted`；`suspendG` 把它改为
+`preemptStop`、`preempt` 与 `stackPreempt`，以至多每 5 µs 一次的频率调用 `preemptM`，然后自旋等待。goroutine
+在同步或异步安全点上进入 `preemptPark`，状态变为 `_Gpreempted`；`suspendG` 把它改为
 `_Gwaiting` 并持有扫描位，交给调用方使用，扫描结束后由 `resumeG` 让它重新就绪。已经处于阻塞安全点的
 goroutine（`_Grunnable`、`_Gwaiting`、`_Gsyscall`）无需抢占，`suspendG` 只需取得它的扫描位。
 
@@ -420,8 +420,8 @@ goroutine（`_Grunnable`、`_Gwaiting`、`_Gsyscall`）无需抢占，`suspendG`
 与调度抢占没有严格的时间要求，运行时可以先等待协作式抢占，从而减少保守扫描
 [[Clements, 2019b](#ref-clements-2019b)]。Go 1.26 的 `suspendG` 实际上同时发出两种请求。逐个暂停
 goroutine 的能力，使回收器能够在并发标记阶段逐一扫描各个 goroutine 的栈；Go 1.8 引入混合写屏障之后，
-标记终止阶段也不必在 STW 中重新扫描栈 [[Clements and Hudson, 2016](#ref-clements-and-hudson-2016)]。
-HotSpot 直到 JDK 10 才具备只暂停单个线程的能力，ZGC 则在 JDK 16 中才把线程栈的处理移出安全点（9.7.7）。
+标记终止阶段也不必在 STW 中重新扫描栈 [[Clements and Hudson, 2016](#ref-clements-and-hudson-2016)]。HotSpot
+直到 JDK 10 才具备只暂停单个线程的能力，ZGC 则在 JDK 16 中才把线程栈的处理移出安全点（9.7.7）。
 
 下图汇总了请求的来源与两条抢占路径：
 
@@ -490,8 +490,8 @@ goroutine，以保守扫描栈顶两帧代替逐指令的栈映射。两种机�
 都同时设下同步与异步两道触发条件。
 
 异步抢占仍有覆盖不到的地方，即运行时自身的代码、汇编函数和编译器标记的不安全点。例如，`clear`、`append`
-等操作中对大块内存的清零在运行时内部完成，执行期间不可抢占 [[Hiltner, 2024](#ref-hiltner-2024)]；
-issue #36365 跟踪着异步抢占的其余遗留问题 [[Clements, 2020b](#ref-clements-2020b)]。
+等操作中对大块内存的清零在运行时内部完成，执行期间不可抢占 [[Hiltner, 2024](#ref-hiltner-2024)]；issue
+#36365 跟踪着异步抢占的其余遗留问题 [[Clements, 2020b](#ref-clements-2020b)]。
 
 ## 延伸阅读
 
@@ -553,8 +553,7 @@ issue #36365 跟踪着异步抢占的其余遗留问题 [[Clements, 2020b](#ref-
 - <a id="ref-go-authors-2020"></a>[Go Authors, 2020] The Go Authors. Go 1.14 Release Notes, 2020.
   https://go.dev/doc/go1.14#runtime
   异步抢占正式可用，以及 `asyncpreemptoff`。
-- <a id="ref-go-authors-2026"></a>[Go Authors, 2026] The Go Authors. `runtime/preempt.go`、
-  `runtime/signal_unix.go`、`runtime/proc.go`、`runtime/mgcmark.go`.
+- <a id="ref-go-authors-2026"></a>[Go Authors, 2026] The Go Authors. `runtime/preempt.go`、`runtime/signal_unix.go`、`runtime/proc.go`、`runtime/mgcmark.go`.
   https://github.com/golang/go/tree/master/src/runtime
   安全点的分类、`suspendG`、`isAsyncSafePoint`、`preemptone`/`retake`，以及栈的保守扫描（本节对照
   Go 1.26）。
@@ -581,7 +580,7 @@ issue #36365 跟踪着异步抢占的其余遗留问题 [[Clements, 2020b](#ref-
   HotSpot 安全点与 TTSP 的系统讨论。
 - <a id="ref-westrelin-2017"></a>[Westrelin, 2017] Roland Westrelin. 8186027: C2: loop strip mining.
   OpenJDK commit 386e258e20, 2017. https://bugs.openjdk.org/browse/JDK-8186027
-- 本书 [9.4 调度循环](./schedule.md)、[9.6 信号处理机制](./signal.md)、[9.8 系统监控](./sysmon.md)、
-  [第 14 章 执行栈管理](../../part4memory/ch14stack/readme.md)、
-  [13.4 扫描标记与标记辅助](../../part4memory/ch13gc/mark.md)、
-  [13.7 安全点分析](../../part4memory/ch13gc/safe.md)。
+- 本书 [9.4 调度循环](./schedule.md)、[9.6 信号处理机制](./signal.md)、[9.8 系统监控](./sysmon.md)、[第
+  14 章 执行栈管理](../../part4memory/ch14stack/readme.md)、[13.4
+  扫描标记与标记辅助](../../part4memory/ch13gc/mark.md)、[13.7
+  安全点分析](../../part4memory/ch13gc/safe.md)。

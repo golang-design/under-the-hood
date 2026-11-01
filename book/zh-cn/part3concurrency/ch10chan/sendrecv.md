@@ -17,11 +17,11 @@ channel 是与生俱来的，对带缓冲 channel 则直到 Go 1.6 才成立（1
 
 ## 10.3.1 发送的三种去向
 
-编译器把收发语句翻译为对运行时的调用。`ch <- v` 变为 `chansend1(c, &v)`；`v := <-ch` 变为 `chanrecv1`，
-`v, ok := <-ch` 变为 `chanrecv2`，单独的 `<-ch` 语句同样调用 `chanrecv1`，只是不提供存放结果的地址。
+编译器把收发语句翻译为对运行时的调用。`ch <- v` 变为 `chansend1(c, &v)`；`v := <-ch` 变为 `chanrecv1`，`v, ok := <-ch`
+变为 `chanrecv2`，单独的 `<-ch` 语句同样调用 `chanrecv1`，只是不提供存放结果的地址。
 只含一个收发分支与一个 `default` 分支的 `select` 是特例，编译器把它改写为 `selectnbsend` 或
-`selectnbrecv`。这些入口最终都调用 `chansend` 或 `chanrecv`，区别只在参数 `block`：前三个入口传入真，
-`selectnbsend` 与 `selectnbrecv` 传入假。reflect 包的 `TrySend` 与 `TryRecv` 同样以非阻塞方式进入，
+`selectnbrecv`。这些入口最终都调用 `chansend` 或 `chanrecv`，区别只在参数 `block`：前三个入口传入真，`selectnbsend`
+与 `selectnbrecv` 传入假。reflect 包的 `TrySend` 与 `TryRecv` 同样以非阻塞方式进入，
 含多个分支的 `select` 则由 `selectgo` 另行实现（[10.5](./select.md)）。值总是以指针传入，
 运行时按元素的大小拷贝。
 
@@ -124,8 +124,8 @@ func sendDirect(t *_type, sg *sudog, src unsafe.Pointer) {
 
 跨栈写入还牵涉垃圾回收。并发标记假定栈只由它的主人在运行时写入：一个阻塞的 goroutine 的栈被扫描之后，
 不会再出现新的指针，对栈的写入因此可以不经过写屏障（[13.2](../../part4memory/ch13gc/barrier.md)）。
-直接传递打破了这个假定。这里原本已有一次显式的写屏障，但它依据堆的位图寻找指针，目标在栈上时不起作用。
-Russ Cox 在 Go 1.5 中把它改为依据类型位图的 `typeBitsBulkBarrier`，再配合普通的 `memmove`；为此，
+直接传递打破了这个假定。这里原本已有一次显式的写屏障，但它依据堆的位图寻找指针，目标在栈上时不起作用。Russ
+Cox 在 Go 1.5 中把它改为依据类型位图的 `typeBitsBulkBarrier`，再配合普通的 `memmove`；为此，
 类型位图的适用范围被扩大到 64 KB 以内的所有类型，正好覆盖 channel
 元素的大小上限（[10.2.5](./impl.md)）[[Cox, 2015a](#ref-cox-2015a)]。反方向的 `recvDirect`
 从发送方的栈上读取，起初没有屏障。Go 1.8 引入混合写屏障，不再在标记终止时重新扫描栈，这成了漏洞：
@@ -136,8 +136,8 @@ Russ Cox 在 Go 1.5 中把它改为依据类型位图的 `typeBitsBulkBarrier`�
 
 `send` 先释放锁，再唤醒接收方，这是 [10.2.6](./impl.md) 所述锁纪律的要求。`goready` 把接收方放入当前 P 的
 `runnext`，让它继承发送方剩余的时间片（[9.4.3](../ch09sched/schedule.md)）。发送方一旦阻塞或让出，接收方
-便在同一个处理器上立即运行，一来一回的通信因此像一个整体那样被调度。接收方醒来时，值已经在它的变量里，
-`success` 为真，它无须再碰 channel 便可返回。
+便在同一个处理器上立即运行，一来一回的通信因此像一个整体那样被调度。接收方醒来时，值已经在它的变量里，`success`
+为真，它无须再碰 channel 便可返回。
 
 ## 10.3.3 阻塞与唤醒
 
@@ -173,8 +173,8 @@ Russ Cox 在 Go 1.5 中把它改为依据类型位图的 `typeBitsBulkBarrier`�
 接收方阻塞的过程与此对称，只是挂入 `recvq`，`elem` 记录的是接收变量的地址。此后先到的一方什么也不做，
 后到的一方会在自己的路径上找到它，替它完成拷贝，再调用 `goready`。
 
-传给 `gopark` 的 `chanparkcommit` 在 goroutine 进入 `_Gwaiting` 之后才释放 channel 锁。
-[9.4.3](../ch09sched/schedule.md) 已经说明了这一次序的理由：若先释放锁再停下，对方可能在这个间隙中摘下
+传给 `gopark` 的 `chanparkcommit` 在 goroutine 进入 `_Gwaiting` 之后才释放 channel 锁。[9.4.3](../ch09sched/schedule.md)
+已经说明了这一次序的理由：若先释放锁再停下，对方可能在这个间隙中摘下
 `sudog`，去唤醒一个仍在运行的 goroutine，而 `ready` 遇到不处于 `_Gwaiting` 的 goroutine 会报告
 `bad g->status in ready` 并终止程序 [[Go Authors, 2026b](#ref-go-authors-2026b)]。
 
@@ -383,8 +383,8 @@ Go 1.6 之前，「后到者替先到者完成操作」只对无缓冲 channel �
 这一提议明确限定为对实现的修改，而不是对语言的修改。
 
 讨论中出现了不同的意见。Rob Pike 赞同，但预计在激烈的竞争下，这种做法需要更多的上下文切换。Austin
-Clements 担心严格的先进先出会像确定的 map 遍历次序一样，被用户依赖而无法再放松，建议引入有界的随机性；
-Keith Randall 认为调度器在竞态检测模式下的随机化，会自然地打乱等待的次序。Vyukov 的反对最为具体：从
+Clements 担心严格的先进先出会像确定的 map 遍历次序一样，被用户依赖而无法再放松，建议引入有界的随机性；Keith
+Randall 认为调度器在竞态检测模式下的随机化，会自然地打乱等待的次序。Vyukov 的反对最为具体：从
 goroutine 的角度看，交给队首的等待者是公平的；但从消息的角度看，队首的消息被交给了一个不知何时才能运行的
 goroutine，而一个正在运行、本可以立即处理它的 goroutine 却只能阻塞，或者先处理后面的消息，
 生产者消费者模式的延迟反而会变差。Rick Hudson 则提到 Doug Lea 对 Java 同步器的测量：在完全饱和的竞争下，
@@ -530,6 +530,6 @@ func main() {
 - <a id="ref-vyukov-2015"></a>[Vyukov, 2015] Dmitry Vyukov. runtime: remove futile wakeups from trace. Go
   commit 4396ea96c4, 2015. https://go.dev/cl/7380
   随 Go 1.5 发布。
-- 本书 [10.2 hchan：通道的内部结构](./impl.md)、[10.4 关闭的语义](./close.md)、
-  [10.5 select 的实现](./select.md)、[9.4 调度循环](../ch09sched/schedule.md)、
-  [11.9 内存一致模型](../ch11sync/mem.md).
+- 本书 [10.2 hchan：通道的内部结构](./impl.md)、[10.4 关闭的语义](./close.md)、[10.5
+  select 的实现](./select.md)、[9.4 调度循环](../ch09sched/schedule.md)、[11.9
+  内存一致模型](../ch11sync/mem.md).

@@ -186,8 +186,8 @@ SC）[[Lamport, 1979](#ref-lamport-1979)]：
 
 x86（Intel 与 AMD）位于较强的一端，其模型称为 x86-TSO（total store order）：所有核心共享一个内存，
 每个核心有一个先进先出的存储缓冲，写入按程序次序排出，读取先查本核心的缓冲。
-唯一可见的重排是写之后的读先于该写对其他核心可见（store→load）[[Sewell et al., 2010](#ref-sewell-2010)]。
-11.9.1 实验中 `r1 == r2 == 0` 的结果，x86-TSO 同样允许。在 x86 上碰巧不出错的并发代码，往往依赖的正是 TSO
+唯一可见的重排是写之后的读先于该写对其他核心可见（store→load）[[Sewell et al., 2010](#ref-sewell-2010)]。11.9.1
+实验中 `r1 == r2 == 0` 的结果，x86-TSO 同样允许。在 x86 上碰巧不出错的并发代码，往往依赖的正是 TSO
 的这份强度。
 
 ARMv8 与 POWER 位于较弱的一端，store→store、store→load、load→load、load→store 四种重排都可能发生。
@@ -220,8 +220,8 @@ ARM 上观察到它，从未在 POWER 上观察到 [[Cox, 2021a](#ref-cox-2021a)
 程序就可能在不知不觉中依赖这份额外的强度，而在日后更弱的硬件上出错。
 
 这些模型并非口头约定。给硬件建模有两条路：操作式（operational）模型描述一台带缓冲与队列的抽象机器如何逐步
-执行；公理式（axiomatic）模型把一次执行看作事件之间的关系图，用若干无环条件规定哪些结果合法。Alglave、
-Maranget 与 Tautschnig 给出了统一的公理式框架，配套的 herd、litmus 与 diy 工具既能在模型上模拟石蕊测试，
+执行；公理式（axiomatic）模型把一次执行看作事件之间的关系图，用若干无环条件规定哪些结果合法。Alglave、Maranget
+与 Tautschnig 给出了统一的公理式框架，配套的 herd、litmus 与 diy 工具既能在模型上模拟石蕊测试，
 也能在真实芯片上运行它们；在 ARM 硬件上的测试中，他们发现了一种后来被 ARM 确认为缺陷的行为
 [[Alglave et al., 2014](#ref-alglave-2014)]。
 
@@ -245,8 +245,8 @@ flowchart LR
     D --> E["2022<br/>Go 1.19 修订"]
 ```
 
-Java 是第一个试图写明自己对多线程程序作何保证的主流语言 [[Cox, 2021b](#ref-cox-2021b)]，第一版却并不成功。
-1999 年，Pugh 指出了其中的一系列问题 [[Pugh, 1999](#ref-pugh-1999)]。JSR-133
+Java 是第一个试图写明自己对多线程程序作何保证的主流语言 [[Cox, 2021b](#ref-cox-2021b)]，第一版却并不成功。1999
+年，Pugh 指出了其中的一系列问题 [[Pugh, 1999](#ref-pugh-1999)]。JSR-133
 的常见问题解答列举了旧模型的几处严重缺陷 [[Manson and Goetz, 2004](#ref-manson-goetz-2004)]：它难以理解，
 因而被普遍违反，例如在许多情况下，它不允许每个 JVM 实际都在做的重排；它对 final 字段没有任何特殊处理，
 另一个线程可能先看到字段的默认值、之后才看到构造后的值，于是 `String`
@@ -279,8 +279,8 @@ C 与 C++ 在 2011 年的标准中引入内存模型，理论基础来自 Boehm 
 任何数据竞争都是未定义行为，程序可以做任何事，这一立场常被称为「DRF-SC or Catch
 Fire」[[Cox, 2021b](#ref-cox-2021b)]。为了让专家仍能写出高性能的无锁代码，C++ 为原子操作提供了多种内存序：
 顺序一致（`seq_cst`）、获取与释放（`acquire`/`release`）、松弛（`relaxed`），以及一个意图更弱的
-`consume`。松弛原子的读写彼此竞争而不算数据竞争，Java 在定义有竞争程序时遇到的困难，于是原样回到了 C++。
-C++11 试图以形式化的规则排除一部分凭空出现的值，结果这些规则既不足以推理使用松弛原子的程序，
+`consume`。松弛原子的读写彼此竞争而不算数据竞争，Java 在定义有竞争程序时遇到的困难，于是原样回到了 C++。C++11
+试图以形式化的规则排除一部分凭空出现的值，结果这些规则既不足以推理使用松弛原子的程序，
 又可以说禁止了 `relaxed` 在 ARM 与 POWER 上的一切合理实现，C++14 便删去了它们，只留下一句含糊的建议：
 实现应当确保不计算出循环依赖于自身计算的「凭空」值。用 Cox 的话概括：Java
 试图形式化地排除所有非因果的执行，失败了；C++11 吸取教训，只试图排除其中一部分，同样失败了；C++14
@@ -304,8 +304,8 @@ Go 1.19 修订后的内存模型给出了形式化的定义，紧随 Boehm 与 A
 
 程序的执行由 goroutine 的执行组成，goroutine 的执行又由内存操作组成。一个内存操作由四项描述：种类，
 即普通的读、普通的写，或者原子访问、互斥锁操作、channel 操作这样的同步操作；它在程序中的位置；
-所访问的内存位置或变量；读出或写入的值。读、原子读、加锁与 channel 接收是读型操作；写、原子写、解锁、
-channel 发送与关闭是写型操作；比较并交换这样的操作两者兼具。在此基础上，模型提出三项要求：
+所访问的内存位置或变量；读出或写入的值。读、原子读、加锁与 channel 接收是读型操作；写、原子写、解锁、channel
+发送与关闭是写型操作；比较并交换这样的操作两者兼具。在此基础上，模型提出三项要求：
 
 1. 每个 goroutine 中的内存操作，在给定读写之值的情况下，必须对应该 goroutine 的一次正确的顺序执行，
    并且与**程序次序先于**（sequenced before）关系一致。程序次序先于是语言规范为控制流结构与表达式求值顺序
@@ -526,10 +526,10 @@ Alberto Ferraris 2018 年的这一修改，使 `Once` 的基准测试从 4.54 ns
 移到结构体开头，使快速路径的指令更短 [[Ferraris, 2018](#ref-ferraris-2018)]。Go 1.25 起，`done` 的类型由
 `atomic.Uint32` 改为 `atomic.Bool` [[Dogra, 2025](#ref-dogra-2025)]。
 
-`f` 发生 panic 时，`defer` 仍会执行 `Store(true)`，`Once` 便认为 `f` 已经返回，此后的 `Do` 不再调用 `f`。
-Go 1.4 之前的行为相反，`f` 会被反复调用，直到有一次正常完成。Pike 2014 年修改这一行为时解释说，应当把
-`Once` 理解为只在第一次被调用时运行函数，而不是反复运行直到函数完成一次 [[Pike, 2014b](#ref-pike-2014b)]。
-Go 1.21 加入的 `sync.OnceFunc` [[Gerrand, 2022](#ref-gerrand-2022)]换了一种处理方式：按其文档，`f` 发生
+`f` 发生 panic 时，`defer` 仍会执行 `Store(true)`，`Once` 便认为 `f` 已经返回，此后的 `Do` 不再调用 `f`。Go
+1.4 之前的行为相反，`f` 会被反复调用，直到有一次正常完成。Pike 2014 年修改这一行为时解释说，应当把
+`Once` 理解为只在第一次被调用时运行函数，而不是反复运行直到函数完成一次 [[Pike, 2014b](#ref-pike-2014b)]。Go
+1.21 加入的 `sync.OnceFunc` [[Gerrand, 2022](#ref-gerrand-2022)]换了一种处理方式：按其文档，`f` 发生
 panic 时，返回的函数在之后的每次调用中都以同一个值 panic。两者的差别可以直接观察：
 
 ```go {run=true}
@@ -845,6 +845,6 @@ Go 内存模型中最能体现设计取向的一笔，是只向用户提供顺�
 - <a id="ref-vyukov-2014"></a>[Vyukov, 2014] Dmitriy Vyukov. doc: fix happens-before rules for buffered
   channels. Go commit 81a93ef24a, 2014. https://golang.org/cl/101980047
   随 Go 1.4 发布。
-- 本书 [11.3 原子操作](./atomic.md)、[10.6 内存模型与无锁演进](../ch10chan/lockfree.md)、
-  [11.2 互斥锁](./mutex.md)、[3.6 主 goroutine 的生与死](../../part1overview/ch03life/main.md)、
-  [13.10 终结器](../../part4memory/ch13gc/finalizer.md)。
+- 本书 [11.3 原子操作](./atomic.md)、[10.6 内存模型与无锁演进](../ch10chan/lockfree.md)、[11.2
+  互斥锁](./mutex.md)、[3.6 主 goroutine 的生与死](../../part1overview/ch03life/main.md)、[13.10
+  终结器](../../part4memory/ch13gc/finalizer.md)。

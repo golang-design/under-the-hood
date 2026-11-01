@@ -149,8 +149,8 @@ v.Method2(args)
 //   call fn(v.data, args) // data 作为隐式的接收者传入
 ```
 
-序号是静态的，地址是动态的：同一个调用点，`v` 中存放的具体类型不同，执行的代码就不同。这就是**动态分派**
-（dynamic dispatch）[[Cox, 2009](#ref-cox-2009)]。
+序号是静态的，地址是动态的：同一个调用点，`v` 中存放的具体类型不同，执行的代码就不同。这就是**动态分派**（dynamic
+dispatch）[[Cox, 2009](#ref-cox-2009)]。
 
 构造 `itab`（`getitab`）的代价不小：须逐一核对具体类型是否实现了接口要求的每个方法，并填写整张 `Fun` 表。
 由于接口与具体类型的方法都按名称排序，核对可以同步推进两个列表，时间与两者方法数之和成正比。构造好的
@@ -169,13 +169,13 @@ v.Method2(args)
 那样显式声明 `implements`。这是**结构化类型**（structural typing）相对于名义类型（[4.1](./type.md)）
 的选择 [[Go Authors, 2026b](#ref-go-authors-2026b)]。
 
-其收益是解耦。程序员可以为他人编写的类型、甚至标准库中的类型定义它们恰好满足的接口，而无须修改这些类型。
-`io.Reader`、`io.Writer` 这类小接口得以广泛使用，正源于此：`bytes.Buffer`、`os.File`、`net.Conn` 都没有
+其收益是解耦。程序员可以为他人编写的类型、甚至标准库中的类型定义它们恰好满足的接口，而无须修改这些类型。`io.Reader`、`io.Writer`
+这类小接口得以广泛使用，正源于此：`bytes.Buffer`、`os.File`、`net.Conn` 都没有
 声明自己实现了 `io.Reader`，却都能传给任何接受 `io.Reader` 的函数。接口与实现可以各自演进，二者之间靠
 方法集自然对接。
 
-其代价有两方面。其一，隐式满足使「哪些类型实现了哪些接口」不再一目了然，需要借助工具或阅读代码才能确认；
-`var _ io.Reader = (*T)(nil)` 这种编译期断言的惯用法即由此而来。其二，接口调用是间接调用：
+其代价有两方面。其一，隐式满足使「哪些类型实现了哪些接口」不再一目了然，需要借助工具或阅读代码才能确认；`var _ io.Reader = (*T)(nil)`
+这种编译期断言的惯用法即由此而来。其二，接口调用是间接调用：
 按序号取址再跳转，编译器通常无法跨越接口内联被调函数，也就失去了内联带来的进一步优化。
 在热路径上频繁调用的小方法，经由接口调用与直接调用，性能可能相差可观。编译器能确定接口值的动态类型时，
 会把接口调用改写为直接调用，即去虚化；无法静态确定的热点调用，性能制导优化可以依据剖析数据有条件地
@@ -263,12 +263,12 @@ abstraction）[[Pike, 2015](#ref-pike-2015)]。接口要求的方法越多，能
 | Java/C# 接口 | 动态（接口方法表） | 名义、显式 `implements` | 对象头中有类元数据指针；JIT 以内联缓存加速 |
 
 Rust 的 `dyn Trait` 与 Go 的 `iface` 在表示上非常接近，都是数据指针加方法表指针
-[[Rust Project, n.d.](#ref-rust-project-nd)]。区别在于 Rust 的方法表在编译期按每对「trait 与类型」生成，
-Go 的 `itab` 则可能在运行时首次需要时才构造，因为结构化满足关系无法在编译期穷举。
+[[Rust Project, n.d.](#ref-rust-project-nd)]。区别在于 Rust 的方法表在编译期按每对「trait 与类型」生成，Go
+的 `itab` 则可能在运行时首次需要时才构造，因为结构化满足关系无法在编译期穷举。
 
 Haskell 的类型类以**字典传递**实现，由 Wadler 与 Blott 于 1989 年提出
-[[Wadler and Blott, 1989](#ref-wadler-blott-1989)]：每个实例对应一张方法字典，在调用处作为隐式参数传入。
-Go 泛型的实现采用了类似的思想（[第 8 章](../ch08generics/readme.md)）：按 GC 形状共用的函数体在调用时接收
+[[Wadler and Blott, 1989](#ref-wadler-blott-1989)]：每个实例对应一张方法字典，在调用处作为隐式参数传入。Go
+泛型的实现采用了类似的思想（[第 8 章](../ch08generics/readme.md)）：按 GC 形状共用的函数体在调用时接收
 一张字典，从中取得具体类型的信息与方法。接口的 `itab` 在运行时随值一同传递，泛型的字典则在编译期确定并由调
 用方传入。Go 的独特之处在于把 vtable 式的高效动态分派与结构化、隐式满足的松耦合结合在一起。
 
@@ -277,8 +277,7 @@ Go 泛型的实现采用了类似的思想（[第 8 章](../ch08generics/readme.
 - <a id="ref-cox-2009"></a>[Cox, 2009] Russ Cox. "Go Data Structures: Interfaces." 2009.
   https://research.swtch.com/interfaces
   iface 与 itab 表示的经典讲解。
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `runtime/iface.go`、
-  `internal/abi/iface.go`、`runtime/runtime2.go`.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `runtime/iface.go`、`internal/abi/iface.go`、`runtime/runtime2.go`.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/iface.go
   https://github.com/golang/go/blob/master/src/runtime/iface.go
   `getitab`、`itabTable`、`typeAssert` 与 `interfaceSwitch` 的实现。

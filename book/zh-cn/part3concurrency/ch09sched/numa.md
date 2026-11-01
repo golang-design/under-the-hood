@@ -69,8 +69,8 @@ Go 运行时没有节点的概念。Go 1.26 的运行时源码中找不到任何
 - P 在停止之前一直留在同一个 M 上；
 - M 本身不尝试维持 CPU 亲和性，但操作系统的调度器通常会这样做。
 
-Pratt 也指出了这条亲和链与 NUMA 的联系。goroutine 从所在 P 的内存分配缓存 mcache（[9.3](./mpg.md)、
-[12.2](../../part4memory/ch12alloc/component.md)）中分配对象；按照上一节的本地分配策略，
+Pratt 也指出了这条亲和链与 NUMA 的联系。goroutine 从所在 P 的内存分配缓存 mcache（[9.3](./mpg.md)、[12.2](../../part4memory/ch12alloc/component.md)）
+中分配对象；按照上一节的本地分配策略，
 新取得的页落在最先写入它的线程所在的节点上。只要亲和链不断，goroutine 写入的新页就在它运行的节点上；
 一旦它迁移到另一个节点的 CPU 上，访问这些对象就变成了远程访问。
 
@@ -92,8 +92,8 @@ P 上；停止一切（[9.4](./schedule.md)）会停下所有 P，恢复运行�
 对内存的大量访问让内核以为这些页应当迁往 GC 工作者所在的节点，迁移恰好发生在标记终止期间时，停顿随之延长
 [[Hiltner, 2016](#ref-hiltner-2016)]。把进程的内存策略设为 `MPOL_BIND` 可以避开这种迁移，
 即使绑定的是全部节点也有效，因为在 `MPOL_BIND` 之下，已经位于允许节点上的页不会被移动。Austin Clements
-在讨论中表示，正确的解决办法是让运行时对 NUMA 更友好，但那是长期的工作。问题最终从另一个方向得到解决：
-Clements 的改动让标记终止只处理栈被改动过的 goroutine，不再逐一检查每个 goroutine
+在讨论中表示，正确的解决办法是让运行时对 NUMA 更友好，但那是长期的工作。问题最终从另一个方向得到解决：Clements
+的改动让标记终止只处理栈被改动过的 goroutine，不再逐一检查每个 goroutine
 [[Clements, 2016](#ref-clements-2016)]。Hiltner 的实际应用（约 6 万个 goroutine）的标记终止停顿由
 11 毫秒降到 1.3 毫秒，再加上 `MPOL_BIND` 是 1.0 毫秒。Clements 据此判断，迁移主要发生在对 goroutine
 描述符这类元数据的访问上，随后关闭了这个 issue。这些改动随 Go 1.7 发布。
@@ -150,8 +150,8 @@ Clements 的改动让标记终止只处理栈被改动过的 goroutine，不再�
 线程级的绑定在 Go 中并不方便。`runtime.LockOSThread` 只把 goroutine 锁定在当前的线程上，
 并不把线程绑定到某个 CPU 上；运行时也没有提供把 M 绑定到 CPU 或节点的接口。
 
-运行时对透明大页的使用同样与节点无关，并且已经收缩。在多数 Linux 发行版的默认设置下，
-`madvise(MADV_HUGEPAGE)` 会让线程阻塞在内核对内存的回收与整理中，最坏可达数百毫秒乃至数秒；因此 Go 1.21.1
+运行时对透明大页的使用同样与节点无关，并且已经收缩。在多数 Linux 发行版的默认设置下，`madvise(MADV_HUGEPAGE)`
+会让线程阻塞在内核对内存的回收与整理中，最坏可达数百毫秒乃至数秒；因此 Go 1.21.1
 起，运行时不再把堆内存标记为 `MADV_HUGEPAGE`，目前只对堆索引、页分配器位图等少量元数据请求大页
 [[Knyszek, 2023](#ref-knyszek-2023)]。
 
@@ -213,7 +213,7 @@ Clements 的改动让标记终止只处理栈被改动过的 goroutine，不再�
 - <a id="ref-vyukov-2014"></a>[Vyukov, 2014] Dmitry Vyukov. *NUMA-aware scheduler for Go.* Go design
   proposal, 2014. https://docs.google.com/document/u/0/d/1d3iI2QWURgDIsSR6G2275vMeQ_X7w-qxM2Vp7iGwwuM/pub
   （把 P 按节点分组、就近窃取、堆本地化的完整设计）
-- 本书 [9.2 工作窃取式调度](./steal.md)、[9.3 MPG 模型与并发调度单元](./mpg.md)、
-  [12.2 组件](../../part4memory/ch12alloc/component.md)、
-  [13.9 请求假设与事务制导回收](../../part4memory/ch13gc/roc.md)、[9.10 计时器](./timer.md)、
-  [13.11 Green Tea：面向局部性的标记](../../part4memory/ch13gc/greentea.md)。
+- 本书 [9.2 工作窃取式调度](./steal.md)、[9.3 MPG 模型与并发调度单元](./mpg.md)、[12.2
+  组件](../../part4memory/ch12alloc/component.md)、[13.9
+  请求假设与事务制导回收](../../part4memory/ch13gc/roc.md)、[9.10 计时器](./timer.md)、[13.11
+  Green Tea：面向局部性的标记](../../part4memory/ch13gc/greentea.md)。

@@ -494,8 +494,8 @@ CAS 与并发的写入同步。这一化归的前提是逃逸分析与 `unsafe` 
   随 Go 1.21 发布。
 - <a id="ref-go-authors-2014"></a>[Go Authors, 2014] The Go Authors. *Go 1.3 Release Notes: Changes to the
   garbage collector.* 2014. https://go.dev/doc/go1.3#garbage_collector
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/stack.go：copystack、
-  adjustframe、adjustpointers、adjustsudogs、adjustdefers、adjustctxt. Go 1.26 源码.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/stack.go：copystack、adjustframe、adjustpointers、adjustsudogs、adjustdefers、adjustctxt.
+  Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/stack.go
   本节所据的一手实现。
 - <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors.
@@ -515,7 +515,7 @@ CAS 与并发的写入同步。这一化归的前提是逃逸分析与 `unsafe` 
 - <a id="ref-saioc-2025"></a>[Saioc, 2025] Vlad Saioc. runtime,net/http/pprof: goroutine leak detection by
   using the garbage collector. Go commit 8c68a1c1ab, 2025. https://go.dev/cl/688335
   随 Go 1.26 发布。
-- 本书 [13.7 安全点分析](../ch13gc/safe.md)（栈映射与安全点，指针调整与 GC 扫描共用的基础）、
-  [15.5 逃逸分析](../../part5toolchain/ch15compile/escape.md)（栈可移动性如何约束分配决策）、
-  [10.3 收发与直接传递](../../part3concurrency/ch10chan/sendrecv.md)（sudog 与通道收发槽，解释
+- 本书 [13.7 安全点分析](../ch13gc/safe.md)（栈映射与安全点，指针调整与 GC 扫描共用的基础）、[15.5
+  逃逸分析](../../part5toolchain/ch15compile/escape.md)（栈可移动性如何约束分配决策）、[10.3
+  收发与直接传递](../../part3concurrency/ch10chan/sendrecv.md)（sudog 与通道收发槽，解释
   `adjustsudogs` 为何存在）。

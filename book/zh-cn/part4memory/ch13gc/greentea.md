@@ -17,8 +17,8 @@ Green Tea 是针对这一问题的新标记算法。它在 Go 1.25 中以 `GOEXP
 起默认启用，可用 `GOEXPERIMENT=nogreenteagc` 关闭 [[Go Authors, 2025](#ref-go-authors-2025)]
 [[Go Authors, 2026a](#ref-go-authors-2026a)]。它不改变三色抽象，也不引入新的屏障，
 改变的是标记器遍历对象的方式：不再逐个扫描对象，而是以 span 为单位，把落在同一个 span
-中的待扫对象累积起来一并扫描。本节依次讨论它要解决的局部性问题、按 span 累积的核心机制、单对象的快速路径、
-span 队列与工作分配、扫描一个 span 的两条路径，最后是它的效果、局限与演进。
+中的待扫对象累积起来一并扫描。本节依次讨论它要解决的局部性问题、按 span 累积的核心机制、单对象的快速路径、span
+队列与工作分配、扫描一个 span 的两条路径，最后是它的效果、局限与演进。
 
 ## 13.11.1 标记的局部性问题
 
@@ -41,8 +41,8 @@ span 队列与工作分配、扫描一个 span 的两条路径，最后是它的
 即使算不上以内存为中心，至少是「感知内存」的：它尽量把彼此相邻的对象放在一起处理。
 
 这一思路与 [13.8](./generational.md)、[13.9](./roc.md) 中被放弃的两条路线形成对照。分代回收与 ROC
-利用对象在时间上的规律，即年龄与请求边界，以求少扫描一些对象，代价是在赋值器运行期间始终开启的写屏障；
-Green Tea 利用的是对象在空间上的规律：分配器按尺寸类把同样大小的对象放在同一个 span
+利用对象在时间上的规律，即年龄与请求边界，以求少扫描一些对象，代价是在赋值器运行期间始终开启的写屏障；Green
+Tea 利用的是对象在空间上的规律：分配器按尺寸类把同样大小的对象放在同一个 span
 中（[12.2](../ch12alloc/component.md)），这些对象大小相同、位置相邻，若它们在相近的时刻被发现，
 就可以一并处理。它不减少需要扫描的对象，只设法把同样多的对象扫描得更快，因而无须改动写屏障。
 
@@ -59,8 +59,8 @@ Green Tea 利用的是对象在空间上的规律：分配器按尺寸类把同�
 为此，每个 span 维护两组位：标记位 `marks` 在第一次发现指向某对象的指针时置位；扫描位 `scans`
 表示对象已经扫描过。设计说明称之为灰色位与黑色位：白色对象两位都未置位，灰色对象只置了灰色位，
 黑色对象两位都已置位；`mgcwork.go` 中的注释相应地写道，对于 span 队列中的对象，
-灰色是已标记而扫描位未置位，黑色是已标记且扫描位已置位（[13.1.3](./basic.md)）。span 出队时，
-`spanSetScans` 以机器字为单位比较两组位（有删节）[[Go Authors, 2026b](#ref-go-authors-2026b)]：
+灰色是已标记而扫描位未置位，黑色是已标记且扫描位已置位（[13.1.3](./basic.md)）。span 出队时，`spanSetScans`
+以机器字为单位比较两组位（有删节）[[Go Authors, 2026b](#ref-go-authors-2026b)]：
 
 ```go
 	for i := uintptr(0); i < bytes; i += goarch.PtrSize {
@@ -171,8 +171,8 @@ flowchart TB
 [[Knyszek and Clements, 2025a](#ref-knyszek-clements-2025a)]。
 
 在实现中，代表就是 `objptr` 中的对象序号，标志则是 `spanInlineMarkBits` 中的所有权字段 `owned`。
-它有三种状态：`spanScanUnowned` 表示 span 无人认领；`spanScanOneMark` 表示相对于扫描位只置了一个标记位；
-`spanScanManyMark` 表示可能置了多个 [[Go Authors, 2026b](#ref-go-authors-2026b)]。`tryAcquire`
+它有三种状态：`spanScanUnowned` 表示 span 无人认领；`spanScanOneMark` 表示相对于扫描位只置了一个标记位；`spanScanManyMark`
+表示可能置了多个 [[Go Authors, 2026b](#ref-go-authors-2026b)]。`tryAcquire`
 以原子或操作推进这一状态，只有把它从 `spanScanUnowned` 推进出去的那个线程认领成功，负责让 span 入队；
 此后再有对象在这个 span 中被标记，`tryAcquire` 只把状态推进到 `spanScanManyMark`。`scanSpan` 开始时调用
 `release`，以原子交换释放 span，并取回释放前的状态：
@@ -442,8 +442,8 @@ Green Tea 的实现于 2025 年 5 月合入主干，随 Go 1.25 以实验的形�
 [[Go Authors, 2026e](#ref-go-authors-2026e)]。
 
 设计说明列出了两个后续方向。一是向量化的扫描内核：为每个尺寸类生成专门的内核，利用单个 span
-中对象布局的规律，以及小对象紧凑的指针位图，用 SIMD 的位操作与置换指令完成加载、掩码、重排、压缩与入队；
-Clements 的 AVX-512 原型在已有改进的基准上把回收开销再降低了 15% 至 20%，这一方向已在 Go 1.26 中部分实现。
+中对象布局的规律，以及小对象紧凑的指针位图，用 SIMD 的位操作与置换指令完成加载、掩码、重排、压缩与入队；Clements
+的 AVX-512 原型在已有改进的基准上把回收开销再降低了 15% 至 20%，这一方向已在 Go 1.26 中部分实现。
 二是 Clements 最初设计中的集中网络（concentrator network），一种排序网络，
 用来获得向量扫描所需的更高指针密度，并为设置灰色位这类元数据操作也带来局部性。暂不采用它的原因有二：
 即使密度很低，配合单对象的优化也能取得不错的效果；集中网络与现有算法的差异更大，实现也更复杂。
@@ -478,8 +478,8 @@ span 入队；span 出队时以 `marks &^ scans` 求出待扫对象，一次扫�
 - <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *internal/runtime/gc/scan.*
   `ScanSpanPacked` 与其 AVX-512 特化. Go 1.26.
   https://github.com/golang/go/tree/release-branch.go1.26/src/internal/runtime/gc/scan
-- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. src/runtime/mgcwork.go、
-  mgcmark.go； src/internal/buildcfg/exp.go. Go 1.26.
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. src/runtime/mgcwork.go、mgcmark.go；src/internal/buildcfg/exp.go.
+  Go 1.26.
   https://github.com/golang/go/tree/release-branch.go1.26/src
 - <a id="ref-go-authors-2026e"></a>[Go Authors, 2026e] The Go Authors.
   src/runtime/mgcmark_nogreenteagc.go；src/internal/buildcfg/exp.go. Go 1.27.3.
@@ -498,6 +498,6 @@ span 入队；span 出队时以 `marks &^ scans` 求出待扫对象，一次扫�
   （Green Tea 的设计动机、基准与默认开启的讨论）
 - <a id="ref-knyszek-clements-2025b"></a>[Knyszek and Clements, 2025b] Michael Knyszek, Austin Clements.
   The Green Tea Garbage Collector. The Go Blog, October 29, 2025. https://go.dev/blog/greenteagc
-- 本书 [13.1 垃圾回收的基本想法](./basic.md)、[13.4 扫描标记与标记辅助](./mark.md)、
-  [13.8 分代假设与代际回收](./generational.md)、[13.9 请求假设与事务制导回收](./roc.md)、
-  [13.12 过去、现在与未来](./history.md)、[12.2 组件](../ch12alloc/component.md)。
+- 本书 [13.1 垃圾回收的基本想法](./basic.md)、[13.4 扫描标记与标记辅助](./mark.md)、[13.8
+  分代假设与代际回收](./generational.md)、[13.9 请求假设与事务制导回收](./roc.md)、[13.12
+  过去、现在与未来](./history.md)、[12.2 组件](../ch12alloc/component.md)。

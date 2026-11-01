@@ -137,8 +137,8 @@ import (
 
 另一类代码根本没有版本标签。依赖一个尚未标记的提交时，`go` 命令为它合成一个**伪版本**（pseudo-version），
 形如 `v0.0.0-20191109021931-daa7c04131f5`，由三部分组成：基础版本前缀、修订创建时刻的 UTC 时间戳（在 Git
-中是提交时间而非作者时间），以及提交哈希的 12 个字符的前缀 [[Go Authors, n.d.a](#ref-go-authors-nda)]。
-`x/mod` 中的注释列出了伪版本的全部形式 [[Go Authors, 2026b](#ref-go-authors-2026b)]：
+中是提交时间而非作者时间），以及提交哈希的 12 个字符的前缀 [[Go Authors, n.d.a](#ref-go-authors-nda)]。`x/mod`
+中的注释列出了伪版本的全部形式 [[Go Authors, 2026b](#ref-go-authors-2026b)]：
 
 ```go
 // A pseudo-version takes one of the general forms:
@@ -194,8 +194,8 @@ vX.Y.Z，又低于 vX.Y.(Z+1) 的任何正式的先行版本；基础版本相�
   https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/vendor/golang.org/x/mod/module/pseudo.go
 - <a id="ref-go-authors-nda"></a>[Go Authors, n.d.a] The Go Authors. *Go Modules Reference.*
   https://go.dev/ref/mod
-  「Major version suffixes」「+incompatible versions」「Pseudo-versions」各节：v0 与 v1 不带后缀、
-  `gopkg.in` 的特例、`+incompatible` 过渡通道、伪版本的格式与检查。
+  「Major version suffixes」「+incompatible versions」「Pseudo-versions」各节：v0 与 v1 不带后缀、`gopkg.in`
+  的特例、`+incompatible` 过渡通道、伪版本的格式与检查。
 - <a id="ref-go-authors-ndb"></a>[Go Authors, n.d.b] The Go Authors. *golang.org/x/exp/cmd/gorelease* 与
   *golang.org/x/exp/apidiff.* https://pkg.go.dev/golang.org/x/exp/cmd/gorelease
   检查导出 API 的兼容性，为遵守语义化版本提供工具支持。

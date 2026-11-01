@@ -19,8 +19,8 @@ span、大对象、goroutine 的栈以及回收器的工作缓冲区，所用的
 
 ## 12.7.1 问题
 
-页分配器对外只有两个操作：`alloc(npages)` 返回一段 `npages` 页的连续空闲区间的起始地址，
-`free(base, npages)` 把一段区间重新标记为空闲。困难在于下面三项要求必须同时满足。
+页分配器对外只有两个操作：`alloc(npages)` 返回一段 `npages` 页的连续空闲区间的起始地址，`free(base, npages)`
+把一段区间重新标记为空闲。困难在于下面三项要求必须同时满足。
 
 第一，区间必须连续，而且分配策略要控制碎片。Go 的页分配器采用按地址排序的**首次适配**（address-ordered
 first fit）：在所有足够大的空闲区间中，总是选择地址最低的一个（[12.2.4](./component.md)）。
@@ -34,8 +34,8 @@ first fit）：在所有足够大的空闲区间中，总是选择地址最低�
 [[Knyszek and Clements, 2019](#ref-knyszek-clements-2019)]，85% 以上的页申请恰好只要一页
 [[Knyszek, 2019c](#ref-knyszek-2019c)]。
 
-第三，多个 P 并发申请。页堆的状态由一把堆锁 `mheap.lock` 保护（[12.2.4](./component.md)），申请越频繁、
-`GOMAXPROCS` 越大，这把锁的争用就越严重。
+第三，多个 P 并发申请。页堆的状态由一把堆锁 `mheap.lock` 保护（[12.2.4](./component.md)），申请越频繁、`GOMAXPROCS`
+越大，这把锁的争用就越严重。
 
 因此，页分配器的「快」有两层含义：持锁的时间要短；常见的情况最好根本不必持锁。Go 1.14
 的重写分别从这两方面入手。
@@ -574,8 +574,8 @@ C/C++ 分配器的一项优势：运行时知道在下一轮回收开始之前�
 ```
 
 堆目标以对象的字节计，常驻内存则以页计，二者之间隔着 span 内部的碎片。`heapGoal / lastHeapGoal`
-反映堆的伸缩，乘以上一轮回收结束时实际使用的页 `lastHeapInUse`，便把这部分碎片考虑在内。
-`retainExtraPercent` 为 10，额外保留 10% 未归还的内存，使更多的分配可以落在无需缺页的内存上。
+反映堆的伸缩，乘以上一轮回收结束时实际使用的页 `lastHeapInUse`，便把这部分碎片考虑在内。`retainExtraPercent`
+为 10，额外保留 10% 未归还的内存，使更多的分配可以落在无需缺页的内存上。
 与目标比较的是 `heapRetained`，即使用中与空闲而未归还的堆内存之和，它是运行时对堆所占常驻内存的估计。
 
 后台的归还由常驻的 goroutine `bgscavenge` 承担。每一轮清扫结束时，
@@ -684,8 +684,8 @@ chunk 很快会被重新填满，归还它们只会徒增开销，还会拆散�
 
 除了这两条途径，`runtime/debug.FreeOSMemory` 还提供一条强制的路径：先执行一次完整的回收，再调用
 `scavengeAll` 归还所有空闲页，不理会密度规则，也不受 1% 的 CPU 预算约束。下面的程序借助 `runtime/metrics`
-观察这一过程，其中 `/memory/classes/heap/free:bytes` 是空闲而未归还的堆内存，
-`/memory/classes/heap/released:bytes` 是已归还操作系统的堆内存（[12.8](./mstats.md)）：
+观察这一过程，其中 `/memory/classes/heap/free:bytes` 是空闲而未归还的堆内存，`/memory/classes/heap/released:bytes`
+是已归还操作系统的堆内存（[12.8](./mstats.md)）：
 
 ```go {run=true}
 package main
@@ -733,8 +733,8 @@ func main() {
 
 回收结束时，256 MiB 已经全部回到页分配器，却一页也没有归还。这些页所在的 chunk 在回收之前曾被填满，
 按照密度规则，直到下一轮回收的标记结束，它们对后台 scavenger 都不可见：若在 `runtime.GC()` 之后等待几秒，
-空闲而未归还的内存几乎不减少；再执行一次回收，后台 scavenger 才在随后很短的时间内把它们归还。
-`FreeOSMemory` 不理会这一规则，立即把它们全部归还。归还之后空闲而未归还的内存并不严格为零，只是不足
+空闲而未归还的内存几乎不减少；再执行一次回收，后台 scavenger 才在随后很短的时间内把它们归还。`FreeOSMemory`
+不理会这一规则，立即把它们全部归还。归还之后空闲而未归还的内存并不严格为零，只是不足
 0.01 GiB：例如仍在运行的 P 的页缓存中的空闲页，在位图中记为已用，scavenger 看不到它们（12.7.6）。
 
 ## 12.7.8 内存限制下的归还
@@ -791,18 +791,17 @@ func main() {
   https://go.dev/doc/go1.14 （页分配器「更高效，在 `GOMAXPROCS` 较大时锁争用显著减少」）
 - <a id="ref-go-authors-2022"></a>[Go Authors, 2022] The Go Authors. *A Guide to the Go Garbage
   Collector.* https://go.dev/doc/gc-guide （`GOGC` 与 `GOMEMLIMIT` 的配合与调优）
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/mpagealloc.go
-  （pageAlloc、pallocSum、基数树查找 find）. Go 1.26 源码.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/mpagealloc.go（pageAlloc、pallocSum、
+  基数树查找 find）. Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mpagealloc.go
-- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. src/runtime/mpagecache.go、
-  src/runtime/mpallocbits.go（每 P 页缓存、chunk 位图 pallocData、`findBitRange64`）. Go 1.26 源码.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. src/runtime/mpagecache.go、src/runtime/mpallocbits.go（
+  每 P 页缓存、chunk 位图 pallocData、`findBitRange64`）. Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mpagecache.go
-- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/runtime/mgcscavenge.go
-  （后台与同步 scavenger、归还目标的推导、`scavengeIndex`）. Go 1.26 源码.
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/runtime/mgcscavenge.go（后
+  台与同步 scavenger、归还目标的推导、`scavengeIndex`）. Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mgcscavenge.go
-- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. src/runtime/mheap.go（`allocSpan`、
-  `grow`、`tryAllocMSpan`）、src/runtime/mgc.go（`gcMarkTermination`）、
-  src/runtime/proc.go（`(*p).destroy`）、src/runtime/mgcsweep.go. Go 1.26 源码.
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. src/runtime/mheap.go（`allocSpan`、`grow`、`tryAllocMSpan`）、src/runtime/mgc.go（`gcMarkTermination`）、src/runtime/proc.go（`(*p).destroy`）、src/runtime/mgcsweep.go.
+  Go 1.26 源码.
   https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
 - <a id="ref-hudson-2017"></a>[Hudson, 2017] Rick Hudson. runtime: redo insert/remove of large spans. Go
   commit 6e9ec14186, 2017. https://go.dev/cl/38732
@@ -840,7 +839,7 @@ func main() {
 - <a id="ref-knyszek-pratt-2023"></a>[Knyszek and Pratt, 2023] Michael Knyszek, Michael Pratt. A more
   hugepage-aware Go heap. Go design document, 2023.
   https://go.googlesource.com/proposal/+/master/design/59960-heap-hugepage-util.md
-- 本书 [12.2 组件](./component.md)、[9.8 系统监控](../../part3concurrency/ch09sched/sysmon.md)
-  （唤醒 scavenger）、[第 13 章 垃圾回收器](../ch13gc)。
-- 本书 [12.3 初始化](./init.md)（地址空间的四种状态与 `sysUnused`）、[12.4 大对象分配](./largealloc.md)
-  （页缓存的使用条件）、[13.3 触发频率及其调步算法](../ch13gc/pacing.md)（堆目标与内存限制）。
+- 本书 [12.2 组件](./component.md)、[9.8 系统监控](../../part3concurrency/ch09sched/sysmon.md)（唤
+  醒 scavenger）、[第 13 章 垃圾回收器](../ch13gc)。
+- 本书 [12.3 初始化](./init.md)（地址空间的四种状态与 `sysUnused`）、[12.4 大对象分配](./largealloc.md)（页
+  缓存的使用条件）、[13.3 触发频率及其调步算法](../ch13gc/pacing.md)（堆目标与内存限制）。

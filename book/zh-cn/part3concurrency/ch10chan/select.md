@@ -6,8 +6,8 @@ title: "10.5 select 的实现"
 # 10.5 select 的实现
 
 `select` 让一个 goroutine 同时等待多个 channel 操作，哪一个先能进行就执行哪一个；带 `default` 时，
-一个都不能进行也不会阻塞。它的语义由规范规定 [[Go Authors, 2026a](#ref-go-authors-2026a)]，
-[10.1.4](./model.md) 已经介绍：进入 `select` 时先对所有 case 中的 channel 与待发送的值求值；若有多个 case
+一个都不能进行也不会阻塞。它的语义由规范规定 [[Go Authors, 2026a](#ref-go-authors-2026a)]，[10.1.4](./model.md)
+已经介绍：进入 `select` 时先对所有 case 中的 channel 与待发送的值求值；若有多个 case
 可以进行，以均匀的伪随机方式选择其中一个。
 
 单个 channel 上的收发只涉及一把锁。`select` 同时面对多个 channel，实现上多出三个问题：多个 case
@@ -29,8 +29,8 @@ channel 上，如何保证只被其中一个唤醒。运行时的 `selectgo` 回
 | 一个 case 加 `default` | 一次非阻塞收发：`selectnbsend` 或 `selectnbrecv` |
 | 其余 | 调用 `selectgo` |
 
-用 `go build -gcflags=-S` 编译下面四个函数，可以在汇编中看到各自调用的运行时函数：`zero` 调用 `block`，
-`one` 调用 `chanrecv2`，`nonblocking` 调用 `selectnbrecv`，`two` 调用 `selectgo`（Go 1.26，amd64 与 arm64
+用 `go build -gcflags=-S` 编译下面四个函数，可以在汇编中看到各自调用的运行时函数：`zero` 调用 `block`，`one`
+调用 `chanrecv2`，`nonblocking` 调用 `selectnbrecv`，`two` 调用 `selectgo`（Go 1.26，amd64 与 arm64
 相同）。`one` 调用的是带 `ok` 的接收：编译器把每个接收 case 都表示为带 `ok` 的形式，没有写出的 `ok`
 记为空白标识符；只有值与 `ok` 都没有写出（`case <-c:`）时，单个 case 才化为普通的接收表达式，调用
 `chanrecv1`。
@@ -87,9 +87,9 @@ case chosen == 1: // v := <-a 分支；若写了 ok，则 ok = recvOK
 }
 ```
 
-这一布局经过两次简化。Go 1.11 之前，编译器为每个 case 调用一次运行时函数（`selectsend`、`selectrecv`、
-`selectdefault`）来登记；Matthew Dempsky 改为由编译器直接填写数组 [[Dempsky, 2018](#ref-dempsky-2018)]。
-Go 1.16 中，Dempsky 又去掉了 `scase` 中区分发送、接收与 default 的 `kind` 字段：编译器把发送 case 排在前、
+这一布局经过两次简化。Go 1.11 之前，编译器为每个 case 调用一次运行时函数（`selectsend`、`selectrecv`、`selectdefault`）
+来登记；Matthew Dempsky 改为由编译器直接填写数组 [[Dempsky, 2018](#ref-dempsky-2018)]。Go
+1.16 中，Dempsky 又去掉了 `scase` 中区分发送、接收与 default 的 `kind` 字段：编译器把发送 case 排在前、
 接收 case 排在后，分别给出两者的数目，`default` 的有无改由参数 `block` 表示。提交说明写道，这样重排 case
 是安全的，「因为运行时无论如何都会把轮询的次序随机化」[[Dempsky, 2020a](#ref-dempsky-2020a)]。
 
@@ -105,8 +105,8 @@ type scase struct {
 func selectgo(cas0 *scase, order0 *uint16, pc0 *uintptr, nsends, nrecvs int, block bool) (int, bool)
 ```
 
-`cas0` 指向 case 数组，下标小于 `nsends` 的是发送 case，其余是接收 case。`pc0` 只在竞态检测时使用。
-`order0` 指向一个长度为 case 数两倍的 `uint16` 数组，`selectgo` 把它分成两半，分别存放两套次序：
+`cas0` 指向 case 数组，下标小于 `nsends` 的是发送 case，其余是接收 case。`pc0` 只在竞态检测时使用。`order0`
+指向一个长度为 case 数两倍的 `uint16` 数组，`selectgo` 把它分成两半，分别存放两套次序：
 
 ```go
 ncases := nsends + nrecvs
@@ -148,8 +148,8 @@ lockorder = lockorder[:norder]
 归纳可知结果是均匀的：已放入 $k$ 个下标时，它们的 $k!$ 种排列等可能；第 $k+1$ 个下标的位置在 $k+1$
 个位置中均匀选取，每种新的排列恰好对应一种旧排列与一个位置，所以 $(k+1)!$ 种排列同样等可能。
 第一趟扫描（10.5.5）按这个次序检查，执行第一个能进行的 case。在均匀随机的排列中，各个就绪的 case
-谁排在最前是等可能的，与其中混有多少个不能进行的 case 无关。这一结论成立于伪随机数的精度之内：
-`cheaprandn` 用一次乘法和移位把 32 位随机数映射到 $[0, n)$ [[Lemire, 2019](#ref-lemire-2019)]，
+谁排在最前是等可能的，与其中混有多少个不能进行的 case 无关。这一结论成立于伪随机数的精度之内：`cheaprandn`
+用一次乘法和移位把 32 位随机数映射到 $[0, n)$ [[Lemire, 2019](#ref-lemire-2019)]，
 不做拒绝采样，偏差在 $n/2^{32}$ 的量级。
 
 最后一点并非显然。2011 年 1 月以前，`select` 用另一种办法打乱次序：随机选一个起点 $o$ 与一个与 case
@@ -157,8 +157,8 @@ lockorder = lockorder[:norder]
 一条 `select` 中有三个 case 从同一个 channel `c` 接收，第四个 case 从一个永远没有数据的 channel `d` 接收；
 循环 4000 次，三个计数本应都接近 1333，实际是 1484、1008 与 1508。报告还提到，Newsqueak 的 select 与
 plan9port 的 libthread 没有这个问题 [[Sherry, 2011](#ref-sherry-2011)]。Russ Cox 的分析是：只要有一个
-case 永远不就绪，在这种访问次序中紧随其后的 case 就会多得机会；要保证公平，唯一的办法是让所有排列等可能。
-Cox 据此改为显式生成一个随机排列，并指出 case 数超过 12 时随机性不足以做到完美：
+case 永远不就绪，在这种访问次序中紧随其后的 case 就会多得机会；要保证公平，唯一的办法是让所有排列等可能。Cox
+据此改为显式生成一个随机排列，并指出 case 数超过 12 时随机性不足以做到完美：
 当时随机数发生器的状态只有 32 位，至多给出 $2^{32}$ 种不同的序列，而 $12! < 2^{32} < 13!$；
 但结果仍比原来好得多 [[Cox, 2011](#ref-cox-2011)]。下面的程序重现了当年的报告：
 
@@ -219,8 +219,8 @@ channel 的等待队列上。如果在这两步之间放开某个 channel 的锁
 所以从第一趟开始，直到挂上全部队列为止，所有相关 channel 的锁都要一直持有。
 
 同时持有多把锁就有死锁的危险。goroutine A 执行 `select { case <-x: case <-y: }`，B 执行
-`select { case <-y: case <-x: }`，若各自按书写次序加锁，A 持有 `x` 的锁等待 `y`，B 持有 `y` 的锁等待 `x`。
-Coffman 等人在 1971 年的综述中列出了死锁的四个必要条件：互斥、持有并等待、不可剥夺与循环等待，并介绍了
+`select { case <-y: case <-x: }`，若各自按书写次序加锁，A 持有 `x` 的锁等待 `y`，B 持有 `y` 的锁等待 `x`。Coffman
+等人在 1971 年的综述中列出了死锁的四个必要条件：互斥、持有并等待、不可剥夺与循环等待，并介绍了
 Havender 提出的预防办法，其中之一是为所有资源规定一个线性次序，任何任务只能按这个次序申请资源；
 在这一约束下，等待关系不可能成环 [[Coffman et al., 1971](#ref-coffman-et-al-1971)]。`selectgo`
 采用的正是这种办法，次序的键是 channel 的地址：
@@ -294,8 +294,8 @@ flowchart TD
     P3 --> DO2["解锁，返回该 case"]
 ```
 
-第一趟按 `pollorder` 寻找能立即进行的 case。接收 case 依次看有没有等待的发送方、缓冲区中有没有数据、
-channel 是否已关闭；发送 case 先看 channel 是否已关闭，再看有没有等待的接收方、缓冲区有没有空位：
+第一趟按 `pollorder` 寻找能立即进行的 case。接收 case 依次看有没有等待的发送方、缓冲区中有没有数据、channel
+是否已关闭；发送 case 先看 channel 是否已关闭，再看有没有等待的接收方、缓冲区有没有空位：
 
 ```go
 // 第一趟：寻找能立即进行的 case（Go 1.26，略去竞态检测）
@@ -368,11 +368,11 @@ gopark(selparkcommit, nil, waitReason, traceBlockSelect, 1)
 `gp.waiting` 按加锁次序排列，是 Clements 在 Go 1.7 中为并发收缩栈所做的调整
 [[Clements, 2016b](#ref-clements-2016b)]：收缩一个阻塞在 `select` 中的 goroutine 的栈时，
 运行时沿这条链表逐个锁住它的 channel，以便修正 `sudog.elem` 中指向旧栈的指针。链表的次序就是这里加锁的
-次序，所以它必须与全局的加锁次序一致。
-`gopark` 的解锁函数 `selparkcommit` 同样沿这条链表解锁，而不读 `lockorder`。`gopark`
+次序，所以它必须与全局的加锁次序一致。`gopark`
+的解锁函数 `selparkcommit` 同样沿这条链表解锁，而不读 `lockorder`。`gopark`
 规定解锁函数不得访问当前 goroutine 的栈，因为这个栈在调用 `gopark` 与调用解锁函数之间可能被移动
-[[Go Authors, 2026e](#ref-go-authors-2026e)]；`scases` 与 `lockorder` 都在这个栈上，`sudog` 则在堆上。
-`selparkcommit` 还要等走过同一 channel 的最后一个 `sudog` 之后才解开这个 channel 的锁，因为锁一旦解开，
+[[Go Authors, 2026e](#ref-go-authors-2026e)]；`scases` 与 `lockorder` 都在这个栈上，`sudog` 则在堆上。`selparkcommit`
+还要等走过同一 channel 的最后一个 `sudog` 之后才解开这个 channel 的锁，因为锁一旦解开，
 这些 `sudog` 的字段就可能被其他 goroutine 修改：
 
 ```go
@@ -428,17 +428,17 @@ for _, casei := range lockorder {
 ```
 
 摘下任意一个 `sudog` 只需常数时间，这得益于等待队列是双向链表（[10.2.4](./impl.md)）。选中的若是发送 case
-而 `success` 为假，说明唤醒它的是 `close`，`selectgo` 随即 panic（[10.4.1](./close.md)）；若是接收 case，
-`success` 就是返回给调用方的 `ok`。
+而 `success` 为假，说明唤醒它的是 `close`，`selectgo` 随即 panic（[10.4.1](./close.md)）；若是接收 case，`success`
+就是返回给调用方的 `ok`。
 
 合起来看，一次不阻塞的 `select` 要排序一次、加锁并解锁一轮；一次阻塞的 `select` 还要为每个 case
-取得并归还一个 `sudog`，在醒来之后再加锁一轮。这是同时等待多个 channel 的代价，case 越多，代价越高。
-`reflect.Select` 走的也是 `selectgo`，只是 case 数组与次序数组由 `reflect_rselect` 在堆上分配。
+取得并归还一个 `sudog`，在醒来之后再加锁一轮。这是同时等待多个 channel 的代价，case 越多，代价越高。`reflect.Select`
+走的也是 `selectgo`，只是 case 数组与次序数组由 `reflect_rselect` 在堆上分配。
 
 ## 10.5.6 从输入守卫到输出守卫
 
-`select` 源自 Dijkstra 的守卫命令与 Hoare 1978 年的 CSP，二者的关系与 Hoare 对选择方式不作规定的立场，
-[1.3.2](../../part1overview/ch01intro/csp.md) 已经介绍。这里只看 Go 与 1978 年的 CSP 不同的两点，以及一个
+`select` 源自 Dijkstra 的守卫命令与 Hoare 1978 年的 CSP，二者的关系与 Hoare 对选择方式不作规定的立场，[1.3.2](../../part1overview/ch01intro/csp.md)
+已经介绍。这里只看 Go 与 1978 年的 CSP 不同的两点，以及一个
 缺失的特性如何被补上。
 
 第一，Go 的 `select` 允许发送 case。1978 年的 CSP 只允许输入命令出现在守卫中。Hoare 在论文的讨论部分写道，
@@ -540,5 +540,5 @@ case y <- 3:
 - <a id="ref-snyder-2017"></a>[Snyder, 2017] Josh Bleecher Snyder. runtime: speed up fastrand() % n. Go
   commit 46a75870ad, 2017. https://go.dev/cl/36932
   随 Go 1.9 发布。
-- 本书 [10.1 通道与 CSP 的工程化](./model.md)、[10.3 收发与直接传递](./sendrecv.md)、
-  [10.4 关闭的语义](./close.md)、[10.6 内存模型与无锁演进](./lockfree.md)。
+- 本书 [10.1 通道与 CSP 的工程化](./model.md)、[10.3 收发与直接传递](./sendrecv.md)、[10.4
+  关闭的语义](./close.md)、[10.6 内存模型与无锁演进](./lockfree.md)。

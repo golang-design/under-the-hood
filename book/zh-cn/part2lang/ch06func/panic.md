@@ -14,14 +14,14 @@ Go 没有异常机制。函数通过返回 `error` 值报告预期之内的失�
 「Proposal for an exception-like mechanism」的提案 [[Pike, 2010a](#ref-pike-2010a)]，当天即修改了语言规范
 [[Pike, 2010b](#ref-pike-2010b)]；Russ Cox 在 3 月 31 日完成了编译器中的实现
 [[Cox, 2010a](#ref-cox-2010a)]。提案明确表示，它有意不同于通常作为控制结构的异常模型，以免像 Java
-等语言那样把错误与异常混为一谈。在此之前，数组越界、空指针解引用等运行时错误会直接使程序崩溃；同年 4 月，
-Russ Cox 把这些运行时错误也改为 panic，使它们可以被 `recover` 截获 [[Cox, 2010b](#ref-cox-2010b)]
+等语言那样把错误与异常混为一谈。在此之前，数组越界、空指针解引用等运行时错误会直接使程序崩溃；同年 4 月，Russ
+Cox 把这些运行时错误也改为 panic，使它们可以被 `recover` 截获 [[Cox, 2010b](#ref-cox-2010b)]
 [[Cox, 2010c](#ref-cox-2010c)]。同一提案还修改了 `defer` 的语义，使延迟调用在函数设置结果之后、
 返回调用方之前执行，这正是 [6.2.1](./defer.md) 所述第四条语义的由来：只有这样，延迟调用才能在 panic
 被截获后改写函数的返回值。
 
-本节先说明 `panic` 与 `recover` 的语义，再讨论运行时的实现：`gopanic` 如何沿栈逐帧执行延迟调用，
-`gorecover` 如何判定一次调用是否有资格截获 panic，以及截获之后执行流程如何回到正常的轨道。最后讨论 panic
+本节先说明 `panic` 与 `recover` 的语义，再讨论运行时的实现：`gopanic` 如何沿栈逐帧执行延迟调用，`gorecover`
+如何判定一次调用是否有资格截获 panic，以及截获之后执行流程如何回到正常的轨道。最后讨论 panic
 与其他语言中异常机制的区别，以及在工程中应当如何使用它。
 
 ## 6.3.1 语义
@@ -130,8 +130,8 @@ string false
 ```
 
 还有两类情形与 panic 相似，但不能被 `recover` 截获。其一是 `runtime.Goexit`：它终止当前 goroutine，并像
-panic 一样执行所有延迟调用，但它不是 panic，延迟函数中的 `recover` 返回 nil。其二是运行时的**致命错误**
-（fatal error），例如并发读写 map、所有 goroutine 都陷入死锁、栈溢出以及内存耗尽。
+panic 一样执行所有延迟调用，但它不是 panic，延迟函数中的 `recover` 返回 nil。其二是运行时的**致命错误**（fatal
+error），例如并发读写 map、所有 goroutine 都陷入死锁、栈溢出以及内存耗尽。
 运行时在这些情形下调用内部的 `throw` 或 `fatal` 函数，打印以 `fatal error:` 开头的信息后直接终止进程，
 不执行任何延迟调用。前者用于运行时自身可能有缺陷的情形，后者用于错误多半出在用户代码的情形，
 两者都意味着程序的状态已不可信，继续执行没有意义。
@@ -139,8 +139,8 @@ panic 一样执行所有延迟调用，但它不是 panic，延迟函数中的 `
 ## 6.3.2 展开期间的调用栈
 
 在讨论实现之前，有一个容易被忽视的事实需要说明：panic 执行延迟调用的时候，调用栈并没有被弹出。延迟函数作为
-普通的函数调用，运行在发生 panic 的那一帧之上；只有当某个延迟函数截获了 panic，运行时才会丢弃中间的栈帧。
-Rob Pike 的提案中已经指出这一点：延迟调用像普通调用一样运行，因此对调用方栈帧的展开，只在某个延迟调用停止
+普通的函数调用，运行在发生 panic 的那一帧之上；只有当某个延迟函数截获了 panic，运行时才会丢弃中间的栈帧。Rob
+Pike 的提案中已经指出这一点：延迟调用像普通调用一样运行，因此对调用方栈帧的展开，只在某个延迟调用停止
 了 panic 时才会发生 [[Pike, 2010a](#ref-pike-2010a)]。
 
 这一性质使延迟函数能够看到 panic 发生时完整的调用栈。下面的程序在延迟函数中调用 `runtime.Stack` 获取当前的
@@ -355,8 +355,8 @@ func (p *_panic) nextFrame() (ok bool) {
 
 `nextFrame` 借助运行时的栈展开器（unwinder）逐帧向上移动，判断一帧是否有延迟调用的依据有两个：`g._defer`
 表头记录的栈指针恰好等于该帧的栈指针，或者该函数带有 `FUNCDATA_OpenCodedDeferInfo`
-元数据且其延迟位图不为零。后者正是 [6.2.4](./defer.md) 所说开放编码式延迟在 panic 时仍可被找到的机制：
-`initOpenCodedDefers` 从元数据中读出延迟位图与闭包槽位在栈帧中的偏移量，并把该函数中对 `deferreturn`
+元数据且其延迟位图不为零。后者正是 [6.2.4](./defer.md) 所说开放编码式延迟在 panic 时仍可被找到的机制：`initOpenCodedDefers`
+从元数据中读出延迟位图与闭包槽位在栈帧中的偏移量，并把该函数中对 `deferreturn`
 的调用地址记入 `p.retpc`，供截获之后使用。
 
 在 Go 1.22 之前，`gopanic` 自己遍历 `_defer` 链表，开放编码式延迟则由另一段代码（`addOneOpenDeferFrame`）
@@ -537,8 +537,8 @@ goroutine 一同终止；并且 `recover` 只能截获本 goroutine 的 panic，
 Rust 的取舍与 Go 相近。可恢复的错误以 `Result<T, E>` 类型表示，`panic!` 则用于不可恢复的错误
 [[Klabnik et al., n.d.](#ref-klabnik-et-al-nd)]。Rust 也提供了截获 panic 的 `std::panic::catch_unwind`，
 但其文档明确表示，不建议把它用作通用的 try/catch 机制，经常可能失败的函数应当返回 `Result`
-[[Rust Project, n.d.](#ref-rust-project-nd)]；而且当程序以 `panic=abort` 方式编译时，panic 直接终止进程，
-`catch_unwind` 也无从截获。
+[[Rust Project, n.d.](#ref-rust-project-nd)]；而且当程序以 `panic=abort` 方式编译时，panic 直接终止进程，`catch_unwind`
+也无从截获。
 
 在 Go 中，`recover` 的合理用途主要有两种。第一种是在包的内部使用 panic 简化错误的传递，
 再在包的边界上把它转换为错误值，使调用方看不到 panic [[Go Authors, 2026c](#ref-go-authors-2026c)]。标准库
@@ -563,8 +563,8 @@ func (e *encodeState) marshal(v any, opts encOpts) (err error) {
 
 第二种是在服务的边界上隔离故障。`net/http` 的文档说明，若 handler 的 `ServeHTTP` 发生 panic，服务器假定
 panic 的影响仅限于当前请求：它截获 panic，把调用栈写入错误日志，然后关闭网络连接（HTTP/2 下则重置该流），
-其余请求不受影响 [[Go Authors, 2026f](#ref-go-authors-2026f)]。不过，这种做法本身也有争议。2018 年，
-Damien Neil 提议 `net/http` 不再截获 handler 的 panic [[Neil, 2018](#ref-neil-2018)]：panic 意味着
+其余请求不受影响 [[Go Authors, 2026f](#ref-go-authors-2026f)]。不过，这种做法本身也有争议。2018 年，Damien
+Neil 提议 `net/http` 不再截获 handler 的 panic [[Neil, 2018](#ref-neil-2018)]：panic 意味着
 handler 中存在缺陷，而 handler 未必在 panic 之后正确地完成了清理，例如一个未被释放的互斥锁会使后续的请求全
 部阻塞，与其让服务带着不一致的状态继续运行，不如让进程崩溃后重新启动。Brad Fitzpatrick 回复说，
 这一行为令人遗憾，但出于兼容性的考虑，在 Go 1.x 中无法改变。由此可见，在边界上截获 panic

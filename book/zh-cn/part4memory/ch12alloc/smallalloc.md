@@ -5,10 +5,10 @@ title: "12.5 小对象分配"
 
 # 12.5 小对象分配
 
-**小对象**（small object）是由尺寸类管理的对象。不含指针的对象从 16 字节起（更小的交给微对象分配器，
-[12.6](./tinyalloc.md)），含指针的对象则不论多小都在此列，上限都是 32760 字节。`mallocgc` 按是否含指针、
-是否需要分配头，把它们分派给三个函数（[12.1.4](./basic.md)）：`mallocgcSmallNoscan`、
-`mallocgcSmallScanNoHeader` 与 `mallocgcSmallScanHeader`。三者的骨架相同：由大小求出尺寸类，
+**小对象**（small object）是由尺寸类管理的对象。不含指针的对象从 16 字节起（更小的交给微对象分配器，[12.6](./tinyalloc.md)），
+含指针的对象则不论多小都在此列，上限都是 32760 字节。`mallocgc` 按是否含指针、
+是否需要分配头，把它们分派给三个函数（[12.1.4](./basic.md)）：`mallocgcSmallNoscan`、`mallocgcSmallScanNoHeader`
+与 `mallocgcSmallScanHeader`。三者的骨架相同：由大小求出尺寸类，
 从本地缓存当前的 span 中取一个空闲槽，取不到时向中心缓存换一个 span，最后初始化对象，
 使其能够安全地被回收器看到。本节沿这一骨架展开，以不含指针的版本为主线，并在各处指出含指针的版本有何不同；
 最后讨论槽位如何在回收之后被重新使用。
@@ -51,15 +51,15 @@ func mallocgcSmallNoscan(size uintptr, typ *_type, needzero bool) (unsafe.Pointe
 
 `acquirem` 增加当前 M 的锁计数，`mallocing` 标记 M 正在分配，两者都会使 `canPreemptM` 返回假；
 协作式抢占（`newstack`）与异步抢占（`isAsyncSafePoint`）都以它为准，因此分配过程中 goroutine
-不会被抢占（[9.7](../../part3concurrency/ch09sched/preemption.md)）。这一点是必需的：本地缓存属于 P，
-goroutine 若在中途被抢占、随后换到另一个 P 上继续执行，手中的 `c` 便不再属于它。`nextFree`
+不会被抢占（[9.7](../../part3concurrency/ch09sched/preemption.md)）。这一点是必需的：本地缓存属于 P，goroutine
+若在中途被抢占、随后换到另一个 P 上继续执行，手中的 `c` 便不再属于它。`nextFree`
 的注释要求它在不可抢占的上下文中运行，原因即在于此。
 
 尺寸类的查找用两张表。不超过 1016 字节的请求按 8 字节一档，查 129 项的 `SizeToSizeClass8`；更大的请求减去
 1024 后按 128 字节一档，查 249 项的 `SizeToSizeClass128`；其中 1017 至 1024 字节的请求减去 1024
 后在无符号运算中回绕，向上取整恰好得到 0 号档，即 1024 字节。两张表由 `mksizeclasses.go`
-对每一档的上界求出所属的尺寸类后写入 [[Go Authors, 2026d](#ref-go-authors-2026d)]。
-1024 字节以下的尺寸类都是 8 的倍数，以上的都是 128 的倍数，因此同一档内的请求必然落入同一个尺寸类，
+对每一档的上界求出所属的尺寸类后写入 [[Go Authors, 2026d](#ref-go-authors-2026d)]。1024
+字节以下的尺寸类都是 8 的倍数，以上的都是 128 的倍数，因此同一档内的请求必然落入同一个尺寸类，
 查表的结果是精确的；分两种档距，则使两张表都保持在数百字节之内。`divRoundUp` 的除数是 2 的幂常量，
 源码注释指出编译器会把这次除法优化掉，实际只剩一次加法与一次移位。`mallocgcSmallScanNoHeader`
 只处理不超过 512 字节的对象，所以只查第一张表。`makeSpanClass` 把尺寸类左移一位，
@@ -67,8 +67,8 @@ goroutine 若在中途被抢占、随后换到另一个 P 上继续执行，手�
 类为下标（[12.2.2](./component.md)）。
 
 查表解决了由大小求尺寸类的问题。反方向的计算同样频繁：给定 span 中的一个地址，求它属于第几个对象。
-回收器标记时遇到的指针可能指向对象内部，须先求出对象的序号，才能找到对应的标记位；分配时标黑新对象、
-`runtime.Pinner` 固定对象时，也要做同样的计算。序号等于地址相对 span 起点的偏移除以对象大小，
+回收器标记时遇到的指针可能指向对象内部，须先求出对象的序号，才能找到对应的标记位；分配时标黑新对象、`runtime.Pinner`
+固定对象时，也要做同样的计算。序号等于地址相对 span 起点的偏移除以对象大小，
 而整数除法比乘法慢得多。`mspan.divideByElemSize` 用一次乘法和一次移位代替除法
 [[Go Authors, 2026c](#ref-go-authors-2026c)]：
 
@@ -159,9 +159,9 @@ malloc.go:1625:19: inlining call to nextFreeFast
 
 摘下表头同样只需寥寥数行，代价却在读取 `v.ptr().next` 上：下一个空闲块的地址存放在当前空闲块之中，
 而空闲块散布在 span 各处，访问的地址难以预测，缓存也难以命中。Hudson 曾为此在每次分配时预取下一个空闲块，
-在 garbage 基准上得到约 1% 的提升 [[Hudson, 2015](#ref-hudson-2015)]；Clements 的设计文档则测得，
-`mallocgc` 的时间中有 14% 至 19% 花在遍历自由表上 [[Clements, 2015](#ref-clements-2015)]。位图方案中，
-`allocCache` 与 `freeindex` 都在 `mspan` 结构中，分配时访问的是刚刚用过的元数据，
+在 garbage 基准上得到约 1% 的提升 [[Hudson, 2015](#ref-hudson-2015)]；Clements 的设计文档则测得，`mallocgc`
+的时间中有 14% 至 19% 花在遍历自由表上 [[Clements, 2015](#ref-clements-2015)]。位图方案中，`allocCache`
+与 `freeindex` 都在 `mspan` 结构中，分配时访问的是刚刚用过的元数据，
 寻找空闲槽只是寄存器中的位运算。以位图直接分配 [[Hudson, 2016b](#ref-hudson-2016b)]
 的这一系列改动合入主干时，garbage 基准的耗时减少了 3.9% [[Hudson, 2016d](#ref-hudson-2016d)]。
 
@@ -310,8 +310,8 @@ span 之前要让缓存与 `freeindex` 对齐 [[Go Authors, 2026b](#ref-go-autho
 回收器的内联标记位，它的扫描位也同时被置位（[13.11](../ch13gc/greentea.md)）。不在标记阶段时，分配器更新
 `freeIndexForScan`，这一字段服务于保守式扫描。被异步抢占打断的栈帧没有精确的指针信息
 （[9.7](../../part3concurrency/ch09sched/preemption.md)、[13.7.4](../ch13gc/safe.md)），
-回收器只能把其中每个形似指针的值都当作指针，这样的值可能恰好指向一个刚分配、尚未初始化的槽。
-`scanConservative` 借助 `isFreeOrNewlyAllocated` 过滤这类值：序号不小于 `freeIndexForScan`、
+回收器只能把其中每个形似指针的值都当作指针，这样的值可能恰好指向一个刚分配、尚未初始化的槽。`scanConservative`
+借助 `isFreeOrNewlyAllocated` 过滤这类值：序号不小于 `freeIndexForScan`、
 且在上次清扫时空闲的槽，要么仍然空闲，要么是标记开始之后才分配的对象，而后者已被标黑，两种情况都可以跳过
 [[Go Authors, 2026f](#ref-go-authors-2026f)]。`freeindex` 在槽被取走时就已前移，此时对象尚未清零、
 堆位图尚未写入；`freeIndexForScan` 则在初始化与发布屏障之后才更新。Go 1.20 以前，扫描器直接依据
@@ -421,8 +421,8 @@ func main() {
 走快速路径时，取得一个槽位只需一次查表、一次计算末尾零个数、一次移位和一次乘加，既不加锁，`nextFreeFast`
 也已被内联。TCMalloc 的快速路径同样不获取任何锁 [[Ghemawat and Menage, 2005](#ref-ghemawat-menage-2005)]；
 现行的 TCMalloc 还可以按 CPU 而非按线程缓存，借助 Linux 的可重启序列（rseq）
-在不使用锁与原子指令的情况下存取每个 CPU 的缓存 [[TCMalloc Authors, 2026](#ref-tcmalloc-authors-2026)]。
-Go 的本地缓存属于 P，同一时刻只有一个 M 持有 P，因此无需借助这类机制（[12.2.2](./component.md)）。
+在不使用锁与原子指令的情况下存取每个 CPU 的缓存 [[TCMalloc Authors, 2026](#ref-tcmalloc-authors-2026)]。Go
+的本地缓存属于 P，同一时刻只有一个 M 持有 P，因此无需借助这类机制（[12.2.2](./component.md)）。
 慢速路径的代价按 span 均摊：换入 span 时，中心缓存的集合以原子操作存取，必要时还要就地清扫，
 或者经由页堆（[12.7](./pagealloc.md)）申请新的页，并在换入时按比例承担清扫的工作
 （[13.5](../ch13gc/sweep.md)）。越往下，同步的代价越大，走到的频率越低。这与调度器为每个 P
@@ -476,12 +476,11 @@ Go 的本地缓存属于 P，同一时刻只有一个 M 持有 P，因此无需�
   src/runtime/_mkmalloc/mksizeclasses.go（尺寸类表与除法魔数的生成及验证）. Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/_mkmalloc/mksizeclasses.go
 - <a id="ref-go-authors-2026f"></a>[Go Authors, 2026f] The Go Authors.
-  src/runtime/mgcsweep.go、src/runtime/mgc.go（`GC`）、src/runtime/mgcmark.go（`gcmarknewobject`、
-  `scanConservative`）、src/runtime/mheap.go（`initSpan`）. Go 1.26 源码.
+  src/runtime/mgcsweep.go、src/runtime/mgc.go（`GC`）、src/runtime/mgcmark.go（`gcmarknewobject`、`scanConservative`）、src/runtime/mheap.go（`initSpan`）.
+  Go 1.26 源码.
   https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
 - <a id="ref-go-authors-2026g"></a>[Go Authors, 2026g] The Go Authors.
-  src/runtime/stubs.go、asm_amd64.s、atomic_arm64.s、asm_wasm.s（`publicationBarrier`）、
-  src/runtime/slice.go、src/runtime/string.go、src/cmd/compile/internal/ssa/_gen/*.rules（`Ctz64`
+  src/runtime/stubs.go、asm_amd64.s、atomic_arm64.s、asm_wasm.s（`publicationBarrier`）、src/runtime/slice.go、src/runtime/string.go、src/cmd/compile/internal/ssa/_gen/*.rules（`Ctz64`
   的降低规则）. Go 1.26 源码. https://github.com/golang/go/tree/release-branch.go1.26/src
 - <a id="ref-hudson-2015"></a>[Hudson, 2015] Rick Hudson. runtime: Add prefetch to allocation code. Go
   commit 99482f2f9e, 2015. https://go.dev/cl/5350
@@ -508,7 +507,7 @@ Go 的本地缓存属于 P，同一时刻只有一个 M 持有 P，因此无需�
 - <a id="ref-tcmalloc-authors-2026"></a>[TCMalloc Authors, 2026] The TCMalloc Authors.
   *TCMalloc: Thread-Caching Malloc.* 2026. https://google.github.io/tcmalloc/design.html
   尺寸类与线程缓存的思想原型。
-- 本书 [12.2 组件](./component.md)、[12.6 微对象分配](./tinyalloc.md)、
-  [13.5 清扫与位图](../ch13gc/sweep.md)（allocBits ← gcmarkBits 的交换）。
-- 本书 [15.5 逃逸分析](../../part5toolchain/ch15compile/escape.md)、
-  [11.6 缓存池](../../part3concurrency/ch11sync/pool.md)（减少分配次数的两条途径）。
+- 本书 [12.2 组件](./component.md)、[12.6 微对象分配](./tinyalloc.md)、[13.5
+  清扫与位图](../ch13gc/sweep.md)（allocBits ← gcmarkBits 的交换）。
+- 本书 [15.5 逃逸分析](../../part5toolchain/ch15compile/escape.md)、[11.6
+  缓存池](../../part3concurrency/ch11sync/pool.md)（减少分配次数的两条途径）。

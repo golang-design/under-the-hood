@@ -5,8 +5,8 @@ title: "11.5 同步组"
 
 # 11.5 同步组
 
-互斥锁（[11.2](./mutex.md)）与条件变量（[11.4](./cond.md)）处理的是多个 goroutine 争用同一份状态。
-`sync.WaitGroup` 处理的是另一种结构：一个 goroutine 派生出若干任务，等它们全部结束后再继续。
+互斥锁（[11.2](./mutex.md)）与条件变量（[11.4](./cond.md)）处理的是多个 goroutine 争用同一份状态。`sync.WaitGroup`
+处理的是另一种结构：一个 goroutine 派生出若干任务，等它们全部结束后再继续。
 这种先分后合的结构称为 fork-join：
 
 ```go
@@ -29,8 +29,8 @@ Go 早得多，1963 年 Melvin Conway 为多处理器计算机设计的 FORK 与
 
 Conway 把并行看作流程图上的分叉：一个过程总是从流程图上的某一点开始，
 所以「所有的并行都来自流程图路径上的分叉」，分开的路径可以在汇合点重新合并
-[[Conway, 1963](#ref-conway-1963)]。论文为此在指令集中加入了 FORK 与 JOIN。以两路分叉为例，
-`FORK 200, 299, 2` 先把地址 299 的内容置为 2，再分别从 101 与 200 两处继续执行；两条路径的末尾各有一条
+[[Conway, 1963](#ref-conway-1963)]。论文为此在指令集中加入了 FORK 与 JOIN。以两路分叉为例，`FORK 200, 299, 2`
+先把地址 299 的内容置为 2，再分别从 101 与 200 两处继续执行；两条路径的末尾各有一条
 `JOIN 299`，含义是：
 
 > 把 299 处的计数器减一。如果结果为零，转到 299 + 1；否则释放这个处理器。
@@ -51,8 +51,8 @@ Conway 把并行看作流程图上的分叉：一个过程总是从流程图上�
 两种做法的差别在于由谁执行汇合之后的代码：Conway 交给最后完成的路径，`WaitGroup` 留给发起分叉的一方，
 代价是一次阻塞与一次唤醒，好处是汇合之后的代码仍写在原处。Go 1.25 起，`WaitGroup`
 的文档称它为一种计数信号量（counting semaphore）[[Go Authors, 2026a](#ref-go-authors-2026a)]，
-但阻塞的条件与经典的计数信号量（[11.1.1](./basic.md)）恰好相反：Dijkstra 的 P 操作在计数为零时阻塞，
-`Wait` 则阻塞到计数为零。
+但阻塞的条件与经典的计数信号量（[11.1.1](./basic.md)）恰好相反：Dijkstra 的 P 操作在计数为零时阻塞，`Wait`
+则阻塞到计数为零。
 
 Conway 的「最后到达者继续执行」并没有消失。Java 的 `CyclicBarrier` 可以带一个屏障动作，
 由最后到达的线程在放行其他线程之前执行；`Phaser` 每一阶段的推进动作，同样由触发推进的那个参与方执行
@@ -105,8 +105,8 @@ wg.Wait()
 
 这些措辞是逐步形成的。2013 年，Russ Cox 应 issue #4762 的请求在文档中加了一句提醒：以正数调用的 `Add`
 必须在调用 `Wait` 之前发生，否则 `Wait` 等待的可能是一组过小的任务 [[Cox, 2013](#ref-cox-2013)]。
-读者有的把其中的「调用」理解为「所有调用」，有的理解为「至少一次调用」，两种读法导致的行为截然不同。
-2014 年，Andrew Gerrand 把它改写为今天的前两条规则 [[Gerrand, 2014](#ref-gerrand-2014)]。第三条规则是
+读者有的把其中的「调用」理解为「所有调用」，有的理解为「至少一次调用」，两种读法导致的行为截然不同。2014
+年，Andrew Gerrand 把它改写为今天的前两条规则 [[Gerrand, 2014](#ref-gerrand-2014)]。第三条规则是
 2015 年随实现的重写一起加入的，下一节会讲到它的来由。
 
 ## 11.5.3 实现的演进
@@ -150,13 +150,12 @@ if atomic.LoadInt32(&wg.counter) == 0 {
 }
 ```
 
-`Wait` 的这一段虽然持有锁，与之竞争的却是 `Add` 不加锁的快速路径。`Add` 先写计数器、再读等待者数目，
-`Wait` 先写等待者数目、再读计数器：双方各写一个变量，再读对方的变量，正是 [11.9](./mem.md)
+`Wait` 的这一段虽然持有锁，与之竞争的却是 `Add` 不加锁的快速路径。`Add` 先写计数器、再读等待者数目，`Wait`
+先写等待者数目、再读计数器：双方各写一个变量，再读对方的变量，正是 [11.9](./mem.md)
 所说的存储缓冲（store buffering）石蕊测试的形状。如果两次读都可能看到旧值，`Add`
 会以为无人等待而直接返回，`Wait` 会以为计数尚未归零而去睡眠，唤醒就此丢失。只有原子操作顺序一致，
 两次读才不会同时落空。2021 年 Cox 论证 Go 的原子操作应当顺序一致时，举的例子之一正是「`sync.WaitGroup`
-的一个旧实现用了一对原子 uint32 值，`wg.counter` 与 `wg.waiters`」[[Cox, 2021](#ref-cox-2021)]
-（[11.3.6](./atomic.md)）。
+的一个旧实现用了一对原子 uint32 值，`wg.counter` 与 `wg.waiters`」[[Cox, 2021](#ref-cox-2021)]（[11.3.6](./atomic.md)）。
 
 2014 年，Rui Ueyama 修复了这一版中的一次虚假唤醒（issue #7734）[[Ueyama, 2014](#ref-ueyama-2014)]。G1
 把计数器减到零，看到有等待者，准备进入锁去唤醒它们；在它拿到锁之前，G2 把计数器加一并调用 `Wait`，
@@ -358,8 +357,8 @@ go func() {
 wg.Wait()
 ```
 
-如果 `Wait` 先读到状态，它看到计数器为零，立即返回，`work` 可能还没有开始。此时并不会 panic：
-`Add called concurrently with Wait` 只在已有等待者时才可能触发，而这个 `Wait` 根本没有登记为等待者。如果
+如果 `Wait` 先读到状态，它看到计数器为零，立即返回，`work` 可能还没有开始。此时并不会 panic：`Add called concurrently with Wait`
+只在已有等待者时才可能触发，而这个 `Wait` 根本没有登记为等待者。如果
 `Add` 抢先执行，`Wait` 正常阻塞，程序的行为恰好正确。结果取决于调度，测试中可能始终遇不到出错的那一次。
 
 能稳定发现这类错误的是另外两层工具。2013 年，Vyukov 改进了竞态检测器对 `WaitGroup` 的建模
@@ -482,8 +481,8 @@ goroutine 中未被恢复的 panic 会终止整个程序，退出码为 2。但 
 `defer`，在 `f` 返回之后再调用 `Done` [[maxim2266, 2025](#ref-maxim2266-2025)]：`f` 若 panic，
 程序终将终止，`Done` 不调用也无妨。这个写法遗漏了第三种结束方式：`f` 可能调用 `runtime.Goexit`。`Goexit`
 终止当前 goroutine 并执行它的延迟调用，但它不是 panic，延迟函数中的 `recover` 返回
-nil（[6.3.1](../../part2lang/ch06func/panic.md)）。不用 `defer`，`Goexit` 之后 `Done` 就不会被调用，
-`Wait` 将永远阻塞：
+nil（[6.3.1](../../part2lang/ch06func/panic.md)）。不用 `defer`，`Goexit` 之后 `Done` 就不会被调用，`Wait`
+将永远阻塞：
 
 ```go {run=true}
 package main
@@ -673,5 +672,5 @@ func (wg *WaitGroup) Go(f func()) {
 - <a id="ref-vyukov-2015"></a>[Vyukov, 2015] Dmitry Vyukov. sync: simplify WaitGroup. Go commit
   03a48ebe1c, 2015. https://go.dev/cl/4117
   随 Go 1.5 发布。
-- 本书 [11.3 原子操作](./atomic.md)、[11.8 上下文](./context.md)、[11.9 内存一致模型](./mem.md)、
-  [6.1 函数](../../part2lang/ch06func/func.md)、[10.7 并发模式](../ch10chan/pattern.md)。
+- 本书 [11.3 原子操作](./atomic.md)、[11.8 上下文](./context.md)、[11.9 内存一致模型](./mem.md)、[6.1
+  函数](../../part2lang/ch06func/func.md)、[10.7 并发模式](../ch10chan/pattern.md)。

@@ -168,8 +168,8 @@ func Max[T Ordered](a, b T) T {
 ```
 
 新的写法中有两个为类型集服务的记号：`|` 表示**并集**，把多个类型并入同一个集合；`~T` 表示**底层类型为 `T`
-的所有类型**。有了 `~`，`type Celsius float64` 这样以 `float64` 为底层类型的自定义类型也属于 `Ordered`，
-`Max(Celsius(21.5), 19)` 可以直接调用，而不必在约束中逐一列举。2020 年草案中的类型列表同样按底层类型匹配，
+的所有类型**。有了 `~`，`type Celsius float64` 这样以 `float64` 为底层类型的自定义类型也属于 `Ordered`，`Max(Celsius(21.5), 19)`
+可以直接调用，而不必在约束中逐一列举。2020 年草案中的类型列表同样按底层类型匹配，
 类型集只是把这一规则写成了显式的记号，并去掉了 `type` 关键字。方法要求沿用接口原有的写法，合约之间的组合也
 回归为接口的嵌入。
 
@@ -212,18 +212,18 @@ flowchart LR
 ```
 
 2018 年 8 月的草案以一段代码描述约束 [[Taylor and Griesemer, 2018](#ref-taylor-griesemer-2018)]；2019 年
-7 月的修订把合约改为类型列表与方法列表 [[Taylor and Griesemer, 2019](#ref-taylor-griesemer-2019)]；
-2020 年 6 月的草案放弃了合约，由接口承载约束
+7 月的修订把合约改为类型列表与方法列表 [[Taylor and Griesemer, 2019](#ref-taylor-griesemer-2019)]；2020
+年 6 月的草案放弃了合约，由接口承载约束
 [[Taylor and Griesemer, 2020b](#ref-taylor-griesemer-2020b)]，同年 8 月改用方括号声明类型参数；2021 年
 1 月，草案转为正式提案 #43651，并于 2 月被接受
-[[Taylor and Griesemer, 2021](#ref-taylor-griesemer-2021)]；2021 年 7 月，类型集的提案 #45346 被接受，
-`~T` 与 `|` 取代了以 `type` 开头的类型列表 [[Taylor, 2021](#ref-taylor-2021)]。2022 年 3 月，这一设计随
+[[Taylor and Griesemer, 2021](#ref-taylor-griesemer-2021)]；2021 年 7 月，类型集的提案 #45346 被接受，`~T`
+与 `|` 取代了以 `type` 开头的类型列表 [[Taylor, 2021](#ref-taylor-2021)]。2022 年 3 月，这一设计随
 Go 1.18 发布。
 
 括号的变化有其具体原因。最终的提案解释说，圆括号的写法可行，却带来了若干语法分析上的歧义：在
 `var f func(x(T))` 中，无法确定这是一个参数类型为实例化类型 `x(T)` 的函数，还是一个名为 `x`、
-类型为带括号的 `(T)` 的参数；`[]T(v1)` 与 `[]T(v2){}` 在读到左括号时无法区分类型转换与复合字面量；
-`interface { M(T) }` 中的 `M(T)` 既可能是方法，也可能是嵌入的实例化接口。这些歧义可以靠添加括号解决，
+类型为带括号的 `(T)` 的参数；`[]T(v1)` 与 `[]T(v2){}` 在读到左括号时无法区分类型转换与复合字面量；`interface { M(T) }`
+中的 `M(T)` 既可能是方法，也可能是嵌入的实例化接口。这些歧义可以靠添加括号解决，
 但写法别扭；此外，`func F(T any)(v T)(r1, r2 T)` 与 `F(int)(1)` 这样一连串的括号也让许多人感到困扰
 [[Taylor and Griesemer, 2021](#ref-taylor-griesemer-2021)]。
 
@@ -239,9 +239,9 @@ Go 1.18 发布。
 
 C++ 的 **Concepts** 经历了相似的过程，结局却不同。Concepts 是一套描述模板参数要求的机制，
 旨在解决模板接口缺乏明确规定、错误信息难以理解的问题。为 C++0x 设计的 Concepts 在
-2009 年被从标准草案中移除；同年，Stroustrup 与 Gabriel Dos Reis、Andrew Sutton 从头开始重新设计，
-2015 年形成了技术规范 [[Stroustrup, 2017](#ref-stroustrup-2017)]，最终于 C++20 进入标准。值得注意的是，
-C++20 的 `requires` 表达式以一段不会执行的代码描述要求，例如
+2009 年被从标准草案中移除；同年，Stroustrup 与 Gabriel Dos Reis、Andrew Sutton 从头开始重新设计，2015
+年形成了技术规范 [[Stroustrup, 2017](#ref-stroustrup-2017)]，最终于 C++20 进入标准。值得注意的是，C++20
+的 `requires` 表达式以一段不会执行的代码描述要求，例如
 `requires(T x) { { x == x } -> std::convertible_to<bool>; }` [[Smith, 2020](#ref-smith-2020)]，与 Go
 2018 年草案中的合约体十分接近。Go 放弃了这种形式，选择以类型集描述约束；C++ 则保留了它，
 并以命名的概念加以组织。两种语言对同一问题给出了不同的回答，这也说明「约束应当如何表达」

@@ -13,8 +13,8 @@ title: "11.8 上下文"
 
 `context` 包是 Go 对这一问题的标准回答。按照包文档的说法，`Context` 在 API 边界之间、
 进程之间携带截止时间、取消信号以及其他请求范围内的值 [[Go Authors, 2026a](#ref-go-authors-2026a)]。它在
-Google 内部开发，2014 年以 `golang.org/x/net/context` 公开 [[Ajmani, 2014b](#ref-ajmani-2014b)]；2016 年，
-Brad Fitzpatrick 与 Sameer Ajmani 提议将其并入标准库 [[Fitzpatrick, 2016a](#ref-fitzpatrick-2016a)]，随
+Google 内部开发，2014 年以 `golang.org/x/net/context` 公开 [[Ajmani, 2014b](#ref-ajmani-2014b)]；2016 年，Brad
+Fitzpatrick 与 Sameer Ajmani 提议将其并入标准库 [[Fitzpatrick, 2016a](#ref-fitzpatrick-2016a)]，随
 Go 1.7 发布 [[Fitzpatrick, 2016b](#ref-fitzpatrick-2016b)]。同一版本中，`net/http` 的 `Request` 有了
 `Context` 方法，`net.Dialer` 有了 `DialContext`，`os/exec` 有了 `CommandContext`。
 
@@ -43,8 +43,8 @@ Go 从一开始就没有给出这种操作的入口：goroutine 是匿名的，�
 相当于一次广播（[10.4.3](../ch10chan/close.md)）[[Ajmani, 2014a](#ref-ajmani-2014a)]。
 这一手法在一条流水线之内足够好用，但工作扇出成树之后，它的局限就显现出来：一个 done channel
 只能取消整棵树，要单独取消某棵子树，就得再引入一个 channel；截止时间、取消的原因都要另行传递；
-而且各个库各有各的取消方式，调用方的 channel 无法传进别人的函数 [[Štrba, 2017](#ref-strba-2017)]。
-`context` 用一个统一的接口解决了这些问题，并使取消沿树自动传播。
+而且各个库各有各的取消方式，调用方的 channel 无法传进别人的函数 [[Štrba, 2017](#ref-strba-2017)]。`context`
+用一个统一的接口解决了这些问题，并使取消沿树自动传播。
 
 ## 11.8.2 取消树
 
@@ -138,8 +138,8 @@ type cancelCtx struct {
 }
 ```
 
-嵌入的 `Context` 指向父节点，`children` 记录需要随之取消的后代。这个结构的几处细节都来自后来的性能修改。
-`done` 起初在创建时就分配，2017 年 Josh Bleecher Snyder 把它改为在第一次调用 `Done` 时才创建：许多
+嵌入的 `Context` 指向父节点，`children` 记录需要随之取消的后代。这个结构的几处细节都来自后来的性能修改。`done`
+起初在创建时就分配，2017 年 Josh Bleecher Snyder 把它改为在第一次调用 `Done` 时才创建：许多
 context 从未被人监听，或者在被监听之前就已取消。深度为 1 的取消树的基准测试中，每次操作的分配从
 176 字节降到 80 字节 [[Snyder, 2017](#ref-snyder-2017)]。2021 年，`done` 改存于 `atomic.Value`，`Done`
 的快速路径不再加锁，起因是一份报告指出 `cancelCtx` 的互斥锁在高并发下争用极其严重；相应基准测试的耗时从
@@ -295,8 +295,8 @@ func WithDeadlineCause(parent Context, d time.Time, cause error) (Context, Cance
 无论取消由谁触发，`WithCancel`、`WithDeadline`、`WithTimeout` 返回的 `CancelFunc` 都必须调用，
 哪怕工作已经正常结束。文档写道，调用它会取消子节点及其后代、移除父节点对子节点的引用、停止相关的定时器；
 不调用，子节点及其后代就会一直泄漏，直到父节点被取消 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
-在一个长期存在的父节点之下，这就是持续增长的内存泄漏。惯用写法是在创建之后紧接着 `defer cancel()`。
-`go vet` 的 lostcancel 检查与 `context` 同在 Go 1.7 加入，它在控制流图上寻找从 `WithCancel` 到 `return`
+在一个长期存在的父节点之下，这就是持续增长的内存泄漏。惯用写法是在创建之后紧接着 `defer cancel()`。`go vet`
+的 lostcancel 检查与 `context` 同在 Go 1.7 加入，它在控制流图上寻找从 `WithCancel` 到 `return`
 却没有使用 `cancel` 的路径；Alan Donovan 在 5 万个源文件的样本上运行它，找到 2068 处把 `cancel`
 赋给空白标识符的写法和 118 处在调用 `cancel` 之前返回的错误，人工检查其中 20 处，没有发现误报
 [[Donovan, 2016](#ref-donovan-2016)]。这项检查需要显式运行 `go vet`，`go test`
@@ -310,12 +310,12 @@ context 是在哪里被取消的；Ajmani 据此在 2022 年提出了取消原�
 的类型和已有函数的签名，`Err` 也只能返回 nil、`Canceled`、`DeadlineExceeded` 三者之一。于是 Go 1.20
 新增了 `WithCancelCause`，它返回的 `CancelCauseFunc` 接受一个 error 作为原因，记入 `cancelCtx.cause`；
 原因由包级函数 `Cause` 取回，它同样借助 `&cancelCtxKey` 找到最近的 `cancelCtx`。原因由第一次取消决定：
-父节点先以 cause1 取消，则父子两者的原因都是 cause1；子节点先以 cause2 取消，则子节点的原因保持为 cause2。
-Go 1.21 又补上了 `WithDeadlineCause` 与 `WithTimeoutCause`，为到点触发的取消指定原因，它们返回的
+父节点先以 cause1 取消，则父子两者的原因都是 cause1；子节点先以 cause2 取消，则子节点的原因保持为 cause2。Go
+1.21 又补上了 `WithDeadlineCause` 与 `WithTimeoutCause`，为到点触发的取消指定原因，它们返回的
 `CancelFunc` 不设置原因 [[Ajmani, 2022b](#ref-ajmani-2022b)]。
 
-Go 1.21 还加入了两个函数。`WithoutCancel` 派生一个保留值、但切断取消的 context：它的 `Done` 返回 nil，
-`Err` 恒为 nil，`Cause` 也返回 nil。提案者 Carlo Alberto Ferraris 列举的用途是：触发事件（例如一个 HTTP
+Go 1.21 还加入了两个函数。`WithoutCancel` 派生一个保留值、但切断取消的 context：它的 `Done` 返回 nil，`Err`
+恒为 nil，`Cause` 也返回 nil。提案者 Carlo Alberto Ferraris 列举的用途是：触发事件（例如一个 HTTP
 请求）已被取消或已经结束，却仍要完成回滚、清理或长时间的后续操作，而这些操作需要请求附带的认证、日志、
 追踪等值；改用 `Background` 就会丢失这些值。提案还指出，类似的函数已在各处被重复实现了多次，例如
 `x/tools` 内部的 `xcontext.Detach` [[Ferraris, 2020](#ref-ferraris-2020)]。实现上，`withoutCancelCtx` 的
@@ -429,11 +429,11 @@ type valueCtx struct {
 
 更大的争议在于什么该放进 `Value`，以及 `ctx` 是否该出现在每个函数的签名中。文档划出的界线是：
 值只用于跨越进程与 API 边界的、请求范围内的数据，不要用它向函数传递可选参数。Michal Štrba 在
-2017 年的文章中批评，`context` 像病毒一样扩散，一个库只要可能被服务器使用，就得在耗时的函数上接受 `ctx`；
-`Value` 没有静态类型，与线程局部存储相似；整个 `context` 在多数情况下只是一个低效的链表。但 Štrba 也承认，
+2017 年的文章中批评，`context` 像病毒一样扩散，一个库只要可能被服务器使用，就得在耗时的函数上接受 `ctx`；`Value`
+没有静态类型，与线程局部存储相似；整个 `context` 在多数情况下只是一个低效的链表。但 Štrba 也承认，
 它确实解决了取消这个在 Go 中颇为困难的问题，并主张由 Go 2 在语言层面直接解决
-[[Štrba, 2017](#ref-strba-2017)]，次年提交的相应提案三周后即被关闭 [[Štrba, 2018](#ref-strba-2018)]。
-Damien Neil 则从另一个方向提出，可否用 goroutine 局部存储整个取代 `Context`
+[[Štrba, 2017](#ref-strba-2017)]，次年提交的相应提案三周后即被关闭 [[Štrba, 2018](#ref-strba-2018)]。Damien
+Neil 则从另一个方向提出，可否用 goroutine 局部存储整个取代 `Context`
 [[Neil, 2017](#ref-neil-2017)]。Ian Lance Taylor 关闭了这一提案，理由是现行的显式机制是有意选择的，
 而且看来行之有效，若每创建一个 goroutine 都复制一份局部数据，代价也可能很高
 [[Taylor, 2018b](#ref-taylor-2018b)]。Go 的 FAQ 给出了更根本的理由：goroutine 之所以匿名，
@@ -448,13 +448,13 @@ Cheney 的主张与 Štrba 方向相反：值才是 `context` 名副其实的用
 
 与显式传参相应的另一条规则，是不要把 `Context` 存进结构体，而应把它作为第一个参数显式传给每个需要它的函数
 [[Barkhuysen and Proud, 2021](#ref-barkhuysen-proud-2021)]。Fitzpatrick 在并入标准库的提案中就说过，
-真正的建议是不要「保存」context，它应像参数一样被传递 [[Fitzpatrick, 2016a](#ref-fitzpatrick-2016a)]。
-`http.Request` 内部持有 context 是这条规则的例外：Go 1.7 引入 `context` 时，`Client.Do`
+真正的建议是不要「保存」context，它应像参数一样被传递 [[Fitzpatrick, 2016a](#ref-fitzpatrick-2016a)]。`http.Request`
+内部持有 context 是这条规则的例外：Go 1.7 引入 `context` 时，`Client.Do`
 等方法若增加参数就会破坏兼容性，`net/http` 于是把 context 放进请求结构体，由 `WithContext` 返回携带新
 context 的请求；另一种兼容的做法是增加以 `Context` 为后缀的新函数，例如 `net.Dialer` 的 `DialContext`
 [[Barkhuysen and Proud, 2021](#ref-barkhuysen-proud-2021)]。显式传参的代价是签名冗长，
-换来的是取消与截止时间的传递路径在代码中清晰可见，并能由工具静态检查。在「签名整洁」与「数据流可见」之间，
-Go 又一次选择了后者。
+换来的是取消与截止时间的传递路径在代码中清晰可见，并能由工具静态检查。在「签名整洁」与「数据流可见」之间，Go
+又一次选择了后者。
 
 ## 延伸阅读
 
@@ -551,6 +551,6 @@ Go 又一次选择了后者。
   update context package.* 2018. https://github.com/golang/go/issues/28342
 - <a id="ref-taylor-2018b"></a>[Taylor, 2018b] Ian Lance Taylor. Comment on golang/go#21355, 2018.
   https://github.com/golang/go/issues/21355#issuecomment-371308423
-- 本书 [10.4 关闭的语义](../ch10chan/close.md)、[10.7 工程实践与跨语言对照](../ch10chan/pattern.md)、
-  [9.10 计时器](../ch09sched/timer.md)、[11.4 条件变量](./cond.md)、[11.5 同步组](./waitgroup.md)、
-  [11.9 内存一致模型](./mem.md)。
+- 本书 [10.4 关闭的语义](../ch10chan/close.md)、[10.7 工程实践与跨语言对照](../ch10chan/pattern.md)、[9.10
+  计时器](../ch09sched/timer.md)、[11.4 条件变量](./cond.md)、[11.5 同步组](./waitgroup.md)、[11.9
+  内存一致模型](./mem.md)。

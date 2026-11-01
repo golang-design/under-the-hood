@@ -6,8 +6,8 @@ title: "11.7 并发安全散列表"
 # 11.7 并发安全散列表
 
 语言内建的 `map` 不是并发安全的。多个 goroutine 在没有同步的情况下读写同一个 `map`，运行时会尽力检测，
-一旦发现就以 `fatal error: concurrent map writes` 或 `concurrent map read and map write` 终止程序，
-`recover` 无法截获（[5.4.4](../../part2lang/ch05data/swisstable.md)）。多个 goroutine 共享一张表时，
+一旦发现就以 `fatal error: concurrent map writes` 或 `concurrent map read and map write` 终止程序，`recover`
+无法截获（[5.4.4](../../part2lang/ch05data/swisstable.md)）。多个 goroutine 共享一张表时，
 最直接的做法是给普通的 `map` 配一把锁：
 
 ```go
@@ -110,8 +110,8 @@ type readOnly struct {
 }
 ```
 
-`read` 指向一个不可变的 `readOnly`，其中的 `map` 一经发布就不再修改，任何 goroutine 都可以不加锁地读它。
-`dirty` 包含 `read` 中所有未被清除的键，再加上新写入的键，只能在持有 `mu` 时访问。两张表中存放的都是
+`read` 指向一个不可变的 `readOnly`，其中的 `map` 一经发布就不再修改，任何 goroutine 都可以不加锁地读它。`dirty`
+包含 `read` 中所有未被清除的键，再加上新写入的键，只能在持有 `mu` 时访问。两张表中存放的都是
 `*entry`，同一个键在两张表中指向同一个 `entry`。值存放在 `entry` 内的原子指针 `p` 中，
 因此更新一个已有的键只需对 `p` 做一次原子操作，两张表同时看到新值，不必加锁。
 
@@ -165,10 +165,10 @@ func (m *Map) missLocked() {
 `LoadAndDelete` 以及 `Swap`、`CompareAndSwap`、`CompareAndDelete` 由 Changkun Ou 实现
 [[Ou, 2019](#ref-ou-2019)] [[Ou, 2022a](#ref-ou-2022a)]。
 
-文档用内存模型的术语给出保证：写操作同步先于观察到其效果的读操作。哪些调用算读、哪些算写，文档逐一列明：
-`Load`、`LoadAndDelete`、`LoadOrStore`、`Swap`、`CompareAndSwap` 与 `CompareAndDelete` 是读操作；
-`Delete`、`LoadAndDelete`、`Store` 与 `Swap` 是写操作；`LoadOrStore` 在返回 `loaded` 为假时是写操作，
-`CompareAndSwap` 与 `CompareAndDelete` 在成功时是写操作 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
+文档用内存模型的术语给出保证：写操作同步先于观察到其效果的读操作。哪些调用算读、哪些算写，文档逐一列明：`Load`、`LoadAndDelete`、`LoadOrStore`、`Swap`、`CompareAndSwap`
+与 `CompareAndDelete` 是读操作；`Delete`、`LoadAndDelete`、`Store`
+与 `Swap` 是写操作；`LoadOrStore` 在返回 `loaded` 为假时是写操作，`CompareAndSwap`
+与 `CompareAndDelete` 在成功时是写操作 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
 这段说明由 Cox 在 2022 年写入，随 Go 1.19 发布 [[Cox, 2022](#ref-cox-2022)]；Go 1.20 新增的三个方法，
 其分类是 Changkun Ou 随后补上的 [[Ou, 2022b](#ref-ou-2022b)]。
 
@@ -226,8 +226,8 @@ func main() {
 在新的内部包 `internal/concurrent` 中加入了一个并发散列字典树 `HashTrieMap`
 [[Knyszek, 2024a](#ref-knyszek-2024a)]。提交说明写道，它专为频繁成功的查找、相对少见的插入与删除而构建；
 单线程下 `LoadOrStore` 的性能与加锁的 `map` 相当，`Load` 在作者机器的 24 个核上完美扩展。随后它被移到
-`internal/sync`，补齐了 `sync.Map` 的全部操作。Knyszek 发现，几乎在每一项基准测试中，
-`HashTrieMap[any, any]` 都比 `sync.Map` 快，于是在 Go 1.24 中把它作为 `sync.Map` 的默认实现
+`internal/sync`，补齐了 `sync.Map` 的全部操作。Knyszek 发现，几乎在每一项基准测试中，`HashTrieMap[any, any]`
+都比 `sync.Map` 快，于是在 Go 1.24 中把它作为 `sync.Map` 的默认实现
 [[Knyszek, 2024b](#ref-knyszek-2024b)] [[Knyszek, 2024c](#ref-knyszek-2024c)]。issue #70683
 列出的微基准测试中，查找多数不命中的情形快了约 27%，针对旧实现弱点构造的反复分配与反复删除的情形分别快了约
 67% 与 78%；查找多数命中的情形则慢了约 7%。Go 1.24 的发布说明写道，新实现尤其改善了修改操作：
@@ -340,8 +340,8 @@ func (ht *HashTrieMap[K, V]) Load(key K) (value V, ok bool) {
 例如键集频繁变化时的整表复制与新键的预热，但它的接口仍以 `any` 为键和值，这带来两项代价。
 
 其一是类型安全。键和值的类型无法由编译器检查，取出的值还要做类型断言。其二是分配。非指针类型的值转换为
-`any` 时通常需要在堆上分配，以 `string` 为键的表，每次写入都要多一次分配；`HashTrieMap` 本身是泛型的，
-`sync.Map` 却只能使用 `HashTrieMap[any, any]`。由于兼容性的约束，`sync.Map` 不能改为泛型类型。Ian Lance
+`any` 时通常需要在堆上分配，以 `string` 为键的表，每次写入都要多一次分配；`HashTrieMap` 本身是泛型的，`sync.Map`
+却只能使用 `HashTrieMap[any, any]`。由于兼容性的约束，`sync.Map` 不能改为泛型类型。Ian Lance
 Taylor 在 2025 年提出新的 `sync/v2` 包，用泛型的 `Map` 与 `Pool` 替代现有的两个类型，截至 Go 1.26
 这一提案仍在讨论之中 [[Taylor, 2025](#ref-taylor-2025)]。
 
@@ -412,7 +412,7 @@ Taylor 在 2025 年提出新的 `sync/v2` 包，用泛型的 `Map` 与 `Pool` �
   CTrie。
 - <a id="ref-taylor-2025"></a>[Taylor, 2025] Ian Lance Taylor. Go issue #71076. *proposal: sync/v2: new
   package.* 2025. https://github.com/golang/go/issues/71076
-- 本书 [5.3 散列表](../../part2lang/ch05data/map.md)、
-  [5.4 Swiss Table](../../part2lang/ch05data/swisstable.md)、[11.2 互斥锁](./mutex.md)、
-  [12.2 分配器组件](../../part4memory/ch12alloc/component.md)（mcentral 的「为并发而重构数据结构」
+- 本书 [5.3 散列表](../../part2lang/ch05data/map.md)、[5.4
+  Swiss Table](../../part2lang/ch05data/swisstable.md)、[11.2 互斥锁](./mutex.md)、[12.2
+  分配器组件](../../part4memory/ch12alloc/component.md)（mcentral 的「为并发而重构数据结构」
   是同一类演进）。

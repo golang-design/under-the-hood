@@ -26,8 +26,8 @@ flowchart LR
 
 管线中的阶段分为两类。**固定功能**阶段由硬件实现，程序只能设置参数，例如图元装配、光栅化，以及最后把片元
 写入帧缓冲时的深度测试与混合。**可编程**阶段执行由程序提供的小程序，这种程序称为**着色器**（shader）：
-顶点着色器逐个处理顶点，片元着色器逐个处理光栅化产生的片元。WebGPU 规范对 GPU 工作方式的概括正是如此：
-GPU 让数据流过一条由固定功能阶段与可编程阶段组成的管线，以此执行命令缓冲中编码的命令
+顶点着色器逐个处理顶点，片元着色器逐个处理光栅化产生的片元。WebGPU 规范对 GPU 工作方式的概括正是如此：GPU
+让数据流过一条由固定功能阶段与可编程阶段组成的管线，以此执行命令缓冲中编码的命令
 [[W3C, n.d.](#ref-w3c-webgpu)]。光栅化位于两类着色器之间，它确定一个三角形覆盖了哪些像素，并为每个
 被覆盖的像素生成一个片元。各阶段的详细讨论见 [[Akenine-Möller et al., 2018](#ref-akenine-moller-2018)]
 第 2、3 章。
@@ -50,10 +50,10 @@ Go 代码只位于管线最左端的应用阶段。它运行在 CPU 上，负责
 无论哪种形式，GPU 都在自己的时间线上异步执行，18.1 讨论的异步提交模型在这里同样适用。
 一帧往往包含大量绘制调用，因此「减少跨越边界的次数」在图形领域表现为「减少绘制调用的次数」。
 
-第二道是语言边界。着色器运行在 GPU 上，驱动接受的是各图形 API 规定的着色语言或中间表示：OpenGL 的 GLSL、
-Direct3D 的 HLSL、Metal 的 MSL、WebGPU 的 WGSL，以及 Vulkan 使用的二进制中间表示 SPIR-V。Go 编译器不生成
-GPU 代码，Go 程序中的着色器最终总要以这些形式之一交给驱动。Go 生态中也有让着色器在形式上接近 Go 的做法：
-Ebitengine 的着色语言 Kage 在语法层面与 Go 相同，可以用 `gofmt` 格式化，
+第二道是语言边界。着色器运行在 GPU 上，驱动接受的是各图形 API 规定的着色语言或中间表示：OpenGL 的 GLSL、Direct3D
+的 HLSL、Metal 的 MSL、WebGPU 的 WGSL，以及 Vulkan 使用的二进制中间表示 SPIR-V。Go 编译器不生成
+GPU 代码，Go 程序中的着色器最终总要以这些形式之一交给驱动。Go 生态中也有让着色器在形式上接近 Go 的做法：Ebitengine
+的着色语言 Kage 在语法层面与 Go 相同，可以用 `gofmt` 格式化，
 运行时再编译为当前图形后端所需的语言 [[Ebitengine, n.d.b](#ref-ebitengine-ndb)]；polyred 把带有
 `//gpu:vertex`、`//gpu:fragment` 等注释的 Go 函数编译为后端的着色语言 [[Ou, n.d.](#ref-ou-nd)]。
 但这些着色器并不是普通的 Go 程序。以 Kage 为例，除 `int` 外的大多数类型（字符串、切片、指针、接口、
@@ -78,15 +78,15 @@ Overhead in OpenGL」（简称 AZDO）为题指出，驱动开销在桌面系统
 - **实例化**（instancing）：用一次绘制调用画出同一网格的大量副本（如草叶、人群），
   各副本只在变换等少量参数上不同。
 
-更大的变化发生在 API 层面。OpenGL 维护一个隐式的状态机，状态的管理与校验由驱动在背后完成；Vulkan、Metal、
-Direct3D 12 与 WebGPU 这一代**显式** API 则把这部分工作交给应用。应用先把一串命令录制进**命令缓冲**
-（command buffer），再提交给设备队列执行。Vulkan 规范对命令缓冲的定义是：用来录制命令的对象，所录制的命令
+更大的变化发生在 API 层面。OpenGL 维护一个隐式的状态机，状态的管理与校验由驱动在背后完成；Vulkan、Metal、Direct3D
+12 与 WebGPU 这一代**显式** API 则把这部分工作交给应用。应用先把一串命令录制进**命令缓冲**（command
+buffer），再提交给设备队列执行。Vulkan 规范对命令缓冲的定义是：用来录制命令的对象，所录制的命令
 随后被提交到设备队列执行 [[Khronos, n.d.](#ref-khronos-vulkan)]。WebGPU 也采用这一模型，其规范称这套 API
 从设计之初就以高效映射到 2014 年以后的原生 GPU API 为目标 [[W3C, n.d.](#ref-w3c-webgpu)]。
 
 录制与提交分离之后，构造命令的开销可以在多次提交之间分摊。Vulkan 的命令缓冲录制一次后可以多次提交，
-除非录制时声明了 `VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT` [[Khronos, n.d.](#ref-khronos-vulkan)]；
-WebGPU 的命令缓冲只能提交一次，需要在多次提交中重用的渲染命令改用渲染包 `GPURenderBundle`
+除非录制时声明了 `VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT` [[Khronos, n.d.](#ref-khronos-vulkan)]；WebGPU
+的命令缓冲只能提交一次，需要在多次提交中重用的渲染命令改用渲染包 `GPURenderBundle`
 [[W3C, n.d.](#ref-w3c-webgpu)]。这与 18.1 讨论的 CUDA Graph 是同一种思路：构造一次，执行多次。
 
 显式 API 还改变了多线程的条件。Vulkan 规范写明，它的目标之一是在多个主机线程上取得可扩展的性能：所有命令都
@@ -105,8 +105,8 @@ Direct3D 11，并正在转向基于计算着色器的渲染器 [[Gio, n.d.](#ref
 渲染管线是一条分段的数据流，固定功能阶段与可编程的着色器阶段交替出现。Go 代码只位于其中的应用阶段：在 CPU
 上准备数据并发出绘制调用。由此，图形程序面对两道边界：一道是 18.1 讨论的 FFI 边界，绘制调用就是命令提交，
 减少绘制调用就是减少跨越边界的次数；另一道是语言边界，着色器必须以 GPU 驱动接受的语言或中间表示交付，Kage
-这类语法接近 Go 的着色语言只是把这道边界移进了工具链。绘制调用的固定开销催生了批处理与实例化；Vulkan、
-WebGPU 等显式 API 进一步把命令的录制与提交分开，并允许多个线程分别录制命令缓冲，为 goroutine 参与 CPU
+这类语法接近 Go 的着色语言只是把这道边界移进了工具链。绘制调用的固定开销催生了批处理与实例化；Vulkan、WebGPU
+等显式 API 进一步把命令的录制与提交分开，并允许多个线程分别录制命令缓冲，为 goroutine 参与 CPU
 一侧的编排提供了条件。
 
 下一节讨论第一道边界在图形中的特殊约束：OpenGL 上下文为何与线程绑定，窗口系统为何要求主线程，以及
@@ -140,5 +140,5 @@ WebGPU 等显式 API 进一步把命令的录制与提交分开，并允许多�
 - <a id="ref-w3c-webgpu"></a>[W3C, n.d.] W3C GPU for the Web Working Group. *WebGPU Specification.* W3C
   Candidate Recommendation Draft. https://www.w3.org/TR/webgpu/
   Web 上的显式图形与计算 API；命令缓冲、渲染包与管线模型。与 19.4 相关。
-- 本书 [18.1 跨越 FFI 边界](../ch18gpu/boundary.md)、[18.4 异步编程模型](../ch18gpu/model.md)、
-  [19.2 图形绑定与线程亲和](./bindings.md)。
+- 本书 [18.1 跨越 FFI 边界](../ch18gpu/boundary.md)、[18.4 异步编程模型](../ch18gpu/model.md)、[19.2
+  图形绑定与线程亲和](./bindings.md)。

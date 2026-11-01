@@ -80,8 +80,8 @@ channel 不只传递数据，也同步收发双方。Go 内存模型对 channel 
 这些规则的含义与它们在运行时中的落实，在 [10.6](./lockfree.md) 中讨论。
 
 容量的选择因此首先是语义的选择。需要「对方已经收到」这样的确认时，用无缓冲 channel，会合本身就是确认。
-需要让生产者与消费者在时间上解耦，或者为尚未处理的数据设定上限时，用有缓冲 channel，容量就是这个上限；
-`make(chan struct{}, k)` 配合「发送时占用、接收时释放」，可以把同时进行的任务数限制在 $k$ 以内
+需要让生产者与消费者在时间上解耦，或者为尚未处理的数据设定上限时，用有缓冲 channel，容量就是这个上限；`make(chan struct{}, k)`
+配合「发送时占用、接收时释放」，可以把同时进行的任务数限制在 $k$ 以内
 [[Go Authors, 2026b](#ref-go-authors-2026b)]。缓冲区只能减少较快一方的等待，
 不能让较慢的一方变快（[1.3.5](../../part1overview/ch01intro/csp.md) 中的演示）。把容量设得很大，
 往往只是推迟了阻塞发生的时刻，同时让积压变得不易察觉。容量是需要论证的设计参数，而不是调大就能提速的开关。
@@ -149,8 +149,8 @@ func main() {
 每次都能立即返回零值，`select` 会反复选中它，循环既不会结束，也不会阻塞。
 
 「进入 `select` 时对所有 case 求值」这一条也有陷阱。Ajmani 的例子中，一个 goroutine 想把待发送队列
-`pending` 的第一个元素发出去，于是写下 `case out <- pending[0]`；队列为空时，即使这个 case 不会被选中，
-`pending[0]` 也会在进入 `select` 时求值，导致越界 panic。解决办法同样是 nil channel：没有数据可发时，
+`pending` 的第一个元素发出去，于是写下 `case out <- pending[0]`；队列为空时，即使这个 case 不会被选中，`pending[0]`
+也会在进入 `select` 时求值，导致越界 panic。解决办法同样是 nil channel：没有数据可发时，
 让这个 case 使用一个为 `nil` 的 channel 变量 [[Ajmani, 2013](#ref-ajmani-2013)]。
 
 ```go {run=true}
@@ -208,8 +208,8 @@ guarded: true 42
 规范的修改记录显示了其中的考虑。
 
 最早的规范规定，发往已关闭 channel 的值将被忽略。运行时却对已关闭 channel 上的操作计数，累计约
-500 次之后便以「too many operations on a closed channel」终止程序，而且这一错误无法被 `recover` 捕获。
-Nigel Tao 指出，这样的程序在低负载下工作正常，到了高负载下却会莫名崩溃；向已关闭 channel
+500 次之后便以「too many operations on a closed channel」终止程序，而且这一错误无法被 `recover` 捕获。Nigel
+Tao 指出，这样的程序在低负载下工作正常，到了高负载下却会莫名崩溃；向已关闭 channel
 发送要么应当立即失败，要么应当永远允许 [[Tao, 2011](#ref-tao-2011)]。2011 年 1 月，Russ Cox 选择了前者：
 向已关闭的 channel 发送、重复关闭都立即 panic，而从已关闭的 channel 接收无论多少次都不会 panic
 [[Cox, 2011a](#ref-cox-2011a)]。
@@ -237,8 +237,8 @@ channel 上的收发因此永久阻塞；同一次修改让 nil map 在读取时
 | 2012 年 2 月 | 向已关闭 channel 的发送算作「可以进行」，`select` 可能选中它并因此 panic [[Cox, 2012](#ref-cox-2012)] |
 | 2013 年 7 月 | 规范写明 channel 是先进先出的，并且可以不加同步地被多个 goroutine 并发使用 [[Pike, 2013](#ref-pike-2013)] |
 
-Pike 在 2012 年那次修改的提交说明中写道，这一措辞上的斟酌是为了「安抚有理论倾向的读者」。
-2013 年的修改则把实践中一直依赖的两条性质写进了规范。此后，channel 的核心语义没有再改变；规范中与 channel
+Pike 在 2012 年那次修改的提交说明中写道，这一措辞上的斟酌是为了「安抚有理论倾向的读者」。2013
+年的修改则把实践中一直依赖的两条性质写进了规范。此后，channel 的核心语义没有再改变；规范中与 channel
 相关的修改，都是措辞上的澄清，或泛型引入之后关于类型参数的规则。
 
 ## 延伸阅读
@@ -281,6 +281,6 @@ Pike 在 2012 年那次修改的提交说明中写道，这一措辞上的斟酌
   修复 issue #5911。
 - <a id="ref-tao-2011"></a>[Tao, 2011] Nigel Tao. golang/go#1419. *Sending on a closed channel should fail
   after 0 or ∞ times, not a finite N > 0.* 2011. https://github.com/golang/go/issues/1419
-- 本书 [1.3 通信顺序进程](../../part1overview/ch01intro/csp.md)、
-  [10.6 内存模型与无锁演进](./lockfree.md)、[11.9 内存一致模型](../ch11sync/mem.md)、
-  [10.4 关闭的语义](./close.md)、[10.5 select 的实现](./select.md)。
+- 本书 [1.3 通信顺序进程](../../part1overview/ch01intro/csp.md)、[10.6
+  内存模型与无锁演进](./lockfree.md)、[11.9 内存一致模型](../ch11sync/mem.md)、[10.4
+  关闭的语义](./close.md)、[10.5 select 的实现](./select.md)。

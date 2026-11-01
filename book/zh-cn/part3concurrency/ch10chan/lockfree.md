@@ -22,8 +22,8 @@ goroutine 中，前面的语句在程序次序上先于后面的语句（sequenc
 3. 无缓冲 channel 上的一次接收同步先于对应发送的完成。
 4. 容量为 $C$ 的 channel 上，第 $k$ 次接收同步先于第 $k+C$ 次发送的完成。
 
-规则 1、3、4 的后一半都是某个操作的「完成」，规则 2 中因关闭而返回零值的接收，说的也是这次接收的完成。
-channel 操作可能阻塞，它有开始，也有完成，二者之间可能相隔任意长的时间。规则承诺的是：等到操作完成，
+规则 1、3、4 的后一半都是某个操作的「完成」，规则 2 中因关闭而返回零值的接收，说的也是这次接收的完成。channel
+操作可能阻塞，它有开始，也有完成，二者之间可能相隔任意长的时间。规则承诺的是：等到操作完成，
 即接收拿到值、发送返回时，对方在同步点之前的写入才可见。内存模型中的例子是：
 
 ```go
@@ -164,8 +164,8 @@ golang-dev 和 issue 中引起过多次讨论。我们曾经公开表示它成�
 检测器来检查。
 
 竞态检测器基于 ThreadSanitizer。它为每个 goroutine 维护一个向量时钟，记录这个 goroutine 已经知道的其他
-goroutine 的历史；同步操作在某个地址对应的同步对象中存取时钟，两次访问之间若没有先行发生关系，就报告竞争。
-channel 的规则在 `chan.go` 中都有对应的标注 [[Go Authors, 2026](#ref-go-authors-2026)]：
+goroutine 的历史；同步操作在某个地址对应的同步对象中存取时钟，两次访问之间若没有先行发生关系，就报告竞争。channel
+的规则在 `chan.go` 中都有对应的标注 [[Go Authors, 2026](#ref-go-authors-2026)]：
 
 - 无缓冲 channel 上，收发双方由 `racesync` 互相交换时钟，对应规则 1 与规则 3 的双向同步；
 - 有缓冲 channel 上，每个槽位的地址充当一个同步对象，发送与接收都通过 `racenotify` 对所用的槽位调用
@@ -337,5 +337,5 @@ goroutine；`select` 同样如此 [[Vyukov, 2016b](#ref-vyukov-2016b)]。2022 �
 - <a id="ref-vyukov-2020"></a>[Vyukov, 2020] Dmitry Vyukov. Comment on golang/go#42598, 2020.
   https://github.com/golang/go/issues/42598#issuecomment-731033819
   2020 年 11 月 20 日：主张回滚 CL 220419，误报比漏报糟糕得多。
-- 本书 [10.3 收发与直接传递](./sendrecv.md)、[10.5 select 的实现](./select.md)、
-  [11.9 内存一致模型](../ch11sync/mem.md).
+- 本书 [10.3 收发与直接传递](./sendrecv.md)、[10.5 select 的实现](./select.md)、[11.9
+  内存一致模型](../ch11sync/mem.md).

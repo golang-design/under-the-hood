@@ -93,8 +93,8 @@ P=17 G=1 TaskEnd Time=2837339111473408 ID=1 Parent=18446744073709551615 Type="re
 从这段输出可以还原 `main` 的 10 毫秒是怎样度过的。goroutine 1 在 `main.go:32` 的通道接收处由 `Running`
 转为 `Waiting`，原因是 `chan receive`；goroutine 10 随即开始运行，进入区域 `work`，又因 `sleep` 进入等待。
 约 10.25 毫秒后，goroutine 10 被置为可运行并重新执行，结束区域，然后把 goroutine 1 置为可运行。
-最后这个事件由 goroutine 10 发出，所附的栈指向 `main.go:30` 的 `close(done)`，追踪因此记下了谁唤醒了谁。
-goroutine 1 从可运行到真正开始运行又经过了 1.6 微秒，这是它的调度延迟。`Time` 以纳秒为单位，
+最后这个事件由 goroutine 10 发出，所附的栈指向 `main.go:30` 的 `close(done)`，追踪因此记下了谁唤醒了谁。goroutine
+1 从可运行到真正开始运行又经过了 1.6 微秒，这是它的调度延迟。`Time` 以纳秒为单位，
 上面每一个值都是 64 的倍数，原因见下一小节。
 
 这些信息在 CPU 剖面中无从得到：整个过程中两个 goroutine 实际执行的时间以微秒计，剖面里几乎什么也没有；
@@ -139,9 +139,9 @@ goroutine 1 从可运行到真正开始运行又经过了 1.6 微秒，这是它
 ## 16.3.3 不依赖时钟的定序
 
 每个 M 各写各的缓冲区，事件在追踪数据中的顺序就不再是它们实际发生的顺序。最直接的办法是按时间戳排序，
-但这要求各个核心读到的时钟彼此一致，许多现代 CPU 并不提供这样的保证 [[Knyszek, 2023](#ref-knyszek-2023)]。
-Go 1.5 的追踪器最初正是按 `cputicks` 时间戳为事件定序，在时钟不同步的机器与虚拟机上得到了次序错乱的追踪；
-Go 1.5 发布之前，Cox 把次序改为由全局序号显式记录，时间戳只用于显示 [[Cox, 2015](#ref-cox-2015)]。
+但这要求各个核心读到的时钟彼此一致，许多现代 CPU 并不提供这样的保证 [[Knyszek, 2023](#ref-knyszek-2023)]。Go
+1.5 的追踪器最初正是按 `cputicks` 时间戳为事件定序，在时钟不同步的机器与虚拟机上得到了次序错乱的追踪；Go
+1.5 发布之前，Cox 把次序改为由全局序号显式记录，时间戳只用于显示 [[Cox, 2015](#ref-cox-2015)]。
 全局序号要求每个事件都同步地递增同一个计数器，在多核机器上代价很高。Go 1.7 改用每个 goroutine 各自的序号
 [[Vyukov, 2016](#ref-vyukov-2016)]：goroutine 运行期间不会离开它所在的线程，它自己发出的事件天然有序，
 只有由别处「代为」发出的事件，例如唤醒另一个 goroutine 的 `GoUnblock`，才需要携带序号，以便与该 goroutine
@@ -150,8 +150,8 @@ Go 1.5 发布之前，Cox 把次序改为由全局序号显式记录，时间戳
 
 现行的追踪器沿用了这一思路。每个 G 与 P 各有一个序号计数器，序号写入相关事件，编码出一个偏序，
 计数器在每一代开始时归零；M 不需要序号，因为同一线程写出的事件乃至整个缓冲区，
-在数据流中的顺序就是它们的发出顺序 [[Go Authors, 2026a](#ref-go-authors-2026a)]。上面的事件表中，
-`GoStart` 与 `GoUnblock` 都带有 `goroutine seq` 参数。解析器的算法写在 `internal/trace` 的注释中
+在数据流中的顺序就是它们的发出顺序 [[Go Authors, 2026a](#ref-go-authors-2026a)]。上面的事件表中，`GoStart`
+与 `GoUnblock` 都带有 `goroutine seq` 参数。解析器的算法写在 `internal/trace` 的注释中
 [[Go Authors, 2026d](#ref-go-authors-2026d)]：
 
 ```go
@@ -177,10 +177,10 @@ Go 1.5 发布之前，Cox 把次序改为由全局序号显式记录，时间戳
 ## 16.3.4 分代：从 Go 1.5 到 Go 1.22
 
 执行追踪器由 Vyukov 于 2014 年设计 [[Vyukov, 2014](#ref-vyukov-2014)]，随 Go 1.5 发布，同时提供了
-`go test -trace` 与 `go tool trace` [[Go Authors, 2015](#ref-go-authors-2015)]。此后的几个版本不断扩充它：
-Go 1.11 加入了用户标注 [[Go Authors, 2018](#ref-go-authors-2018)]，Go 1.19 起，同时开启 CPU 剖析时，
-追踪中会包含 CPU 剖析的样本 [[Go Authors, 2022](#ref-go-authors-2022)]。但它的基本结构此后八年多没有改变，
-Knyszek 在 2024 年的博文中把由此带来的问题归纳为四点：开销高；追踪不能伸缩，可能大到无法分析；
+`go test -trace` 与 `go tool trace` [[Go Authors, 2015](#ref-go-authors-2015)]。此后的几个版本不断扩充它：Go
+1.11 加入了用户标注 [[Go Authors, 2018](#ref-go-authors-2018)]，Go 1.19 起，同时开启 CPU 剖析时，
+追踪中会包含 CPU 剖析的样本 [[Go Authors, 2022](#ref-go-authors-2022)]。但它的基本结构此后八年多没有改变，Knyszek
+在 2024 年的博文中把由此带来的问题归纳为四点：开销高；追踪不能伸缩，可能大到无法分析；
 往往不清楚何时开始追踪才能捕捉到某个异常；缺少公开的解析包，只有少数人能以编程方式分析追踪
 [[Knyszek, 2024](#ref-knyszek-2024)]。
 
@@ -351,8 +351,8 @@ func main() {
 执行追踪器记录的是运行时内部的状态转换，本书第三、四部分讨论的调度器
 （[9](../../part3concurrency/ch09sched)）与垃圾回收器（[13](../../part4memory/ch13gc)）的行为，
 都能在追踪中直接看到。它的设计围绕一个约束展开：写事件必须便宜，因此每个线程各写各的缓冲区，事件紧凑编码，
-次序交给序号与解析器重建；Go 1.22 的分代使每一段追踪自包含，追踪由此可以流式处理，也可以只保留最近的一段，
-Go 1.25 的飞行记录仪正是建立在这一性质之上。
+次序交给序号与解析器重建；Go 1.22 的分代使每一段追踪自包含，追踪由此可以流式处理，也可以只保留最近的一段，Go
+1.25 的飞行记录仪正是建立在这一性质之上。
 
 ## 延伸阅读
 
@@ -435,5 +435,5 @@ Go 1.25 的飞行记录仪正是建立在这一性质之上。
 - <a id="ref-vyukov-2016"></a>[Vyukov, 2016] Dmitry Vyukov. runtime: use per-goroutine sequence numbers in
   tracer. Go commit a3703618ea, 2016. https://go.dev/cl/21512
   随 Go 1.7 发布。
-- 本书 [16.5 基准测试与性能剖析](./perf.md)、[16.6 运行时统计量](./metric.md)、
-  [9 调度器](../../part3concurrency/ch09sched)、[13 垃圾回收](../../part4memory/ch13gc)。
+- 本书 [16.5 基准测试与性能剖析](./perf.md)、[16.6 运行时统计量](./metric.md)、[9
+  调度器](../../part3concurrency/ch09sched)、[13 垃圾回收](../../part4memory/ch13gc)。

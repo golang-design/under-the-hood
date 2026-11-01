@@ -54,8 +54,8 @@ slab 分配器的全局锁无法随处理器数目扩展，为它加上了每个
 ## 11.6.2 何时清空
 
 2013 年 1 月，Brad Fitzpatrick 在 issue #4720 中列举了标准库里各自为政的对象复用：`regexp`
-复用匹配用的线程，`fmt` 有自己的空闲缓存，`io.Copy` 的 32 KB 缓冲区出现在 dl.google.com 的性能剖析中，
-dl.google.com 本身每秒分配数百 MB，在加入一个内部的字节池之前频繁触发垃圾回收
+复用匹配用的线程，`fmt` 有自己的空闲缓存，`io.Copy` 的 32 KB 缓冲区出现在 dl.google.com 的性能剖析中，dl.google.com
+本身每秒分配数百 MB，在加入一个内部的字节池之前频繁触发垃圾回收
 [[Fitzpatrick, 2013](#ref-fitzpatrick-2013)]。这种模式在每个包里私下重新实现一遍，而且实现得很差，因此
 Fitzpatrick 希望有一个人人可以复用的好实现。Dmitry Vyukov 随即在讨论中提出一个由 `Get` 与 `Put`
 组成的通用池，随后做出了基于处理器本地数据的原型，起初名为 `sync.Cache`，后来认为 `Pool`
@@ -92,8 +92,8 @@ Fitzpatrick 希望有一个人人可以复用的好实现。Dmitry Vyukov 随即
 ## 11.6.3 按 P 分片
 
 2014 年 1 月，Vyukov 实现了可扩展的 `Pool`：每个 P 有一个固定大小的本地缓存，本地缓存溢出或耗尽时，
-与一个由互斥锁保护的全局缓存成批交换对象 [[Vyukov, 2014a](#ref-vyukov-2014a)]。这与弹匣层的结构如出一辙，
-TCMalloc 的前端缓存按线程或按逻辑 CPU 划分，也是同一思路
+与一个由互斥锁保护的全局缓存成批交换对象 [[Vyukov, 2014a](#ref-vyukov-2014a)]。这与弹匣层的结构如出一辙，TCMalloc
+的前端缓存按线程或按逻辑 CPU 划分，也是同一思路
 [[Ghemawat and Menage, n.d.](#ref-ghemawat-menage-nd)]。同年 4 月，Vyukov 又发现每个 P 至多缓存
 15 个对象、且其他 P 无法取用，若池中缓存的是 2 MB 的大对象，而 `GOMAXPROCS` 设为 32，池最多会浪费 960 MB。
 新的策略是每个 P 只独占一个对象，其余对象在 P 之间共享 [[Vyukov, 2014b](#ref-vyukov-2014b)]。今天每个 P
@@ -119,8 +119,8 @@ type poolLocal struct {
 P 在它的头部存取，其他 P 只能从尾部窃取（[9.2](../ch09sched/steal.md)），所属 P
 的常规存取与偶尔的窃取分处两端，彼此很少争用。`pad` 把每个 `poolLocal` 的大小补齐为 128 字节的整数倍，
 使相邻 P 的本地缓存不会落在同一条缓存行上，避免伪共享
-（[12.2](../../part4memory/ch12alloc/component.md)）。2014 年的实现已有一段 128 字节的填充；2017 年，
-Aliaksandr Valialkin 把它改为补齐到 128 字节的整数倍，在 amd64 上 `poolLocal` 因此从 176 字节缩小到
+（[12.2](../../part4memory/ch12alloc/component.md)）。2014 年的实现已有一段 128 字节的填充；2017 年，Aliaksandr
+Valialkin 把它改为补齐到 128 字节的整数倍，在 amd64 上 `poolLocal` 因此从 176 字节缩小到
 128 字节 [[Valialkin, 2017](#ref-valialkin-2017)]。
 
 `Pool` 的 `local` 字段指向一个按 P 编号索引的 `poolLocal` 数组，`localSize` 记录数组的长度。`Get` 与
@@ -148,8 +148,8 @@ func (p *Pool) pin() (*poolLocal, int) {
 而停止一切需要抢占每个 P，所以固定期间也不会发生垃圾回收。这一点是整个快速路径的基础：`private`
 的读写无需原子操作，与回收时清空池之间的同步，也靠固定本身来保证。
 
-数组只在 `pinSlow` 中分配：第一次使用这个池，或者 `GOMAXPROCS` 变大、当前 P 的编号超出数组长度时，
-`pinSlow` 在全局锁 `allPoolsMu` 下按当前的 `GOMAXPROCS` 分配新数组，先原子地写入 `local`，
+数组只在 `pinSlow` 中分配：第一次使用这个池，或者 `GOMAXPROCS` 变大、当前 P 的编号超出数组长度时，`pinSlow`
+在全局锁 `allPoolsMu` 下按当前的 `GOMAXPROCS` 分配新数组，先原子地写入 `local`，
 再以存储-释放写入 `localSize`；首次分配时，它还把这个池加入名单 `allPools`。`pin` 则按相反的次序，
 先以加载-获取读取 `localSize`，再读 `local`。这是 [11.9](./mem.md) 中消息传递（message passing）的形状：
 读到新的长度，就一定读到不短于它的数组。消息传递只需要获取与释放语义，因此这里用的是运行时内部包
@@ -210,8 +210,8 @@ Clements 在提交说明中解释了这带来的麻烦 [[Clements, 2019a](#ref-c
    这发生在停止一切期间，停顿时间因此与池中对象的总数成正比；
 3. 若要实现 victim 缓存，清空只会更慢。
 
-当时的 `poolCleanup` 确实逐个置空每个池的 `private` 与 `shared` 中的每个元素，注释称之为「防御性地」清零。
-Clements 的办法是把加锁的切片换成无锁结构，`Get` 与 `Put` 在操作分片的整个过程中都保持固定，
+当时的 `poolCleanup` 确实逐个置空每个池的 `private` 与 `shared` 中的每个元素，注释称之为「防御性地」清零。Clements
+的办法是把加锁的切片换成无锁结构，`Get` 与 `Put` 在操作分片的整个过程中都保持固定，
 不再与清空竞争；清空因而无需触碰池中的对象，停止一切期间的工作量降为与池的个数成正比。
 提交说明中模拟停顿的基准测试从 71.0 微秒降到 5.6 微秒。这次修改同时关闭了 issue #22331。那个 issue
 报告的是运行时在同一个函数 `clearpools` 中逐个断开 `sudog` 与 `defer` 缓存链表造成的长时间停顿
@@ -290,8 +290,8 @@ func poolCleanup() {
 }
 ```
 
-运行时在每次回收开始、并发标记之前的停止一切阶段调用它（`runtime.clearpools`）。两张名单各司其职：
-`allPools` 是主缓存非空的池，`oldPools` 是 victim 缓存可能非空的池。整个过程只交换指针，
+运行时在每次回收开始、并发标记之前的停止一切阶段调用它（`runtime.clearpools`）。两张名单各司其职：`allPools`
+是主缓存非空的池，`oldPools` 是 victim 缓存可能非空的池。整个过程只交换指针，
 与池中对象的数目无关。对象的寿命由此确定：放入池中的对象在下一次回收时降入 victim 缓存，
 再下一次回收时被丢弃；在此之前被 `Get` 取走、再 `Put` 回来，它就回到主缓存，重新开始计算。
 
@@ -409,8 +409,8 @@ func main() {
 如今的实现进一步改为只丢弃缓冲区，仍回收打印器本身。
 
 在同一条评论中，Clements 转述了 Rick Hudson 常说的一句话：每一处对 `sync.Pool` 的使用，
-都是对垃圾回收器的一份缺陷报告。垃圾回收器已经改进了许多，但对于高频分配、生命周期明确且无需清零的对象，
-`sync.Pool` 仍可能是显著的优化。它是对回收器不足之处的弥补，引入之前，
+都是对垃圾回收器的一份缺陷报告。垃圾回收器已经改进了许多，但对于高频分配、生命周期明确且无需清零的对象，`sync.Pool`
+仍可能是显著的优化。它是对回收器不足之处的弥补，引入之前，
 应当先用性能剖析确认临时分配确实是瓶颈。
 
 ## 延伸阅读
@@ -481,5 +481,5 @@ func main() {
 - <a id="ref-vyukov-2014b"></a>[Vyukov, 2014b] Dmitriy Vyukov. sync: less agressive local caching in Pool.
   Go commit 8fc6ed4c89, 2014. https://github.com/golang/go/commit/8fc6ed4c8901d13fe1a5aa176b0ba808e2855af5
   每 P 只独占一个对象，随 Go 1.3 发布。
-- 本书 [9.2 工作窃取](../ch09sched/steal.md)、[11.9 内存一致模型](./mem.md)、
-  [12.2 分配器组件](../../part4memory/ch12alloc/component.md)（每 P 缓存与偷取的同源设计）。
+- 本书 [9.2 工作窃取](../ch09sched/steal.md)、[11.9 内存一致模型](./mem.md)、[12.2
+  分配器组件](../../part4memory/ch12alloc/component.md)（每 P 缓存与偷取的同源设计）。

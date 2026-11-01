@@ -103,8 +103,8 @@ $ go build -gcflags=-m -o /dev/null .
 这种变换称为**内联**（inlining）。
 
 内联的代价是代码体积增大、编译时间延长，因此只对小函数进行。编译器以函数体语法树的节点数作为其
-**内联成本**，成本不超过 80 时才内联；函数体中每调用一个不可内联的函数，成本另加 57
-（`cmd/compile/internal/inline/inl.go`）。`-gcflags=-m=2` 会输出成本，例如 3.2.6 将要讨论的
+**内联成本**，成本不超过 80 时才内联；函数体中每调用一个不可内联的函数，成本另加 57（`cmd/compile/internal/inline/inl.go`）。`-gcflags=-m=2`
+会输出成本，例如 3.2.6 将要讨论的
 `larger` 函数：
 
 ```
@@ -116,8 +116,8 @@ $ go build -gcflags=-m -o /dev/null .
 
 80 的预算对所有函数一视同仁，然而程序的运行时间往往集中在少数几个函数上。从 Go 1.21 起，可以把线上采集的
 CPU 性能剖析数据放入主包目录（文件名为 `default.pgo`），编译器据此找出调用最频繁的位置，
-对这些位置把预算放宽到 2000。这种方法称为**性能制导优化**（profile-guided optimization，
-PGO）[[Go Authors, 2026d](#ref-go-authors-2026d)]。
+对这些位置把预算放宽到 2000。这种方法称为**性能制导优化**（profile-guided optimization，PGO）[[Go
+Authors, 2026d](#ref-go-authors-2026d)]。
 
 ## 3.2.4 逃逸分析
 
@@ -125,15 +125,15 @@ PGO）[[Go Authors, 2026d](#ref-go-authors-2026d)]。
 指针指向某个局部变量，这个变量就不能随栈帧消失，只能分配在堆上，在不再被引用之后由垃圾回收器回收。
 
 C 语言把这一问题留给程序员：返回局部变量的地址是一种错误，程序随后会读到已被覆盖的内存。Go 允许
-`return &p`，并保证其安全，办法是由编译器判断每个变量是否会逃出其所在的函数，这称为**逃逸分析**
-（escape analysis）。`escape.go` 开头的注释把需要保证的性质归结为两条不变式：
+`return &p`，并保证其安全，办法是由编译器判断每个变量是否会逃出其所在的函数，这称为**逃逸分析**（escape
+analysis）。`escape.go` 开头的注释把需要保证的性质归结为两条不变式：
 
 1. 指向栈上对象的指针不能存放在堆中；
 2. 指向栈上对象的指针，其生命期不能超过该对象。
 
 编译器构造一张带权有向图：顶点表示变量等存储位置，边表示赋值，边的权重记录沿途取地址与解引用的
-次数。随后检查是否存在一条路径，把某个变量的地址带入堆中或带出函数；若存在，该变量即分配在堆上。
-`escape` 中的 `p` 经 `return &p` 被带出函数，因此报告「moved to heap」。`sum` 的参数 `p` 只被读取了
+次数。随后检查是否存在一条路径，把某个变量的地址带入堆中或带出函数；若存在，该变量即分配在堆上。`escape`
+中的 `p` 经 `return &p` 被带出函数，因此报告「moved to heap」。`sum` 的参数 `p` 只被读取了
 两个字段，报告「does not escape」；这一结论会随包的导出数据一并保存，其他包调用 `sum` 时，同样知道
 把栈上变量的地址传给它是安全的。
 
@@ -264,8 +264,7 @@ b3: <- b1
 源码中的 `m` 变成了三个值：`v7`、`v11` 和汇合处的 `v12`，其中 `v12` 即 φ 函数。`larger` 共经过 54 趟
 处理，其中几趟的效果最为明显：
 
-- `branchelim` 发现两条路径只是为了选出一个值，于是把分支改写为条件选择，三个基本块合并为一个：
-  `v12 = CondSelect <int> v8 v7 v10`；
+- `branchelim` 发现两条路径只是为了选出一个值，于是把分支改写为条件选择，三个基本块合并为一个：`v12 = CondSelect <int> v8 v7 v10`；
 - `lower` 把与体系结构无关的操作替换为 arm64 的指令：比较替换为 `CMP`，条件选择替换为 `CSEL`；
 - `regalloc` 为每个值分配寄存器：`a` 位于 `R0`，`b` 位于 `R1`，结果写回 `R0`。
 
@@ -282,13 +281,13 @@ RET
 
 ## 3.2.7 目标文件与导出数据
 
-编译器写出的目标文件中，除了机器码以及供链接器使用的信息（[3.4](./link.md)），还有一份**导出数据**
-（export data），其中包含其他包导入本包时所需的全部信息：导出的类型与函数签名、可内联的函数体、泛型
+编译器写出的目标文件中，除了机器码以及供链接器使用的信息（[3.4](./link.md)），还有一份**导出数据**（export
+data），其中包含其他包导入本包时所需的全部信息：导出的类型与函数签名、可内联的函数体、泛型
 函数的函数体，以及逃逸分析对每个参数的结论 [[Go Authors, 2026c](#ref-go-authors-2026c)]。
 
 包 Q 导入包 P 时，编译器只读取 P 的导出数据，而不读取 P 的源码。导出数据还包含了 P 的公开接口所涉及
-的、来自更底层的包的信息，因此 Q 对每个直接导入的包只需读取一个文件。C 与 C++ 的做法恰好相反：
-`#include` 把头文件的文本原样插入，同一个头文件在每个包含它的源文件中都要重新解析，而头文件又会
+的、来自更底层的包的信息，因此 Q 对每个直接导入的包只需读取一个文件。C 与 C++ 的做法恰好相反：`#include`
+把头文件的文本原样插入，同一个头文件在每个包含它的源文件中都要重新解析，而头文件又会
 包含其他头文件。Pike 在《Go at Google》中举过 Google 内部的一个例子：一个大型 C++ 程序在展开头文件
 之后，交给编译器的输入约为源码本身的两千倍 [[Pike, 2012](#ref-pike-2012)]。
 
@@ -345,10 +344,10 @@ RET
 - <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. *Profile-guided optimization.*
   https://go.dev/doc/pgo
   `default.pgo` 的用法与 PGO 所做的优化。
-- 本书 [15.1 词法与文法](../../part5toolchain/ch15compile/parse.md)、
-  [15.2 中间表示](../../part5toolchain/ch15compile/ssa.md)、
-  [8.3 类型检查技术](../../part2lang/ch08generics/checker.md)。
-- 本书 [1.1 编程语言的发展](../ch01intro/history.md)、
-  [13.2 写屏障技术](../../part4memory/ch13gc/barrier.md)、
-  [第 14 章 执行栈管理](../../part4memory/ch14stack/readme.md)。
+- 本书 [15.1 词法与文法](../../part5toolchain/ch15compile/parse.md)、[15.2
+  中间表示](../../part5toolchain/ch15compile/ssa.md)、[8.3
+  类型检查技术](../../part2lang/ch08generics/checker.md)。
+- 本书 [1.1 编程语言的发展](../ch01intro/history.md)、[13.2
+  写屏障技术](../../part4memory/ch13gc/barrier.md)、[第
+  14 章 执行栈管理](../../part4memory/ch14stack/readme.md)。
 

@@ -6,8 +6,8 @@ title: "21.2 工具调用与 MCP"
 # 21.2 工具调用与 MCP
 
 [21.1](./loop.md) 把 Agent 归结为一个控制循环，循环中最关键的动作是执行工具。本节讨论工具本身：
-一个工具在机制上是什么，运行时如何把模型的调用请求分发到真正的代码，以及当工具的数量与来源迅速增长时，
-**Model Context Protocol**（MCP）如何用一套协议把工具的接入标准化。从结构上看，工具调用是一次结构化的
+一个工具在机制上是什么，运行时如何把模型的调用请求分发到真正的代码，以及当工具的数量与来源迅速增长时，**Model
+Context Protocol**（MCP）如何用一套协议把工具的接入标准化。从结构上看，工具调用是一次结构化的
 远程过程调用，而编写 RPC 服务是 Go 程序员熟悉的工作。
 
 ## 21.2.1 工具：带 schema 的函数
@@ -67,8 +67,8 @@ connected systems difficult to scale.
 [[Model Context Protocol, 2026](#ref-model-context-protocol-2026)]。MCP 的官方网站还把它比作「AI 应用的
 USB-C 接口」[[Model Context Protocol, n.d.](#ref-model-context-protocol-nd)]。
 
-规范把参与方分为三种角色：**宿主**（host）是发起连接的 AI 应用，**客户端**（client）是宿主内部的连接器，
-**服务器**（server）提供上下文与能力。一个宿主可以创建多个客户端，每个客户端只与一个服务器通信，
+规范把参与方分为三种角色：**宿主**（host）是发起连接的 AI 应用，**客户端**（client）是宿主内部的连接器，**服
+务器**（server）提供上下文与能力。一个宿主可以创建多个客户端，每个客户端只与一个服务器通信，
 二者是一对一的关系 [[Model Context Protocol, 2026](#ref-model-context-protocol-2026)]。
 
 ## 21.2.3 协议机制：JSON-RPC 2.0 与两种传输
@@ -103,8 +103,8 @@ JSON-RPC 消息由**传输**（transport）承载。2026-07-28 修订版定义�
   服务器以单个 JSON 对象，或者以只属于这次请求的 SSE（Server-Sent Events）流作答，
   流中先是与请求相关的通知，最后是响应。它适合远端、共享、需要独立伸缩的工具。
 
-Streamable HTTP 在 2025-03-26 修订版中引入，取代了 2024-11-05 的 HTTP+SSE 传输，后者现已被正式列为弃用。
-2026-07-28 修订版又从 Streamable HTTP 中移除了用于服务器推送的 GET 端点和协议层的会话（`Mcp-Session-Id`
+Streamable HTTP 在 2025-03-26 修订版中引入，取代了 2024-11-05 的 HTTP+SSE 传输，后者现已被正式列为弃用。2026-07-28
+修订版又从 Streamable HTTP 中移除了用于服务器推送的 GET 端点和协议层的会话（`Mcp-Session-Id`
 头）。这样的演进对中间层也有直接影响。pons 是一个代为持有用户凭据、转发工具调用的服务
 [[Ou, 2026a](#ref-ou-2026a)]，它在转发 MCP 请求时，除了当前修订版唯一使用的 POST，仍然接受 GET 与 DELETE，
 以兼容 2025-03-26 至 2025-11-25 各修订版中打开推送流与结束会话的用法：
@@ -124,8 +124,8 @@ stdio 与 Streamable HTTP 的取舍，是 [18.1](../ch18gpu/boundary.md) 中「�
 
 MCP 有官方的 Go SDK（`github.com/modelcontextprotocol/go-sdk`），v1.0.0 发布于 2025 年 9 月 30 日，自
 v1.7.0 起支持 2026-07-28 修订版。它的设计文档写明，仓库最初由 Go 团队与 Anthropic 共同管理；
-文档还解释了为什么把大部分 API 放进单一的 `mcp` 包：这与其他语言的 MCP SDK 不同，却与 `net/http`、
-`net/rpc` 和 `google.golang.org/grpc` 的做法一致，便于在文档与编辑器中查找
+文档还解释了为什么把大部分 API 放进单一的 `mcp` 包：这与其他语言的 MCP SDK 不同，却与 `net/http`、`net/rpc`
+和 `google.golang.org/grpc` 的做法一致，便于在文档与编辑器中查找
 [[modelcontextprotocol, 2026](#ref-modelcontextprotocol-2026)]。
 
 下面是一个只提供一个工具的服务器，基于 SDK 的 v1.8.0，以 Go 1.26.10 构建：
@@ -310,12 +310,12 @@ JSON Schema，并把规范中协议错误与工具错误的区分对应到两种
   *JSON-RPC 2.0 Specification.* 2010（2013 年 1 月 4 日修订）. https://www.jsonrpc.org/specification
   （请求、响应与通知三种消息；通知不带 `id`，接收方不得回复；与传输无关）
 - <a id="ref-json-schema-go-project-authors-2026"></a>[JSON Schema Go Project Authors, 2026] The JSON
-  Schema Go Project Authors. jsonschema-go. https://github.com/google/jsonschema-go, 2026.
-  （由 Go 类型推导 JSON Schema 并据以校验；go-sdk v1.8.0 依赖其 v0.4.3）
+  Schema Go Project Authors. jsonschema-go. https://github.com/google/jsonschema-go, 2026.（由
+  Go 类型推导 JSON Schema 并据以校验；go-sdk v1.8.0 依赖其 v0.4.3）
 - <a id="ref-model-context-protocol-2026"></a>[Model Context Protocol, 2026] Model Context Protocol.
   *Specification,* revision 2026-07-28. https://modelcontextprotocol.io/specification/2026-07-28
-  （本节依据的修订版：JSON-RPC 消息、无状态的请求、`server/discover`、`tools/list` 与 `tools/call`、
-  stdio 与 Streamable HTTP 传输，以及各修订版之间的变更记录；网站首页为 <https://modelcontextprotocol.io/>）
+  （本节依据的修订版：JSON-RPC 消息、无状态的请求、`server/discover`、`tools/list` 与 `tools/call`、stdio
+  与 Streamable HTTP 传输，以及各修订版之间的变更记录；网站首页为 <https://modelcontextprotocol.io/>）
 - <a id="ref-model-context-protocol-nd"></a>[Model Context Protocol, n.d.] Model Context Protocol. *What
   is the Model Context Protocol (MCP)?* https://modelcontextprotocol.io/docs/getting-started/intro
   （官方网站的介绍页，把 MCP 比作 AI 应用的 USB-C 接口）
@@ -323,12 +323,12 @@ JSON Schema，并把规范中协议错误与工具错误的区分对应到两种
   *Official Go SDK.* v1.8.0, 2026. https://github.com/modelcontextprotocol/go-sdk
   （`mcp.NewServer`、`mcp.AddTool`、`ToolHandlerFor`、`StdioTransport`、`session.CallTool`；
   仓库中的 `design/design.md` 说明了单一 `mcp` 包的取舍，以及仓库最初由 Go 团队与 Anthropic 共同管理）
-- <a id="ref-ou-2026a"></a>[Ou, 2026a] Changkun Ou. pons. https://github.com/latere-ai/pons, 2026.
-  （代为持有用户凭据、转发工具调用的服务；经 Streamable HTTP 转发 MCP，凭据不经过调用方）
-- <a id="ref-ou-2026b"></a>[Ou, 2026b] Changkun Ou. limen. https://github.com/latere-ai/limen, 2026.
-  （学习一个人会批准哪些自动执行的动作，并度量每种自动决定出错的频率；尚处于预发布阶段）
-- 本书 [第 10 章 通道与 select](../../part3concurrency/ch10chan/readme.md)、
-  [第 11 章 同步原语与模式](../../part3concurrency/ch11sync/readme.md)、
-  [11.8 上下文](../../part3concurrency/ch11sync/context.md)、
-  [18.1 跨越 FFI 边界](../ch18gpu/boundary.md)、
-  [21.1 Agent 控制循环](./loop.md)、[21.3 流式、背压与取消](./stream.md)。
+- <a id="ref-ou-2026a"></a>[Ou, 2026a] Changkun Ou. pons. https://github.com/latere-ai/pons, 2026.（代
+  为持有用户凭据、转发工具调用的服务；经 Streamable HTTP 转发 MCP，凭据不经过调用方）
+- <a id="ref-ou-2026b"></a>[Ou, 2026b] Changkun Ou. limen. https://github.com/latere-ai/limen, 2026.（学
+  习一个人会批准哪些自动执行的动作，并度量每种自动决定出错的频率；尚处于预发布阶段）
+- 本书 [第 10 章 通道与 select](../../part3concurrency/ch10chan/readme.md)、[第
+  11 章 同步原语与模式](../../part3concurrency/ch11sync/readme.md)、[11.8
+  上下文](../../part3concurrency/ch11sync/context.md)、[18.1
+  跨越 FFI 边界](../ch18gpu/boundary.md)、[21.1
+  Agent 控制循环](./loop.md)、[21.3 流式、背压与取消](./stream.md)。

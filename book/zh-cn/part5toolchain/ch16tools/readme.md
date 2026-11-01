@@ -37,9 +37,9 @@ clever as you can be when you write it, how will you ever debug it?
 
 [16.1](./deadlock.md)、[16.2](./race.md) 与 [16.4](./testing.md) 讨论程序的正确性。[16.1](./deadlock.md)
 讨论运行时如何判定全局死锁，`synctest` 与 goroutine 泄漏剖面如何把检测推广到局部死锁；[16.2](./race.md)
-讨论竞态检测器如何以向量时钟发现缺少同步的内存访问，以及编译器与 ThreadSanitizer 运行时的分工；
-[16.4](./testing.md) 讨论 `go test` 如何把测试约定变成可执行程序，以及表驱动测试、子测试与模糊测试。
-[16.3](./trace.md)、[16.5](./perf.md) 与 [16.6](./metric.md) 讨论如何观察运行中的程序：
+讨论竞态检测器如何以向量时钟发现缺少同步的内存访问，以及编译器与 ThreadSanitizer 运行时的分工；[16.4](./testing.md)
+讨论 `go test` 如何把测试约定变成可执行程序，以及表驱动测试、子测试与模糊测试。[16.3](./trace.md)、[16.5](./perf.md)
+与 [16.6](./metric.md) 讨论如何观察运行中的程序：
 执行追踪按时间顺序记录调度、垃圾回收与系统调用事件；基准测试、`benchstat` 与剖析回答「有多快」
 「是否真的变了」与「时间花在哪里」；运行时指标以很低的开销持续报告堆、回收与调度器的状态，
 供监控系统长期保存与告警。[16.7](./gopls.md) 讨论语言服务协议与 gopls，即编辑器中的语义功能如何建立在

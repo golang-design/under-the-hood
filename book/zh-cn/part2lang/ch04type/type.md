@@ -230,13 +230,13 @@ p.SetFloat(7.1)                 // x 变为 7.1；对不可寻址的 v 调用则
 
 ## 4.1.5 指针位图：描述符如何支持精确扫描
 
-描述符中的 `GCData` 与 `PtrBytes` 供垃圾回收器（[第 13 章](../../part4memory/ch13gc/readme.md)）使用。
-Go 的垃圾回收器是**精确的**（precise）：扫描一个对象时，它必须确切知道哪些字是指针、哪些是普通数据，
+描述符中的 `GCData` 与 `PtrBytes` 供垃圾回收器（[第 13 章](../../part4memory/ch13gc/readme.md)）使用。Go
+的垃圾回收器是**精确的**（precise）：扫描一个对象时，它必须确切知道哪些字是指针、哪些是普通数据，
 不能把一个恰好形似地址的整数当作指针追踪。这一信息正由类型描述符提供。
 
 `GCData` 通常指向一张**指针位图**（pointer mask）：每一位对应该类型的一个字，1 表示指针，0 表示非指针，
-位图的长度至少覆盖 `PtrBytes`。回收器扫描一个对象时，按其描述符取出这张位图，逐位决定是否追踪。
-`PtrBytes` 给出了一个上界：该类型的指针只可能出现在前 `PtrBytes` 个字节之内，其后都是普通数据，扫描到此
+位图的长度至少覆盖 `PtrBytes`。回收器扫描一个对象时，按其描述符取出这张位图，逐位决定是否追踪。`PtrBytes`
+给出了一个上界：该类型的指针只可能出现在前 `PtrBytes` 个字节之内，其后都是普通数据，扫描到此
 即可结束。一个末尾是大数组的结构体，因此可以省去相当一部分扫描。
 
 ```mermaid
@@ -286,8 +286,7 @@ Java 那样为每个对象附加元数据。类型信息集中在每个类型唯
 - <a id="ref-cox-2009"></a>[Cox, 2009] Russ Cox. "Go Data Structures: Interfaces." 2009.
   https://research.swtch.com/interfaces
   接口值与类型描述符内存布局的早期说明。
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `internal/abi/type.go`、
-  `internal/abi/iface.go`.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `internal/abi/type.go`、`internal/abi/iface.go`.
   https://github.com/golang/go/blob/release-branch.go1.26/src/internal/abi/type.go
   https://github.com/golang/go/blob/master/src/internal/abi/type.go
   Go 1.26 的类型描述符与接口布局，各标志位的含义见其注释。

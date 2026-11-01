@@ -432,9 +432,9 @@ $ go build -gcflags='-m -l' tags.go
 ## 15.5.6 演变
 
 Go 的逃逸分析始于 2011 年 8 月。Luuk van Dijk 在 C 语言编写的编译器 `gc` 中加入了 `esc.c`，起初需要用
-`-s` 开启，`-m` 用于查看结果 [[van Dijk, 2011](#ref-van-dijk-2011)]。四天之后，Russ Cox 将其改为默认开启，
-`-s` 改为关闭这项分析，并在安全时把 `new(T)` 与切片字面量改写为栈上的分配 [[Cox, 2011](#ref-cox-2011)]。
-Go 1 发布时即包含这一分析。Go 1.5 中编译器由 C 自动翻译为 Go（[15.7](./future.md)），`esc.c` 成为
+`-s` 开启，`-m` 用于查看结果 [[van Dijk, 2011](#ref-van-dijk-2011)]。四天之后，Russ Cox 将其改为默认开启，`-s`
+改为关闭这项分析，并在安全时把 `new(T)` 与切片字面量改写为栈上的分配 [[Cox, 2011](#ref-cox-2011)]。Go
+1 发布时即包含这一分析。Go 1.5 中编译器由 C 自动翻译为 Go（[15.7](./future.md)），`esc.c` 成为
 `esc.go`，算法基本不变：从一个代表一切外部去处的「汇点」出发，沿流图传播「逃逸层级」。
 
 此后几年，这份代码在修补中变得难以理解。2017 年 12 月，Matthew Dempsky 提交了 issue #23109，开头写道：
@@ -445,8 +445,8 @@ Go 1 发布时即包含这一分析。Go 1.5 中编译器由 C 自动翻译为 G
 [[Dempsky, 2019a](#ref-dempsky-2019a)]。新实现在 Go 1.13 中默认启用
 [[Dempsky, 2019b](#ref-dempsky-2019b)]。发布说明提醒，更高的精度可能使恰好能够运行的非法代码出错，
 例如违反 `unsafe.Pointer` 规则的代码 [[Go Authors, 2019](#ref-go-authors-2019)]。
-旧实现保留了一个版本的退路，在 Go 1.14 中删除 [[Dempsky, 2019c](#ref-dempsky-2019c)]。2020 年 12 月，
-`dev.regabi` 分支把庞大的 `gc` 包拆分为若干子包，逃逸分析成为独立的 `cmd/compile/internal/escape`，随 Go
+旧实现保留了一个版本的退路，在 Go 1.14 中删除 [[Dempsky, 2019c](#ref-dempsky-2019c)]。2020 年 12 月，`dev.regabi`
+分支把庞大的 `gc` 包拆分为若干子包，逃逸分析成为独立的 `cmd/compile/internal/escape`，随 Go
 1.17 发布 [[Cox, 2020](#ref-cox-2020)]。
 
 近几个版本的改进不再改动这一模型，而是在它的结论之上扩展栈分配的范围，主要集中在切片上。此前，
@@ -567,10 +567,10 @@ collect(100)：5 次堆分配
 ```
 
 `checksum` 在 n 不超过 32 时完全不分配。`collect` 的元素为 8 字节，栈上的缓冲区可以容纳 4 个元素：n
-不超过 4 时，唯一的一次分配是返回前的 `move2heap`；n 为 5 时，第 5 次 `append` 已把切片扩容到堆上，
-`move2heap` 无须再复制；n 为 100 时，省去的是扩容序列中最早的几次分配。以
-`-gcflags=all=-d=variablemakehash=n` 关闭这类栈分配后重新编译，`collect` 四行的结果依次变为 3、3、4、
-8 次，`checksum` 四行均为 1 次。用 `-race` 构建时，`append` 改由 walk 展开为插桩所需的旧形式，`collect`
+不超过 4 时，唯一的一次分配是返回前的 `move2heap`；n 为 5 时，第 5 次 `append` 已把切片扩容到堆上，`move2heap`
+无须再复制；n 为 100 时，省去的是扩容序列中最早的几次分配。以
+`-gcflags=all=-d=variablemakehash=n` 关闭这类栈分配后重新编译，`collect` 四行的结果依次变为 3、3、4、8
+次，`checksum` 四行均为 1 次。用 `-race` 构建时，`append` 改由 walk 展开为插桩所需的旧形式，`collect`
 的这项优化不再生效。Go 1.25 的发布说明提醒，这类优化可能放大错误使用 `unsafe.Pointer` 的后果；
 两个版本的发布说明都给出了用 `bisect` 工具（`-compile=variablemake`）定位问题分配的方法
 [[Go Authors, 2025](#ref-go-authors-2025)] [[Go Authors, 2026e](#ref-go-authors-2026e)]。
@@ -584,8 +584,8 @@ collect(100)：5 次堆分配
 
 逃逸分析是保守的：无法证明不逃逸的位置，一律分配在堆上。放到堆上总是安全的，错放到栈上则会留下悬垂指针，
 两种错误的代价并不对称。15.5.2 与 15.5.4 已经给出了几种典型的保守情形：经由指针或切片元素的写入、
-经由接口的方法调用、没有函数体的函数。此外还有大小的限制：显式声明的变量超过 128 KiB、隐式的分配（`new`、
-`&T{}`、常量大小的 `make` 等）超过 64 KiB 时，诊断输出注明「too large for stack」，编译选项
+经由接口的方法调用、没有函数体的函数。此外还有大小的限制：显式声明的变量超过 128 KiB、隐式的分配（`new`、`&T{}`、
+常量大小的 `make` 等）超过 64 KiB 时，诊断输出注明「too large for stack」，编译选项
 `-smallframes` 把两个上限分别降为 64 KiB 与 16 KiB。上限定义在 `cmd/compile/internal/ir/cfg.go` 中，
 判定由 `escape` 包的 `HeapAllocReason` 完成 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
 
@@ -670,9 +670,9 @@ collect(100)：5 次堆分配
 - <a id="ref-van-dijk-2011"></a>[van Dijk, 2011] Luuk van Dijk. gc: Escape analysis. Go commit 847b61b554,
   2011. https://golang.org/cl/4634073
   随 Go 1 发布。
-- 本书 [3.2.4 逃逸分析](../../part1overview/ch03life/compile.md)（问题的引入与两条不变式）、
-  [13 垃圾回收](../../part4memory/ch13gc/readme.md)与
-  [13.8 分代假设与代际回收](../../part4memory/ch13gc/generational.md)（逃逸分析为何削弱分代红利）、
-  [14.4 栈的拷贝与指针调整](../../part4memory/ch14stack/copy.md)（栈会移动，故外部持有的地址必须逃逸）、
-  [15.3 优化器](./optimize.md)（逃逸分析在编译流水线中的位置）、
-  [16.5 基准测试与性能剖析](../ch16tools/perf.md)（先测后调）。
+- 本书 [3.2.4 逃逸分析](../../part1overview/ch03life/compile.md)（问题的引入与两条不变式）、[13
+  垃圾回收](../../part4memory/ch13gc/readme.md)与
+  [13.8 分代假设与代际回收](../../part4memory/ch13gc/generational.md)（逃逸分析为何削弱分代红利）、[14.4
+  栈的拷贝与指针调整](../../part4memory/ch14stack/copy.md)（栈会移动，故外部持有的地址必须逃逸）、[15.3
+  优化器](./optimize.md)（逃逸分析在编译流水线中的位置）、[16.5
+  基准测试与性能剖析](../ch16tools/perf.md)（先测后调）。

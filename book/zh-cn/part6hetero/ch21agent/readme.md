@@ -20,5 +20,5 @@ goroutine」与集中编排之间的取舍；21.2 讨论工具调用如何分发
 schema；21.3 讨论流式词元（token）的逐段处理、慢消费者带来的背压，以及一次取消如何沿着 context
 穿过层层工具调用，直到另一个进程中的工具处理函数。第三部分的通道
 （[第 10 章](../../part3concurrency/ch10chan/readme.md)）、同步原语与
-context（[第 11 章](../../part3concurrency/ch11sync/readme.md)、
-[11.8](../../part3concurrency/ch11sync/context.md)）是本章反复使用的工具。
+context（[第 11 章](../../part3concurrency/ch11sync/readme.md)、[11.8](../../part3concurrency/ch11sync/context.md)）
+是本章反复使用的工具。

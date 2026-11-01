@@ -5,8 +5,8 @@ title: "18.1 跨越 FFI 边界"
 
 # 18.1 跨越 FFI 边界
 
-[15.6](../../part5toolchain/ch15compile/cgo.md) 分析了一次 cgo 调用的全过程：切换到系统栈、
-`entersyscall`、按 C 的调用约定调用、`exitsyscall`。按该节在 Apple M5 Pro 上的测量（以 Go 1.26.10 为准），
+[15.6](../../part5toolchain/ch15compile/cgo.md) 分析了一次 cgo 调用的全过程：切换到系统栈、`entersyscall`、
+按 C 的调用约定调用、`exitsyscall`。按该节在 Apple M5 Pro 上的测量（以 Go 1.26.10 为准），
 一次空的 C 调用约 16 ns，是一次不内联的 Go 调用（约 2 ns）的 8 倍左右，接近一个数量级；若 C 函数再回调
 Go，开销约为 72 ns。由此得出的建议是：cgo 适合少量、粗粒度的调用，不宜出现在热点循环中。
 
@@ -217,13 +217,13 @@ Go，却不能代替程序向 GPU 提交命令。
 
 **其四，进程外：把边界移出进程。** 当所需的能力可以作为独立服务提供时，就不必把它链接进同一个进程。把 GPU
 推理放进一个独立的服务进程（通常用 C++ 或 Python 编写，直接调用 CUDA），Go 一侧经 gRPC
-或共享内存与之通信。Go 进程中不再有 cgo，边界从进程内的 FFI 变为进程间通信，代价是序列化与跨进程的拷贝。
-[第 20 章](../ch20inference/readme.md)会反复看到这种部署形态：Go 负责服务与编排，
+或共享内存与之通信。Go 进程中不再有 cgo，边界从进程内的 FFI 变为进程间通信，代价是序列化与跨进程的拷贝。[第
+20 章](../ch20inference/readme.md)会反复看到这种部署形态：Go 负责服务与编排，
 直接与设备打交道的部分隔离在另一个进程中。accel 的设计文档在否决「经子进程或 IPC 绑定 C 库」时给出的理由，
 恰好划出了这一档的适用范围：逐次调用的延迟使它无法用于 kernel 级的提交 [[Ou, 2026b](#ref-ou-2026b)]。
 
-把四档放在一起看：cgo 与 purego 以函数为粒度跨界，最直接，但有运行期的跨界开销，cgo 还有构建期的代价；
-Wasm 免除了 cgo，但带来 Wasm 自身的开销，且无法访问 GPU；纯 Go 重写没有边界，但需要重写，且常常更慢；
+把四档放在一起看：cgo 与 purego 以函数为粒度跨界，最直接，但有运行期的跨界开销，cgo 还有构建期的代价；Wasm
+免除了 cgo，但带来 Wasm 自身的开销，且无法访问 GPU；纯 Go 重写没有边界，但需要重写，且常常更慢；
 进程外的方案最为隔离，但每次交互都要序列化，只适合粗粒度的请求。选择哪一档，取决于调用的频率、数据的规模、
 是否必须直接访问 GPU，以及对纯 Go 工具链的重视程度。即使最终选择了 cgo，运行期的开销也在下降：Go 1.26 把
 cgo 调用的基础运行时开销降低了约 30% [[Go Authors, 2026a](#ref-go-authors-2026a)]，[18.2](./sched.md)
@@ -282,9 +282,9 @@ GPU 使 15.6「减少跨界」的建议成为设计的主线：GPU 的工作负�
   Go.* <https://wazero.io/>，及 *ncruces/go-sqlite3*（把 SQLite 编成 Wasm 跑进纯 Go）
   https://github.com/ncruces/go-sqlite3
   纯 Go、不含 cgo 的 Wasm 运行时，绕开 cgo 运行 C 库的代表作。go-sqlite3 自 v0.33 起改用 wasm2go。
-- 本书 [15.6 cgo](../../part5toolchain/ch15compile/cgo.md)、
-  [2.3 调用约定与寄存器 ABI](../../part1overview/ch02asm/callconv.md)、
-  [18.2 调度器与阻塞的外部调用](./sched.md)、
-  [18.3 显存与垃圾回收的分界](./memory.md)、
-  [19.3 软件渲染与并行](../ch19graphics/software.md)、
-  [第 20 章 推理服务](../ch20inference/readme.md)。
+- 本书 [15.6 cgo](../../part5toolchain/ch15compile/cgo.md)、[2.3
+  调用约定与寄存器 ABI](../../part1overview/ch02asm/callconv.md)、[18.2
+  调度器与阻塞的外部调用](./sched.md)、[18.3
+  显存与垃圾回收的分界](./memory.md)、[19.3
+  软件渲染与并行](../ch19graphics/software.md)、[第
+  20 章 推理服务](../ch20inference/readme.md)。

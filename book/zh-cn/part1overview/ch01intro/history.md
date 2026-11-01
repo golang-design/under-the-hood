@@ -52,8 +52,8 @@ Ken Thompson 与 Dennis Ritchie 共同开发了 Unix [[Kernighan, 2019](#ref-ker
 在苏黎世联邦理工学院（ETH Zürich）获得博士学位，Niklaus Wirth 正是在那里设计了 Pascal、Modula-2 与
 Oberon；此后 Griesemer 参与过 Java 的 HotSpot 虚拟机与 Chrome 的 V8 JavaScript 引擎的开发。
 
-Go 的官方 FAQ 这样概括 Go 的渊源：基本语法属于 C 语言一族；声明与包的设计大量借鉴了 Pascal、Modula、
-Oberon 一族；并发的思想则来自受 Hoare 的 CSP 启发的语言，如 Newsqueak 与 Limbo
+Go 的官方 FAQ 这样概括 Go 的渊源：基本语法属于 C 语言一族；声明与包的设计大量借鉴了 Pascal、Modula、Oberon
+一族；并发的思想则来自受 Hoare 的 CSP 启发的语言，如 Newsqueak 与 Limbo
 [[Go Authors, 2026](#ref-go-authors-2026)]。这三个来源与三位设计者的经历大致对应
 [[Donovan and Kernighan, 2015](#ref-donovan-kernighan-2015)]：
 
@@ -109,8 +109,8 @@ Pike 在 2012 年的演讲《Less is exponentially more》中阐述了 Go 的设
 特性之间的规则正属于次要问题，而且要由每一个使用这门语言的人承担。Tony Hoare 在 1980 年的图灵奖演讲中说
 [[Hoare, 1981](#ref-hoare-1981)]：「构建软件设计的方法有两种：一种是把软件做得很简单，
 以至于明显找不到缺陷；另一种是把它做得很复杂，以至于找不到明显的缺陷。第一种方法要难得多。」Wirth 在
-1995 年的《A Plea for Lean Software》中援引 Martin Reiser 的观察：软件变慢的速度快于硬件变快的速度；
-Wirth 以自己与 Jürg Gutknecht 开发的 Oberon 系统作为反例：一个完整的操作系统连同编译器，
+1995 年的《A Plea for Lean Software》中援引 Martin Reiser 的观察：软件变慢的速度快于硬件变快的速度；Wirth
+以自己与 Jürg Gutknecht 开发的 Oberon 系统作为反例：一个完整的操作系统连同编译器，
 规模小到可以在一本书（《Project Oberon》）中从头到尾讲解清楚 [[Wirth, 1995](#ref-wirth-1995)]。
 
 ## 1.1.4 新特性必须证明其价值

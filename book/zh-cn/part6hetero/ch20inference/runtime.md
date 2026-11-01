@@ -24,8 +24,8 @@ v0.40.13 版的 `go.mod` 声明 `go 1.26.10` [[Ollama, n.d.](#ref-ollama-nd)]。
 
 ## 20.1.2 接入原生推理运行时
 
-矩阵乘法、注意力、反量化这些消耗算力的计算，Go 并不亲自完成，而是交给一个**推理运行时**：
-llama.cpp 及其张量库 ggml（C/C++）[[Gerganov et al., n.d.](#ref-gerganov-nd)]、
+矩阵乘法、注意力、反量化这些消耗算力的计算，Go 并不亲自完成，而是交给一个**推理运行时**：llama.cpp
+及其张量库 ggml（C/C++）[[Gerganov et al., n.d.](#ref-gerganov-nd)]、
 以 C API 对外提供接口的 ONNX Runtime [[Microsoft, n.d.](#ref-microsoft-nd)]，或 Apple 的 MLX。
 这些运行时针对 CPU 的 SIMD 指令与各类 GPU 后端做了深度优化。Go 接入它们，最直接的方式仍然是 cgo。
 
@@ -43,8 +43,8 @@ by running `go clean -cache` first.
 ```
 
 即：Ollama 含有经 CGO 编译的原生代码，这些数据结构偶尔会变化，CGO 可能因此失去同步，导致意外崩溃；先执行
-`go clean -cache` 即可强制完整重建原生代码。这是一个构建层面的问题，根源在 Go 构建缓存的设计。
-`go help cache` 写明，构建缓存能正确跟踪 Go 源文件、编译器与编译选项的变化，但不检测经 cgo 引入的 C
+`go clean -cache` 即可强制完整重建原生代码。这是一个构建层面的问题，根源在 Go 构建缓存的设计。`go help cache`
+写明，构建缓存能正确跟踪 Go 源文件、编译器与编译选项的变化，但不检测经 cgo 引入的 C
 库的变化；C 库变化之后，需要显式清理缓存或使用 `-a` 强制重建。在 `cmd/go` 的实现中，参与计算动作 ID
 的只有包目录内的文件（Go、C、头文件等），包目录之外被 `#include` 的头文件不在其中（以 Go 1.26 为准）。cgo
 把两种语言的类型定义绑在一起，而 Go 工具链只看得见其中一半。
@@ -91,8 +91,8 @@ flowchart LR
 **其二，KV 缓存是每个序列的大块状态。** 自回归生成时，模型在每一步都要读回此前所有位置的键与值，
 运行时因此为每个序列维护一份 KV 缓存。每个位置的开销为 $2 \times \text{层数} \times \text{KV 头数} \times
 \text{头维度} \times \text{每元素字节数}$。以 Qwen3-4B 为例（36 层、8 个 KV 头、头维度 128），按 f16
-存储时每个位置约 144 KiB，4096 个位置约 576 MiB [[Ou, 2026a](#ref-ou-2026a)]。这块内存同样由运行时管理，
-Go 一侧只持有一个句柄或序列编号。
+存储时每个位置约 144 KiB，4096 个位置约 576 MiB [[Ou, 2026a](#ref-ou-2026a)]。这块内存同样由运行时管理，Go
+一侧只持有一个句柄或序列编号。
 
 **其三，跨越边界的只有小数据。** 输入的词元 ID、每一步的 logits 或采样结果、最终的文本，
 与权重相比都是小量，复制过边界并无大碍。采样放在哪一侧会影响跨界的数据量：采样在运行时内部完成时，
@@ -164,8 +164,8 @@ case err := <-serveErr:
 
 **同一进程，不用 C 工具链。** Forma 以 `CGO_ENABLED=0` 构建，不依赖 C++ 运行时、Python 或厂商 SDK
 [[Ou, 2026a](#ref-ou-2026a)]。模型被描述为一张计算图，由 accel 编译并在 CPU 后端或 Metal 上执行
-[[Ou, 2026b](#ref-ou-2026b)]；accel 借助 purego 在运行时调用 `objc_msgSend` 驱动 Metal。需要说清的是，
-purego 通过 `go:linkname` 使用运行时的 `runtime.cgocall` 完成调用
+[[Ou, 2026b](#ref-ou-2026b)]；accel 借助 purego 在运行时调用 `objc_msgSend` 驱动 Metal。需要说清的是，purego
+通过 `go:linkname` 使用运行时的 `runtime.cgocall` 完成调用
 [[Ebitengine, n.d.](#ref-ebitengine-nd)]，因此它消除的是构建期的成本，运行期的状态切换依然存在，这一点
 18.1 已有讨论。Forma 目前处于早期阶段，没有发布标签：在一台 8 核的 Apple 芯片机器上，Qwen3-0.6B 以 f16
 运行单个会话，解码约每秒 18 个词元，首词元时间约 170 ms；CPU 后端结果正确，但速度远不足以提供服务；尚未与
@@ -184,8 +184,8 @@ vLLM 做过对比 [[Ou, 2026a](#ref-ou-2026a)]。它代表光谱上的一端：�
 
 模型训练完成之后，服务它是一个系统问题，这是 Go 进入 AI 推理与服务层的原因。但 Go 并不亲自计算张量，它经
 cgo、子进程或 purego 接入原生运行时，第 18 章的边界连同它的代价随之回归：粗粒度调用的纪律、构建期的 C
-工具链、Go 构建缓存看不见的 C 依赖，以及运行期的跨界开销。内存上，数 GB 的权重经 mmap 映射或写入设备缓冲，
-KV 缓存与激活值也都留在原生一侧，Go 只传递句柄、词元与 logits，原生内存则以确定的作用域释放。
+工具链、Go 构建缓存看不见的 C 依赖，以及运行期的跨界开销。内存上，数 GB 的权重经 mmap 映射或写入设备缓冲，KV
+缓存与激活值也都留在原生一侧，Go 只传递句柄、词元与 logits，原生内存则以确定的作用域释放。
 进程边界放在哪里决定了系统拓扑：Ollama 与 Fornax 把原生引擎放进子进程，Forma 则选择不用 C 工具链。
 
 权重与张量安顿好之后，[20.2](./tokenize.md) 讨论数据本身：一段文本如何切分为词元、又如何还原为文本，
@@ -199,8 +199,8 @@ KV 缓存与激活值也都留在原生一侧，Go 只传递句柄、词元与 l
 - <a id="ref-gerganov-nd"></a>[Gerganov et al., n.d.] Georgi Gerganov 等. *llama.cpp 与 ggml.*
   https://github.com/ggml-org/llama.cpp ，https://github.com/ggml-org/ggml
   C/C++ 张量运行时、GGUF 权重格式与 `mmap` 加载、KV 缓存。
-- <a id="ref-ggml-org-2026a"></a>[ggml-org, 2026a] ggml-org. *llama.cpp b11963*（提交 39febd2adb）：
-  `include/llama.h` 中的 `llama_load_mode` 与 `tools/server/README.md`. 2026.
+- <a id="ref-ggml-org-2026a"></a>[ggml-org, 2026a] ggml-org. *llama.cpp b11963*（提交 39febd2adb）：`include/llama.h`
+  中的 `llama_load_mode` 与 `tools/server/README.md`. 2026.
   https://github.com/ggml-org/llama.cpp/blob/b11963/tools/server/README.md
 - <a id="ref-ggml-org-2026b"></a>[ggml-org, 2026b] ggml-org. *GGUF.* ggml v0.28.0（提交 facdc44a67），
   2026. https://github.com/ggml-org/ggml/blob/v0.28.0/docs/gguf.md
@@ -234,7 +234,7 @@ KV 缓存与激活值也都留在原生一侧，Go 只传递句柄、词元与 l
 - <a id="ref-vllm-nd"></a>[vLLM, n.d.] vLLM. *vLLM: Easy, Fast, and Cheap LLM Serving.*
   https://docs.vllm.ai/
   进程外推理服务的代表，Go 经 RPC 接入的对端。
-- 本书 [15.6 cgo](../../part5toolchain/ch15compile/cgo.md)、
-  [18.1 跨越 FFI 边界](../ch18gpu/boundary.md)、[18.2 调度器与阻塞的外部调用](../ch18gpu/sched.md)、
-  [18.3 显存与垃圾回收的分界](../ch18gpu/memory.md)、[20.2 分词与张量](./tokenize.md)、
-  [20.3 服务、批处理与流式](./serving.md)。
+- 本书 [15.6 cgo](../../part5toolchain/ch15compile/cgo.md)、[18.1
+  跨越 FFI 边界](../ch18gpu/boundary.md)、[18.2 调度器与阻塞的外部调用](../ch18gpu/sched.md)、[18.3
+  显存与垃圾回收的分界](../ch18gpu/memory.md)、[20.2 分词与张量](./tokenize.md)、[20.3
+  服务、批处理与流式](./serving.md)。

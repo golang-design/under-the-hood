@@ -108,8 +108,8 @@ func gcScanFinalizer(spf *specialfinalizer, s *mspan, gcw *gcWork) {
 		}
 ```
 
-置位标记位使清扫把这个对象当作存活对象保留下来，这就是**复活**（resurrection）。终结器记录随即被摘下，
-`freeSpecial` 对它调用 `queuefinalizer`，把对象与终结函数放入队列 `finq`；
+置位标记位使清扫把这个对象当作存活对象保留下来，这就是**复活**（resurrection）。终结器记录随即被摘下，`freeSpecial`
+对它调用 `queuefinalizer`，把对象与终结函数放入队列 `finq`；
 同一对象上的弱指针句柄则被清零（13.10.4）。`queuefinalizer` 若在标记期间被调用，会直接抛出致命错误：
 运行时假定终结器队列在标记期间不会增长，从而无须在标记终止时重新扫描它
 [[Go Authors, 2026c](#ref-go-authors-2026c)]。队列由 `persistentalloc` 在堆外分配的块组成，
@@ -168,9 +168,9 @@ func runFinalizers() {
 终结器在另一个 goroutine 中运行，因而与程序的其余部分构成并发。Vyukov 在 2014 年的 issue #9442 中指出，
 二者之间的同步关系没有定义，并提议写明 `SetFinalizer` 先行发生于终结器开始执行
 [[Vyukov, 2014](#ref-vyukov-2014)]。2022 年修订的 Go 内存模型采纳了这一条：对 `SetFinalizer(x, f)`
-的调用同步先于终结调用 `f(x)`
-（[11.9](../../part3concurrency/ch11sync/mem.md)）[[Go Authors, 2022b](#ref-go-authors-2022b)]。
-`SetFinalizer` 的文档同时提醒，`KeepAlive(x)` 或对 `x` 的其他使用并不保证同步先于 `f(x)`，终结器若要访问
+的调用同步先于终结调用 `f(x)`（[11.9](../../part3concurrency/ch11sync/mem.md)）[[Go
+Authors, 2022b](#ref-go-authors-2022b)]。`SetFinalizer`
+的文档同时提醒，`KeepAlive(x)` 或对 `x` 的其他使用并不保证同步先于 `f(x)`，终结器若要访问
 `x` 中可变的状态，仍需使用互斥锁或原子操作 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
 
 把上述两步连起来，一个带终结器的对象从不可达到被释放，至少跨越两轮回收：
@@ -282,12 +282,12 @@ func main() {
   第 2 轮：无
 ```
 
-第一组结果说明终结器按依赖顺序运行。第 1 轮标记时，a 的终结器记录作为根，标记了 a 引用的 b，进而标记了 c；
-b 与 c 虽然也带终结器，但已被标记，于是清扫只复活 a 并将其终结器排队。a 的终结器运行之后，
+第一组结果说明终结器按依赖顺序运行。第 1 轮标记时，a 的终结器记录作为根，标记了 a 引用的 b，进而标记了 c；b
+与 c 虽然也带终结器，但已被标记，于是清扫只复活 a 并将其终结器排队。a 的终结器运行之后，
 再没有任何对象引用 b，第 2 轮中 b 成为唯一未被标记的带终结器对象，第 3 轮轮到 c。文档对此的表述是：
 若 A 指向 B，两者都有终结器且别处不可达，则只有 A 的终结器运行，A 被释放之后，B 的终结器才能运行
-[[Go Authors, 2026a](#ref-go-authors-2026a)]。代价是一条长度为 $n$ 的链至少需要 $n$ 轮回收才能清理完毕，
-GC 指南因此建议让带终结器的结构保持浅层 [[Go Authors, 2022a](#ref-go-authors-2022a)]。
+[[Go Authors, 2026a](#ref-go-authors-2026a)]。代价是一条长度为 $n$ 的链至少需要 $n$ 轮回收才能清理完毕，GC
+指南因此建议让带终结器的结构保持浅层 [[Go Authors, 2022a](#ref-go-authors-2022a)]。
 
 第三组结果说明环为何无法回收。x 的终结器记录标记了 x 引用的 y，y 的终结器记录又标记了 x，
 二者在每一轮都被标记，既不会被复活，也不会被释放，终结器永远不会运行。文档的表述是：
@@ -304,8 +304,8 @@ channel 发送出去，使对象真正恢复可达。此时对象已没有终结
 
 终结器运行的时机同样无法预料。它取决于下一轮回收何时开始、清扫何时处理到对象所在的 span，
 以及终结器 goroutine 何时得到调度。文档明确表示不保证终结器在程序退出前运行，因此依靠终结器刷新
-`bufio.Writer` 的缓冲是错误的，缓冲在程序退出时不会被写出 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
-`runtime.GC` 也只保证终结器已经排队，并不等待它们执行完毕 [[Go Authors, 2022a](#ref-go-authors-2022a)]，
+`bufio.Writer` 的缓冲是错误的，缓冲在程序退出时不会被写出 [[Go Authors, 2026a](#ref-go-authors-2026a)]。`runtime.GC`
+也只保证终结器已经排队，并不等待它们执行完毕 [[Go Authors, 2022a](#ref-go-authors-2022a)]，
 上面的程序因此在每轮回收之后短暂休眠。此外，有三类对象的终结器不保证运行：大小为零的对象，
 因为它可能与其他零大小的对象共享地址；包级变量初始化时创建的对象，因为它们可能由链接器分配而不在堆上；
 以及与其他对象合并在同一分配槽位中的微对象，只要同一块中还有对象存活，它就不会被回收
@@ -333,8 +333,8 @@ runtime.KeepAlive(p)
 
 `KeepAlive` 本身不做任何事情。编译器把对它的调用识别为内建操作，令参数至少存活到调用点；
 函数体中一条永不执行的 `println(x)`，则保证 `defer runtime.KeepAlive(x)` 这类未被内建展开的调用同样有效
-[[Go Authors, 2026c](#ref-go-authors-2026c)] [[Go Authors, 2026f](#ref-go-authors-2026f)]。
-Boehm 在 2003 年比较析构函数与终结器的论文中已经指出，对象完全可能在它的某个方法仍在执行时被终结，
+[[Go Authors, 2026c](#ref-go-authors-2026c)] [[Go Authors, 2026f](#ref-go-authors-2026f)]。Boehm
+在 2003 年比较析构函数与终结器的论文中已经指出，对象完全可能在它的某个方法仍在执行时被终结，
 这应当由语言规范与客户代码共同解决 [[Boehm, 2003](#ref-boehm-2003)]。Java 9 加入的
 `Reference.reachabilityFence` 与 `KeepAlive` 作用相同 [[Oracle, 2023](#ref-oracle-2023)]。
 
@@ -358,8 +358,8 @@ func AddCleanup[T, S any](ptr *T, cleanup func(S), arg S) Cleanup
 `func(S)` 而非 `func()`：显式的参数降低了清理函数意外捕获 `ptr` 的风险，
 也便于调用方避免为每次登记分配一个闭包 [[Knyszek, 2024a](#ref-knyszek-2024a)]。
 
-机制上的差别体现在标记一侧。清理函数同样以特殊记录挂在 span 上，记录中保存清理函数与参数。标记时，
-`markrootSpans` 只把记录本身当作根 [[Go Authors, 2026f](#ref-go-authors-2026f)]：
+机制上的差别体现在标记一侧。清理函数同样以特殊记录挂在 span 上，记录中保存清理函数与参数。标记时，`markrootSpans`
+只把记录本身当作根 [[Go Authors, 2026f](#ref-go-authors-2026f)]：
 
 ```go
 func gcScanCleanup(spc *specialCleanup, gcw *gcWork) {
@@ -522,9 +522,8 @@ runtime.AddCleanup」，`os.Process` 则已改用 `AddCleanup` [[Go Authors, 202
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mcleanup.go
 - <a id="ref-go-authors-2026e"></a>[Go Authors, 2026e] The Go Authors. weak.Pointer. Go 标准库文档。
   https://pkg.go.dev/weak#Pointer
-- <a id="ref-go-authors-2026f"></a>[Go Authors, 2026f] The Go Authors. src/runtime/mgcmark.go、
-  mgcsweep.go、mheap.go；src/cmd/compile/internal/ssagen/intrinsics.go；src/os/file_unix.go、
-  src/net/fd_posix.go、 src/os/exec.go. Go 1.26.
+- <a id="ref-go-authors-2026f"></a>[Go Authors, 2026f] The Go Authors. src/runtime/mgcmark.go、mgcsweep.go、mheap.go；src/cmd/compile/internal/ssagen/intrinsics.go；src/os/file_unix.go、src/net/fd_posix.go、src/os/exec.go.
+  Go 1.26.
   https://github.com/golang/go/tree/release-branch.go1.26/src
 - <a id="ref-knyszek-2024a"></a>[Knyszek, 2024a] Michael Knyszek. *runtime: add AddCleanup*（issue
   #67535）. https://github.com/golang/go/issues/67535 （AddCleanup 设计动机与对 SetFinalizer 缺陷的讨论）
@@ -556,5 +555,5 @@ runtime.AddCleanup」，`os.Process` 则已改用 `AddCleanup` [[Go Authors, 202
   2025. https://go.dev/cl/697535 、 https://go.dev/cl/714000
 - <a id="ref-vyukov-2014"></a>[Vyukov, 2014] Dmitry Vyukov. doc: define how finalizers interact with
   memory model. golang/go#9442, 2014. https://go.dev/issue/9442
-- 本书 [6.2 延迟语句](../../part2lang/ch06func/defer.md)、[12.2 组件](../ch12alloc/component.md)、
-  [12.6 微对象分配](../ch12alloc/tinyalloc.md)、[13.5 清扫与位图](./sweep.md)。
+- 本书 [6.2 延迟语句](../../part2lang/ch06func/defer.md)、[12.2 组件](../ch12alloc/component.md)、[12.6
+  微对象分配](../ch12alloc/tinyalloc.md)、[13.5 清扫与位图](./sweep.md)。

@@ -205,8 +205,8 @@ flowchart TB
 
 ## 小结
 
-软件渲染位于 FFI 边界的另一侧：放弃 GPU 的吞吐，换来零边界开销、可控的结果与在无头机器上照常出图的能力。
-CPU 上的并行分两层：外层用 goroutine 把画面切成互不重叠的区域，分布到多个核上，无须加锁；内层用 SIMD
+软件渲染位于 FFI 边界的另一侧：放弃 GPU 的吞吐，换来零边界开销、可控的结果与在无头机器上照常出图的能力。CPU
+上的并行分两层：外层用 goroutine 把画面切成互不重叠的区域，分布到多个核上，无须加锁；内层用 SIMD
 向量化逐像素的算术，Go 1.27 实验性的 `simd` 包使这一层可以用可移植的 Go 代码表达，而不必编写汇编。
 两层相乘，构成 CPU 并行能力的上限。是否改用 GPU，仍取决于 18.4 讨论的边界成本。
 
@@ -220,8 +220,8 @@ CPU 上的并行分两层：外层用 goroutine 把画面切成互不重叠的�
   `simd` 包的动机与设计：可移植、不规定向量宽度、硬件不支持时的模拟实现与 `GODEBUG=simd` 设置。
 - <a id="ref-go-authors-nd"></a>[Go Authors, n.d.] The Go Authors. *Package image/draw 与
   golang.org/x/image.* https://pkg.go.dev/image/draw ，https://pkg.go.dev/golang.org/x/image
-  Go 的标准与扩展图像库。`image/draw` 为纯 Go 实现；
-  `x/image/vector` 的累加步骤在 amd64 上有 SSE4.1 汇编实现。
+  Go 的标准与扩展图像库。`image/draw` 为纯 Go 实现；`x/image/vector`
+  的累加步骤在 amd64 上有 SSE4.1 汇编实现。
 - <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *The Go Programming Language
   Specification: Floating-point operators.* https://go.dev/ref/spec#Floating_point_operators
   实现可以把多个浮点运算合并为融合运算；显式类型转换阻止合并。
@@ -234,12 +234,12 @@ CPU 上的并行分两层：外层用 goroutine 把画面切成互不重叠的�
   `Float32s` 等不定宽向量类型，`LoadFloat32s`、`BroadcastFloat32s`、`MulAdd` 等操作。
 - <a id="ref-ou-nd"></a>[Ou, n.d.] Changkun Ou. *polyred: 3D graphics in Go.*
   https://github.com/changkun/polyred
-  原题 *polyred: a 3D graphics facility in pure Go*。
-  Go 的三维渲染器，同时提供 GPU 路径与纯 Go 的 CPU 路径。
+  原题 *polyred: a 3D graphics facility in pure Go*。Go
+  的三维渲染器，同时提供 GPU 路径与纯 Go 的 CPU 路径。
 - <a id="ref-pharr-2023"></a>[Pharr et al., 2023] Matt Pharr, Wenzel Jakob, Greg Humphreys. *Physically
   Based Rendering: From Theory to Implementation, 4th ed.* 2023. https://pbr-book.org/
   软件渲染器的体系结构；第 1.3.4 节的 `ImageTileIntegrator` 把图像切分为图块并行渲染。
-- 本书 [第 9 章 goroutine 调度器](../../part3concurrency/ch09sched/readme.md)、
-  [第 11 章 同步原语与模式](../../part3concurrency/ch11sync/readme.md)、
-  [12.2 组件](../../part4memory/ch12alloc/component.md)、[18.4 异步编程模型](../ch18gpu/model.md)、
-  [19.1 渲染管线与 Go 的位置](./pipeline.md)、[19.4 浏览器中的渲染](./wasm.md)。
+- 本书 [第 9 章 goroutine 调度器](../../part3concurrency/ch09sched/readme.md)、[第
+  11 章 同步原语与模式](../../part3concurrency/ch11sync/readme.md)、[12.2
+  组件](../../part4memory/ch12alloc/component.md)、[18.4 异步编程模型](../ch18gpu/model.md)、[19.1
+  渲染管线与 Go 的位置](./pipeline.md)、[19.4 浏览器中的渲染](./wasm.md)。

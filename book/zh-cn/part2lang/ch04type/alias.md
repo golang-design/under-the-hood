@@ -20,8 +20,8 @@ title: "4.3 类型别名"
 `float64` 相同。此后 `Celsius` 与 `float64` 是两个不同的命名类型：`Celsius` 有自己的标识，可以声明自己的
 方法，与 `float64` 之间不能直接赋值，只能显式转换。
 
-`type Temperature = float64` 是别名声明。它只是把一个标识符绑定到已有的类型上，在该标识符的作用域内，
-`Temperature` 与 `float64` 是同一个类型的两个名字，可以完全互换。预声明标识符中的 `byte`（`uint8` 的
+`type Temperature = float64` 是别名声明。它只是把一个标识符绑定到已有的类型上，在该标识符的作用域内，`Temperature`
+与 `float64` 是同一个类型的两个名字，可以完全互换。预声明标识符中的 `byte`（`uint8` 的
 别名）、`rune`（`int32` 的别名），以及自 Go 1.18 起的 `any`（`interface{}` 的别名），都是这样的别名。
 
 二者的区别在方法集上体现得最为明显。下面的程序无法通过编译：
@@ -87,8 +87,8 @@ map[string]bool
 ```
 
 `Celsius` 在运行时有自己的名字 `main.Celsius`；`Temperature` 与 `Set[string]` 则分别显示为 `float64` 与
-`map[string]bool`。与此相对，编译器的错误信息会保留别名的名字。把字符串赋给 `Temperature` 类型的变量，
-Go 1.26 报告的错误是：
+`map[string]bool`。与此相对，编译器的错误信息会保留别名的名字。把字符串赋给 `Temperature` 类型的变量，Go
+1.26 报告的错误是：
 
 ```
 ./main.go:6:22: cannot use "hot" (untyped string constant) as Temperature value in variable declaration

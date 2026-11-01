@@ -5,14 +5,14 @@ title: "11.4 条件变量"
 
 # 11.4 条件变量
 
-互斥锁（[11.2](./mutex.md)）决定谁能进入临界区，却不能表达「进入之后发现条件不满足，需要等待」。
-**条件变量**（condition variable）补上了这一点：goroutine 在持有锁时发现条件不成立，就在条件变量上等待，
+互斥锁（[11.2](./mutex.md)）决定谁能进入临界区，却不能表达「进入之后发现条件不满足，需要等待」。**条
+件变量**（condition variable）补上了这一点：goroutine 在持有锁时发现条件不成立，就在条件变量上等待，
 同时让出锁；另一个 goroutine 改变状态之后，通知等待者重新检查。`sync.Cond` 的文档把它描述为一个会合点，
 供 goroutine 等待或宣告某个事件的发生 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
 
 条件变量是 Brinch Hansen 与 Hoare 在 1973 至 1974 年提出的管程的一部分
-（[11.1.1](./basic.md)）[[Brinch Hansen, 1972](#ref-brinch-hansen-1972)][[Hoare, 1974](#ref-hoare-1974)]；
-Go 在提供 CSP 式的 channel [[Hoare, 1978](#ref-hoare-1978)]的同时，也提供了管程式的锁与条件变量。
+（[11.1.1](./basic.md)）[[Brinch Hansen, 1972](#ref-brinch-hansen-1972)][[Hoare, 1974](#ref-hoare-1974)]；Go
+在提供 CSP 式的 channel [[Hoare, 1978](#ref-hoare-1978)]的同时，也提供了管程式的锁与条件变量。
 本节讨论它的两种唤醒语义，即 Hoare 的语义与 Mesa 的语义，以及 Go 为什么属于后者；随后介绍 `sync.Cond`
 的实现如何演进到今天基于号码的通知列表，以及它在标准库中的用途。何时该用条件变量、何时该用 channel，见
 [10.7.1](../ch10chan/pattern.md)。
@@ -116,8 +116,8 @@ NOTIFY 就让等待者运行，也完全正确。验证规则因此更简单、�
 不变式，在入口过程开始时和 WAIT 之后假定不变式。有了这条规则，再加入三种恢复等待者的方式就很容易：
 超时、中止，以及唤醒全部等待者的 BROADCAST。既然 NOTIFY 只是提示，用 BROADCAST 代替它总是正确的。
 
-Hoare 的语义称为「发信并等待」（signal-and-wait），Mesa 的语义称为「发信并继续」（signal-and-continue）。
-`sync.Cond` 属于后者：`Signal` 之后，发信者继续持有锁，可以继续修改状态；被唤醒的 goroutine 要重新竞争锁，
+Hoare 的语义称为「发信并等待」（signal-and-wait），Mesa 的语义称为「发信并继续」（signal-and-continue）。`sync.Cond`
+属于后者：`Signal` 之后，发信者继续持有锁，可以继续修改状态；被唤醒的 goroutine 要重新竞争锁，
 而 `Signal` 的文档写明，它不影响 goroutine 的调度优先级，其他正在尝试获取 `c.L` 的 goroutine
 可能先于等待者被唤醒 [[Go Authors, 2026a](#ref-go-authors-2026a)]。下面的程序让发信者在 `Signal` 之后、
 释放锁之前，把刚刚使之成立的条件又消耗掉，分别用 `if` 与 `for` 检查条件：
@@ -196,16 +196,16 @@ func main() {
 `items = 1`；在 Mesa 的语义下，用 `if` 的等待者带着一个不成立的条件继续执行。
 
 Mesa 论文还提到一种用法：不必判断等待者需要的确切条件是否成立，只要有任何变化，就通知一个覆盖所有情况
-的条件变量，由等待者自己判断是否继续。论文认为这样做可行，是因为唤醒一个进程的代价很小。
-[10.7.1](../ch10chan/pattern.md) 中 Mills 对 `sync.Cond` 的批评，针对的正是这种用法带来的无效唤醒。
+的条件变量，由等待者自己判断是否继续。论文认为这样做可行，是因为唤醒一个进程的代价很小。[10.7.1](../ch10chan/pattern.md)
+中 Mills 对 `sync.Cond` 的批评，针对的正是这种用法带来的无效唤醒。
 
 ## 11.4.3 不同系统中的条件变量
 
 此后的条件变量都采用了 Mesa 的语义，但各自对「`Wait` 何时返回」的规定有所不同。
 
 POSIX 允许**虚假唤醒**（spurious wakeup）：`pthread_cond_wait` 可能在没有对应通知的情况下返回
-[[IEEE and The Open Group, 2024](#ref-ieee-open-group-2024)]。规范的基本原理一节解释说，在多处理器上，
-`pthread_cond_signal` 的实现可能无法避免唤醒不止一个线程；消除这种情况会降低这一基本构件的并发度，
+[[IEEE and The Open Group, 2024](#ref-ieee-open-group-2024)]。规范的基本原理一节解释说，在多处理器上，`pthread_cond_signal`
+的实现可能无法避免唤醒不止一个线程；消除这种情况会降低这一基本构件的并发度，
 为一个罕见的边缘情形付出这样的代价是不可接受的，何况调用者无论如何都要检查条件。规范还提到一个附带的
 好处：允许虚假唤醒，迫使应用程序在等待外面写一个检查条件的循环，也就能容忍程序其他部分多余的通知，
 程序因而更加健壮。Java 的 `Object.wait` 同样允许虚假唤醒，文档要求应用程序在循环中检查条件
@@ -226,8 +226,8 @@ Go 的 `Wait` 则不会虚假唤醒。文档写明：与其他系统不同，`Wa
 ## 11.4.4 实现的演进
 
 `sync.Cond` 由 Gustavo Niemeyer 于 2011 年加入 [[Niemeyer, 2011](#ref-niemeyer-2011)]。最初的实现用一把
-内部互斥锁保护一个等待者计数和一个信号量：`Wait` 先把计数加一，再释放 `c.L`，然后在信号量上等待；
-`Signal` 在计数大于零时释放一次信号量。先登记、后释放锁的次序关闭了 11.4.1 所说的窗口。`Broadcast` 则
+内部互斥锁保护一个等待者计数和一个信号量：`Wait` 先把计数加一，再释放 `c.L`，然后在信号量上等待；`Signal`
+在计数大于零时释放一次信号量。先登记、后释放锁的次序关闭了 11.4.1 所说的窗口。`Broadcast` 则
 按计数释放信号量之后，换一个新的信号量，使得此后到达的等待者不会消耗本次广播发出的唤醒。
 
 2013 年，Vyukov 改用原子计数与运行时的同步信号量，去掉了内存分配，提交说明称速度提高了 30% 至 50%；
@@ -274,8 +274,8 @@ type notifyList struct {
 
 `notifyListAdd` 原子地把 `wait` 加一，返回加一之前的值作为号码，不需要加锁；`Wait` 在持有读锁时也可能
 并发地调用它。`notifyListWait` 加锁后先比较号码与 `notify`：号码小于 `notify`，说明在登记之后、挂起之前
-已经有人通知过它，于是立即返回；否则把自己挂入链表并挂起（[9.4.3](../ch09sched/schedule.md)）。
-`notifyListNotifyOne` 把 `notify` 加一，在链表中找到持有原号码的等待者并唤醒它；如果等待者还没来得及
+已经有人通知过它，于是立即返回；否则把自己挂入链表并挂起（[9.4.3](../ch09sched/schedule.md)）。`notifyListNotifyOne`
+把 `notify` 加一，在链表中找到持有原号码的等待者并唤醒它；如果等待者还没来得及
 挂入链表，它会在 `notifyListWait` 中看到新的 `notify`，不再挂起。`notifyListNotifyAll` 把 `notify`
 直接设为 `wait`，唤醒链表中的全部等待者。两者都有一条不加锁的快速路径：`wait` 与 `notify` 相等，说明
 上次通知以来没有新的等待者，直接返回。
@@ -290,8 +290,8 @@ type notifyList struct {
 [[Lampson and Redell, 1980](#ref-lampson-redell-1980)]。`sync.Cond` 允许在不持有锁时调用 `Signal`，
 面对的是同样的情形；号码在释放锁之前就已领取，之后的任何通知都不会遗漏它。
 
-最后是复制检测。`Cond` 在首次使用后不能复制：副本中的通知列表与原件互不相干，通知会发往错误的队列。
-`noCopy` 字段供 `go vet` 的 copylocks 检查在编译前发现复制；`copyChecker` 则在运行时检测，
+最后是复制检测。`Cond` 在首次使用后不能复制：副本中的通知列表与原件互不相干，通知会发往错误的队列。`noCopy`
+字段供 `go vet` 的 copylocks 检查在编译前发现复制；`copyChecker` 则在运行时检测，
 它保存自己的地址：
 
 ```go
@@ -322,10 +322,10 @@ Go 内存模型对条件变量、`Map`、`Pool` 与 `WaitGroup` 只说明它们�
 
 ## 11.4.6 标准库中的条件变量
 
-`io.Pipe` 的历史说明了条件变量与 channel 的关系。它最初用 channel 和一个长期运行的 goroutine 实现；
-`sync.Cond` 加入不到三周，Cox 就用两个条件变量重写了它 [[Cox, 2011](#ref-cox-2011)]。2017 年，Joe Tsai
-又把它改回 channel，随 Go 1.10 发布 [[Tsai, 2017](#ref-tsai-2017)]。提交说明解释道，基于条件变量的实现中，
-`p.data` 总是在 `Signal` 之前设置，两者合起来实际上就是一次 channel 式的操作，却还要在 `p.data`
+`io.Pipe` 的历史说明了条件变量与 channel 的关系。它最初用 channel 和一个长期运行的 goroutine 实现；`sync.Cond`
+加入不到三周，Cox 就用两个条件变量重写了它 [[Cox, 2011](#ref-cox-2011)]。2017 年，Joe Tsai
+又把它改回 channel，随 Go 1.10 发布 [[Tsai, 2017](#ref-tsai-2017)]。提交说明解释道，基于条件变量的实现中，`p.data`
+总是在 `Signal` 之前设置，两者合起来实际上就是一次 channel 式的操作，却还要在 `p.data`
 周围显式加锁；数据加上读者的条件变量可以换成一个 `chan []byte`，数据加上写者的条件变量可以换成一个
 `chan int`。`Cond` 文档中「`Signal` 对应在 channel 上发送，`Broadcast` 对应关闭 channel」的建议，
 说的正是这种情形。需要注意，关闭只能进行一次，重复关闭会引发 panic（[10.4](../ch10chan/close.md)），
@@ -395,5 +395,5 @@ Go 1.26 的源码树中，除测试外用到 `sync.Cond` 的地方只有几处�
 - <a id="ref-vyukov-2013"></a>[Vyukov, 2013] Dmitriy Vyukov. sync: faster Cond. Go commit 5a20b4a6a9,
   2013. https://github.com/golang/go/commit/5a20b4a6a9dcf26a402edfe352aa1e8564f2fb01
   随 Go 1.2 发布。
-- 本书 [11.2 互斥锁](./mutex.md)、[11.9 内存一致模型](./mem.md)、[10.7 并发模式](../ch10chan/pattern.md)、
-  [12.2 组件](../../part4memory/ch12alloc/component.md)。
+- 本书 [11.2 互斥锁](./mutex.md)、[11.9 内存一致模型](./mem.md)、[10.7 并发模式](../ch10chan/pattern.md)、[12.2
+  组件](../../part4memory/ch12alloc/component.md)。

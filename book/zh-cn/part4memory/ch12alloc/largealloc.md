@@ -21,8 +21,8 @@ chunk 中的连续页提供；大于半个 chunk（默认 chunk 为 2 MB）的�
 既不在前端缓存，也不在中间层缓存 [[TCMalloc Authors, 2026](#ref-tcmalloc-authors-2026)]。
 
 Go 的尺寸类表说明了 32 KiB 附近为什么适合作为分界。尺寸类的作用在于让许多同样大小的对象共享一个 span，
-从而共享一次补充 span 的代价。表的末端，66 号尺寸类（28672 字节）的 span 只容纳 2 个对象，
-67 号尺寸类（32768 字节）的 span 占 4 页、只容纳 1 个对象 [[Go Authors, 2026d](#ref-go-authors-2026d)]。
+从而共享一次补充 span 的代价。表的末端，66 号尺寸类（28672 字节）的 span 只容纳 2 个对象，67
+号尺寸类（32768 字节）的 span 占 4 页、只容纳 1 个对象 [[Go Authors, 2026d](#ref-go-authors-2026d)]。
 到了这里，按尺寸类分配已与按页分配没有区别，再向上增加尺寸类只会增加缓存的数量，而得不到共享的收益。
 
 Go 1.22 引入分配头之后，分界变为 32760 字节。超过 512 字节的含指针对象要在对象前存放
@@ -164,9 +164,9 @@ func mallocgcLarge(size uintptr, typ *_type, needzero bool) (unsafe.Pointer, uin
 }
 ```
 
-整个过程分为三段。第一段不可抢占：`acquirem` 与 `mallocing` 保证分配进行到一半时不会被回收器打断。
-`allocLarge` 取得一个独占的 span（12.4.3），把唯一的槽位标记为已占用，对象的地址即 span 的起始地址。
-`largeType` 是大对象的类型指针，存放在 `mspan` 中（[12.1.4](./basic.md)）；此时先把它置空，
+整个过程分为三段。第一段不可抢占：`acquirem` 与 `mallocing` 保证分配进行到一半时不会被回收器打断。`allocLarge`
+取得一个独占的 span（12.4.3），把唯一的槽位标记为已占用，对象的地址即 span 的起始地址。`largeType`
+是大对象的类型指针，存放在 `mspan` 中（[12.1.4](./basic.md)）；此时先把它置空，
 告诉回收器暂时不要检视这个对象，随后的发布屏障保证这一写入先于对象的地址被其他线程看到。
 在弱内存序的机器上，若没有这道屏障，回收器可能循着一个指向新对象的指针，读到 `largeType` 的旧值。
 分配若发生在标记期间，对象直接被标黑，回收器在本轮不再扫描它（[12.1.5](./basic.md)）。
@@ -291,8 +291,8 @@ Linux 默认设置下全部交还过操作系统的页，内核保证它们再�
 偿还清扫债务，查找连续的空闲页，初始化一个新的 `mspan`，页数不少于 16 或页缓存不能满足时还要获取堆锁。
 与小对象快速路径上的一次位图查找相比，这条路径的固定开销高得多，只是这一开销分摊在较多的字节上。
 
-按页取整造成的内部碎片不超过一页，即 8191 字节，相对于对象大小的比例随对象增大而下降。
-40961 字节的对象占用 6 页即 49152 字节，多出 8191 字节，约为请求的 20%；1000000 字节的对象占用 123 页，
+按页取整造成的内部碎片不超过一页，即 8191 字节，相对于对象大小的比例随对象增大而下降。40961
+字节的对象占用 6 页即 49152 字节，多出 8191 字节，约为请求的 20%；1000000 字节的对象占用 123 页，
 多出 7616 字节，不到 1%。[12.1.3](./basic.md) 中 33000 字节的切片经 `append` 得到 40960 字节的容量，
 也是这一取整的结果。由 `append` 增长的切片会用上取整后的全部容量，直接以 `make` 创建的切片则不会。
 
@@ -338,8 +338,8 @@ Linux 默认设置下全部交还过操作系统的页，内核保证它们再�
   src/runtime/mheap.go（`mheap.alloc`、`allocSpan`、`initSpan`、页缓存与堆锁路径）. Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mheap.go
 - <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors.
-  src/runtime/mbitmap.go（`heapSetTypeLarge`）、src/runtime/metrics.go、
-  src/internal/runtime/gc/sizeclasses.go. Go 1.26 源码.
+  src/runtime/mbitmap.go（`heapSetTypeLarge`）、src/runtime/metrics.go、src/internal/runtime/gc/sizeclasses.go.
+  Go 1.26 源码.
   https://github.com/golang/go/tree/release-branch.go1.26/src
 - <a id="ref-knyszek-2023"></a>[Knyszek, 2023] Michael Anthony Knyszek. runtime: implement experiment to
   replace heap bitmap with alloc headers. Go commit 38ac7c41aa, 2023. https://go.dev/cl/437955
@@ -353,7 +353,7 @@ Linux 默认设置下全部交还过操作系统的页，内核保证它们再�
 - <a id="ref-yang-2025"></a>[Yang, 2025] Lance Yang. runtime: avoid zeroing scavenged memory. Go commit
   27937289dc, 2025. https://go.dev/cl/715160
   随 Go 1.26 发布。
-- 本书 [11.6 缓存池](../../part3concurrency/ch11sync/pool.md)（大缓冲区复用）、
-  [12.5 小对象分配](./smallalloc.md)（作为对照的小对象精巧路径）、
-  [12.7 页分配器](./pagealloc.md)（`h.pages.alloc` 如何找出连续空闲页、`grow` 如何向操作系统增长）、
-  [第 13 章 垃圾回收器](../ch13gc)（大对象如何牵动回收步调）。
+- 本书 [11.6 缓存池](../../part3concurrency/ch11sync/pool.md)（大缓冲区复用）、[12.5
+  小对象分配](./smallalloc.md)（作为对照的小对象精巧路径）、[12.7
+  页分配器](./pagealloc.md)（`h.pages.alloc` 如何找出连续空闲页、`grow` 如何向操作系统增长）、[第
+  13 章 垃圾回收器](../ch13gc)（大对象如何牵动回收步调）。

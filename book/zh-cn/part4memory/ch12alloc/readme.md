@@ -31,10 +31,10 @@ bookCollapseSection: true
 因此分配器必须与回收器一同设计，碎片也只能在分配时加以控制。
 
 [12.1](./basic.md) 讨论分配器需要兼顾的目标、它从 TCMalloc 继承的结构，以及尺寸类与按大小、类型分流的
-设计。[12.2](./component.md) 介绍 `mspan`、`mcache`、`mcentral`、`mheap` 等组件及其协作。
-[12.3](./init.md) 讨论启动时的初始化、地址空间的划分，以及内存的预留、映射与提交。[12.4](./largealloc.md)
+设计。[12.2](./component.md) 介绍 `mspan`、`mcache`、`mcentral`、`mheap` 等组件及其协作。[12.3](./init.md)
+讨论启动时的初始化、地址空间的划分，以及内存的预留、映射与提交。[12.4](./largealloc.md)
 至 [12.6](./tinyalloc.md) 依次讨论大对象、小对象与微对象的分配路径。[12.7](./pagealloc.md)
 讨论以位图与基数树管理页的页分配器，以及向操作系统归还物理内存的 scavenger。[12.8](./mstats.md)
-讨论运行时如何统计内存，并经由 `runtime.ReadMemStats`、`runtime/metrics` 与堆剖面对外报告。
-[12.9](./history.md) 按时间回顾分配器的演进。回收器的实现见[第 13 章](../ch13gc/readme.md)，
-goroutine 执行栈的分配见[第 14 章](../ch14stack/readme.md)。
+讨论运行时如何统计内存，并经由 `runtime.ReadMemStats`、`runtime/metrics` 与堆剖面对外报告。[12.9](./history.md)
+按时间回顾分配器的演进。回收器的实现见[第 13 章](../ch13gc/readme.md)，goroutine
+执行栈的分配见[第 14 章](../ch14stack/readme.md)。

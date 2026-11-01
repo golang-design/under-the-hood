@@ -20,15 +20,15 @@ Agent，难处并不在循环的骨架，而在贯穿整条链路的三件事：
 用户不应在 Agent 执行几十步的过程中面对一个没有任何反馈的界面。模型正在输出什么、正在调用哪个工具、
 工具返回了什么，都应在发生时呈现出来。这意味着 Agent 不只是消费下层的流，
 还要生成一条自己的事件流交给上游：模型输出的词元、开始调用某个工具、工具返回结果。在 HTTP 上，
-处理函数每写出一个事件，就用 `http.ResponseController` 的 `Flush`（Go 1.20 加入）把缓冲的数据推给客户端。
-MCP 的 Streamable HTTP 采用同样的形状：服务器可以用只属于这次请求的 SSE 流作答，
+处理函数每写出一个事件，就用 `http.ResponseController` 的 `Flush`（Go 1.20 加入）把缓冲的数据推给客户端。MCP
+的 Streamable HTTP 采用同样的形状：服务器可以用只属于这次请求的 SSE 流作答，
 流中先是进度等与请求相关的通知，最后是响应
 [[Model Context Protocol, 2026](#ref-model-context-protocol-2026)]。
 
 在 Go 中表示一条流，有两种常见的写法。一种是 goroutine 加通道：生产者在自己的 goroutine 中运行，
 把元素发送到通道，消费者从通道接收；有缓冲的通道让生产与消费可以在时间上重叠。另一种是 Go 1.23
-加入的迭代器 `iter.Seq`：生产者是一个函数，在消费者的调用栈上运行，每产出一个元素就调用一次 `yield`。
-`iter` 包的文档写道：
+加入的迭代器 `iter.Seq`：生产者是一个函数，在消费者的调用栈上运行，每产出一个元素就调用一次 `yield`。`iter`
+包的文档写道：
 
 ```text
 The function stops either when the sequence is finished or
@@ -251,8 +251,8 @@ produced - received <= capacity: true
 （[11.8](../../part3concurrency/ch11sync/context.md)）。主 goroutine 最后等待 `done`，确认生产者已经返回，
 而不是把它遗留在一个无人接收的通道上。
 
-Agent 派生并行的子任务时，例如同时调用多个工具或派生多个子 Agent，背压与取消还要与扇出、扇入结合。
-`golang.org/x/sync/errgroup` 把这三者封装在一起 [[Go Authors, 2026b](#ref-go-authors-2026b)]，其实现见
+Agent 派生并行的子任务时，例如同时调用多个工具或派生多个子 Agent，背压与取消还要与扇出、扇入结合。`golang.org/x/sync/errgroup`
+把这三者封装在一起 [[Go Authors, 2026b](#ref-go-authors-2026b)]，其实现见
 [10.7](../../part3concurrency/ch10chan/pattern.md)：
 
 ```go
@@ -271,8 +271,8 @@ err := g.Wait() // 等待全部结束，返回第一个错误
 ```
 
 自 Go 1.22 起，循环变量在每轮迭代中都是新的实例（[6.1](../../part2lang/ch06func/func.md)），过去为闭包写的
-`i, call := i, call` 已经不再需要。`SetLimit` 与 `TryGo` 是 2022 年加入的 [[Ou, 2022](#ref-ou-2022)]，
-`SetLimit` 设置上限后，`Go` 在启动 goroutine 之前先向一个容量等于上限的通道发送一个令牌：
+`i, call := i, call` 已经不再需要。`SetLimit` 与 `TryGo` 是 2022 年加入的 [[Ou, 2022](#ref-ou-2022)]，`SetLimit`
+设置上限后，`Go` 在启动 goroutine 之前先向一个容量等于上限的通道发送一个令牌：
 
 ```go
 func (g *Group) Go(f func() error) {
@@ -300,13 +300,13 @@ func (g *Group) Go(f func() error) {
 名额用尽时，`Go` 阻塞在这次发送上，调用方随之放慢，这是阻塞式的背压。代码中的注释还记录了一次反复：x/sync
 的 v0.14.0 曾让 `Wait` 把子 goroutine 的 panic 传回调用方，v0.16.0 又撤销了这一改动，理由是这会任意推迟
 panic、使 bug 更难发现，把 panic 的调用栈变成一个普通的值、使崩溃监控工具看不到它，还可能因死锁而把 panic
-完全掩盖 [[Donovan, 2025](#ref-donovan-2025)]。对 Agent 而言，这意味着进程内运行的工具一旦 panic，
-errgroup 不会替调用方兜底，未恢复的 panic 会终止整个进程；不受信任或不够稳定的工具代码，要么在调用处自行
+完全掩盖 [[Donovan, 2025](#ref-donovan-2025)]。对 Agent 而言，这意味着进程内运行的工具一旦 panic，errgroup
+不会替调用方兜底，未恢复的 panic 会终止整个进程；不受信任或不够稳定的工具代码，要么在调用处自行
 `recover`，要么放到进程之外，经由 MCP 调用。
 
 背压还有另一种策略：不等待，直接拒绝。`TryGo` 在名额已满时立即返回 false。跨越网络时，
-拒绝往往比阻塞更合适：阻塞会一直占用连接与 goroutine，拒绝则把决定权交还调用方，由它选择稍后重试或放弃。
-pons 在转发工具调用时，为整个进程、每个调用者和每个连接分别限制同时在途的请求数，超出时以「请求过多」
+拒绝往往比阻塞更合适：阻塞会一直占用连接与 goroutine，拒绝则把决定权交还调用方，由它选择稍后重试或放弃。pons
+在转发工具调用时，为整个进程、每个调用者和每个连接分别限制同时在途的请求数，超出时以「请求过多」
 的错误立即拒绝 [[Ou, 2026b](#ref-ou-2026b)]：
 
 ```go
@@ -357,8 +357,8 @@ flowchart TD
 树的每个节点是一个 goroutine：控制循环、推理流、并行的工具，以及递归派生的子 Agent。在树的每条边上，
 流式让事件向上游流动，背压让慢的节点抑制上游的生产，取消让根节点的一个信号到达整棵子树。
 要让这棵树在取消后真正收拢，还需要等待每个子节点退出，这是结构化并发关心的问题
-（[11.8](../../part3concurrency/ch11sync/context.md)、
-[10.7](../../part3concurrency/ch10chan/pattern.md)）。树中的每个部件，goroutine、通道、`select`、context
+（[11.8](../../part3concurrency/ch11sync/context.md)、[10.7](../../part3concurrency/ch10chan/pattern.md)）。
+树中的每个部件，goroutine、通道、`select`、context
 与 errgroup，本书前面都已讨论过。Agent 是一类新的负载，在运行时层面却没有要求新的机制。
 
 ## 小结
@@ -403,16 +403,16 @@ flowchart TD
   concurrency. x/sync commit 0976fa681c, 2022. https://go.dev/cl/405174
   随 x/sync v0.1.0 发布。
   （以容量等于上限的通道作为信号量，限制同时运行的 goroutine 数）
-- <a id="ref-ou-2026a"></a>[Ou, 2026a] Changkun Ou. topos. https://github.com/latere-ai/topos, 2026.
-  （Agent 会话运行时；每一步可中断的 context，以及取消后用 `context.WithoutCancel` 记录终止状态）
-- <a id="ref-ou-2026b"></a>[Ou, 2026b] Changkun Ou. pons. https://github.com/latere-ai/pons, 2026.
-  （转发工具调用的服务；按进程、调用者与连接限制在途请求，超出时立即拒绝）
-- 本书 [6.1 函数调用](../../part2lang/ch06func/func.md)、
-  [第 10 章 通道与 select](../../part3concurrency/ch10chan/readme.md)、
-  [10.7 工程实践与跨语言对照](../../part3concurrency/ch10chan/pattern.md)、
-  [第 11 章 同步原语与模式](../../part3concurrency/ch11sync/readme.md)、
-  [11.8 上下文](../../part3concurrency/ch11sync/context.md)、
-  [15.6 cgo](../../part5toolchain/ch15compile/cgo.md)、
-  [18.2 调度器与阻塞的外部调用](../ch18gpu/sched.md)、
-  [20.3 服务、批处理与流式](../ch20inference/serving.md)、
-  [21.1 Agent 控制循环](./loop.md)、[21.2 工具调用与 MCP](./mcp.md)。
+- <a id="ref-ou-2026a"></a>[Ou, 2026a] Changkun Ou. topos. https://github.com/latere-ai/topos, 2026.（Agent
+  会话运行时；每一步可中断的 context，以及取消后用 `context.WithoutCancel` 记录终止状态）
+- <a id="ref-ou-2026b"></a>[Ou, 2026b] Changkun Ou. pons. https://github.com/latere-ai/pons, 2026.（转
+  发工具调用的服务；按进程、调用者与连接限制在途请求，超出时立即拒绝）
+- 本书 [6.1 函数调用](../../part2lang/ch06func/func.md)、[第
+  10 章 通道与 select](../../part3concurrency/ch10chan/readme.md)、[10.7
+  工程实践与跨语言对照](../../part3concurrency/ch10chan/pattern.md)、[第
+  11 章 同步原语与模式](../../part3concurrency/ch11sync/readme.md)、[11.8
+  上下文](../../part3concurrency/ch11sync/context.md)、[15.6
+  cgo](../../part5toolchain/ch15compile/cgo.md)、[18.2
+  调度器与阻塞的外部调用](../ch18gpu/sched.md)、[20.3
+  服务、批处理与流式](../ch20inference/serving.md)、[21.1
+  Agent 控制循环](./loop.md)、[21.2 工具调用与 MCP](./mcp.md)。

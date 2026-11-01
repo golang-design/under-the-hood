@@ -11,8 +11,8 @@ title: "13.7 安全点分析"
 每个类型生成的位图（[12.2](../ch12alloc/component.md)），栈帧的布局则来自编译器为每个函数生成的
 **栈映射**（stack map）。
 
-栈映射只在函数的调用处存在，回收器因此只能在 goroutine 停在这些位置时精确地扫描它的栈。
-[9.7](../../part3concurrency/ch09sched/preemption.md) 从调度的角度讨论了安全点的分类，以及如何让
+栈映射只在函数的调用处存在，回收器因此只能在 goroutine 停在这些位置时精确地扫描它的栈。[9.7](../../part3concurrency/ch09sched/preemption.md)
+从调度的角度讨论了安全点的分类，以及如何让
 goroutine 停在安全点上；本节从回收器的角度讨论在安全点上能读到什么：编译器如何生成栈映射，
 运行时如何依据它扫描一个栈，被取了地址的局部变量如何处理，以及异步抢占留下的两帧如何保守地扫描。
 
@@ -195,8 +195,8 @@ func (frame *stkframe) getStackMap(debug bool) (locals, args bitvector, objs []s
 内容。返回地址指向调用指令的下一条指令，那里可能已属于另一张位图的范围，因此先退回一个字节，落在调用指令
 本身。停在函数入口的帧，例如尚未开始运行的 goroutine，使用入口处的第 0 张位图。
 
-`getStackMap` 用同一个序号分别从局部变量表与参数表中取出位图，再取出本函数登记的栈对象（13.7.3），
-`scanframeworker` 把两张位图交给 `scanblock`：
+`getStackMap` 用同一个序号分别从局部变量表与参数表中取出位图，再取出本函数登记的栈对象（13.7.3），`scanframeworker`
+把两张位图交给 `scanblock`：
 
 ```go
 	locals, args, objs := frame.getStackMap(false)
@@ -250,8 +250,8 @@ func (frame *stkframe) getStackMap(debug bool) (locals, args bitvector, objs []s
 否则与扫描堆对象时相同，Green Tea 接管的小对象放入 span 队列（[13.11](./greentea.md)），其余对象直接置灰。
 位图之外的字，无论数值多像地址，都不会被解引用。
 
-除了各个栈帧，`scanstack` 还扫描几处与栈相连的指针：调度上下文中保存的闭包上下文寄存器 `gp.sched.ctxt`、
-defer 记录中的函数值与链接，以及 panic 记录。panic 记录总是分配在栈上，按栈对象处理。
+除了各个栈帧，`scanstack` 还扫描几处与栈相连的指针：调度上下文中保存的闭包上下文寄存器 `gp.sched.ctxt`、defer
+记录中的函数值与链接，以及 panic 记录。panic 记录总是分配在栈上，按栈对象处理。
 
 ## 13.7.3 栈对象
 
@@ -271,8 +271,8 @@ defer 记录中的函数值与链接，以及 panic 记录。panic 记录总是�
 
 Go 1.12 引入的**栈对象**（stack object）改为在运行时判定 [[Randall, 2018a](#ref-randall-2018a)]
 [[Randall, 2018b](#ref-randall-2018b)]。编译器把每个函数中被取了地址、类型含有指针且留在栈上的变量登记在
-函数的元数据 `FUNCDATA_StackObjects` 中，扫描栈时，运行时在这些对象之间做一次小规模的标记。
-`runtime/mgcstack.go` 开头的注释说明了思路 [[Go Authors, 2026d](#ref-go-authors-2026d)]：
+函数的元数据 `FUNCDATA_StackObjects` 中，扫描栈时，运行时在这些对象之间做一次小规模的标记。`runtime/mgcstack.go`
+开头的注释说明了思路 [[Go Authors, 2026d](#ref-go-authors-2026d)]：
 
 ```go
 // Instead, we will track pointers to stack variables dynamically.
@@ -286,8 +286,8 @@ Go 1.12 引入的**栈对象**（stack object）改为在运行时判定 [[Randa
 // pointer. We call these variables "stack objects".
 ```
 
-注释接着给出一个例子：`foo` 调用 `bar`，`bar` 调用 `baz`；`foo` 有栈对象 A 与 B，`bar` 有栈对象 C 与 D，
-C 指向 D，D 指向 A；`baz` 有指向 C 的栈对象 E，以及指向 E 的局部变量 F。从 F 出发，依次扫描 E、C、D 与 A；
+注释接着给出一个例子：`foo` 调用 `bar`，`bar` 调用 `baz`；`foo` 有栈对象 A 与 B，`bar` 有栈对象 C 与 D，C
+指向 D，D 指向 A；`baz` 有指向 C 的栈对象 E，以及指向 E 的局部变量 F。从 F 出发，依次扫描 E、C、D 与 A；
 没有活跃的指针指向 B，它不会被扫描。如果 `foo` 在调用 `bar` 之后也不再直接访问 B，B 中指向堆的指针就不会
 使堆对象存活。
 
@@ -410,8 +410,8 @@ flowchart LR
 ```
 
 这里有两处与精确路径不同。其一，保守扫描覆盖从 SP 到 `varp` 的整个区域，包括为传出参数预留的空间，
-因为被打断时这个函数可能正在准备一次调用；传入参数的区域也整段扫描，不再参照参数位图。其二，
-`asyncPreempt` 帧或调试调用帧扫描完毕后置位 `state.conservative`，使下一帧，即被打断的函数，
+因为被打断时这个函数可能正在准备一次调用；传入参数的区域也整段扫描，不再参照参数位图。其二，`asyncPreempt`
+帧或调试调用帧扫描完毕后置位 `state.conservative`，使下一帧，即被打断的函数，
 同样保守地扫描；这一帧扫描完毕即清除标志，更外层的帧都停在调用处，仍按栈映射精确扫描。
 
 「形似指针」的判定并不宽泛。`scanConservative` 对每个字依次检查：
@@ -463,8 +463,8 @@ flowchart LR
 这个栈对象也要保守地扫描。为此，`scanstack` 的指针队列优先取出精确的指针，以便尽可能按位图扫描栈对象。
 
 保守扫描的代价是可能把恰好像地址的整数当作指针，使本应回收的对象多存活一轮。这里的范围被限制在栈顶的两帧，
-以及只能经由它们访问到的栈对象，代价很小。另一个限制是，这两帧的指针信息不精确，运行时不能搬迁这个栈：
-goroutine 停在异步安全点时，`isShrinkStackSafe` 返回假，`scanstack`
+以及只能经由它们访问到的栈对象，代价很小。另一个限制是，这两帧的指针信息不精确，运行时不能搬迁这个栈：goroutine
+停在异步安全点时，`isShrinkStackSafe` 返回假，`scanstack`
 把收缩推迟到下一个同步安全点（[14.5](../ch14stack/shrink.md)）。调试调用之所以能接受这一限制，
 是因为此前它已改在新的 goroutine 上执行，在那里可以自由扩栈 [[Clements, 2020a](#ref-clements-2020a)]。
 
@@ -536,25 +536,25 @@ Go 并非一开始就是精确的。Go 1.0 的回收器几乎没有类型信息�
 - <a id="ref-cox-2014"></a>[Cox, 2014] Russ Cox. runtime: remove uses of ScanConservatively. Go commit
   d208361cde, 2014. https://golang.org/cl/144860043
   随 Go 1.4 发布。
-- <a id="ref-go-authors-2012"></a>[Go Authors, 2012] The Go Authors. src/pkg/runtime/mgc0.c（scanblock、
-  scanstack）. Go 1 源码. https://github.com/golang/go/blob/go1/src/pkg/runtime/mgc0.c
+- <a id="ref-go-authors-2012"></a>[Go Authors, 2012] The Go Authors. src/pkg/runtime/mgc0.c（scanblock、scanstack）.
+  Go 1 源码. https://github.com/golang/go/blob/go1/src/pkg/runtime/mgc0.c
 - <a id="ref-go-authors-2013"></a>[Go Authors, 2013] The Go Authors. *Go 1.1 Release Notes.* 2013.
   https://go.dev/doc/go1.1
 - <a id="ref-go-authors-2014a"></a>[Go Authors, 2014a] The Go Authors. *Go 1.3 Release Notes: Changes to
   the garbage collector.* 2014. https://go.dev/doc/go1.3#garbage_collector
 - <a id="ref-go-authors-2014b"></a>[Go Authors, 2014b] The Go Authors. *Go 1.4 Release Notes: Changes to
   the runtime.* 2014. https://go.dev/doc/go1.4#runtime
-- <a id="ref-go-authors-2018"></a>[Go Authors, 2018] The Go Authors. src/cmd/compile/internal/gc/plive.go
-  （被取地址变量的活跃性与模糊活跃）. Go 1.11 源码.
+- <a id="ref-go-authors-2018"></a>[Go Authors, 2018] The Go Authors. src/cmd/compile/internal/gc/plive.go（被
+  取地址变量的活跃性与模糊活跃）. Go 1.11 源码.
   https://github.com/golang/go/blob/go1.11/src/cmd/compile/internal/gc/plive.go
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/mgcmark.go（scanstack、
-  scanframeworker、scanblock、scanConservative）与 src/runtime/stkframe.go（getStackMap）. 另见
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/mgcmark.go（scanstack、scanframeworker、scanblock、scanConservative）
+  与 src/runtime/stkframe.go（getStackMap）. 另见
   src/runtime/symtab.go、src/runtime/mbitmap.go. Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mgcmark.go
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/stkframe.go
   栈映射的读取与精确、保守扫描。
-- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. src/runtime/preempt.go（suspendG、
-  isAsyncSafePoint）. Go 1.26 源码.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. src/runtime/preempt.go（suspendG、isAsyncSafePoint）.
+  Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/preempt.go
   把 goroutine 停在安全点。
 - <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors.
@@ -584,8 +584,8 @@ Go 并非一开始就是精确的。Go 1.0 的回收器几乎没有类型信息�
 - <a id="ref-zardlee1937-2017"></a>[zardlee1937, 2017] zardlee1937. cmd/compile: compiler can unexpectedly
   preserve memory. Go issue #22350, 2017. https://go.dev/issue/22350
 - 本书 [9.7 协作与抢占](../../part3concurrency/ch09sched/preemption.md)（安全点、到达安全点的时间、
-  协作式与异步抢占的完整机制，本节的栈扫描复用了它）、[12.2 组件](../ch12alloc/component.md)、
-  [12.5 小对象分配](../ch12alloc/smallalloc.md)、[13.2 写屏障技术](./barrier.md)、
-  [13.4 扫描标记与标记辅助](./mark.md)、[13.10 终结器](./finalizer.md)、
-  [14.4 栈的拷贝与指针调整](../ch14stack/copy.md)、[14.5 栈的收缩与演进](../ch14stack/shrink.md)（栈映射与
+  协作式与异步抢占的完整机制，本节的栈扫描复用了它）、[12.2 组件](../ch12alloc/component.md)、[12.5
+  小对象分配](../ch12alloc/smallalloc.md)、[13.2 写屏障技术](./barrier.md)、[13.4
+  扫描标记与标记辅助](./mark.md)、[13.10 终结器](./finalizer.md)、[14.4
+  栈的拷贝与指针调整](../ch14stack/copy.md)、[14.5 栈的收缩与演进](../ch14stack/shrink.md)（栈映射与
   mspan、arena 的指针位图共同支撑精确扫描）。

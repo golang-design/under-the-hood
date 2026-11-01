@@ -15,8 +15,8 @@ title: "16.4 代码测试"
 ## 16.4.1 从约定到可执行程序
 
 `go test` 依据文件名与函数签名发现测试：以 `_test.go` 结尾的文件只在测试时编译，其中形如
-`func TestXxx(*testing.T)` 的函数是测试，`func BenchmarkXxx(*testing.B)` 是基准测试，
-`func FuzzXxx(*testing.F)` 是模糊测试，`func ExampleXxx()` 是示例；示例函数末尾若有以 `Output:`
+`func TestXxx(*testing.T)` 的函数是测试，`func BenchmarkXxx(*testing.B)` 是基准测试，`func FuzzXxx(*testing.F)`
+是模糊测试，`func ExampleXxx()` 是示例；示例函数末尾若有以 `Output:`
 开头的注释，运行时会把函数的标准输出与之比较 [[Go Authors, n.d.a](#ref-go-authors-nda)]。
 这里没有配置文件，也没有注解 [[Go Authors, n.d.d](#ref-go-authors-ndd)]。
 下面是一个按字节反转字符串的函数及其测试，本节的例子都以它为对象；按字节反转的 `Reverse`
@@ -144,8 +144,8 @@ func main() {
 
 ## 16.4.3 表驱动测试与子测试
 
-当失败消息需要逐个手写时，把输入与期望写成一张表、用循环逐行检查，就能把写好一条消息的成本摊到所有用例上，
-Go FAQ 正是这样建议的 [[Go Authors, n.d.f](#ref-go-authors-ndf)]。这种写法在 Go 社区被称为表驱动测试
+当失败消息需要逐个手写时，把输入与期望写成一张表、用循环逐行检查，就能把写好一条消息的成本摊到所有用例上，Go
+FAQ 正是这样建议的 [[Go Authors, n.d.f](#ref-go-authors-ndf)]。这种写法在 Go 社区被称为表驱动测试
 [[Cheney, 2019](#ref-cheney-2019)]。早期的表驱动测试有两个不便：表中的一行无法单独运行，
 失败消息也必须自己带上用例的名字。van Lohuizen 在 2015 年提出的子测试解决了这些问题，
 所列的动机包括从命令行选择表中的单个用例、在子测试中使用 `Fail` 一类方法、比 `TestMain`
@@ -187,8 +187,8 @@ PASS
 
 子测试之外，`*testing.T` 还陆续获得了管理测试资源的方法：`t.Cleanup`
 注册在测试及其子测试结束后运行的清理函数（Go 1.14），`t.TempDir` 返回测试结束后自动删除的临时目录（Go
-1.15），`t.Setenv` 在测试期间设置环境变量（Go 1.17），`t.Context` 返回一个在清理函数运行之前取消的上下文，
-`t.Chdir` 在测试期间切换工作目录（Go 1.24）[[Go Authors, 2026c](#ref-go-authors-2026c);
+1.15），`t.Setenv` 在测试期间设置环境变量（Go 1.17），`t.Context` 返回一个在清理函数运行之前取消的上下文，`t.Chdir`
+在测试期间切换工作目录（Go 1.24）[[Go Authors, 2026c](#ref-go-authors-2026c);
 [Go Authors, 2025a](#ref-go-authors-2025a)]。它们的共同点是把资源的生命周期绑定到测试上。修改进程级状态的
 `t.Setenv` 与 `t.Chdir` 不能与 `t.Parallel` 同时使用 [[Go Authors, 2026c](#ref-go-authors-2026c)]。
 
@@ -271,8 +271,8 @@ Go 1.26 的另一项变化有关：`crypto` 各包生成密钥等函数不再使
 
 ## 16.4.7 小结
 
-Go 的测试建立在几条命名约定之上：`go test` 依据约定发现测试，生成一个 `main` 包把它们组织成测试二进制。
-`testing` 包刻意保持朴素，只提供报告原语，把表达失败的责任留给测试作者，并以表驱动测试摊薄这一成本；
+Go 的测试建立在几条命名约定之上：`go test` 依据约定发现测试，生成一个 `main` 包把它们组织成测试二进制。`testing`
+包刻意保持朴素，只提供报告原语，把表达失败的责任留给测试作者，并以表驱动测试摊薄这一成本；
 子测试让表中的每一行可以单独运行、并行执行；模糊测试把覆盖率引导的输入生成纳入同一套约定，
 找到的反例以语料文件的形式成为回归用例。
 
@@ -324,8 +324,8 @@ Go 的测试建立在几条命名约定之上：`go test` 依据约定发现测�
 - <a id="ref-go-authors-2025b"></a>[Go Authors, 2025b] The Go Authors. *Go 1.25 Release Notes.* 2025.
   https://go.dev/doc/go1.25
   `T.Attr`、`T.Output`；`testing/synctest` 转为正式功能。
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/cmd/go/internal/load/test.go：
-  `testmainTmpl`. Go 1.26 源码.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/cmd/go/internal/load/test.go：`testmainTmpl`.
+  Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/go/internal/load/test.go
 - <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. src/cmd/go/internal/test/test.go.
   Go 1.26 源码. https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/go/internal/test/test.go
@@ -350,5 +350,5 @@ Go 的测试建立在几条命名约定之上：`go test` 依据约定发现测�
 - <a id="ref-van-lohuizen-2015"></a>[van Lohuizen, 2015] Marcel van Lohuizen. *Proposal: testing:
   programmatic sub-test and sub-benchmark support.* Go design document, 2015-09-02.
   https://go.dev/design/12166-subtests
-- 本书 [16.5 基准测试与性能剖析](./perf.md)（`b.Loop`、`b.N` 收敛与内存度量的机制）、
-  [16.1 运行时死锁检查](./deadlock.md)、[16.2 竞争检查](./race.md)。
+- 本书 [16.5 基准测试与性能剖析](./perf.md)（`b.Loop`、`b.N` 收敛与内存度量的机制）、[16.1
+  运行时死锁检查](./deadlock.md)、[16.2 竞争检查](./race.md)。

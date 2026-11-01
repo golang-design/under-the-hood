@@ -82,8 +82,8 @@ macOS 上的注释则是「OS X wants >= 8K」。线程启动后，`minit` 调�
 内核按照 C 的调用约定调用处理函数，并不了解 Go 的 G、M、P。因此内核实际调用的是一段汇编代码 `sigtramp`，
 它按 Go 的约定整理参数后调用 `sigtrampgo`。`sigtrampgo` 先调用 `sigfwdgo` 判断这个信号是否应当转交给非 Go
 的处理函数；然后取得被打断的 goroutine。若被打断的线程上没有 G，或者它是一个正在执行 C 代码的 extra M，
-就交给 `badsignal` 处理，后者借用一个 extra M 来运行 Go 代码（[9.5.5](./thread.md)）。通常情况下，
-`sigtrampgo` 把当前 G 切换为本线程的 `gsignal`，再调用 `sighandler`：
+就交给 `badsignal` 处理，后者借用一个 extra M 来运行 Go 代码（[9.5.5](./thread.md)）。通常情况下，`sigtrampgo`
+把当前 G 切换为本线程的 `gsignal`，再调用 `sighandler`：
 
 ```go
 // sigtrampgo：信号处理的 Go 入口（示意）
@@ -124,8 +124,8 @@ const (
 
 例如在 Linux 上，`SIGINT`、`SIGTERM` 与 `SIGHUP` 标记为 `_SigNotify + _SigKill`，`SIGQUIT` 标记为
 `_SigNotify + _SigThrow`，`SIGSEGV` 标记为 `_SigPanic + _SigUnblock`，`SIGURG` 标记为
-`_SigNotify + _SigIgn`。`os/signal` 的文档据此总结了默认行为：同步信号转换为 panic；`SIGHUP`、`SIGINT`、
-`SIGTERM` 使程序退出；`SIGQUIT` 等信号使程序打印栈回溯后退出，因此在终端上按 Ctrl-\ 可以看到所有
+`_SigNotify + _SigIgn`。`os/signal` 的文档据此总结了默认行为：同步信号转换为 panic；`SIGHUP`、`SIGINT`、`SIGTERM`
+使程序退出；`SIGQUIT` 等信号使程序打印栈回溯后退出，因此在终端上按 Ctrl-\ 可以看到所有
 goroutine 的栈 [[Go Authors, 2026b](#ref-go-authors-2026b)]。分流的整体情况如下：
 
 ```mermaid
@@ -402,24 +402,24 @@ Java 虚拟机面对的是同样的问题。HotSpot 使用 `SIGSEGV`、`SIGBUS`�
 信号是进程中稀缺的共享资源，因此 Go 1.14 为异步抢占选择信号时颇为谨慎。`signal_unix.go` 中 `sigPreempt`
 的注释列出了四条启发式规则 [[Go Authors, 2026a](#ref-go-authors-2026a)]：
 
-1. 调试器默认应当放行这个信号。在 Linux 上，这样的信号有 `SIGALRM`、`SIGURG`、`SIGCHLD`、`SIGIO`、
-   `SIGVTALRM`、`SIGPROF`、`SIGWINCH`，以及若干 glibc 内部信号。
+1. 调试器默认应当放行这个信号。在 Linux 上，这样的信号有 `SIGALRM`、`SIGURG`、`SIGCHLD`、`SIGIO`、`SIGVTALRM`、`SIGPROF`、`SIGWINCH`，
+   以及若干 glibc 内部信号。
 2. 在 Go 与 C 混合的程序中，它不应被 libc 内部使用，例如 `SIGCANCEL` 与 `SIGSETXID`。
-3. 它应当可以虚假地到达而不造成后果。`SIGALRM` 不合适，因为处理函数无法分辨它是否由真正的定时器引起；
-   `SIGUSR1` 与 `SIGUSR2` 也不合适，因为应用程序常赋予它们实际的含义。
+3. 它应当可以虚假地到达而不造成后果。`SIGALRM` 不合适，因为处理函数无法分辨它是否由真正的定时器引起；`SIGUSR1`
+   与 `SIGUSR2` 也不合适，因为应用程序常赋予它们实际的含义。
 4. 它不能是实时信号，因为 macOS 等平台没有实时信号。
 
 `SIGURG` 满足全部条件。它原本用于报告套接字上的带外数据，而带外数据几乎无人使用，`SIGURG`
-甚至不说明是哪个套接字，本身就近乎无用；即便有应用程序使用它，也必须能够容忍虚假的 `SIGURG`。注释还提到，
-`SIGIO` 也不失为一个选择，只是更可能被实际使用。抢占机制的设计动机与实现见 [9.7](./preemption.md)
+甚至不说明是哪个套接字，本身就近乎无用；即便有应用程序使用它，也必须能够容忍虚假的 `SIGURG`。注释还提到，`SIGIO`
+也不失为一个选择，只是更可能被实际使用。抢占机制的设计动机与实现见 [9.7](./preemption.md)
 及其设计文档 [[Clements, 2019a](#ref-clements-2019a)]。
 
 这一选择带来了一个用户可见的后果。信号会打断阻塞中的慢速系统调用，使其以 `EINTR` 失败。Go 1.14
 的发布说明指出，由于抢占的实现，Unix 系统上的 Go 程序将比以往收到更多的信号，使用 `syscall` 或
 `golang.org/x/sys/unix` 的程序会看到更多以 `EINTR` 失败的慢速系统调用，这些程序必须处理这类错误，
 最常见的做法是重试 [[Go Authors, 2020](#ref-go-authors-2020)]。Go 安装处理函数时虽然带有 `SA_RESTART`
-标志，但它只能使部分系统调用自动重启：按照 `signal(7)` 的说明，`poll`、`select`、`epoll_wait`、
-`nanosleep`，以及设置了超时的套接字操作，无论是否设置 `SA_RESTART`，被信号处理函数打断后都会以 `EINTR`
+标志，但它只能使部分系统调用自动重启：按照 `signal(7)` 的说明，`poll`、`select`、`epoll_wait`、`nanosleep`，
+以及设置了超时的套接字操作，无论是否设置 `SA_RESTART`，被信号处理函数打断后都会以 `EINTR`
 失败 [[Linux man-pages, n.d.b](#ref-linux-man-pages-ndb)]。标准库在 `os` 与 `internal/poll` 中以
 `ignoringEINTR` 等辅助函数重试这类系统调用，直接调用 `syscall` 的代码则需要自己处理。
 若需要排查与抢占信号有关的问题，可以设置 `GODEBUG=asyncpreemptoff=1` 关闭异步抢占。
@@ -448,8 +448,8 @@ Java 虚拟机面对的是同样的问题。HotSpot 使用 `SIGSEGV`、`SIGBUS`�
   35586f718c, 2012. https://golang.org/cl/3749041
 - <a id="ref-go-authors-2020"></a>[Go Authors, 2020] The Go Authors. Go 1.14 Release Notes, 2020.
   https://go.dev/doc/go1.14
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `runtime/signal_unix.go`、
-  `runtime/sigqueue.go`. https://github.com/golang/go/blob/master/src/runtime/signal_unix.go
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `runtime/signal_unix.go`、`runtime/sigqueue.go`.
+  https://github.com/golang/go/blob/master/src/runtime/signal_unix.go
   `sighandler`、`sigtramp`/`sigtrampgo`、`sigsend`/`signal_recv`，以及 `sigPreempt = _SIGURG`
   的选型注释（本节对照 Go 1.26）。
 - <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `os/signal` 包文档与
@@ -481,5 +481,5 @@ Java 虚拟机面对的是同样的问题。HotSpot 使用 `SIGSEGV`、`SIGBUS`�
   on Darwin. Go commit c485e8b559, 2019. https://go.dev/cl/184169
 - <a id="ref-zhang-2019"></a>[Zhang, 2019] Cherry Zhang. runtime: always use Go signal stack in non-cgo
   program. Go commit 73d20f8186, 2019. https://go.dev/cl/207445
-- 本书 [9.3 MPG 模型与并发调度单元](./mpg.md)、[9.7 协作与抢占](./preemption.md)、
-  [第 14 章 执行栈管理](../../part4memory/ch14stack)。
+- 本书 [9.3 MPG 模型与并发调度单元](./mpg.md)、[9.7 协作与抢占](./preemption.md)、[第
+  14 章 执行栈管理](../../part4memory/ch14stack)。

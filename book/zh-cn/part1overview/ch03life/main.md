@@ -113,11 +113,11 @@ func main() { // runtime.main，运行在主 goroutine 上
 链接器布置运行时的代码时尚不知道 `main` 包的地址，因此这里经由函数值间接调用。
 
 `lockOSThread` 是为少数平台准备的：某些系统库只允许在进程的主线程上调用，例如 macOS 的图形界面库。
-初始化期间，主 goroutine 始终绑定在主线程上；如果在 `init` 中调用 `runtime.LockOSThread`，
-`main.main` 也将在主线程上运行。
+初始化期间，主 goroutine 始终绑定在主线程上；如果在 `init` 中调用 `runtime.LockOSThread`，`main.main`
+也将在主线程上运行。
 
-由这段代码可以得出一个容易被忽视的事实：
-**所有包的初始化代码与 `main.main` 都在同一个 goroutine 上依次执行。** `init` 中可以启动新的 goroutine，
+由这段代码可以得出一个容易被忽视的事实：**所
+有包的初始化代码与 `main.main` 都在同一个 goroutine 上依次执行。** `init` 中可以启动新的 goroutine，
 但两个 `init` 之间、最后一个 `init` 与 `main.main` 之间不存在并发。例外出现在以 `-buildmode=c-archive` 或
 `c-shared` 构建的库中：C 线程可能在 Go 的初始化完成之前就回调 Go 函数，运行时以一个名为 `main_init_done`
 的 channel 让它等待初始化结束 [[Taylor, 2016](#ref-taylor-2016)]。
@@ -299,10 +299,10 @@ func doInit1(t *initTask) {
 的程序不会进入 `case 1`。
 
 这种由链接器排序、运行时执行的分工是 Go 1.21 引入的 [[Go Authors, 2023](#ref-go-authors-2023)]。在此之前，
-运行时在初始化一个包之前，会先递归地初始化它所导入的包（Go 1.20 的 `initTask` 中带有一个依赖列表，
-`doInit` 依次递归处理）。语言规范只要求被导入的包先于导入者初始化，并未规定两个互不依赖的包的先后。
-依赖列表的次序由编译器处理 `import` 声明的先后决定，因此实际顺序取决于 `import` 语句的书写顺序这类细节。
-Go 1.21 把「按导入路径排序、选取第一个可初始化的包」写入规范，初始化顺序从此唯一确定。
+运行时在初始化一个包之前，会先递归地初始化它所导入的包（Go 1.20 的 `initTask` 中带有一个依赖列表，`doInit`
+依次递归处理）。语言规范只要求被导入的包先于导入者初始化，并未规定两个互不依赖的包的先后。
+依赖列表的次序由编译器处理 `import` 声明的先后决定，因此实际顺序取决于 `import` 语句的书写顺序这类细节。Go
+1.21 把「按导入路径排序、选取第一个可初始化的包」写入规范，初始化顺序从此唯一确定。
 少数旧程序依赖了某种未经规定的顺序，例如两个互不导入的包向同一张全局表注册内容，升级后行为可能发生变化。
 正确的做法是通过 `import` 显式表达依赖关系。
 
@@ -407,8 +407,8 @@ fatal error: no goroutines (main called runtime.Goexit) - deadlock!
 
 「主线程结束即进程结束」并不是唯一的设计。
 
-C 语言规定，从 `main` 返回等同于调用 `exit`，而在 Linux、macOS 等系统上，`exit` 会终止进程中的所有线程。
-Go 沿用了这一规则。Java 的规则不同：只要还有非守护线程在运行，`main` 返回后程序就不会退出；
+C 语言规定，从 `main` 返回等同于调用 `exit`，而在 Linux、macOS 等系统上，`exit` 会终止进程中的所有线程。Go
+沿用了这一规则。Java 的规则不同：只要还有非守护线程在运行，`main` 返回后程序就不会退出；
 只有被标记为**守护线程**（daemon thread）的后台线程，才会在其他线程全部结束时被一并终止
 [[Gosling et al., 2023](#ref-gosling-et-al-2023)]。
 
@@ -419,8 +419,8 @@ goroutine 是否仍在运行，也无法从外部终止它。如果运行时在�
 常见错误。
 
 这一问题还有更一般的讨论。2018 年，Nathaniel J. Smith 在《Notes on structured concurrency, or: Go
-statement considered harmful》一文中 [[Smith, 2018](#ref-smith-2018)]把 `go` 语句比作早年的 `goto`：
-`goto` 使控制流可以跳到程序的任意位置，`go` 则使一段并发执行的代码比启动它的函数存活得更久。
+statement considered harmful》一文中 [[Smith, 2018](#ref-smith-2018)]把 `go` 语句比作早年的 `goto`：`goto`
+使控制流可以跳到程序的任意位置，`go` 则使一段并发执行的代码比启动它的函数存活得更久。
 二者都破坏了一个基本的推理前提，即函数返回时，它所启动的工作已经全部完成。Smith
 主张每个并发任务都应隶属于某个代码块，代码块结束之前必须等待其启动的任务全部结束，
 这种编程方式称为**结构化并发**（structured concurrency）。Go 没有改变 `go` 语句的语义，
@@ -446,8 +446,8 @@ statement considered harmful》一文中 [[Smith, 2018](#ref-smith-2018)]把 `go
 - <a id="ref-go-authors-2023"></a>[Go Authors, 2023] The Go Authors. *Go 1.21 Release Notes*, "Changes to
   the language". https://go.dev/doc/go1.21
   初始化顺序由实现细节变为语言规范的那次修改。
-- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `runtime/proc.go`（`main`、
-  `doInit1`）与 `cmd/link/internal/ld/inittask.go`.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `runtime/proc.go`（`main`、`doInit1`）
+  与 `cmd/link/internal/ld/inittask.go`.
   https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/link/internal/ld/inittask.go
   https://github.com/golang/go/blob/master/src/runtime/proc.go （`func main`、`doInit`、`doInit1`、`initTask`）
   链接器排序与运行时执行的源码。
@@ -467,6 +467,6 @@ statement considered harmful》一文中 [[Smith, 2018](#ref-smith-2018)]把 `go
   more efficiently." Go issue #15943, 2016. https://github.com/golang/go/issues/15943
 - <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. *Command compile.*
   https://go.dev/cmd/compile/
-- 本书 [3.5 Go 程序启动引导](./boot.md)、[9.8 系统监控](../../part3concurrency/ch09sched/sysmon.md)、
-  [11 同步模式](../../part3concurrency/ch11sync)。
+- 本书 [3.5 Go 程序启动引导](./boot.md)、[9.8 系统监控](../../part3concurrency/ch09sched/sysmon.md)、[11
+  同步模式](../../part3concurrency/ch11sync)。
 

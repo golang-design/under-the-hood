@@ -118,8 +118,8 @@ span 索引与堆位图。预留的规模随版本增长：Go 1.0 为 16 GB，Go
 	//           wasm         32       512KB           1  8192 (64KB)
 ```
 
-在 64 位的 Linux 与 macOS 上，堆地址按 48 位计算，每个区域为 64 MiB，地址空间中可容纳约 420 万个区域。
-Windows 使用 4 MiB 的较小区域，因为 Windows 把所有已提交的内存都计入进程的额度，即使这些内存从未被访问；
+在 64 位的 Linux 与 macOS 上，堆地址按 48 位计算，每个区域为 64 MiB，地址空间中可容纳约 420 万个区域。Windows
+使用 4 MiB 的较小区域，因为 Windows 把所有已提交的内存都计入进程的额度，即使这些内存从未被访问；
 对于堆很小的进程，映射的区域空间应当与堆的规模相称 [[Go Authors, 2026a](#ref-go-authors-2026a)]。wasm
 的线性内存同样全部计入程序的占用。Go 1.26 把 wasm 的区域由 4 MiB 缩小为 512 KiB，一个 hello world
 程序所需的线性内存因此由 8 MB 降至 3 MB 以下 [[Mui, 2025](#ref-mui-2025)]。
@@ -200,9 +200,9 @@ flowchart LR
 ```
 
 默认的提示形如 `i<<40 | 0x00c0<<32`，`i` 从 0x7f 递减到 0，链表以 `0x00c000000000` 为首，这就是以往的 Go
-程序在 amd64 等平台上常见的 `0xc000……` 地址的来源。以 0x00c0 开头的地址按小端序存放时，其字节 `c0 00`、
-`c1 00` 等都不是合法的 UTF-8 序列，也远离常见的 `ff`，在内存转储中容易辨认。这一选择沿用自连续堆的时代：
-Go 1.0 的起始地址以 0x00f8 开头，Go 1.1 扩大预留时改为 0x00c0 [[Cox, 2012](#ref-cox-2012)]。当时 Go
+程序在 amd64 等平台上常见的 `0xc000……` 地址的来源。以 0x00c0 开头的地址按小端序存放时，其字节 `c0 00`、`c1 00`
+等都不是合法的 UTF-8 序列，也远离常见的 `ff`，在内存转储中容易辨认。这一选择沿用自连续堆的时代：Go
+1.0 的起始地址以 0x00f8 开头，Go 1.1 扩大预留时改为 0x00c0 [[Cox, 2012](#ref-cox-2012)]。当时 Go
 自身的回收器还是保守式（[13.7](../ch13gc/safe.md)）的，非指针数据恰好与堆地址相同会使本应回收的对象被保
 留，容易辨认的地址可以降低这种误判的几率；如今只有 gccgo 的栈扫描仍需考虑这一点。arm64 是例外：使用 4 KiB
 页与三级页表时，用户地址空间只有 39 位，提示因此以 `0x0040<<32` 为起点。竞态检测器要求堆位于
@@ -311,8 +311,8 @@ stateDiagram-v2
 堆的增长依次经过这些状态。`mheap.sysAlloc` 以区域为单位预留地址（None → Reserved），它没有对应的释放函数，
 堆的地址空间只增不减；它与包级别的 `sysAlloc` 同名但不同义，后者由操作系统选定地址并直接进入 Ready，供
 `persistentalloc` 等堆外的内存使用（[12.2.5](./component.md)）。`mheap.grow` 每次以 4 MiB（wasm 上为
-512 KiB）为单位对预留的空间调用 `sysMap`（Reserved → Prepared），并把这部分内存记为已归还（released）。
-`allocSpan` 分配的页中含有已归还的页时，调用 `sysUsed`（Prepared → Ready），
+512 KiB）为单位对预留的空间调用 `sysMap`（Reserved → Prepared），并把这部分内存记为已归还（released）。`allocSpan`
+分配的页中含有已归还的页时，调用 `sysUsed`（Prepared → Ready），
 因此新映射的内存在第一次被分配时进入 Ready。长期空闲的页由 `sysUnused` 交还操作系统（Ready → Prepared），
 何时交还、交还多少见 [12.7](./pagealloc.md)。
 
@@ -504,5 +504,5 @@ wasm 的区域：这一层的设计至今仍在随平台与使用场景调整。
 - <a id="ref-yang-2025"></a>[Yang, 2025] Lance Yang. runtime: avoid zeroing scavenged memory. Go commit
   27937289dc, 2025. https://go.dev/cl/715160
   随 Go 1.26 发布。
-- 本书 [3.5 Go 程序启动引导](../../part1overview/ch03life/boot.md)、[12.2 组件](./component.md)、
-  [12.7 页分配器](./pagealloc.md)、[第 13 章 垃圾回收器](../ch13gc)。
+- 本书 [3.5 Go 程序启动引导](../../part1overview/ch03life/boot.md)、[12.2 组件](./component.md)、[12.7
+  页分配器](./pagealloc.md)、[第 13 章 垃圾回收器](../ch13gc)。

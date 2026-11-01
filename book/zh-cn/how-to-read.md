@@ -9,10 +9,10 @@ title: "如何阅读本书"
 真正读懂。本书追求的深度，有一部分来自系统、并发与编译等领域数十年的积累，初次接触时门槛确实较高。但
 这并不意味着只能从头到尾逐字攻读。本页介绍几种降低阅读难度的读法。
 
-首先，本书不必从头读到尾。全书六个部分相对独立：[全景与历史](./part1overview/readme.md)、
-[语言特性的实现](./part2lang/readme.md)、[并发](./part3concurrency/readme.md)、
-[内存](./part4memory/readme.md)、[编译器与工具链](./part5toolchain/readme.md)、
-[异构计算与 AI 时代的 Go](./part6hetero/readme.md)。各部分之间虽有交叉引用，却不必依次阅读。读者可以
+首先，本书不必从头读到尾。全书六个部分相对独立：[全景与历史](./part1overview/readme.md)、[语
+言特性的实现](./part2lang/readme.md)、[并发](./part3concurrency/readme.md)、[内
+存](./part4memory/readme.md)、[编译器与工具链](./part5toolchain/readme.md)、[异
+构计算与 AI 时代的 Go](./part6hetero/readme.md)。各部分之间虽有交叉引用，却不必依次阅读。读者可以
 从最关心的部分读起，遇到不熟悉的前置概念再回头查阅。
 
 ## 按背景选择起点
@@ -52,15 +52,15 @@ title: "如何阅读本书"
 **goroutine 调度。** 不宜直接从调度循环读起。先读
 [9.1 调度问题与 GMP 模型](./part3concurrency/ch09sched/model.md)，弄清调度的对象是什么、难点在哪里；
 再读 [9.3 MPG 模型与并发调度单元](./part3concurrency/ch09sched/mpg.md)，它从 goroutine 在协程谱系中的
-位置讲起，说明 G、M、P 三种调度单元在运行时中如何表示。读懂这两节，
-[9.4 调度循环](./part3concurrency/ch09sched/schedule.md)讨论的便只是如何在这些单元之间安排 G 的执行。
+位置讲起，说明 G、M、P 三种调度单元在运行时中如何表示。读懂这两节，[9.4
+调度循环](./part3concurrency/ch09sched/schedule.md)讨论的便只是如何在这些单元之间安排 G 的执行。
 若对进程与线程、用户态与内核态的区别还不清楚，先补上这些概念会省力许多。
 
 **工作窃取。** [9.2 工作窃取式调度](./part3concurrency/ch09sched/steal.md)从一个具体问题开始：每个 P
 各有一条本地队列，负载难免不均，如何在不引入中心瓶颈的前提下平衡负载。第一遍读懂这个问题、工作共享与
 工作窃取的取舍，以及 Go 寻找可运行 G 的顺序即可，9.2.4 中的理论保证留到第二遍。经典的工作窃取以每个
-处理器一个双端队列为基础：所有者在一端存取任务，窃取者从另一端取走任务。Go 的本地队列与此有所不同，
-9.2.4 对此有专门的说明。
+处理器一个双端队列为基础：所有者在一端存取任务，窃取者从另一端取走任务。Go 的本地队列与此有所不同，9.2.4
+对此有专门的说明。
 
 **内存分配。** 从 [12.1 设计原则](./part4memory/ch12alloc/basic.md)与
 [12.2 组件](./part4memory/ch12alloc/component.md)入手：先建立由 mcache、mcentral、mheap 组成的多级

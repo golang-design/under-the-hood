@@ -56,15 +56,15 @@ type hchan struct {
 就依赖这一点（[10.3](./sendrecv.md)）。
 
 另外两个字段服务于其他组件。`timer` 只在 `time.NewTimer` 等函数创建的 channel 上不为空：接收时，
-运行时借助它检查计时器是否已经到期，若已到期而尚未发送，就当场执行发送（[9.10](../ch09sched/timer.md)）。
-`bubble` 记录创建这个 channel 的 `testing/synctest` 气泡（Go 1.25）：气泡之外的 goroutine
-对它收发或关闭都会使程序终止，气泡之内阻塞在它上面的 goroutine 则被视为只能由气泡内的其他 goroutine 唤醒，
-`synctest` 据此判断何时推进虚拟时钟。
+运行时借助它检查计时器是否已经到期，若已到期而尚未发送，就当场执行发送（[9.10](../ch09sched/timer.md)）。`bubble`
+记录创建这个 channel 的 `testing/synctest` 气泡（Go 1.25）：气泡之外的 goroutine
+对它收发或关闭都会使程序终止，气泡之内阻塞在它上面的 goroutine 则被视为只能由气泡内的其他 goroutine 唤醒，`synctest`
+据此判断何时推进虚拟时钟。
 
 ## 10.2.3 环形缓冲区
 
-有缓冲 channel 的元素存放在一个**环形缓冲区**中。`buf` 指向一段能放下 `dataqsiz` 个元素的连续内存，
-`sendx` 与 `recvx` 是两个下标：发送把元素写到 `sendx` 处，然后让它前进一格；接收从 `recvx` 处读出，
+有缓冲 channel 的元素存放在一个**环形缓冲区**中。`buf` 指向一段能放下 `dataqsiz` 个元素的连续内存，`sendx`
+与 `recvx` 是两个下标：发送把元素写到 `sendx` 处，然后让它前进一格；接收从 `recvx` 处读出，
 然后让它前进一格；二者到达末尾后回到 0。`qcount` 记录现有元素的个数，缓冲区满即 `qcount == dataqsiz`，
 空即 `qcount == 0`。第 `i` 个槽的地址由 `chanbuf` 计算：
 
@@ -96,10 +96,10 @@ if c.sendx == c.dataqsiz {
 容量一般不是 2 的幂，取模需要一次除法，比较则不需要。channel 先进先出，
 环形缓冲区使入队与出队都只需移动一个下标，不必搬动元素。
 
-早期的实现并非如此。2011 年 4 月之前，缓冲区是一个环形链表，各元素虽然分配在同一块内存中，却靠指针相连。
-Russ Cox 把它改成了用下标访问的数组，省去了指针的跟随和存储；这一修改同时去掉了 channel
-指向自身内存块的指针。这个自引用构成一个环，而处在环中的内存块不保证能正确执行终结器；当时在一些系统上，
-channel 依靠终结器释放操作系统层面的锁，于是这样的 channel 无法被回收 [[Cox, 2011](#ref-cox-2011)]。
+早期的实现并非如此。2011 年 4 月之前，缓冲区是一个环形链表，各元素虽然分配在同一块内存中，却靠指针相连。Russ
+Cox 把它改成了用下标访问的数组，省去了指针的跟随和存储；这一修改同时去掉了 channel
+指向自身内存块的指针。这个自引用构成一个环，而处在环中的内存块不保证能正确执行终结器；当时在一些系统上，channel
+依靠终结器释放操作系统层面的锁，于是这样的 channel 无法被回收 [[Cox, 2011](#ref-cox-2011)]。
 
 无缓冲 channel 的 `dataqsiz` 为 0，没有缓冲区，值总是在两个 goroutine
 之间直接传递（[10.3](./sendrecv.md)）。
@@ -261,8 +261,8 @@ make(chan *int, 8)       2
 
 ## 10.2.6 锁
 
-`hchan` 最后的 `lock` 保护 `hchan` 的所有字段，以及阻塞在这个 channel 上的 `sudog` 的 `g`、`next`、
-`prev`、`elem` 等字段。发送、接收、关闭与 `select` 在读写这些状态之前都要先获取它。内存模型对 channel
+`hchan` 最后的 `lock` 保护 `hchan` 的所有字段，以及阻塞在这个 channel 上的 `sudog` 的 `g`、`next`、`prev`、`elem`
+等字段。发送、接收、关闭与 `select` 在读写这些状态之前都要先获取它。内存模型对 channel
 的保证（[10.1](./model.md)）就是在这把锁的临界区中实现的，详见 [10.6](./lockfree.md)。
 
 这把锁带有一条纪律，写在它的注释中：持有它时不得改变另一个 goroutine 的状态，特别是不得唤醒一个
@@ -273,11 +273,10 @@ goroutine，否则可能与栈收缩形成死锁。原因在于加锁的次序�
 并修正了当时唯一违反它的 `closechan` [[Clements, 2016](#ref-clements-2016)]。这项工作的起因是 Rhys
 Hiltner 报告的 issue #12967：在标记终止期间收缩栈，显著延长了停顿，涉及的正是
 [9.11](../ch09sched/numa.md) 中那个拥有大量 goroutine 的程序。因此，发送、
-接收与关闭都在持锁时把等待者从队列中摘下，释放锁之后才调用 `goready` 唤醒它们（[10.3](./sendrecv.md)、
-[10.4](./close.md)）。
+接收与关闭都在持锁时把等待者从队列中摘下，释放锁之后才调用 `goready` 唤醒它们（[10.3](./sendrecv.md)、[10.4](./close.md)）。
 
-用一把锁保护整个 channel，实现简单，正确性容易论证，代价是同一个 channel 上的并发操作在这把锁上串行。
-Dmitry Vyukov 在 2014 年 1 月的设计文档中提出过一系列提速 channel 的办法，目标包括加快无竞争的操作、
+用一把锁保护整个 channel，实现简单，正确性容易论证，代价是同一个 channel 上的并发操作在这把锁上串行。Dmitry
+Vyukov 在 2014 年 1 月的设计文档中提出过一系列提速 channel 的办法，目标包括加快无竞争的操作、
 有竞争的生产者消费者场景、失败的非阻塞操作与 `select`；文档同时把「让 channel 完全无锁」列为非目标，
 理由是这会使实现复杂得多，并让常见情形变慢 [[Vyukov, 2014a](#ref-vyukov-2014a)]。同年 8 月，Vyukov
 为失败的非阻塞操作加入了不加锁的快速路径，在 `GOMAXPROCS` 为 4 时耗时降低了 97%
@@ -294,8 +293,8 @@ Dmitry Vyukov 在 2014 年 1 月的设计文档中提出过一系列提速 chann
 - <a id="ref-cox-2011"></a>[Cox, 2011] Russ Cox. runtime: drop chan circular linked list in favor of
   circular buffer. Go commit 507df959e4, 2011. https://github.com/golang/go/commit/507df959e4
   修复 issue #1676。
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *runtime/chan.go*（`hchan`、
-  `waitq`、 `makechan`、`chanbuf`，含开头的不变式注释）.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *runtime/chan.go*（`hchan`、`waitq`、`makechan`、`chanbuf`，
+  含开头的不变式注释）.
   https://github.com/golang/go/blob/master/src/runtime/chan.go
   本节对照 Go 1.26。
 - <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *runtime/runtime2.go*（`sudog`
@@ -311,5 +310,5 @@ Dmitry Vyukov 在 2014 年 1 月的设计文档中提出过一系列提速 chann
 - <a id="ref-vyukov-2014b"></a>[Vyukov, 2014b] Dmitry Vyukov. runtime: add fast paths to non-blocking
   channel operations. Go commit f6ceefa2bf, 2014. https://github.com/golang/go/commit/f6ceefa2bf
   随 Go 1.4 发布。
-- 本书 [10.1 通道与 CSP 的工程化](./model.md)、[10.3 收发与直接传递](./sendrecv.md)、
-  [11.9 内存一致模型](../ch11sync/mem.md)、[12 内存分配](../../part4memory/ch12alloc)。
+- 本书 [10.1 通道与 CSP 的工程化](./model.md)、[10.3 收发与直接传递](./sendrecv.md)、[11.9
+  内存一致模型](../ch11sync/mem.md)、[12 内存分配](../../part4memory/ch12alloc)。

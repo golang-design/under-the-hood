@@ -128,8 +128,8 @@ func nextslicecap(newLen, oldCap int) int {
 ```
 
 增长策略以 256 为界。旧容量小于 256 时容量翻倍，小切片增长较快，以减少搬迁次数。旧容量达到 256 之后，
-每轮增加 $\tfrac{1}{4}(\text{newcap} + 768)$：`newcap` 较小时，常数项 768 所占比重较大，增长倍率接近 2；
-`newcap` 很大时，常数项可以忽略，倍率趋于 $1.25$。于是增长倍率从 2 连续地过渡到 1.25。这一公式由 Keith
+每轮增加 $\tfrac{1}{4}(\text{newcap} + 768)$：`newcap` 较小时，常数项 768 所占比重较大，增长倍率接近 2；`newcap`
+很大时，常数项可以忽略，倍率趋于 $1.25$。于是增长倍率从 2 连续地过渡到 1.25。这一公式由 Keith
 Randall 于 2021 年提出并在 Go 1.18 中采用 [[Randall, 2021](#ref-randall-2021)]；此前的策略是容量小于 1024
 时翻倍、此后按 1.25 倍增长，倍率在 1024 处突变。
 
@@ -236,8 +236,8 @@ func main() {
 ```
 
 在 Go 1.26 下，追加 4 个元素的 `local` 完全不分配；同样的循环在 `escaping` 中只在返回时分配一次，而不是
-容量为 1、2、4 时各分配一次。追加 100 个元素时，栈上的缓冲区很快用尽，此后与通常的情形相同，容量为 8、16、
-32、64、128 时各分配一次，共 5 次。关闭这项优化后，四个数字依次为 3、8、3、8。
+容量为 1、2、4 时各分配一次。追加 100 个元素时，栈上的缓冲区很快用尽，此后与通常的情形相同，容量为 8、16、32、64、128
+时各分配一次，共 5 次。关闭这项优化后，四个数字依次为 3、8、3、8。
 
 与此相关，Go 1.26 还实现了 `growsliceNoAlias`：当编译器能够证明切片的旧底层数组没有其他引用时，扩容后可以
 立即释放旧数组，而不必等待垃圾回收。这项功能由实验开关 `GOEXPERIMENT=runtimefreegc` 控制，在 Go 1.26 中
@@ -359,8 +359,8 @@ func Delete[S ~[]E, E any](s S, i, j int) S {
 - <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *The Go Programming Language
   Specification*, "Slice expressions". https://go.dev/ref/spec#Slice_expressions
   包括完整切片表达式 `a[lo:hi:max]` 的定义。
-- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. *`slices` 包文档*（Go 1.21，
-  `Clone` / `Delete` / `Insert` / `Grow`）. https://pkg.go.dev/slices
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. *`slices` 包文档*（Go 1.21，`Clone`
+  / `Delete` / `Insert` / `Grow`）. https://pkg.go.dev/slices
 - <a id="ref-go-authors-2024"></a>[Go Authors, 2024] The Go Authors. *Go 1.22 Release Notes*, "slices".
   https://go.dev/doc/go1.22
   缩短切片的 `Delete`、`DeleteFunc`、`Compact`、`CompactFunc` 与 `Replace` 改为清零被移出的元素。

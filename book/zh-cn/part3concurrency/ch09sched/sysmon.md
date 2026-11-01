@@ -49,8 +49,8 @@ goroutine 放入运行队列。真正的工作交给在普通 P 上运行的 gor
 没有 P 时，被注入的 G 进入全局队列，运行时再按空闲 P 的数量启动 M 来运行它们。
 
 没有 P 同样意味着 sysmon 不受调度状况的影响。它通过 `usleep` 与 `notetsleep` 休眠，二者都直接建立在
-操作系统的原语之上（`note` 见 [9.5](./thread.md)），不需要等待任何 P 空闲下来。即使所有 P 都被占住，
-sysmon 仍会按时醒来。监视者必须独立于被监视的系统，这是看门狗（watchdog）类机制的共同原则。
+操作系统的原语之上（`note` 见 [9.5](./thread.md)），不需要等待任何 P 空闲下来。即使所有 P 都被占住，sysmon
+仍会按时醒来。监视者必须独立于被监视的系统，这是看门狗（watchdog）类机制的共同原则。
 
 sysmon 的这种身份也体现在死锁检测中。`checkdead` 在 M 转入空闲（`mput`）、被锁定的 M 转入空闲
 （`incidlelocked`）、M 退出（`mexit`）时，以及模板线程与 sysmon 启动时被调用。它以 M 的总数减去空闲的 M、
@@ -73,8 +73,8 @@ Go 1.0 的调度器用一个原子变量 `sched.atomic` 记录正在执行 Go �
 代码」[[Vyukov, 2012](#ref-vyukov-2012)]。
 
 Go 1.1 的实现换了一条路，提交说明称之为「更快的非阻塞系统调用进入与退
-出」[[Vyukov, 2013a](#ref-vyukov-2013a)]。`entersyscall` 不再让出任何东西，只把 P 的状态改为 `Psyscall`，
-P 仍留在原来的 M 上；系统调用很快返回时，M 直接继续执行。对于迟迟不返回的调用，由新增的 sysmon
+出」[[Vyukov, 2013a](#ref-vyukov-2013a)]。`entersyscall` 不再让出任何东西，只把 P 的状态改为 `Psyscall`，P
+仍留在原来的 M 上；系统调用很快返回时，M 直接继续执行。对于迟迟不返回的调用，由新增的 sysmon
 在事后发现，并把 P 取走交给其他 M。Go 1.1 的 sysmon 只有两项职责：取回陷在系统调用中的 P，
 以及在长时间无人轮询时代为轮询网络。
 
@@ -154,8 +154,8 @@ func sysmon() {
 的返回值，而返回值只统计从系统调用中取走的 P（9.8.4）。抢占请求与网络轮询注入的 G 都不使 `idle` 归零。
 
 按这一规则，sysmon 先以 20 µs 的间隔睡 51 轮（约 1 ms），然后每轮翻倍，依次睡 40、80、……、5120 µs，
-共 8 轮（合计约 10 ms），之后保持在 10 ms 的上限。也就是说，只要大约 11 ms 内没有从系统调用中取回 P，
-sysmon 就降为每 10 ms 巡视一次。这带来两个直接的后果。一个纯计算的程序很少阻塞在系统调用中，sysmon
+共 8 轮（合计约 10 ms），之后保持在 10 ms 的上限。也就是说，只要大约 11 ms 内没有从系统调用中取回 P，sysmon
+就降为每 10 ms 巡视一次。这带来两个直接的后果。一个纯计算的程序很少阻塞在系统调用中，sysmon
 很快稳定在 10 ms 的周期上，而一个时间片必须在两次采样中都被观察到才会被判定超时，所以一个从不让出的
 goroutine 实际要运行 10 ms 至 20 ms 以上才被抢占（见 [9.4.2](./schedule.md) 的测量）。反过来，频繁
 阻塞在系统调用中的程序使 sysmon 保持在 20 µs 的间隔上，P 能够被及时取回。
@@ -247,8 +247,8 @@ goroutine 实际要运行 10 ms 至 20 ms 以上才被抢占（见 [9.4.2](./sch
 
 第二项职责是更新 `GOMAXPROCS`。Go 1.25 起，`GOMAXPROCS` 的默认值会考虑 Linux cgroup 的 CPU 带宽限制，
 并在可用的逻辑 CPU 数或 cgroup 限制变化时自动更新；若用户通过环境变量或 `runtime.GOMAXPROCS` 手动设置过，
-两项行为都自动关闭 [[Go Authors, 2025](#ref-go-authors-2025)]。周期性的检查由 sysmon 每秒至多执行一次：
-`sysmonUpdateGOMAXPROCS` 重新计算默认值，与当前值不同时才需要更新。更新必须停止一切，源码注释直言：
+两项行为都自动关闭 [[Go Authors, 2025](#ref-go-authors-2025)]。周期性的检查由 sysmon 每秒至多执行一次：`sysmonUpdateGOMAXPROCS`
+重新计算默认值，与当前值不同时才需要更新。更新必须停止一切，源码注释直言：
 「sysmon 无法直接停止一切。运行辅助 goroutine 代为执行。」于是 sysmon 把 `updateMaxProcsG` 放入运行队列，
 由它在普通 P 上完成停止一切与调整 [[Pratt, 2025](#ref-pratt-2025)]。
 
@@ -288,16 +288,16 @@ func retake(now int64) uint32 {
 }
 ```
 
-第一类是运行过久的时间片。`schedtick` 在 10 ms（`forcePreemptNS`）内没有变化，说明同一个时间片运行得太久，
-sysmon 便调用 `preemptone` 请求抢占；请求经由函数序言中的检查或异步抢占信号得到响应
+第一类是运行过久的时间片。`schedtick` 在 10 ms（`forcePreemptNS`）内没有变化，说明同一个时间片运行得太久，sysmon
+便调用 `preemptone` 请求抢占；请求经由函数序言中的检查或异步抢占信号得到响应
 [[Clements, 2019](#ref-clements-2019)]，见 [9.4.2](./schedule.md) 与 [9.7](./preemption.md)。
 第二类是陷在系统调用中的 P，sysmon 在条件满足时把它取走并经 `handoffp` 交给其他 M，规则与同步细节见
 [9.5](./thread.md)。若同一时间片超时的 P 恰好处于系统调用中，抢占请求无人响应，`sysretake` 使 sysmon
 不必等待第二次观察就取走 P。返回值 `n` 只统计取走的 P，这正是 9.8.3 中 `idle` 的来源。
 
 第五项职责是强制 GC。按堆的增长触发 GC 的调步算法（[13.3](../../part4memory/ch13gc/pacing.md)）
-有一个盲区：程序若几乎不再分配，堆就到不了下一个目标，上一轮 GC 之后产生的垃圾便会一直留在堆中。
-`gcTriggerTime` 的判据是：`GOGC` 不为 `off`，至少已经发生过一次 GC，并且距上次 GC 已超过
+有一个盲区：程序若几乎不再分配，堆就到不了下一个目标，上一轮 GC 之后产生的垃圾便会一直留在堆中。`gcTriggerTime`
+的判据是：`GOGC` 不为 `off`，至少已经发生过一次 GC，并且距上次 GC 已超过
 `forcegcperiod`（2 分钟）。满足时，sysmon 把常驻的 `forcegc` goroutine 放入运行队列，由它调用 `gcStart`
 发起一轮并发的 GC；开启 `GODEBUG=gctrace=1` 时，这样的 GC 之前会打印一行 `GC forced`。sysmon
 自己只是一个定时的闹钟。
@@ -406,8 +406,8 @@ goroutine 进入队列，等待中的 goroutine 开始一个新的时间片。�
 而由于开启了 `schedtrace`，它仍每轮醒来并按时打印，这正是 9.8.3 所述的例外。
 
 这个示例只能在本地运行：wasm 上既没有 `os/exec` 所需的子进程，也没有 sysmon。后者的影响远不止
-`schedtrace` 失效：没有时间片抢占，没有代为轮询网络，没有强制 GC，也没有 `GOMAXPROCS` 的自动更新；
-[9.4](./schedule.md) 还讨论过，正因为没有 sysmon 抢占，Go 1.23 起运行时在这类平台上完全禁用了 `runnext`。
+`schedtrace` 失效：没有时间片抢占，没有代为轮询网络，没有强制 GC，也没有 `GOMAXPROCS` 的自动更新；[9.4](./schedule.md)
+还讨论过，正因为没有 sysmon 抢占，Go 1.23 起运行时在这类平台上完全禁用了 `runnext`。
 
 ## 9.8.6 与其他系统的比较
 
@@ -436,8 +436,8 @@ HotSpot JVM 的 WatcherThread 在源码中被描述为「用于模拟计时器�
 否则为线程数目标乘以 1 s），就判定发生了饥饿，把线程数目标加一并启动一个新的工作线程。连续两轮没有待处理的
 请求之后，gate thread 停下来等待，直到工作线程再次需要它，这与 sysmon 的深度睡眠相仿。二者的区别在于
 信息的多少。除了 `Task.Wait` 这类会主动通知线程池的阻塞（源码称之为协作式阻塞），.NET 线程池无从得知
-一个工作线程是阻塞在同步 I/O 上还是在计算，只能从队列长时间没有进展来推断；
-Go 的运行时在 `entersyscall` 中已经把 G 标记为 `_Gsyscall`，sysmon 能准确地知道哪一个 P 陷在系统调用中，
+一个工作线程是阻塞在同步 I/O 上还是在计算，只能从队列长时间没有进展来推断；Go
+的运行时在 `entersyscall` 中已经把 G 标记为 `_Gsyscall`，sysmon 能准确地知道哪一个 P 陷在系统调用中，
 因而可以在一到两个周期内作出反应，并且移交的是 P 而不是增加线程。
 
 | 机制 | 检查周期 | 发现异常之后 |
@@ -463,12 +463,11 @@ sysmon 是一个不关联 P、不受调度器支配的线程。它的存在源�
 - <a id="ref-go-authors-2025"></a>[Go Authors, 2025] The Go Authors. Go 1.25 Release Notes, 2025.
   https://go.dev/doc/go1.25
   容器感知的 `GOMAXPROCS` 默认值与周期性更新，以及关闭它们的 `GODEBUG` 设置。
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `runtime/proc.go`（`sysmon`、
-  `retake`、`handoffp`、`preemptone`、`checkdead`、`forcePreemptNS`、`forcegcperiod`）.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `runtime/proc.go`（`sysmon`、`retake`、`handoffp`、`preemptone`、`checkdead`、`forcePreemptNS`、`forcegcperiod`）.
   https://github.com/golang/go/blob/master/src/runtime/proc.go
   另含 `forcegchelper`、`sysmonUpdateGOMAXPROCS`、`schedtrace`（本节对照 Go 1.26）。
-- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `runtime/mgcscavenge.go`
-  （`bgscavenge`、`scavenger.wake`、`sysmonWake`，归还空闲内存的专职 goroutine）.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `runtime/mgcscavenge.go`（`bgscavenge`、`scavenger.wake`、`sysmonWake`，
+  归还空闲内存的专职 goroutine）.
   https://github.com/golang/go/blob/master/src/runtime/mgcscavenge.go
 - <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. `runtime/HACKING.md`.
   https://github.com/golang/go/blob/master/src/runtime/HACKING.md
@@ -525,6 +524,6 @@ sysmon 是一个不关联 P、不受调度器支配的线程。它的存在源�
 - <a id="ref-vyukov-2014"></a>[Vyukov, 2014] Dmitry Vyukov. runtime: remove dedicated scavenger thread. Go
   commit b83d8bd0b8, 2014. https://github.com/golang/go/commit/b83d8bd0b85ff8b60a113bac841bfaf4cce52e3c
   强制 GC 与周期性的内存归还并入 sysmon，同时引入 `forcegc` 辅助 goroutine。
-- 本书 [9.7 协作与抢占](./preemption.md)、[9.5 线程管理](./thread.md)、[9.9 网络轮询器](./poller.md)、
-  [16.1 运行时死锁检查](../../part5toolchain/ch16tools/deadlock.md)、[9.4 调度循环](./schedule.md)、
-  [12.7 页分配器](../../part4memory/ch12alloc/pagealloc.md)。
+- 本书 [9.7 协作与抢占](./preemption.md)、[9.5 线程管理](./thread.md)、[9.9 网络轮询器](./poller.md)、[16.1
+  运行时死锁检查](../../part5toolchain/ch16tools/deadlock.md)、[9.4 调度循环](./schedule.md)、[12.7
+  页分配器](../../part4memory/ch12alloc/pagealloc.md)。

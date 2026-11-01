@@ -83,8 +83,8 @@ release 分别对应 P 与 V，这「简单地证明了管程与条件的概念�
 一个独占状态、逐条处理消息的进程做的也正是这件事。
 
 下面用 Go 把这种对应写出来。两个类型实现同一个资源池：池中有 n 个单元，`Acquire` 取走一个，没有空闲
-单元时等待；`Release` 归还一个。`MonitorPool` 按管程的写法，用一把锁保护计数，用条件变量等待；
-`ServerPool` 按消息式的写法，由一个 goroutine 独占计数，在主循环中逐条处理请求。
+单元时等待；`Release` 归还一个。`MonitorPool` 按管程的写法，用一把锁保护计数，用条件变量等待；`ServerPool`
+按消息式的写法，由一个 goroutine 独占计数，在主循环中逐条处理请求。
 
 ```go {run=true}
 package main
@@ -242,16 +242,16 @@ Go 同时提供两类工具，但安排的位置不同。goroutine、channel 与
 
 锁也不属于任何 goroutine。`sync.Mutex` 的文档写道，一把已锁定的 `Mutex` 不与特定的 goroutine 相关联，
 允许一个 goroutine 加锁、另一个 goroutine 解锁 [[Go Authors, 2026b](#ref-go-authors-2026b)]。
-既然没有持有者，同一个 goroutine 再次加锁也就无从识别，只会阻塞：Go 的互斥锁不可重入。这是有意的设计。
-2010 年，一位把 Java 程序移植到 Go 的用户在 golang-nuts 邮件列表上问到 Go 的互斥锁似乎不可重入，Russ Cox
+既然没有持有者，同一个 goroutine 再次加锁也就无从识别，只会阻塞：Go 的互斥锁不可重入。这是有意的设计。2010
+年，一位把 Java 程序移植到 Go 的用户在 golang-nuts 邮件列表上问到 Go 的互斥锁似乎不可重入，Russ Cox
 答复说，使用互斥锁的根本原因是它保护不变式：加锁等于声明「我需要不变式成立」，或许还有「我将暂时破坏它」；
 解锁等于声明「我不再依赖不变式」以及「若我破坏过它，现已恢复」[[Cox, 2010](#ref-cox-2010)]。若函数 `F`
 持锁时调用了同样加锁的 `G`，可重入锁会让 `G` 的加锁直接成功，而此刻 `F` 可能正处于破坏了不变式的中途。Cox
 因此认为可重入锁「不保护不变式」，并建议把需要在两种情形下调用的函数拆成两个版本：一个假定调用方已经持锁，
 另一个先加锁再调用前者。这里的不变式，与 Hoare 为管程规定的不变式是同一个概念。
 
-goroutine 也没有对外可见的标识，因而也没有与线程局部存储相当的 goroutine 局部存储。Go 的 FAQ 解释说，
-goroutine 是匿名的，为的是在并发代码中可以使用完整的语言：一旦某个 goroutine 有了名字，
+goroutine 也没有对外可见的标识，因而也没有与线程局部存储相当的 goroutine 局部存储。Go 的 FAQ 解释说，goroutine
+是匿名的，为的是在并发代码中可以使用完整的语言：一旦某个 goroutine 有了名字，
 人们就倾向于把所有计算都与它关联，而忽略用多个、甚至共享的 goroutine 处理同一件事的可能。假如 `net/http`
 把每个请求的状态与某个 goroutine 关联，处理请求时就无法再使用更多的 goroutine。
 图形库要求所有操作都在「主线程」上执行，也说明了这种做法在并发语言中有多么别扭。确实有某个 goroutine
@@ -313,8 +313,8 @@ flowchart TB
 后者在主流架构上直接展开为原子指令，不经过函数调用（[11.3](./atomic.md)）。`sync.Mutex` 自 Go 1.24
 起只是一层包装，实现移到了 `internal/sync`。这样做是为了理顺包的依赖：`HashTrieMap` 需要互斥锁，而 `sync`
 又要依赖 `HashTrieMap`，锁的实现因此必须位于两者之下；同一版本中，`sync.Map` 默认改由 `HashTrieMap`
-实现（[11.7](./map.md)）。`Mutex`、`RWMutex` 与 `WaitGroup` 需要等待时，调用运行时 `sema.go` 中的信号量；
-`Cond` 使用同一文件中的 `notifyList`；`Pool` 借助运行时禁止抢占并取得当前 P 的编号，以访问按 P
+实现（[11.7](./map.md)）。`Mutex`、`RWMutex` 与 `WaitGroup` 需要等待时，调用运行时 `sema.go` 中的信号量；`Cond`
+使用同一文件中的 `notifyList`；`Pool` 借助运行时禁止抢占并取得当前 P 的编号，以访问按 P
 划分的缓存，运行时还在每轮垃圾回收开始时清理这些缓存（[11.6](./pool.md)）。
 
 运行时的信号量仍然只有两个操作，`semacquire` 与 `semrelease`，分别对应 Dijkstra 的 P 与 V。但 `sema.go`

@@ -26,8 +26,8 @@ title: "9.3 MPG 模型与并发调度单元"
 - **是否有栈**：**有栈协程**（stackful coroutine）可以在嵌套调用的任意深度挂起，恢复后从挂起点继续执行；
   无栈的机制只能在协程体的顶层挂起。
 
-两人把兼具一等性与有栈性的协程称为**完全协程**（full coroutine），并证明完全协程的表达能力与**一次性续延**
-（one-shot continuation）及一次性部分续延相当。对称与非对称两种形式的表达能力相同，
+两人把兼具一等性与有栈性的协程称为**完全协程**（full coroutine），并证明完全协程的表达能力与**一次性续延**（one-shot
+continuation）及一次性部分续延相当。对称与非对称两种形式的表达能力相同，
 但非对称形式更易于使用。
 
 按这一分类，goroutine 的实现是有栈的。每个 G 拥有独立的栈，挂起时只需把栈指针、程序计数器等少数寄存器保存
@@ -210,9 +210,9 @@ func main() {
 `gFree` 缓存已退出的 G。G 退出后并不释放，而是连同栈一起放回 P 的 `gFree`；若栈已增长到非标准大小，
 则先释放栈，只保留 G 本身。本地链表增至 64 个时，运行时把其中一批转移到全局链表 `sched.gFree`，
 直到本地少于 32 个；本地链表为空时，再从全局链表取回一批，优先取带栈的 G。G 结构本身从不归还给堆：
-所有创建过的 G 都记录在全局切片 `allgs` 中，它只增不减。除运行队列与 `gFree` 之外，P 还缓存 defer 记录、
-sudog、内存页等资源，目的都是让快路径无须加锁。这与内存分配器的 mcache
-（[12.2](../../part4memory/ch12alloc/component.md)）及 `sync.Pool` 的按 P 分片
+所有创建过的 G 都记录在全局切片 `allgs` 中，它只增不减。除运行队列与 `gFree` 之外，P 还缓存 defer 记录、sudog、
+内存页等资源，目的都是让快路径无须加锁。这与内存分配器的 mcache（[12.2](../../part4memory/ch12alloc/component.md)）
+及 `sync.Pool` 的按 P 分片
 （[11.6](../ch11sync/pool.md)）是同一种设计。
 
 ## 9.3.3 g0 与栈切换
@@ -220,8 +220,8 @@ sudog、内存页等资源，目的都是让快路径无须加锁。这与内存
 调度代码同样需要一个栈来执行，但它不能在用户 goroutine 的栈上执行，原因有二。其一，
 用户栈会在增长时整段复制到新地址，运行时代码若持有指向旧栈的指针，复制后便会失效。其二，
 栈增长本身就是运行时操作：函数序言发现栈空间不足时调用 `morestack`，而扩容不可能在已经耗尽的栈上完成。
-因此每个 M 都有一个专用的 `g0`，其栈大小固定、永不移动：在 Linux 等平台上由运行时分配 16 KiB，在 Darwin、
-Windows 等平台以及启用 cgo 时直接使用操作系统为线程分配的栈。g0 的栈不能增长，若在 g0 上触发 `morestack`，
+因此每个 M 都有一个专用的 `g0`，其栈大小固定、永不移动：在 Linux 等平台上由运行时分配 16 KiB，在 Darwin、Windows
+等平台以及启用 cgo 时直接使用操作系统为线程分配的栈。g0 的栈不能增长，若在 g0 上触发 `morestack`，
 运行时会直接终止程序（`badmorestackg0`）。在系统栈上执行的代码不可被抢占，GC 也不扫描系统栈
 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
 
@@ -234,8 +234,8 @@ Windows 等平台以及启用 cgo 时直接使用操作系统为线程分配的�
   完成后切回原 G 继续执行。它用于必须在系统栈上执行的运行时片段，例如 `newproc` 创建 G 的过程与 GC
   的标记工作。
 
-一次典型的阻塞与恢复由此构成：G 在 channel 上阻塞时调用 `gopark`，后者经 `mcall(park_m)` 切换到 g0；
-`park_m` 把 G 置为 `_Gwaiting`，然后调用 `schedule`；调度器选出另一个 G，经 `execute` 与 `gogo`
+一次典型的阻塞与恢复由此构成：G 在 channel 上阻塞时调用 `gopark`，后者经 `mcall(park_m)` 切换到 g0；`park_m`
+把 G 置为 `_Gwaiting`，然后调用 `schedule`；调度器选出另一个 G，经 `execute` 与 `gogo`
 恢复其现场。被阻塞的 G 日后由 `goready` 放回运行队列（[9.4](./schedule.md)）。此外，每个 M
 还有一个处理信号的 `gsignal`，它在 Linux 上的栈为 32 KiB，详见 [9.6](./signal.md)。
 
@@ -259,8 +259,8 @@ G 的状态保存在 `atomicstatus` 中。状态的实质是所有权：它规�
 
 值 5 与 7 是废弃的状态 `_Gmoribund_unused` 与 `_Genqueue_unused`，前者因 gdb 脚本中硬编码了其数值而保留。
 另有一个 `_Gscan` 位（`0x1000`）：GC 扫描某个 G 的栈时，把它与当前状态组合（如 `_Gscanwaiting`），
-表示栈暂归扫描者所有，扫描结束后清除该位即恢复原状态，详见[第 13 章](../../part4memory/ch13gc)。
-`_Gscanrunning` 是例外，它只在 GC 通知一个运行中的 G 自行扫描栈时短暂阻止状态迁移。
+表示栈暂归扫描者所有，扫描结束后清除该位即恢复原状态，详见[第 13 章](../../part4memory/ch13gc)。`_Gscanrunning`
+是例外，它只在 GC 通知一个运行中的 G 自行扫描栈时短暂阻止状态迁移。
 
 状态迁移统一经 `casgstatus` 以比较并交换（CAS）完成。若目标 G 正处于 `_Gscan` 状态，`casgstatus`
 会循环等待：起初以 `procyield` 忙等，约 5 µs 后改用 `osyield` 让出线程，直到扫描者清除该位。扫描者与 G
@@ -357,8 +357,8 @@ goroutine 数量，即 `/sched/goroutines/` 下的 runnable、running、waiting 
 [[Go Authors, 2026b](#ref-go-authors-2026b)]。
 
 Go 1.26 新增的 `_Gleaked` 是一个诊断状态，服务于基于 GC 的 goroutine 泄漏检测
-[[Saioc and Chabbi, 2025](#ref-saioc-and-chabbi-2025)]。所谓**泄漏**，是指一个 goroutine 阻塞在 channel、
-`sync.Mutex`、`sync.Cond` 等同步原语上，而这个原语再也不可能被解除阻塞
+[[Saioc and Chabbi, 2025](#ref-saioc-and-chabbi-2025)]。所谓**泄漏**，是指一个 goroutine 阻塞在 channel、`sync.Mutex`、`sync.Cond`
+等同步原语上，而这个原语再也不可能被解除阻塞
 [[Go Authors, 2026b](#ref-go-authors-2026b)]。检测利用了 GC 已有的可达性分析。在一次带检测的 GC 中，
 运行时起初只把可能运行的 goroutine 的栈作为根。标记过程中，若某个阻塞 goroutine 所等待的 channel
 或同步对象已被标记，它就有可能被唤醒，于是它的栈也加入根集合，标记继续进行，直到不再有新的 goroutine
@@ -455,8 +455,8 @@ futex）；`startm` 从空闲链表取出一个 M（没有则创建新线程）�
 无论它是否在自旋。然而非自旋的 M 不参与窃取，却会在复查中发现工作，于是反复回到起点、跳过窃取、再次复查，
 形成无用的空转。Go 1.17 因此改为只让自旋的 M 复查 [[Pratt, 2021](#ref-pratt-2021)]。
 这一改动又引入了新的竞争：非自旋的 M 正要放下 P 并暂止时，提交工作的线程恰好找不到空闲的 P，
-便以为系统已满载而不唤醒任何线程，结果空闲的 P 与可运行的工作同时存在 [[Mills, 2021](#ref-mills-2021)]。
-Go 1.20 引入 `sched.needspinning` 标志加以弥补：提交者找不到空闲 P 时设置该标志，非自旋的 M 在放下 P
+便以为系统已满载而不唤醒任何线程，结果空闲的 P 与可运行的工作同时存在 [[Mills, 2021](#ref-mills-2021)]。Go
+1.20 引入 `sched.needspinning` 标志加以弥补：提交者找不到空闲 P 时设置该标志，非自旋的 M 在放下 P
 之前检查它，若已设置便放弃暂止，转而成为自旋的 M。修复提交指出，若不处理这一竞争，最坏情况下所有 P
 同时进入空闲，程序将完全死锁 [[Pratt, 2022](#ref-pratt-2022)]。
 
@@ -480,8 +480,8 @@ Go 1.20 引入 `sched.needspinning` 标志加以弥补：提交者找不到空�
 - <a id="ref-go-authors-2022"></a>[Go Authors, 2022] The Go Authors. Go 1.19 Release Notes.
   https://go.dev/doc/go1.19
   依据历史平均栈用量确定 goroutine 的初始栈大小。
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `runtime/runtime2.go`、`proc.go`、
-  `stack.go`、`stubs.go`、`HACKING.md` 与 `cmd/compile/abi-internal.md`.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `runtime/runtime2.go`、`proc.go`、`stack.go`、`stubs.go`、`HACKING.md`
+  与 `cmd/compile/abi-internal.md`.
   https://github.com/golang/go/tree/master/src/runtime
   `g`、`m`、`p`、`gobuf` 结构，`_G*` 状态常量与 `casgstatus`，线程的自旋、暂止与复始（本节对照 Go 1.26）。
 - <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. Go 1.26 Release Notes.

@@ -69,8 +69,8 @@ flowchart TD
 
 统一 IR 在 Go 1.18 的开发分支上以实验形式加入 [[Dempsky, 2021](#ref-dempsky-2021)]，Go 1.20 成为默认
 [[Dempsky, 2022](#ref-dempsky-2022)]，Go 1.21 删除了旧的 noding 路径
-[[Dempsky, 2023](#ref-dempsky-2023)]。它的格式长期只由 `noder` 包的代码隐式定义；Go 1.25 起，
-`noder/doc.go` 开始以文法的形式描述这份字节流：一个包由头部、若干节（字符串、元信息、位置、包、名字、
+[[Dempsky, 2023](#ref-dempsky-2023)]。它的格式长期只由 `noder` 包的代码隐式定义；Go 1.25 起，`noder/doc.go`
+开始以文法的形式描述这份字节流：一个包由头部、若干节（字符串、元信息、位置、包、名字、
 类型、对象、函数体等）与一个 8 字节的 SHA-256 指纹组成 [[Freeman, 2025](#ref-freeman-2025)]。泛型的实现，
 即按 GC 形状共享代码并以字典传递类型信息，也建立在统一 IR 之上，详见
 [8.1](../../part2lang/ch08generics/history.md)。
@@ -78,8 +78,8 @@ flowchart TD
 ## 15.2.2 ir 与 walk
 
 `ir` 的节点是一棵树，与源码结构大体对应，但已经过类型检查，名字都已解析。直到 Go 1.16，
-整个前端只用一种庞大的 `Node` 结构体表示所有节点，`Left`、`Right`、`List` 等字段按操作的不同而含义各异。
-2020 年 11 月至 12 月，Russ Cox 在 `dev.regabi` 分支上把它改造为一套有类型的中间表示：
+整个前端只用一种庞大的 `Node` 结构体表示所有节点，`Left`、`Right`、`List` 等字段按操作的不同而含义各异。2020
+年 11 月至 12 月，Russ Cox 在 `dev.regabi` 分支上把它改造为一套有类型的中间表示：
 先为每个字段加上存取方法并改写所有调用者 [[Cox, 2020a](#ref-cox-2020a)]，再把 `*Node` 替换为接口 `Node`
 [[Cox, 2020b](#ref-cox-2020b)]，随后逐步分离出 `ir.Name`、`ir.Func`、`ir.CallExpr` 等具体的节点类型，
 遍历与复制节点的方法改由程序根据结构体定义生成。这些改动大多由重构工具脚本机械地完成，随 Go 1.17 发布。
@@ -114,8 +114,8 @@ type Node interface {
 内联、去虚化（[15.3](./optimize.md)）与逃逸分析（[15.5](./escape.md)）都在 `ir` 上进行。中端的最后一趟是
 walk，它有两项任务：把复杂的语句分解为一系列简单语句，引入临时变量并遵守求值顺序，这一步又称 order；
 把高级的语言构造降级为更基本的形式，例如把 `switch` 转换为二分查找或跳转表，把映射与 channel
-的操作替换为运行时调用 [[Go Authors, 2026a](#ref-go-authors-2026a)]
-（[3.2.5](../../part1overview/ch03life/compile.md)）。下面的函数交换两个指针所指的值：
+的操作替换为运行时调用 [[Go Authors, 2026a](#ref-go-authors-2026a)]（[3.2.5](../../part1overview/ch03life/compile.md)）。
+下面的函数交换两个指针所指的值：
 
 ```go
 //go:noinline
@@ -350,8 +350,8 @@ var passOrder = [...]constraint{
 
 ## 15.2.6 重写规则
 
-多数趟是手写的 Go 代码，`opt` 与 `lower` 则由**重写规则**生成。规则集中在 `ssa/_gen/*.rules` 中：
-`generic.rules` 是对所有体系结构都适用的化简，`AMD64.rules`、`ARM64.rules`
+多数趟是手写的 Go 代码，`opt` 与 `lower` 则由**重写规则**生成。规则集中在 `ssa/_gen/*.rules` 中：`generic.rules`
+是对所有体系结构都适用的化简，`AMD64.rules`、`ARM64.rules`
 等是各体系结构的降级规则与化简。一条规则的左侧是一个值的模式，右侧是替换后的值，中间可以用 `&&` 附加条件
 [[Go Authors, 2026c](#ref-go-authors-2026c)]。例如把乘以 2 的幂改写为左移的规则：
 
@@ -414,8 +414,8 @@ ID 不变的改写。执行规则的 `applyRewrite` 反复扫描函数中的所�
 
 ## 15.2.7 小结
 
-Go 编译器的几种中间表示各有分工。统一 IR 让 noding、泛型实例化、内联与导入导出共用一条复制函数体的路径；
-`ir` 承载内联、逃逸分析等需要源码结构的分析，walk 把它降到接近运行时调用的层次；SSA 从 walk 之后开始，
+Go 编译器的几种中间表示各有分工。统一 IR 让 noding、泛型实例化、内联与导入导出共用一条复制函数体的路径；`ir`
+承载内联、逃逸分析等需要源码结构的分析，walk 把它降到接近运行时调用的层次；SSA 从 walk 之后开始，
 以就地改写的值、只在调度时才排定次序的块、以及由规则生成的化简，完成与体系结构无关和相关的优化。从
 2015 年的设计文档到今天，SSA 的基本数据结构几乎没有变化，编译速度与精确的运行时信息这两项最初的设计约束，
 也一直是这套表示的取舍依据。
@@ -436,8 +436,8 @@ Go 编译器的几种中间表示各有分工。统一 IR 让 noding、泛型实
 - <a id="ref-cytron-et-al-1991"></a>[Cytron et al., 1991] Ron Cytron, Jeanne Ferrante, Barry K. Rosen,
   Mark N. Wegman, F. Kenneth Zadeck. *Efficiently Computing Static Single Assignment Form and the Control
   Dependence Graph.* ACM TOPLAS 13(4), 1991. DOI:
-  [10.1145/115372.115320](https://doi.org/10.1145/115372.115320)
-  （SSA 构造与支配边界的奠基论文）
+  [10.1145/115372.115320](https://doi.org/10.1145/115372.115320)（SSA
+  构造与支配边界的奠基论文）
 - <a id="ref-dempsky-2021"></a>[Dempsky, 2021] Matthew Dempsky. [dev.typeparams] cmd/compile: unified IR
   construction. Go commit 79cd1687e6, 2021. https://go.dev/cl/324573
   统一 IR 的首次提交，提交说明详述了此前四种复制函数体的路径及其问题。随 Go 1.18 发布（实验形式）。
@@ -462,17 +462,17 @@ Go 编译器的几种中间表示各有分工。统一 IR 让 noding、泛型实
   SSA backend (README).* `cmd/compile/internal/ssa/README.md`.
   https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/ssa/README.md
   https://github.com/golang/go/blob/master/src/cmd/compile/internal/ssa/README.md
-- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *重写规则与代码生成：
-  `_gen/generic.rules`、`_gen/rulegen.go`、`compile.go` 的 `passes` 列表.*
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *重写规则与代码生成：`_gen/generic.rules`、`_gen/rulegen.go`、`compile.go`
+  的 `passes` 列表.*
   https://github.com/golang/go/tree/release-branch.go1.26/src/cmd/compile/internal/ssa/_gen
   https://github.com/golang/go/tree/master/src/cmd/compile/internal/ssa/_gen
   另见同目录上一级的 `value.go`、`block.go`、`compile.go`、`rewrite.go`。
-- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. src/cmd/compile/internal/noder：
-  unified.go、doc.go；src/cmd/compile/internal/ir/node.go；src/cmd/compile/internal/ssagen/phi.go. Go 1.26
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. src/cmd/compile/internal/noder：unified.go、doc.go；src/cmd/compile/internal/ir/node.go；src/cmd/compile/internal/ssagen/phi.go.
+  Go 1.26
   源码. https://github.com/golang/go/tree/release-branch.go1.26/src/cmd/compile/internal
 - <a id="ref-muchnick-1997"></a>[Muchnick, 1997] Steven S. Muchnick. *Advanced Compiler Design and
-  Implementation.* Morgan Kaufmann, 1997.
-  （SSA、数据流分析与各类优化传递的系统性教材）
+  Implementation.* Morgan Kaufmann, 1997.（SSA、
+  数据流分析与各类优化传递的系统性教材）
 - <a id="ref-randall-2015"></a>[Randall, 2015] Keith Randall. *New SSA Backend for the Go Compiler.* Go
   design document, 2015. https://go.dev/s/go17ssa
   提议以 SSA 取代基于语法树的后端，阐述在 walk 之后分叉的理由与不采用 LLVM、GCC 后端的三条原因，并附原型中
@@ -490,6 +490,6 @@ Go 编译器的几种中间表示各有分工。统一 IR 让 noding、泛型实
   Linear Time Algorithm for Placing φ-Nodes." *Proceedings of the 22nd ACM SIGPLAN-SIGACT Symposium on
   Principles of Programming Languages (POPL '95)*, 62–73, 1995. https://doi.org/10.1145/199448.199464
   以 DJ 图在线性时间内放置 φ 函数，`ssagen` 用于大函数。
-- 本书 [3.2 Go 程序编译流程](../../part1overview/ch03life/compile.md)、
-  [8.1 泛型设计的演进](../../part2lang/ch08generics/history.md)、[15.1 词法与文法](./parse.md)、
-  [15.3 优化器](./optimize.md)、[15.5 逃逸分析](./escape.md)。
+- 本书 [3.2 Go 程序编译流程](../../part1overview/ch03life/compile.md)、[8.1
+  泛型设计的演进](../../part2lang/ch08generics/history.md)、[15.1 词法与文法](./parse.md)、[15.3
+  优化器](./optimize.md)、[15.5 逃逸分析](./escape.md)。

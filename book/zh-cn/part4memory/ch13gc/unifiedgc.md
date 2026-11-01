@@ -266,12 +266,12 @@ Bacon、Cheng 与 Rajan 的统一理论把追踪与引用计数表述为同一�
   Garbage Collector.* ISMM 2018 keynote / The Go Blog, 2018. https://go.dev/blog/ismmkeynote （Go
   选择追踪式并发回收的设计自述）
 - <a id="ref-jones-2023"></a>[Jones et al., 2023] Richard Jones, Antony Hosking, Eliot Moss. *The Garbage
-  Collection Handbook: The Art of Automatic Memory Management.* 2nd ed., CRC Press, 2023.
-  （追踪式、计数式及各类混合算法的权威综述）
+  Collection Handbook: The Art of Automatic Memory Management.* 2nd ed., CRC Press, 2023.（追
+  踪式、计数式及各类混合算法的权威综述）
 - <a id="ref-mccarthy-1960"></a>[McCarthy, 1960] John McCarthy. *Recursive Functions of Symbolic
   Expressions and Their Computation by Machine, Part I.* *Communications of the ACM* 3(4): 184-195, 1960.
   https://doi.org/10.1145/367177.367199 （标记清扫式追踪回收的最早提出）
-- 本书 [13.1 垃圾回收的基本想法](./basic.md)、[13.2 写屏障技术](./barrier.md)、
-  [13.3 触发频率及其调步算法](./pacing.md)、[13.5 清扫与位图](./sweep.md)、
-  [13.8 分代假设与代际回收](./generational.md)、[13.9 请求假设与事务制导回收](./roc.md)、
-  [13.11 Green Tea：面向局部性的标记](./greentea.md)、[13.12 过去、现在与未来](./history.md)。
+- 本书 [13.1 垃圾回收的基本想法](./basic.md)、[13.2 写屏障技术](./barrier.md)、[13.3
+  触发频率及其调步算法](./pacing.md)、[13.5 清扫与位图](./sweep.md)、[13.8
+  分代假设与代际回收](./generational.md)、[13.9 请求假设与事务制导回收](./roc.md)、[13.11
+  Green Tea：面向局部性的标记](./greentea.md)、[13.12 过去、现在与未来](./history.md)。

@@ -156,8 +156,8 @@ if err != nil {
 defer f.Close() // 清理代码紧邻打开操作，在函数返回时执行
 ```
 
-其好处是出错路径清晰可见，代价是代码中大量重复的 `if err != nil`
-（[第 7 章](../../part2lang/ch07errors/readme.md)；`defer` 见 [6.2](../../part2lang/ch06func/defer.md)）。
+其好处是出错路径清晰可见，代价是代码中大量重复的 `if err != nil`（[第
+7 章](../../part2lang/ch07errors/readme.md)；`defer` 见 [6.2](../../part2lang/ch06func/defer.md)）。
 
 **切片是底层数组的视图。** Go 内建了三种容器：切片、map 与 channel，其中最常用的是切片。切片记录了一个
 底层数组、起始位置、可访问的元素个数（长度）以及最多可扩展到的元素个数（容量）。赋值与传参复制的只是
@@ -215,8 +215,8 @@ func main() {
 - **第一部分 全景与历史**：Go 的设计缘由（第 1 章），Go 的汇编语言与调用约定
   （[第 2 章](../ch02asm/readme.md)），一个程序从构建到退出的全过程（[第 3 章](../ch03life/readme.md)）。
 - **第二部分 语言特性的实现**：类型与接口（[第 4 章](../../part2lang/ch04type/readme.md)）、切片、
-  字符串与 map（[第 5 章](../../part2lang/ch05data/readme.md)）、函数、defer 与 panic
-  （[第 6 章](../../part2lang/ch06func/readme.md)）、错误处理
+  字符串与 map（[第 5 章](../../part2lang/ch05data/readme.md)）、函数、defer 与 panic（[第
+  6 章](../../part2lang/ch06func/readme.md)）、错误处理
   （[第 7 章](../../part2lang/ch07errors/readme.md)）、泛型
   （[第 8 章](../../part2lang/ch08generics/readme.md)）。
 - **第三部分 并发**：goroutine 调度器（[第 9 章](../../part3concurrency/ch09sched/readme.md)）、channel

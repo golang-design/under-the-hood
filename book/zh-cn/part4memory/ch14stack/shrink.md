@@ -345,8 +345,8 @@ Java 21 的虚拟线程与 Go 相近。JEP 444 写道，虚拟线程的栈以栈
   随 Go 1.14 发布。
 - <a id="ref-go-authors-2014"></a>[Go Authors, 2014] The Go Authors. *Go 1.3 Release Notes: Stack
   management.* 2014. https://go.dev/doc/go1.3#stacks
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/stack.go：shrinkstack、
-  isShrinkStackSafe、copystack. Go 1.26 源码.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/stack.go：shrinkstack、isShrinkStackSafe、copystack.
+  Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/stack.go
 - <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. src/runtime/mgcmark.go：scanstack.
   Go 1.26 源码. https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mgcmark.go

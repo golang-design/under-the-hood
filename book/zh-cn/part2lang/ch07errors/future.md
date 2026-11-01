@@ -219,19 +219,19 @@ strconv.Atoi: parsing "y": invalid syntax
 `AsType` 恰好说明了 2025 年决定背后的逻辑：泛型这种通用的语言能力具备之后，错误处理可以在库的
 层面随之改进，而不需要任何专为错误处理设计的语法。Russ Cox 在 2019 年把 Go 的演进方式概括为
 「实验、简化、发布」，`check` 与 `try` 正是在实验之后被放弃的 [[Cox, 2019b](#ref-cox-2019b)]。
-库的改动是增量的，旧代码照常工作，新功能按需取用；语法的改动则会影响每一份代码与每一位读者。
-Go 在错误处理上的实际策略，是把能放进库的改进都放进库，而让语言的文法保持不变。
+库的改动是增量的，旧代码照常工作，新功能按需取用；语法的改动则会影响每一份代码与每一位读者。Go
+在错误处理上的实际策略，是把能放进库的改进都放进库，而让语言的文法保持不变。
 
 ## 7.5.6 显式优于简洁
 
-回顾这七年，Go 团队并非因循守旧，而是在显式与简洁之间一再选择了前者，并且每次都公开说明了理由。
-`check`/`handle` 被放弃，是因为它以复杂换取简短；`try` 被拒绝，是因为它把返回藏进了一个看似普通
+回顾这七年，Go 团队并非因循守旧，而是在显式与简洁之间一再选择了前者，并且每次都公开说明了理由。`check`/`handle`
+被放弃，是因为它以复杂换取简短；`try` 被拒绝，是因为它把返回藏进了一个看似普通
 的表达式。被反复申明的底线是：阅读一段 Go 代码时，控制流应当一目了然。
 
 放在语言谱系中看，这一选择的含义更加清楚。异常把错误交给隐式的控制转移，Go 从一开始就没有
 采用（见 [7.1.1](./value.md)）。Rust 的 `?` 则是另一种做法：错误仍然是值，只是用一个后缀运算符
-省去手写的分支。`?` 正是 `try` 想要提供的东西，Rust 接受了它，因为 Rust 本就允许表达式改变控制流；
-Go 看到了同样的设计，却没有接受。两种语言在同一个问题上做出了相反的选择，反映的是对「控制流是否
+省去手写的分支。`?` 正是 `try` 想要提供的东西，Rust 接受了它，因为 Rust 本就允许表达式改变控制流；Go
+看到了同样的设计，却没有接受。两种语言在同一个问题上做出了相反的选择，反映的是对「控制流是否
 应当始终显式可见」这一问题的不同回答。把错误当作普通的返回值、用普通的控制流处理，是 Go 自诞生
 起的立场，2025 年的决定只是把这一立场又一次明确地写了下来。
 
@@ -256,8 +256,8 @@ Go 看到了同样的设计，却没有接受。两种语言在同一个问题�
   with Errors in Go 1.13（%w 包装与错误链）.* The Go Blog, 2019. https://go.dev/blog/go1.13-errors
 - <a id="ref-cox-2019b"></a>[Cox, 2019b] Russ Cox. *Experiment, Simplify, Ship.* The Go Blog, 2019.
   https://go.dev/blog/experiment （「先库后语言、先实验再固化」的演进哲学，正是本节主线的注脚）
-- <a id="ref-amsterdam-2019"></a>[Amsterdam, 2019] Jonathan Amsterdam. *proposal: Go 2 error values
-  （#29934）.* 2019. https://github.com/golang/go/issues/29934 （错误值演进的总提案，串起被否决与被
+- <a id="ref-amsterdam-2019"></a>[Amsterdam, 2019] Jonathan Amsterdam. *proposal: Go 2 error values（#29934）.* 2019.
+  https://github.com/golang/go/issues/29934 （错误值演进的总提案，串起被否决与被
   采纳的诸多方案）
 - <a id="ref-lohuizen-2018"></a>[Lohuizen, 2018] Marcel van Lohuizen. *Error Handling, Draft Design.*
   2018. https://go.googlesource.com/proposal/+/master/design/go2draft-error-handling.md

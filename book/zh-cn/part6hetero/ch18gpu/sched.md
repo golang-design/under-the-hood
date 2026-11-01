@@ -34,8 +34,8 @@ title: "18.2 调度器与阻塞的外部调用"
 	_Psyscall_unused
 ```
 
-此后，判断一个 P 是否处于系统调用中，只看它上面那个 goroutine 的状态。`entersyscall` 也不再修改 P 的状态，
-P 在整个调用期间仍然挂在当前 M 上，只是随时可能被取走。提交说明指出，
+此后，判断一个 P 是否处于系统调用中，只看它上面那个 goroutine 的状态。`entersyscall` 也不再修改 P 的状态，P
+在整个调用期间仍然挂在当前 M 上，只是随时可能被取走。提交说明指出，
 这一改动省去了系统调用路径上的一次原子存储与一次原子 CAS，在 AMD EPYC 7B13 上把 `CgoCall` 基准从 43.69 ns
 降到 35.83 ns [[Knyszek, 2025](#ref-knyszek-2025)]。它是 Go 1.26 精简系统调用路径的三次提交之一，
 发布说明给出的合计效果是 cgo 调用的基础运行时开销降低约 30% [[Go Authors, 2026a](#ref-go-authors-2026a)]，
@@ -132,14 +132,14 @@ sequenceDiagram
 单次阻塞的代价不大，但在并发场景下会被放大。
 
 比较两种阻塞。goroutine 阻塞在通道或互斥锁上时，调度器把它挂起（park），M 随即去运行别的 goroutine，一个
-M 可以服务大量这样阻塞着的 goroutine，这是 goroutine 廉价的基础。goroutine 阻塞在 cgo 调用中时则无法挂起：
-C 代码占用着这条线程的栈，运行时无法把它移走，这个 goroutine 与它的 M 绑定在一起，直到 C 函数返回。
+M 可以服务大量这样阻塞着的 goroutine，这是 goroutine 廉价的基础。goroutine 阻塞在 cgo 调用中时则无法挂起：C
+代码占用着这条线程的栈，运行时无法把它移走，这个 goroutine 与它的 M 绑定在一起，直到 C 函数返回。
 由此可以得出：
 
 每一个同时阻塞在 GPU 调用中的 goroutine，都独占一个操作系统线程。
 
-如果为每个请求启动一个 goroutine，并让它同步地等待 GPU 完成，那么 N 个并发请求就可能产生多达 N 个线程。
-goroutine 的低成本在这里不再成立，付出的是线程的成本。而且这些线程大部分时间只是在等待：
+如果为每个请求启动一个 goroutine，并让它同步地等待 GPU 完成，那么 N 个并发请求就可能产生多达 N 个线程。goroutine
+的低成本在这里不再成立，付出的是线程的成本。而且这些线程大部分时间只是在等待：
 它们提交给的往往是同一块 GPU，增加线程并不会增加设备的吞吐。线程数也有上限，运行时默认最多允许
 10000 个线程（可以用 `debug.SetMaxThreads` 调整），超过时程序以「thread exhaustion」终止；C
 创建的线程不计入这一上限 [[Go Authors, 2026b](#ref-go-authors-2026b)]。
@@ -245,8 +245,8 @@ accel 为 CUDA 后端起草的设计文档记录了一次探测，说明这一�
 各自循环执行分配、上传、启动、同步、下载与校验。不锁定线程、也不设置上下文时，调用总是返回
 `CUDA_ERROR_INVALID_CONTEXT`；在每次驱动调用之前都调用 `cuCtxSetCurrent`，结果时好时坏，重复 5 次运行中有
 2 次或 3 次失败，因为 goroutine 可能恰好在设置上下文与随后的调用之间换了线程；先 `LockOSThread`、
-再在锁定的区间内设置一次上下文，结果才稳定。同一份文档还发现，显式传入流句柄的调用（`cuLaunchKernel`、
-`cuMemcpyHtoDAsync`、`cuStreamSynchronize` 等）从句柄中取得上下文，即使当前线程没有上下文也能正确执行；
+再在锁定的区间内设置一次上下文，结果才稳定。同一份文档还发现，显式传入流句柄的调用（`cuLaunchKernel`、`cuMemcpyHtoDAsync`、`cuStreamSynchronize`
+等）从句柄中取得上下文，即使当前线程没有上下文也能正确执行；
 需要线程上已有上下文的，是 `cuMemAlloc`、同步拷贝、`cuModuleLoadData` 与 `cuStreamCreate`
 这类没有句柄可携带上下文的调用。由于 Go 无法指定 goroutine 在哪条线程上运行，
 已经设置好上下文的线程也无法事后借用，需要上下文的工作只能交给自始至终锁定在同一条线程上的 goroutine。
@@ -336,8 +336,8 @@ sysmon 把稀缺的 P 取回；大量并发的阻塞调用会导致线程膨胀�
   `cudaLaunchHostFunc` 的语义与对主机函数的限制。
 - <a id="ref-nvidia-ndd"></a>[NVIDIA, n.d.d] NVIDIA. *CUDA Runtime API: Device Management.*
   https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__DEVICE.html
-  `cudaSetDeviceFlags` 中 `cudaDeviceScheduleAuto`、`Spin`、`Yield` 与 `BlockingSync` 的等待策略；
-  `cudaSetDevice` 设置调用线程的当前设备。
+  `cudaSetDeviceFlags` 中 `cudaDeviceScheduleAuto`、`Spin`、`Yield` 与 `BlockingSync` 的等待策略；`cudaSetDevice`
+  设置调用线程的当前设备。
 - <a id="ref-nvidia-nde"></a>[NVIDIA, n.d.e] NVIDIA. *CUDA Driver API: Context Management.*
   https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__CTX.html
   `cuCtxSetCurrent` 与 `cuCtxGetCurrent`：上下文绑定在调用它的 CPU 线程上。
@@ -361,8 +361,8 @@ sysmon 把稀缺的 P 取回；大量并发的阻塞调用会导致线程膨胀�
 - <a id="ref-vyukov-2012"></a>[Vyukov, 2012] Dmitry Vyukov. *Scalable Go Scheduler Design Doc.* 2012.
   https://golang.org/s/go11sched
   M/P/G 模型与系统调用下的 P 移交，sysmon 设计的源头。
-- 本书 [9.5 线程管理](../../part3concurrency/ch09sched/thread.md)、
-  [9.8 系统监控](../../part3concurrency/ch09sched/sysmon.md)、
-  [15.6 cgo](../../part5toolchain/ch15compile/cgo.md)、
-  [18.1 跨越 FFI 边界](./boundary.md)、[18.3 显存与垃圾回收的分界](./memory.md)、
-  [19.2 图形绑定与线程亲和](../ch19graphics/bindings.md)。
+- 本书 [9.5 线程管理](../../part3concurrency/ch09sched/thread.md)、[9.8
+  系统监控](../../part3concurrency/ch09sched/sysmon.md)、[15.6
+  cgo](../../part5toolchain/ch15compile/cgo.md)、[18.1
+  跨越 FFI 边界](./boundary.md)、[18.3 显存与垃圾回收的分界](./memory.md)、[19.2
+  图形绑定与线程亲和](../ch19graphics/bindings.md)。

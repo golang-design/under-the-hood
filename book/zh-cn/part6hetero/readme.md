@@ -47,18 +47,18 @@ bookCollapseSection: true
 `runtime.Pinner` 固定时保留指向它的指针。Go 目前的回收器并不移动堆上的对象，
 这些规则为将来可能移动对象的回收器留出了余地（[15.6](../part5toolchain/ch15compile/cgo.md)）。
 
-其三，并发模型的匹配。GPU 的异步执行、推理服务的批处理、Agent 的流式输出，都不是 goroutine 天然的形状。
-[第 10 章](../part3concurrency/ch10chan/readme.md)的 channel 与
+其三，并发模型的匹配。GPU 的异步执行、推理服务的批处理、Agent 的流式输出，都不是 goroutine 天然的形状。[第
+10 章](../part3concurrency/ch10chan/readme.md)的 channel 与
 [11.8](../part3concurrency/ch11sync/context.md) 的 context 能否胜任背压、超时、
 扇入与扇出等场景，是本部分要回答的问题之一。
 
 本部分分为四章，沿着这条边界由近及远展开。[第 18 章](./ch18gpu/readme.md)讨论 GPU 与异构计算：FFI 边界、
-阻塞的外部调用如何影响调度、显存与 Go 堆的分界，以及异步编程模型，是其余各章的基础。
-[第 19 章](./ch19graphics/readme.md)讨论图形：渲染管线如何在 CPU 与 GPU 之间分工，
-OpenGL 上下文与窗口系统为何把渲染和事件处理限定在特定的操作系统线程上，以及软件渲染与浏览器中的渲染。
-[第 20 章](./ch20inference/readme.md)讨论 AI 推理与服务：Go 为何多出现在推理与服务一侧而非训练一侧，
-本地推理运行时如何接入，分词与张量如何表示，以及服务中的批处理与流式输出。
-[第 21 章](./ch21agent/readme.md)讨论 AI Agent 的运行时：Agent 的控制循环、工具调用与 MCP，
+阻塞的外部调用如何影响调度、显存与 Go 堆的分界，以及异步编程模型，是其余各章的基础。[第
+19 章](./ch19graphics/readme.md)讨论图形：渲染管线如何在 CPU 与 GPU 之间分工，OpenGL
+上下文与窗口系统为何把渲染和事件处理限定在特定的操作系统线程上，以及软件渲染与浏览器中的渲染。[第
+20 章](./ch20inference/readme.md)讨论 AI 推理与服务：Go 为何多出现在推理与服务一侧而非训练一侧，
+本地推理运行时如何接入，分词与张量如何表示，以及服务中的批处理与流式输出。[第
+21 章](./ch21agent/readme.md)讨论 AI Agent 的运行时：Agent 的控制循环、工具调用与 MCP，
 以及流式输出中的背压与取消。
 
 阅读本部分不需要预先了解 CUDA 或深度学习，需要的是前五部分建立的基础：什么是系统调用，什么是抢占，

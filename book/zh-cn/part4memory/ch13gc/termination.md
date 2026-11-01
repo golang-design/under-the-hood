@@ -78,8 +78,8 @@ Go 1.5 把并发标记分为 mark 1 与 mark 2 两个子阶段：mark 1 耗尽�
 // memory barrier. GC uses this as a "ragged barrier."
 ```
 
-正在运行的 P 由抢占促使其到达安全点（[9.7](../../part3concurrency/ch09sched/preemption.md)）。
-`gcMarkDone` 中的对应代码如下 [[Go Authors, 2026a](#ref-go-authors-2026a)]：
+正在运行的 P 由抢占促使其到达安全点（[9.7](../../part3concurrency/ch09sched/preemption.md)）。`gcMarkDone`
+中的对应代码如下 [[Go Authors, 2026a](#ref-go-authors-2026a)]：
 
 ```go
 	// Flush all local buffers and collect flushedWork flags.
@@ -215,8 +215,8 @@ func setGCPhase(x uint32) {
 }
 ```
 
-`gcMarkDone` 的注释强调，写屏障必须保持开启，直到全部标记完成，包括回收器自身的写入。
-2018 年的设计文档曾设想标记终止期间不再需要写屏障 [[Clements, 2018a](#ref-clements-2018a)]，
+`gcMarkDone` 的注释强调，写屏障必须保持开启，直到全部标记完成，包括回收器自身的写入。2018
+年的设计文档曾设想标记终止期间不再需要写屏障 [[Clements, 2018a](#ref-clements-2018a)]，
 现在的实现仍在进入 `_GCoff` 时才关闭它。`gcMark` 已不做任何标记，只核对各处没有剩余的工作，
 丢弃写屏障缓冲，并把调步器的存活堆重置为本轮标记的字节数。
 
@@ -368,8 +368,8 @@ gc 6 0.26+42+0.006 ms clock
   https://go.dev/design/17503-eliminate-rescan
   讨论见 Go issue #17503：https://github.com/golang/go/issues/17503
   附录记录了标记完成判定中的竞争。
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *runtime/mgc.go.* `gcMarkDone`、
-  `gcMarkTermination`、`gcMark`、`gcStart`、`setGCPhase`. Go 1.26 源码.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *runtime/mgc.go.* `gcMarkDone`、`gcMarkTermination`、`gcMark`、`gcStart`、`setGCPhase`.
+  Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mgc.go
 - <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *runtime/proc.go.* `forEachP`
   与不规则屏障. Go 1.26 源码. https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/proc.go
@@ -390,6 +390,6 @@ gc 6 0.26+42+0.006 ms clock
 - <a id="ref-matocha-camp-1998"></a>[Matocha and Camp, 1998] Jeff Matocha, Tracy Camp. "A Taxonomy of
   Distributed Termination Detection Algorithms." *Journal of Systems and Software*, 43(3), 1998, 207-221.
   https://doi.org/10.1016/S0164-1212(98)10034-1
-- 本书 [13.2 写屏障技术](./barrier.md)、[13.3 触发频率及其调步算法](./pacing.md)、
-  [13.4 扫描标记与标记辅助](./mark.md)、[13.5 清扫与位图](./sweep.md)、
-  [13.12 过去、现在与未来](./history.md)。
+- 本书 [13.2 写屏障技术](./barrier.md)、[13.3 触发频率及其调步算法](./pacing.md)、[13.4
+  扫描标记与标记辅助](./mark.md)、[13.5 清扫与位图](./sweep.md)、[13.12
+  过去、现在与未来](./history.md)。

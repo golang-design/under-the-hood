@@ -55,8 +55,8 @@ $$
 其中 $H_m$ 是上一轮标记的存活堆（`heapMarked`），$S$ 是上一轮实际扫描的栈字节数，$G$ 是可扫描的全局变量
 字节数。按默认值，两轮回收之间允许新分配的内存等于存活堆与根之和。Go 1.18 之前的公式只有
 $H_m(1+p/100)$。栈与全局变量同样是回收的工作量，忽略它们会在 goroutine 很多或全局变量很大时低估回收的
-代价；把它们计入目标，是 1.18 调步器重新设计的第一项内容 [[Knyszek, 2021a](#ref-knyszek-2021a)]。
-Go 1.18 的发布说明也提醒，部分程序因此会比以前多用或少用一些内存，必要时可以调整 `GOGC`
+代价；把它们计入目标，是 1.18 调步器重新设计的第一项内容 [[Knyszek, 2021a](#ref-knyszek-2021a)]。Go
+1.18 的发布说明也提醒，部分程序因此会比以前多用或少用一些内存，必要时可以调整 `GOGC`
 [[Go Authors, 2022a](#ref-go-authors-2022a)]。
 
 `GOGC` 是在内存与 CPU 之间取舍的参数。GC 指南给出了一个简单的推导
@@ -69,8 +69,8 @@ Go 1.18 的发布说明也提醒，部分程序因此会比以前多用或少用
 堆目标还有一个下限 `heapMinimum`，等于 4 MiB 乘以 $p/100$。存活堆很小时，按比例算出的目标会使回收过于
 频繁，每轮的固定开销无法摊薄 [[Go Authors, 2026a](#ref-go-authors-2026a)]。1.18 的重新设计曾把默认下限
 降为 512 KiB，理由是运行时自身就有约 200 KiB 可扫描的全局变量，根计入目标之后，小堆上的回收也能合理
-摊销 [[Knyszek, 2021c](#ref-knyszek-2021c)]。这一改动随后被移入默认关闭的实验 `HeapMinimum512KiB`，
-Go 1.26 的默认下限仍是 4 MiB。
+摊销 [[Knyszek, 2021c](#ref-knyszek-2021c)]。这一改动随后被移入默认关闭的实验 `HeapMinimum512KiB`，Go
+1.26 的默认下限仍是 4 MiB。
 
 下面的程序保留约 64 MiB 的存活数据，每次调用 `runtime.GC()` 之后通过 `runtime/metrics` 读取调步器的
 输入与堆目标，并与上面的公式比较：
@@ -158,8 +158,8 @@ limit）[[Go Authors, 2022b](#ref-go-authors-2022b)]。限制的对象是运行�
 是堆对象占用的字节。第 1 项是无法用来存放堆对象的非堆开销，如栈与运行时的元数据；空闲页不算在内，
 因为它们是今后分配的储备，在其中分配不会增加内存的总用量。第 2 项是已经超出限制的部分，从目标中扣除它，
 回收就会更早开始，腾出空间。第 3 步再留出余量，用来吸收调步的误差，同时给分配器保留一些未归还的内存。
-余量取目标的 3%，且不少于 1 MiB；最终的目标不低于上一轮的存活堆。Go 1.19 至 1.20 只有固定的 1 MiB 余量。
-3% 的比例余量是 1.21 加入的：`GOGC=off` 且分配速率很高时，堆目标紧贴限制，分配时的同步归还过于频繁
+余量取目标的 3%，且不少于 1 MiB；最终的目标不低于上一轮的存活堆。Go 1.19 至 1.20 只有固定的 1 MiB 余量。3%
+的比例余量是 1.21 加入的：`GOGC=off` 且分配速率很高时，堆目标紧贴限制，分配时的同步归还过于频繁
 [[Knyszek, 2023b](#ref-knyszek-2023b)]。
 
 调步器取两个目标中较小的一个。上一小节示例的最后一行正是这种情形：`GOGC=200` 给出的目标约为 193 MiB，而
@@ -241,12 +241,12 @@ $$
 \text{辅助比率} = \frac{\text{剩余的扫描工作量}}{\text{堆目标与当前堆之差}}
 $$
 
-赋值器每分配一个字节，就要完成相应的扫描工作，因此堆增长到目标时，剩余的扫描工作也恰好完成。
-`heapLive` 或堆目标的任何输入发生变化时，`revise` 都会重新计算这一比率。它还处理两种偏离：
+赋值器每分配一个字节，就要完成相应的扫描工作，因此堆增长到目标时，剩余的扫描工作也恰好完成。`heapLive`
+或堆目标的任何输入发生变化时，`revise` 都会重新计算这一比率。它还处理两种偏离：
 
 - 已完成的扫描工作超过预期，说明存活堆在增长。`revise` 按最坏情况外推堆目标，
-  即假设全部可扫描的内存都存活、全部已分配的栈都需要扫描，使辅助比率保持平稳。外推的目标不超过「硬目标」
-  $(1 + p/100)\cdot H_{goal}$，依据是：即使本轮分配的内存全部存活，下一轮回收也会用到这么多内存
+  即假设全部可扫描的内存都存活、全部已分配的栈都需要扫描，使辅助比率保持平稳。外推的目标不超过「硬目标」$(1 + p/100)\cdot H_{goal}$，
+  依据是：即使本轮分配的内存全部存活，下一轮回收也会用到这么多内存
   [[Knyszek, 2021a](#ref-knyszek-2021a)]。
 - 堆已超过目标（包括外推后的目标）时，目标放宽为原来的 1.1 倍，剩余的扫描工作量按最坏情况估计。
 
@@ -301,8 +301,8 @@ MiB（输出中写作 MB），向下取整 [[Go Authors, 2026a](#ref-go-authors-
   [[Clements, 2017a](#ref-clements-2017a)]。同一版本把 CPU 目标设为 30%，即 25% 的后台标记加 5% 的辅助：
   没有辅助时，控制器无法把 CPU 占用压到后台标记的 25% 以下，只能得到单向的反馈
   [[Clements, 2017b](#ref-clements-2017b)]。
-- Go 1.14：更快的分配器可能把触发比例压到 0.07，标记期间大量对象被分配为黑色，存活堆与常驻内存随之上涨。
-  Knyszek 为触发比例加上了 0.6 倍的下限 [[Knyszek, 2019](#ref-knyszek-2019)]。
+- Go 1.14：更快的分配器可能把触发比例压到 0.07，标记期间大量对象被分配为黑色，存活堆与常驻内存随之上涨。Knyszek
+  为触发比例加上了 0.6 倍的下限 [[Knyszek, 2019](#ref-knyszek-2019)]。
 - Go 1.18：调步器重新设计 [[Knyszek, 2021a](#ref-knyszek-2021a)]。栈与全局变量计入堆目标；调步从求解优化
   问题改为估计 cons/mark 比，并用比例积分（PI）控制器平滑测量值；稳态下不再需要辅助，CPU 目标回到 25%；
   硬目标改为 $(1+p/100)$ 倍；触发比例的下限由 0.6 提高到 0.7 [[Knyszek, 2021c](#ref-knyszek-2021c)]。
@@ -354,8 +354,8 @@ MiB（输出中写作 MB），向下取整 [[Go Authors, 2026a](#ref-go-authors-
 - <a id="ref-go-authors-2022c"></a>[Go Authors, 2022c] The Go Authors. *A Guide to the Go Garbage
   Collector.* 2022. https://go.dev/doc/gc-guide
   （GOGC、GOMEMLIMIT 与调步直觉的官方指南）
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/mgcpacer.go、
-  src/runtime/mgclimit.go、src/runtime/mgc.go、src/internal/goexperiment/flags.go. Go 1.26 源码.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/mgcpacer.go、src/runtime/mgclimit.go、src/runtime/mgc.go、src/internal/goexperiment/flags.go.
+  Go 1.26 源码.
   https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
   （`gcControllerState`、`commit`、`revise`、`trigger`、`heapGoalInternal` 的实现；`gcCPULimiter` 与
   gctrace 的输出亦见于此）
@@ -390,5 +390,5 @@ MiB（输出中写作 MB），向下取整 [[Go Authors, 2026a](#ref-go-authors-
   Virtual Machine Garbage Collection Tuning Guide*, Java SE 21, F80283-06, 2026.
   https://docs.oracle.com/en/java/javase/21/gctuning/garbage-first-g1-garbage-collector1.html
   G1 的停顿时间目标与自适应 IHOP。
-- 本书 [13.2 写屏障技术](./barrier.md)、[13.4 扫描标记与标记辅助](./mark.md)、
-  [13.5 清扫与位图](./sweep.md)。
+- 本书 [13.2 写屏障技术](./barrier.md)、[13.4 扫描标记与标记辅助](./mark.md)、[13.5
+  清扫与位图](./sweep.md)。

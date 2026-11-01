@@ -262,13 +262,13 @@ Go》把这一点列为分号规则的直接后果：控制结构的左花括号
 ```
 
 `p.tok` 是当前词法单元，`p.next()` 读入下一个。每个顶层声明都以关键字开头，看一个词法单元就能确定声明的
-种类；`importDecl`、`constDecl`、`funcDeclOrNil` 再逐层向下，直至表达式中的名字与字面量。为了容错，
-`fileOrNil` 允许导入声明出现在其他声明之后，但会报告 `imports must appear before other declarations`。
+种类；`importDecl`、`constDecl`、`funcDeclOrNil` 再逐层向下，直至表达式中的名字与字面量。为了容错，`fileOrNil`
+允许导入声明出现在其他声明之后，但会报告 `imports must appear before other declarations`。
 
 分析的产物是 `nodes.go` 定义的语法树。每个节点都实现 `Node` 接口并带有一个位置：终结符（名字、字面量）
 的位置就是它在源码中的位置；非终结符的位置是与该产生式唯一关联的词法单元的位置，通常是最左边的一个，例如
-`IfStmt` 的位置是关键字 `if` [[Go Authors, 2026a](#ref-go-authors-2026a)]。语法分析器只检查语法，
-`x == T{1}` 中的 `T` 是否确为类型，留待类型检查（[8.3](../../part2lang/ch08generics/checker.md)）回答。
+`IfStmt` 的位置是关键字 `if` [[Go Authors, 2026a](#ref-go-authors-2026a)]。语法分析器只检查语法，`x == T{1}`
+中的 `T` 是否确为类型，留待类型检查（[8.3](../../part2lang/ch08generics/checker.md)）回答。
 例外是标签与跳转：编译器以 `CheckBranches` 模式调用语法分析器，标签以及 `break`、`continue`、`goto`
 的正确使用在解析阶段就已检查 [[Go Authors, 2026c](#ref-go-authors-2026c)]。
 
@@ -477,14 +477,14 @@ Go 1.5 把编译器从 C 机械地翻译为 Go（[15.7](./future.md)），`go.y`
 [[Griesemer, 2015b](#ref-griesemer-2015b)]。Go 1.6 的发布说明称，编译器内部最重要的变化是语法分析器改为手
 写，不再由 yacc 生成 [[Go Authors, 2016](#ref-go-authors-2016)]。
 
-这个分析器仍然一边分析一边直接构造编译器内部的 `Node`，语法树与编译器的数据结构没有分开。2016 年 8 月，
-Griesemer 提交了独立的 `syntax` 包，包括语法树节点、词法分析器、语法分析器和打印器；提交说明记录，在预热
+这个分析器仍然一边分析一边直接构造编译器内部的 `Node`，语法树与编译器的数据结构没有分开。2016 年 8 月，Griesemer
+提交了独立的 `syntax` 包，包括语法树节点、词法分析器、语法分析器和打印器；提交说明记录，在预热
 状态下，它解析整个标准库的速度约为每秒 180 万行 [[Griesemer, 2016](#ref-griesemer-2016)]。Matthew Dempsky
 随后编写了 `noder`，把 `syntax` 的语法树转换为编译器的 `Node` [[Dempsky, 2016a](#ref-dempsky-2016a)]；同年
 10 月，新前端成为默认 [[Dempsky, 2016b](#ref-dempsky-2016b)]，旧的词法分析器与语法分析器随即被删除
 [[Dempsky, 2016c](#ref-dempsky-2016c)]。Go 1.8 的发布说明称，新的编译器前端对用户不可见，但为今后的性能
-工作奠定了基础 [[Go Authors, 2017](#ref-go-authors-2017)]。此后，`syntax` 的语法树先后成为 `types2`
-（[8.3](../../part2lang/ch08generics/checker.md)）与统一 IR（[15.2](./ssa.md)）的输入。
+工作奠定了基础 [[Go Authors, 2017](#ref-go-authors-2017)]。此后，`syntax` 的语法树先后成为 `types2`（[8.3](../../part2lang/ch08generics/checker.md)）
+与统一 IR（[15.2](./ssa.md)）的输入。
 
 标准库的 `go/scanner`、`go/parser` 与 `go/ast` 是另一套独立的实现。编译器 README 解释了原因：编译器最初用
 C 写成，`go/*` 系列包是为编写 gofmt、vet 这类处理 Go 代码的工具而开发的，编译器基本不使用它们
@@ -544,8 +544,8 @@ Go 的前端可以概括为两个「只看一个」：词法分析器只看换�
   https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/README.md
   https://github.com/golang/go/blob/master/src/cmd/compile/README.md
 - <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors.
-  src/cmd/compile/internal/noder/noder.go（LoadPackage）、src/cmd/compile/internal/syntax/syntax.go
-  （CheckBranches）. Go 1.26 源码.
+  src/cmd/compile/internal/noder/noder.go（LoadPackage）、src/cmd/compile/internal/syntax/syntax.go（CheckBranches）.
+  Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/noder/noder.go
 - <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Programming Language Specification：*Lexical
   elements / Semicolons*、Function declarations、Composite literals、Type parameter declarations. Language
@@ -568,6 +568,6 @@ Go 的前端可以概括为两个「只看一个」：词法分析器只看换�
 - <a id="ref-pike-2012"></a>[Pike, 2012] Rob Pike. "Go at Google: Language Design in the Service of
   Software Engineering." 2012. https://go.dev/talks/2012/splash.article
   Go 的文法为何无须符号表即可解析，以及 gofmt 如何把源码树迁移到新的分号规则。
-- 本书 [3.2 Go 程序编译流程](../../part1overview/ch03life/compile.md)、
-  [8.3 类型检查技术](../../part2lang/ch08generics/checker.md)、[15.2 中间表示](./ssa.md)、
-  [16.7 语言服务协议](../ch16tools/gopls.md)。
+- 本书 [3.2 Go 程序编译流程](../../part1overview/ch03life/compile.md)、[8.3
+  类型检查技术](../../part2lang/ch08generics/checker.md)、[15.2 中间表示](./ssa.md)、[16.7
+  语言服务协议](../ch16tools/gopls.md)。

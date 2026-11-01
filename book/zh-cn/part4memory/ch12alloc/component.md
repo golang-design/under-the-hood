@@ -65,8 +65,8 @@ type mspan struct {
 > CPU 并不友好，因为它难以缓存，对它的访问也难以预测。
 
 文档估计，典型的 Go 程序约有 5% 的 CPU 时间花在清扫器以及自由表引起的缓存缺失上。Hudson 在 Go 1.7 中实现了
-这一设计，分配直接使用位图 [[Hudson, 2016b](#ref-hudson-2016b)]。每个 span 有两个位图，每个槽位各占 1 位：
-`allocBits` 记录哪些槽已被占用，`gcmarkBits` 记录本轮标记中哪些对象被标记。清扫一个 span 时，`gcmarkBits`
+这一设计，分配直接使用位图 [[Hudson, 2016b](#ref-hudson-2016b)]。每个 span 有两个位图，每个槽位各占 1 位：`allocBits`
+记录哪些槽已被占用，`gcmarkBits` 记录本轮标记中哪些对象被标记。清扫一个 span 时，`gcmarkBits`
 直接成为新的 `allocBits`，旧的 `allocBits` 被释放，再换上一份清零的位图作为下一轮的 `gcmarkBits`。存活的
 对象在新位图中仍是已占用，死去对象的槽位随之变为空闲，无需逐个插回链表（[13.5](../ch13gc/sweep.md)）。
 
@@ -126,9 +126,9 @@ func main() {
 同一 span 中最多的对象数：168
 ```
 
-每个对象都从 span 起点的 48 字节整数倍处开始，可见 33 字节的请求占用的是 48 字节的槽位。
-1000 个对象需要六七个 span，其中被完全占满的 span 容纳了 168 个对象，而不是表中的 170 个：
-`spanInlineMarkBits` 由 63 字节的扫描位、1 字节的所有权标志、63 字节的标记位和 1 字节的 span 类组成，共
+每个对象都从 span 起点的 48 字节整数倍处开始，可见 33 字节的请求占用的是 48 字节的槽位。1000
+个对象需要六七个 span，其中被完全占满的 span 容纳了 168 个对象，而不是表中的 170 个：`spanInlineMarkBits`
+由 63 字节的扫描位、1 字节的所有权标志、63 字节的标记位和 1 字节的 span 类组成，共
 128 字节，(8192 − 128) / 48 取整为 168。以 `GOEXPERIMENT=nogreenteagc` 关闭 Green Tea 后，同一程序输出
 170。按 `initSpan` 的计算，含指针的 48 字节对象还要再预留 128 字节的堆位图，每个 span 只有 (8192 − 256) /
 48 取整，即 165 个槽位。Green Tea 的这一布局由 Knyszek 引入 [[Knyszek, 2025](#ref-knyszek-2025)]，在 Go
@@ -170,8 +170,8 @@ type mcache struct {
 }
 ```
 
-字段按访问频率分组，每次分配都要访问的字段集中在前面，以便落在同一组缓存行中。核心是 `alloc` 数组：
-68 个尺寸类各有含指针与不含指针两个 span 类，共 136 项，每项是该 span 类当前用于分配的 span。`nextSample`
+字段按访问频率分组，每次分配都要访问的字段集中在前面，以便落在同一组缓存行中。核心是 `alloc` 数组：68
+个尺寸类各有含指针与不含指针两个 span 类，共 136 项，每项是该 span 类当前用于分配的 span。`nextSample`
 与 `memProfRate` 服务于内存剖析的采样（[16.5](../../part5toolchain/ch16tools/perf.md)），`tiny`
 等三个字段服务于微对象分配器（[12.6](./tinyalloc.md)），`stackcache`
 是栈的本地缓存（[14.2](../ch14stack/alloc.md)）。`flushGen` 记录这份缓存上一次被清空时的清扫代：
@@ -343,10 +343,10 @@ type heapArena struct {
 
 `spans` 把区域中的每一页映射到它所属的 span。对于任意一个指针，回收器都可以经由 `arenas` 找到对应的
 `heapArena`，再按页号查到 span，进而得知对象的大小、类型信息与标记位，这就是 `spanOf` 所做的查找。
-其后几个位图都以页为索引，但只使用每个 span 第一页对应的位：`pageInUse` 标记处于使用中的 span，
-`pageMarks` 标记含有已标记对象的 span，清扫器借此迅速找到可以整体释放的 span；`pageSpecials`
-标记带有终结器等特殊记录的 span，`pageUseSpanInlineMarkBits` 标记在末尾存放 `spanInlineMarkBits` 的 span。
-Go 1.22 以前，`heapArena` 还保存着覆盖整个区域的指针位图，分配头取代它之后，
+其后几个位图都以页为索引，但只使用每个 span 第一页对应的位：`pageInUse` 标记处于使用中的 span，`pageMarks`
+标记含有已标记对象的 span，清扫器借此迅速找到可以整体释放的 span；`pageSpecials`
+标记带有终结器等特殊记录的 span，`pageUseSpanInlineMarkBits` 标记在末尾存放 `spanInlineMarkBits` 的 span。Go
+1.22 以前，`heapArena` 还保存着覆盖整个区域的指针位图，分配头取代它之后，
 这部分元数据不复存在（[12.1.4](./basic.md)）。
 
 `zeroedBase` 记录区域中从未被使用过的第一个字节。从操作系统新获得的内存已经清零，
@@ -439,8 +439,8 @@ flowchart TD
 
 ## 12.2.7 小结
 
-`mspan` 是分配与回收共同的基本单位，它用两个位图同时记录分配状态与标记结果，自 Go 1.7 起不再维护自由表。
-`mcache` 让绝大多数分配只访问当前 P 的数据；`mcentral` 以带原子快速路径的集合在 P 之间周转 span，
+`mspan` 是分配与回收共同的基本单位，它用两个位图同时记录分配状态与标记结果，自 Go 1.7 起不再维护自由表。`mcache`
+让绝大多数分配只访问当前 P 的数据；`mcentral` 以带原子快速路径的集合在 P 之间周转 span，
 并在分配的同时分担清扫；`mheap` 以页为单位管理整个堆，通过 `heapArena` 支持从任意地址到 span 的查找。
 这些结构自身不在垃圾回收的堆上，而由 `fixalloc` 与 `persistentalloc` 管理。这一层次与 TCMalloc
 的线程缓存、中心自由表与页堆几乎一一对应，不同之处在于每一层都承载了回收器所需的状态。[12.3](./init.md)
@@ -453,8 +453,8 @@ flowchart TD
 - <a id="ref-evans-2006"></a>[Evans, 2006] Jason Evans. "A Scalable Concurrent malloc(3) Implementation
   for FreeBSD." *BSDCan 2006*, 2006. https://people.freebsd.org/~jasone/jemalloc/bsdcan2006/jemalloc.pdf
   jemalloc 的最初设计：多个 arena，线程轮流分派。
-- <a id="ref-go-authors-2026"></a>[Go Authors, 2026] The Go Authors. src/runtime/mheap.go、mcache.go、
-  mcentral.go、mspanset.go、mfixalloc.go. Go 1.26 源码.
+- <a id="ref-go-authors-2026"></a>[Go Authors, 2026] The Go Authors. src/runtime/mheap.go、mcache.go、mcentral.go、mspanset.go、mfixalloc.go.
+  Go 1.26 源码.
   https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
 - <a id="ref-hudson-2016a"></a>[Hudson, 2016a] Rick Hudson. [dev.garbage] runtime: add bit and cache ctz64
   (count trailing zero). Go commit 4093481523, 2016. https://go.dev/cl/20200
@@ -479,5 +479,5 @@ flowchart TD
 - <a id="ref-wilson-1995"></a>[Wilson et al., 1995] Paul R. Wilson, Mark S. Johnstone, Michael Neely,
   David Boles. "Dynamic Storage Allocation: A Survey and Critical Review." *IWMM 1995*, 1–116, 1995.
   https://doi.org/10.1007/3-540-60368-9_19
-- 本书 [12.1 设计原则](./basic.md)、[12.5 小对象分配](./smallalloc.md)、
-  [13.5 清扫与位图](../ch13gc/sweep.md)。
+- 本书 [12.1 设计原则](./basic.md)、[12.5 小对象分配](./smallalloc.md)、[13.5
+  清扫与位图](../ch13gc/sweep.md)。

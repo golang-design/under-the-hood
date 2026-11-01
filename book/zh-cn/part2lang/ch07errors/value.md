@@ -36,8 +36,8 @@ Barbara Liskov 与 Alan Snyder 1979 年的论文 *Exception Handling in CLU*
 换成「作为最后一个返回值」，把 `resignal` 换成 `return err`，把 `failure` 换成 `panic`，几乎就是 Go
 的做法。区别在于，CLU 的异常仍然是一种控制结构，而 Go 的错误只是一个值。
 
-C++ 与 Java 走向了另一个方向：异常可以越过任意多层栈帧自动传播，直到遇到类型匹配的 `catch`。
-Java 又引入了受检异常（checked exception），要求方法在签名中以 `throws` 声明可能抛出的异常。
+C++ 与 Java 走向了另一个方向：异常可以越过任意多层栈帧自动传播，直到遇到类型匹配的 `catch`。Java
+又引入了受检异常（checked exception），要求方法在签名中以 `throws` 声明可能抛出的异常。
 这一设计后来饱受争议。C# 的首席设计者 Anders Hejlsberg 在 2003 年的访谈中解释 C# 为何没有
 采用受检异常时，指出了两个问题：可版本化（versionability），即新版本的方法增加一种异常会
 破坏已有的调用方；以及可扩展性（scalability），即在大型系统中，每一层汇聚下层的异常，`throws`
@@ -119,15 +119,15 @@ type Error interface {
 
 第三个阶段是 Go 1 的内建 `error`。2011 年 11 月 1 日，Russ Cox 在同一天提交了一组修改：
 在语言规范中加入预声明类型 `error`（d9877e22fe），在编译器中实现它（2a0e15d36c），新建只有一个函数 `New`
-的 `errors` 包（e4ae30f5f5），并在 `io` 包中加入 `EOF`，取代原先的 `os.EOF`
-（c06cf03f0b）[[Cox, 2011](#ref-cox-2011)]。Go 1 的发布说明 [[Go Authors, 2012](#ref-go-authors-2012)]解释
+的 `errors` 包（e4ae30f5f5），并在 `io` 包中加入 `EOF`，取代原先的 `os.EOF`（c06cf03f0b）[[Cox,
+2011](#ref-cox-2011)]。Go 1 的发布说明 [[Go Authors, 2012](#ref-go-authors-2012)]解释
 了这样做的理由：错误最初出现在实现 `os` 包的时候，看起来与操作系统相关，所以放在 `os` 中；
 但后来发现错误比操作系统更基础，例如 `os` 所依赖的 `syscall` 也需要使用错误，而把错误放在 `os`
 中会给许多包引入原本不必要的依赖。方法名从 `String` 改为 `Error`，则是为了避免一个只是实现了常用的
 `String` 方法的类型，意外地满足了错误接口。
 
-还有一处细节值得一提。2009 年的 `os.NewError` 会按字符串去重，相同文本的两次调用得到同一个错误；
-Go 1 的 `errors.New` 则每次都分配一个新的 `errorString`，Go 1.26 的文档明确写道，即使文本相同，
+还有一处细节值得一提。2009 年的 `os.NewError` 会按字符串去重，相同文本的两次调用得到同一个错误；Go
+1 的 `errors.New` 则每次都分配一个新的 `errorString`，Go 1.26 的文档明确写道，即使文本相同，
 每次调用 `New` 返回的错误值也各不相同。因此，一个哨兵错误的身份在于那个变量所持有的指针，而
 不在于它的文本。
 
@@ -174,8 +174,8 @@ type error interface {
 
 在运行时，`error` 是一个非空接口，表示为 [4.2.1](../ch04type/interface.md) 所述的 `iface`：一个
 指向接口表 `itab` 的指针加上一个数据指针。只有两个字都为 `nil` 时，`error` 才等于 `nil`。由此
-产生了一个常见的陷阱：函数返回一个值为 `nil` 的具体类型指针，得到的 `error` 却不等于 `nil`。
-[4.2.2](../ch04type/interface.md) 以 `error` 为例详细分析了这一现象，Go FAQ 中也有专门的条目
+产生了一个常见的陷阱：函数返回一个值为 `nil` 的具体类型指针，得到的 `error` 却不等于 `nil`。[4.2.2](../ch04type/interface.md)
+以 `error` 为例详细分析了这一现象，Go FAQ 中也有专门的条目
 *Why is my nil error value not equal to nil?*。
 
 ## 7.1.4 错误即值
@@ -311,8 +311,8 @@ false read config: EOF
 团队发布了 Go 2 的错误处理与错误值两组草案设计 [[Lohuizen, 2018](#ref-lohuizen-2018)]，Russ Cox
 为错误值草案撰写的问题概述 [[Cox, 2018](#ref-cox-2018)]指出，无论用 `fmt.Errorf` 还是新的类型包装错误，
 都会使相等比较与类型断言失效，这反过来使人们不愿包装错误，错误信息也就不够有用。最终落地的是 Go 1.13
-的方案 [[Neil, 2019](#ref-neil-2019)] [[Neil and Amsterdam, 2019](#ref-neil-amsterdam-2019)]：
-`fmt.Errorf` 的 `%w` 动词保留被包装的错误 [[Cox, 2019a](#ref-cox-2019a)]，`errors.Is` 与 `errors.As`
+的方案 [[Neil, 2019](#ref-neil-2019)] [[Neil and Amsterdam, 2019](#ref-neil-amsterdam-2019)]：`fmt.Errorf`
+的 `%w` 动词保留被包装的错误 [[Cox, 2019a](#ref-cox-2019a)]，`errors.Is` 与 `errors.As`
 沿包装链检查。这一机制的实现见 [7.2](./inspect.md)，错误消息与上下文的组织见 [7.3](./context.md)，
 库作者应当以何种形式暴露错误见 [7.4](./semantics.md)。
 
@@ -402,5 +402,5 @@ false read config: EOF
   提案；提案评审委员会的说明见 https://github.com/golang/go/issues/32437#issuecomment-512035919 ）
 - <a id="ref-go-authors-2023"></a>[Go Authors, 2023] The Go Authors. *Go 1.20 Release Notes: errors.*
   2023. https://go.dev/doc/go1.20#errors （`errors.Join` 与多 `%w`）
-- 本书 [6.3 恐慌与恢复](../ch06func/panic.md)、[7.2 错误值检查](./inspect.md)、
-  [7.5 错误处理的未来](./future.md)。
+- 本书 [6.3 恐慌与恢复](../ch06func/panic.md)、[7.2 错误值检查](./inspect.md)、[7.5
+  错误处理的未来](./future.md)。

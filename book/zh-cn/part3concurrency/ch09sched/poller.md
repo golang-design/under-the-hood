@@ -5,8 +5,8 @@ title: "9.9 网络轮询器"
 
 # 9.9 网络轮询器
 
-Go 的网络代码以阻塞的方式书写：`conn.Read` 在数据到达之前不会返回。[9.5](./thread.md) 已经说明，
-goroutine 阻塞在系统调用中时，它所在的线程也随之阻塞，运行时只能另起线程来执行其他 goroutine。网络服务器
+Go 的网络代码以阻塞的方式书写：`conn.Read` 在数据到达之前不会返回。[9.5](./thread.md) 已经说明，goroutine
+阻塞在系统调用中时，它所在的线程也随之阻塞，运行时只能另起线程来执行其他 goroutine。网络服务器
 往往同时持有成千上万个连接，其中绝大多数在任一时刻都在等待数据；如果每一个等待都占用一个线程，M:N 模型
 （[9.1](./model.md)）就失去了意义。运行时的**网络轮询器**（network poller，源码中简称 netpoll）解决的正是
 这个问题：它把 goroutine 在网络上的阻塞转换为 goroutine 的挂起，由少数线程借助操作系统的事件通知机制照看
@@ -37,8 +37,8 @@ epoll 由 Davide Libenzi 提出，初稿写于 2001 年 7 月，补丁于 2002 �
 把描述符登记一次，此后 `epoll_wait` 只返回已经就绪的描述符，每次调用的代价与 $k$ 而非 $n$ 成正比。
 常说的「epoll 是 $O(1)$」并不确切：登记的代价由 `epoll_ctl` 一次付清，等待的代价取决于就绪的数目。
 
-这类接口有两种通知方式。**水平触发**（level-triggered）是只要描述符处于就绪状态，每次等待都会报告它；
-**边沿触发**（edge-triggered）只在描述符从未就绪变为就绪时报告一次。epoll(7) 手册用一个管道说明二者的
+这类接口有两种通知方式。**水平触发**（level-triggered）是只要描述符处于就绪状态，每次等待都会报告它；**边
+沿触发**（edge-triggered）只在描述符从未就绪变为就绪时报告一次。epoll(7) 手册用一个管道说明二者的
 区别：写端写入 2 kB 数据，读端被唤醒后只读取 1 kB。在水平触发下，下一次 `epoll_wait` 立即返回，
 因为管道中还有数据；在边沿触发下，由于没有新的数据到达，下一次 `epoll_wait` 可能无限期地阻塞。
 手册因此建议，边沿触发应当这样使用：「（1）使用非阻塞的文件描述符；（2）仅在 read(2) 或 write(2) 返回
@@ -205,8 +205,8 @@ type pollDesc struct {
 ```
 
 `rg` 与 `wg` 是两个二值信号量，分别供读者与写者挂起。源码注释列出了它们的四种状态：`pdReady` 表示有一个
-尚未被消费的就绪通知；`pdWait` 表示一个 goroutine 准备挂起，但尚未挂起；G 指针表示该 goroutine 已经挂起；
-`pdNil` 表示以上都不是。参与状态转换的有四方：等待者自己、I/O 就绪通知、截止时间到期、描述符关闭。
+尚未被消费的就绪通知；`pdWait` 表示一个 goroutine 准备挂起，但尚未挂起；G 指针表示该 goroutine 已经挂起；`pdNil`
+表示以上都不是。参与状态转换的有四方：等待者自己、I/O 就绪通知、截止时间到期、描述符关闭。
 
 ```mermaid
 stateDiagram-v2
@@ -225,8 +225,8 @@ stateDiagram-v2
 
 这套设计的关键在于 `pdReady` 能把一次就绪通知保存下来。通知可能在三个时刻到达：等待者检查之前、等待者
 置为 `pdWait` 之后但尚未挂起之时、等待者已经挂起之后。第一种情况下，通知把 `pdNil` 变为 `pdReady`，等待者
-随后直接消费它；第二种情况下，通知把 `pdWait` 变为 `pdReady`，`netpollblockcommit` 的 CAS 因此失败，
-`gopark` 立即返回；第三种情况下，通知把 G 指针变为 `pdReady` 并唤醒 G。无论哪种情况，通知都不会丢失。
+随后直接消费它；第二种情况下，通知把 `pdWait` 变为 `pdReady`，`netpollblockcommit` 的 CAS 因此失败，`gopark`
+立即返回；第三种情况下，通知把 G 指针变为 `pdReady` 并唤醒 G。无论哪种情况，通知都不会丢失。
 这一点对边沿触发至关重要：边沿触发的事件只报告一次，丢失一次就可能永远等下去。
 
 超时与关闭则不同。`netpollunblock` 只在就绪时才写入 `pdReady`，超时或关闭不会留下任何记号，
@@ -290,8 +290,8 @@ func netpollopen(fd uintptr, pd *pollDesc) uintptr {
 注释写明二者「在 fd 的整个生命周期中以边沿触发方式（EV_CLEAR）装设」。
 
 选择边沿触发的理由，与 Go 1.0 对比便能看清。Go 1.0 以 `EPOLLONESHOT` 登记，每次等待之前都要调用一次
-`epoll_ctl` 重新装设。若改用水平触发并同时关心读写，问题出在写的方向：套接字的发送缓冲区通常有空间，
-`EPOLLOUT` 会出现在每一次 `epoll_wait` 的结果中，所以只能在有写者等待时才打开 `EPOLLOUT`，写完后再关掉，
+`epoll_ctl` 重新装设。若改用水平触发并同时关心读写，问题出在写的方向：套接字的发送缓冲区通常有空间，`EPOLLOUT`
+会出现在每一次 `epoll_wait` 的结果中，所以只能在有写者等待时才打开 `EPOLLOUT`，写完后再关掉，
 每次开关都是一次系统调用。Netty 4.2 的 epoll 传输只使用水平触发，它正是这样做的：增删关心的事件之前先比较
 新旧集合，源码注释写道「如果关心的事件没有变化，就可以省下一次系统调用」[[Netty, n.d.b](#ref-netty-ndb)]。
 采用边沿触发，Go 只在登记和关闭时各调用一次 `epoll_ctl`，其间无论读写多少次都不必修改登记。
@@ -305,8 +305,8 @@ wasip1 使用水平触发的 I/O」。在这些平台上，每次等待之前都
 的做法相同；`netpoll.go` 开头所说的「边沿触发」对它们并不成立。
 
 Windows 使用完成模型。`netpollopen` 把句柄关联到进程唯一的 I/O 完成端口；`internal/poll`
-发起重叠（overlapped）I/O，若操作返回 `ERROR_IO_PENDING`，就像 Unix 上一样调用 `runtime_pollWait` 挂起；
-`netpoll` 用 `GetQueuedCompletionStatusEx` 取回完成事件，再调用 `netpollready` 唤醒等待者
+发起重叠（overlapped）I/O，若操作返回 `ERROR_IO_PENDING`，就像 Unix 上一样调用 `runtime_pollWait` 挂起；`netpoll`
+用 `GetQueuedCompletionStatusEx` 取回完成事件，再调用 `netpollready` 唤醒等待者
 [[Go Authors, 2026d](#ref-go-authors-2026d)]。超时或关闭时，`internal/poll` 调用 `CancelIoEx`
 取消尚未完成的操作。完成通知由此被包装成了就绪通知，上层看到的仍是同一套挂起与唤醒。
 完成模型要求缓冲区在操作完成之前保持有效，并且地址不变，而 goroutine 的栈是可以移动的
@@ -315,8 +315,8 @@ Windows 使用完成模型。`netpollopen` 把句柄关联到进程唯一的 I/O
 被移动」[[Muntal, 2025](#ref-muntal-2025)]。
 
 最后，阻塞在 `netpoll` 中的线程有时需要被提前唤醒，例如出现了一个更早到期的计时器。这由 `netpollBreak`
-完成：Linux 上自 Go 1.23 起向一个 eventfd 写入 [[Pan, 2024a](#ref-pan-2024a)]，此前使用管道；Darwin、
-DragonFly 与 FreeBSD 触发一个 kqueue 的 `EVFILT_USER` 事件，NetBSD 与 OpenBSD 仍使用管道。这与 Go 1.0 的
+完成：Linux 上自 Go 1.23 起向一个 eventfd 写入 [[Pan, 2024a](#ref-pan-2024a)]，此前使用管道；Darwin、DragonFly
+与 FreeBSD 触发一个 kqueue 的 `EVFILT_USER` 事件，NetBSD 与 OpenBSD 仍使用管道。这与 Go 1.0 的
 pollServer 向自己的管道写入一个字节是同一个思路，即 [9.6](./signal.md) 介绍的自管道技巧。
 
 ## 9.9.6 与调度器的衔接
@@ -485,8 +485,8 @@ goroutine 是运行时自己的后台 goroutine（强制 GC、清扫、scavenger
 
 ## 9.9.8 与其他运行时的比较
 
-Node.js 所用的 libuv 是一个单线程的事件循环，网络 I/O 交给 epoll、kqueue、IOCP 等平台机制。文件则不同，
-libuv 的文档写道：「与网络 I/O 不同，没有 libuv 可以依赖的平台相关的文件 I/O 原语，
+Node.js 所用的 libuv 是一个单线程的事件循环，网络 I/O 交给 epoll、kqueue、IOCP 等平台机制。文件则不同，libuv
+的文档写道：「与网络 I/O 不同，没有 libuv 可以依赖的平台相关的文件 I/O 原语，
 所以目前的做法是在一个线程池中执行阻塞的文件 I/O 操作」[[libuv, n.d.](#ref-libuv-nd)]。线程池默认有
 4 个线程，可以通过 `UV_THREADPOOL_SIZE` 调整，上限为 1024。这与 Go 的结构相同：套接字交给轮询器，
 文件交给线程。区别在于 Go 没有这样一个固定大小的线程池，阻塞的文件操作各占一个 M，线程数随之增长，直至
@@ -531,10 +531,10 @@ goroutine 一次只做一个操作。
 
 ## 9.9.9 小结
 
-网络轮询器让 Go 的网络代码以阻塞的方式书写，以事件驱动的方式执行。描述符是非阻塞的，读写遇到 `EAGAIN` 时，
-goroutine 挂起在描述符的 `pollDesc` 上，线程转去执行其他 goroutine；内核报告就绪之后，由进入调度循环的 M
-或 sysmon 收取事件，把 goroutine 放回运行队列。Linux 与 BSD 上的实现采用边沿触发，每个描述符只登记一次，
-`pdReady` 保证通知不会丢失；Windows 的完成端口被包装成同样的接口。轮询器从 Go 1.0 中 `net` 包的一个
+网络轮询器让 Go 的网络代码以阻塞的方式书写，以事件驱动的方式执行。描述符是非阻塞的，读写遇到 `EAGAIN` 时，goroutine
+挂起在描述符的 `pollDesc` 上，线程转去执行其他 goroutine；内核报告就绪之后，由进入调度循环的 M
+或 sysmon 收取事件，把 goroutine 放回运行队列。Linux 与 BSD 上的实现采用边沿触发，每个描述符只登记一次，`pdReady`
+保证通知不会丢失；Windows 的完成端口被包装成同样的接口。轮询器从 Go 1.0 中 `net` 包的一个
 goroutine 演变为运行时的一部分，与调度器、计时器和死锁检测紧密结合。磁盘文件等无法报告就绪状态的 I/O
 不经过它，仍由线程承担。
 
@@ -562,8 +562,7 @@ goroutine 演变为运行时的一部分，与调度器、计时器和死锁检�
   *runtime/netpoll.go、 netpoll_epoll.go、netpoll_kqueue.go、internal/poll/fd_unix.go.*
   https://github.com/golang/go/tree/master/src/runtime
   另含 `internal/poll/fd_poll_runtime.go`（本节对照 Go 1.26）。
-- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `runtime/proc.go`
-  （`findRunnable`、`pollWork`、`startTheWorldWithSema`）.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `runtime/proc.go`（`findRunnable`、`pollWork`、`startTheWorldWithSema`）.
   https://github.com/golang/go/blob/master/src/runtime/proc.go
 - <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. `os/file_unix.go`（`newFile`）.
   https://github.com/golang/go/blob/master/src/os/file_unix.go
@@ -637,6 +636,6 @@ goroutine 演变为运行时的一部分，与调度器、计时器和死锁检�
 - <a id="ref-vyukov-2013"></a>[Vyukov, 2013] Dmitry Vyukov. runtime: integrated network poller for linux.
   Go commit 49e0300854, 2013. https://github.com/golang/go/commit/49e0300854dabc8d3c2e91d26897a998345f2447
   同日的 0bee99ab3b 为 Darwin 实现了基于 kqueue 的版本。
-- 本书 [9.5 线程管理](./thread.md)、[9.4 调度循环](./schedule.md)、[9.8 系统监控](./sysmon.md)、
-  [9.10 计时器](./timer.md)、[9.6 信号处理机制](./signal.md)、
-  [14.4 栈的拷贝与指针调整](../../part4memory/ch14stack/copy.md)。
+- 本书 [9.5 线程管理](./thread.md)、[9.4 调度循环](./schedule.md)、[9.8 系统监控](./sysmon.md)、[9.10
+  计时器](./timer.md)、[9.6 信号处理机制](./signal.md)、[14.4
+  栈的拷贝与指针调整](../../part4memory/ch14stack/copy.md)。

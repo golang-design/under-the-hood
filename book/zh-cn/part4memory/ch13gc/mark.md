@@ -5,8 +5,8 @@ title: "13.4 扫描标记与标记辅助"
 
 # 13.4 扫描标记与标记辅助
 
-标记是回收的主体工作：从根出发（[13.1](./basic.md)），沿指针找到所有可达的对象，把它们由白色变为黑色。
-Go 1.5 起，标记与赋值器并发进行，这带来三个问题。第一，由谁来标记，占用多少 CPU；第二，多个标记者
+标记是回收的主体工作：从根出发（[13.1](./basic.md)），沿指针找到所有可达的对象，把它们由白色变为黑色。Go
+1.5 起，标记与赋值器并发进行，这带来三个问题。第一，由谁来标记，占用多少 CPU；第二，多个标记者
 如何分享待扫描的灰色对象，而不在共享的数据结构上互相争抢；第三，赋值器在标记期间不断分配，凭什么保证
 标记能赶在堆增长到目标之前完成。本节依次讨论标记工作者与 CPU 预算、灰色对象的队列、扫描一个对象的过程，
 以及让分配者分担标记的标记辅助。
@@ -353,12 +353,12 @@ CPU。灰色对象存放在每个 P 的双缓冲区中，经由全局的无锁�
   https://go.dev/doc/go1.19
 - <a id="ref-go-authors-2024"></a>[Go Authors, 2024] The Go Authors. *Go 1.22 Release Notes.* 2024.
   https://go.dev/doc/go1.22
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *runtime/mgcmark.go.* `gcDrain`、
-  `scanObject`、`gcAssistAlloc`、`gcDrainN`. 另见 src/runtime/mgcmark_greenteagc.go、src/runtime/mgc.go、
-  src/runtime/mgcpacer.go、src/runtime/mbitmap.go. Go 1.26 源码.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *runtime/mgcmark.go.* `gcDrain`、`scanObject`、`gcAssistAlloc`、`gcDrainN`.
+  另见 src/runtime/mgcmark_greenteagc.go、src/runtime/mgc.go、src/runtime/mgcpacer.go、src/runtime/mbitmap.go.
+  Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mgcmark.go
-- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *runtime/mgcwork.go.* `gcWork`、
-  `workbuf` 与双缓冲队列. Go 1.26 源码.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *runtime/mgcwork.go.* `gcWork`、`workbuf`
+  与双缓冲队列. Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mgcwork.go
 - <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *runtime/mgcpacer.go.*
   `gcBackgroundUtilization`、辅助信用与兑换率. Go 1.26 源码.
@@ -376,5 +376,5 @@ CPU。灰色对象存放在每个 P 的双缓冲区中，经由全局的无锁�
 - <a id="ref-randall-2022"></a>[Randall, 2022] Keith Randall. runtime: redo heap bitmap. Go commit
   6a9c674a09, 2022. https://go.dev/cl/422634
   随 Go 1.20 发布。
-- 本书 [13.2 写屏障技术](./barrier.md)、[13.3 触发频率及其调步算法](./pacing.md)、
-  [13.7 安全点分析](./safe.md)、[12.1 设计原则](../ch12alloc/basic.md)。
+- 本书 [13.2 写屏障技术](./barrier.md)、[13.3 触发频率及其调步算法](./pacing.md)、[13.7
+  安全点分析](./safe.md)、[12.1 设计原则](../ch12alloc/basic.md)。

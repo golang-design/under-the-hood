@@ -38,8 +38,8 @@ title: "12.8 内存统计"
 | `other:bytes` | 执行追踪的缓冲区、终结器与剖析的特殊记录等 | `OtherSys` |
 | `total:bytes` | 以上各项之和 | `Sys` |
 
-`HeapAlloc` 包括已经不可达、但尚未被清扫的对象。清扫在两轮回收之间逐步进行（[13.5](../ch13gc/sweep.md)），
-`HeapAlloc` 随分配上升、随清扫下降，因此文档指出它的变化是平滑的，不同于停止一切的回收器常见的锯齿形
+`HeapAlloc` 包括已经不可达、但尚未被清扫的对象。清扫在两轮回收之间逐步进行（[13.5](../ch13gc/sweep.md)），`HeapAlloc`
+随分配上升、随清扫下降，因此文档指出它的变化是平滑的，不同于停止一切的回收器常见的锯齿形
 [[Go Authors, 2026a](#ref-go-authors-2026a)]。表中的两个差值各有含义：`HeapInuse` − `HeapAlloc`
 是已经划归某个尺寸类、却未被使用的内存，是碎片的上界；`HeapIdle` − `HeapReleased`
 是运行时为将来的增长而保留、可以归还却尚未归还的内存，它若明显大于堆本身，说明存活堆最近有过短暂的峰值
@@ -82,16 +82,16 @@ by the Go runtime」，这里的 reserved 是宽泛的说法。在 [12.3.4](./in
 （[12.3.5](./init.md)），cgo 与 `syscall.Mmap` 分配的内存则不在统计之内。
 
 判断内存是否泄漏，应当看每轮回收后的存活堆是否持续上升，即 `/gc/heap/live:bytes`（Go 1.21
-加入）[[Geisendörfer, 2022](#ref-geisendorfer-2022)]，而不是 `Sys` 或进程的虚拟内存。按文档的说法，
-`HeapSys` 估计的是堆曾经达到的最大规模，它不会因为存活堆变小而下降；虚拟内存还包括大量只预留、
+加入）[[Geisendörfer, 2022](#ref-geisendorfer-2022)]，而不是 `Sys` 或进程的虚拟内存。按文档的说法，`HeapSys`
+估计的是堆曾经达到的最大规模，它不会因为存活堆变小而下降；虚拟内存还包括大量只预留、
 未映射的地址。
 
 ## 12.8.2 以 span 为单位结算
 
 分配一个小对象时，快速路径只修改所用 span 的 `allocCount`（微对象另计入 `mcache.tinyAllocs`），
 不触碰任何全局计数。这些分配要等到 span 离开 `mcache` 时才结算：一种情形是 `refill` 用新的 span
-替换已满的 span，另一种是 `releaseAll` 清空整个缓存，后者发生在每轮标记终止后各 P 的第一次分配之前、
-`ReadMemStats` 读取之前以及 P 被销毁时。`refill` 中与统计有关的部分如下
+替换已满的 span，另一种是 `releaseAll` 清空整个缓存，后者发生在每轮标记终止后各 P 的第一次分配之前、`ReadMemStats`
+读取之前以及 P 被销毁时。`refill` 中与统计有关的部分如下
 [[Go Authors, 2026d](#ref-go-authors-2026d)]：
 
 ```go
@@ -153,8 +153,8 @@ span 最多容纳 1024 个对象（8 KiB 的 span 切成 8 字节的对象），
 ```
 
 「一致的外部统计」是 `memstats.heapStats`，供 `ReadMemStats` 与 `runtime/metrics` 读取，
-其中各项计数必须彼此一致，机制见 12.8.3。「不一致的内部统计」是 `gcController` 中的 `totalAlloc`、
-`heapLive` 等字段，供运行时自己做决定：每个计数各自原子地更新，读者一次只读一个，不要求它们彼此一致。
+其中各项计数必须彼此一致，机制见 12.8.3。「不一致的内部统计」是 `gcController` 中的 `totalAlloc`、`heapLive`
+等字段，供运行时自己做决定：每个计数各自原子地更新，读者一次只读一个，不要求它们彼此一致。
 
 两套统计对未用完的 span 采取了相反的估计。`heapLive` 在 span 进入缓存时就把其中的全部空闲槽位算作已分配，
 离开缓存时再扣除未用的部分，因而偏高。注释说明了原因：偏低的估计会让调步器以为情况比实际要好，
@@ -388,8 +388,8 @@ func nextSample() int64 {
 把分配看作一条以字节为刻度的时间线，抽样点构成一个**泊松过程**（Poisson process），
 相邻抽样点的间隔服从均值为 $R$ 的指数分布，$R$ 即 `MemProfileRate`。指数分布无记忆：
 无论距上一个抽样点有多远，接下来的 $S$ 个字节中出现抽样点的概率都是 $1-e^{-S/R}$。一个大小为 $S$
-的对象被抽中的概率因此只取决于它的大小，把每个样本除以这一概率，就得到实际分配量的无偏估计。
-`runtime/pprof` 对每条记录按其平均对象大小这样还原 [[Go Authors, 2026e](#ref-go-authors-2026e)]：
+的对象被抽中的概率因此只取决于它的大小，把每个样本除以这一概率，就得到实际分配量的无偏估计。`runtime/pprof`
+对每条记录按其平均对象大小这样还原 [[Go Authors, 2026e](#ref-go-authors-2026e)]：
 
 ```go
 	avgSize := float64(size) / float64(count)
@@ -505,8 +505,8 @@ func main() {
 - `heapMarked` 是上一轮标记得到的存活堆，即 `/gc/heap/live:bytes`。它与栈、全局变量的扫描量一起决定
   `GOGC` 所对应的堆目标（[13.3.2](../ch13gc/pacing.md)）。`MemStats.NextGC` 与 `/gc/heap/goal:bytes`
   都取自 `gcController.heapGoal()`，即 `GOGC` 与内存限制分别给出的目标中较小的一个，再经若干修正。
-- `mappedReady` 即 `Sys` − `HeapReleased`。内存限制据此推算堆目标（[13.3.3](../ch13gc/pacing.md)），
-  scavenger 据此决定是否要把内存压到上限的 95% 以下（[12.7.8](./pagealloc.md)）。
+- `mappedReady` 即 `Sys` − `HeapReleased`。内存限制据此推算堆目标（[13.3.3](../ch13gc/pacing.md)），scavenger
+  据此决定是否要把内存压到上限的 95% 以下（[12.7.8](./pagealloc.md)）。
 - `heapInUse` 与 `heapFree` 之和是堆保留的内存，scavenger 按 `GOGC`
   计算的归还目标与它比较（[12.7.7](./pagealloc.md)）。
 
@@ -551,12 +551,11 @@ func main() {
   *runtime/mstats.go、 runtime/metrics/description.go.* Go 1.26 源码.
   https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
   （`ReadMemStats` 的 STW 实现与记账细节）
-- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. src/runtime/mcache.go（`refill`、
-  `allocLarge`）、src/runtime/mheap.go（`grow`）、src/runtime/metrics.go（`readMetrics` 与各组聚合）. Go
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. src/runtime/mcache.go（`refill`、`allocLarge`）、src/runtime/mheap.go（`grow`）、src/runtime/metrics.go（`readMetrics`
+  与各组聚合）. Go
   1.26 源码. https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
-- <a id="ref-go-authors-2026e"></a>[Go Authors, 2026e] The Go Authors. src/runtime/mprof.go（剖面周期、
-  `MemProfileRate`、`MemProfile`）、src/runtime/malloc.go（`nextSample`）、src/runtime/pprof/protomem.go
-  （`scaleHeapSample`）、src/runtime/pprof/pprof.go（`writeHeapInternal`）. Go 1.26 源码.
+- <a id="ref-go-authors-2026e"></a>[Go Authors, 2026e] The Go Authors. src/runtime/mprof.go（剖面周期、`MemProfileRate`、`MemProfile`）、src/runtime/malloc.go（`nextSample`）、src/runtime/pprof/protomem.go（`scaleHeapSample`）、src/runtime/pprof/pprof.go（`writeHeapInternal`）.
+  Go 1.26 源码.
   https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
 - <a id="ref-knyszek-2020a"></a>[Knyszek, 2020a] Michael Knyszek. *Proposal: API for unstable runtime
   metrics (runtime/metrics).* Go design document, 2020.
@@ -585,6 +584,6 @@ func main() {
 - <a id="ref-silvera-2015"></a>[Silvera, 2015] Raul Silvera. pprof: improve sampling for heap profiling.
   Go commit 27ee719fb3, 2015. https://go.dev/cl/14590
   随 Go 1.6 发布，修复 Go issue #12620。
-- 本书 [13.3 触发频率及其调步算法](../ch13gc/pacing.md)、[12.7 页分配器](./pagealloc.md)、
-  [12.3 初始化](./init.md).
+- 本书 [13.3 触发频率及其调步算法](../ch13gc/pacing.md)、[12.7 页分配器](./pagealloc.md)、[12.3
+  初始化](./init.md).
 - 本书 [第 16 章 工具与可观测性](../../part5toolchain/ch16tools/readme.md)（pprof、metric 的实操）.

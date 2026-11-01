@@ -228,5 +228,5 @@ Tools cannot work around a lack of cooperation.
   (eds.). *Software Engineering at Google.* O'Reilly, 2020. 第 21 章「Dependency Management」（Titus
   Winters 撰写）. https://abseil.io/resources/swe-book/html/ch21.html
   大规模依赖管理的难点与权衡。
-- 本书 [17.2 语义化版本管理](./semantics.md)、[17.3 最小版本选择算法](./minimum.md)、
-  [17.4 vgo 与 dep 之争](./fight.md)。
+- 本书 [17.2 语义化版本管理](./semantics.md)、[17.3 最小版本选择算法](./minimum.md)、[17.4
+  vgo 与 dep 之争](./fight.md)。

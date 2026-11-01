@@ -206,8 +206,8 @@ func main() {
 ## 5.2.4 手动零拷贝：`unsafe.String` 与相关函数
 
 编译器的优化只覆盖它能够证明安全的情形。当程序员确知某段字节此后不会再被修改时，可以使用 `unsafe`
-包中的四个函数手动完成零拷贝转换：`unsafe.String(ptr, len)` 由字节指针与长度构造字符串，
-`unsafe.StringData(s)` 取得字符串底层字节的指针，`unsafe.Slice` 与 `unsafe.SliceData`
+包中的四个函数手动完成零拷贝转换：`unsafe.String(ptr, len)` 由字节指针与长度构造字符串，`unsafe.StringData(s)`
+取得字符串底层字节的指针，`unsafe.Slice` 与 `unsafe.SliceData`
 是切片一侧的对应函数。其中 `unsafe.Slice` 随 Go 1.17 加入 [[Dempsky, 2021](#ref-dempsky-2021)]，
 其余三个随 Go 1.20 加入 [[Go Authors, 2023](#ref-go-authors-2023)]。
 
@@ -254,8 +254,8 @@ jello
 存中。文档同时提醒，复制本身也消耗内存，`Clone` 应当只在性能剖析表明需要时才使用。
 
 与此相反的需求是**驻留**（interning）：程序中大量重复出现的字符串（例如日志中的主机名、解析得到的字段名）
-只保留一份。Go 1.23 引入的 `unique` 包提供了这一功能 [[Go Authors, 2026b](#ref-go-authors-2026b)]：
-`unique.Make` 返回一个句柄，内容相同的值得到相等的句柄，比较两个句柄只需比较一个指针：
+只保留一份。Go 1.23 引入的 `unique` 包提供了这一功能 [[Go Authors, 2026b](#ref-go-authors-2026b)]：`unique.Make`
+返回一个句柄，内容相同的值得到相等的句柄，比较两个句柄只需比较一个指针：
 
 ```go {run=true}
 package main

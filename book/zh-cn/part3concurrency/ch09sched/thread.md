@@ -429,8 +429,8 @@ extra M 与模板线程等特殊情形。正是这些机制使用户几乎感知
   since CL 46033. Go issue #22227, 2017. https://go.dev/issue/22227
 - <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `runtime/proc.go`.
   https://github.com/golang/go/blob/master/src/runtime/proc.go
-  `newm`/`newm1`/`mstart`、`stopm`/`startm`/`mPark`、`entersyscall`/`exitsyscall`/`reentersyscall`、
-  `handoffp`/`retake`、`acquirep`/`releasep`、`checkmcount`，以及 extra M 相关的
+  `newm`/`newm1`/`mstart`、`stopm`/`startm`/`mPark`、`entersyscall`/`exitsyscall`/`reentersyscall`、`handoffp`/`retake`、`acquirep`/`releasep`、`checkmcount`，
+  以及 extra M 相关的
   `newextram`/`oneNewExtraM`/`needm`/`dropm`（本节对照 Go 1.26）。
 - <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `runtime/os_linux.go`.
   https://github.com/golang/go/blob/master/src/runtime/os_linux.go
@@ -465,5 +465,5 @@ extra M 与模板线程等特殊情形。正是这些机制使用户几乎感知
   退出时终止其锁定的线程）、#21827（`LockOSThread` 带来的显著性能损失）、#22227（Plan 9 上禁用
   `newmHandoff`）、#18023（`LockOSThread` 引发的异常放缓）、#14592（让空闲的操作系统线程退出）。
   https://github.com/golang/go/issues
-- 本书 [9.1 调度问题与 GMP 模型](./model.md)、[9.4 调度循环](./schedule.md)、[9.8 系统监控](./sysmon.md)、
-  [9.9 网络轮询器](./poller.md)。
+- 本书 [9.1 调度问题与 GMP 模型](./model.md)、[9.4 调度循环](./schedule.md)、[9.8 系统监控](./sysmon.md)、[9.9
+  网络轮询器](./poller.md)。

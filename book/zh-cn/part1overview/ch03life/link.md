@@ -45,8 +45,8 @@ $ go tool objdump -s '^main.main$' hello | grep Fprintln
 ## 3.4.1 链接器的工作
 
 编译器为每个包产出的**目标文件**（object file，见 [3.2](./compile.md)）包含该包的机器码和数据，
-以及两张表。一张是**符号**（symbol）表，列出本包定义的函数和全局变量，如 `fmt.Fprintln`、
-`os.Stdout`；另一张是**重定位项**（relocation）表，记录代码和数据中所有待填写的地址，上例中以
+以及两张表。一张是**符号**（symbol）表，列出本包定义的函数和全局变量，如 `fmt.Fprintln`、`os.Stdout`；
+另一张是**重定位项**（relocation）表，记录代码和数据中所有待填写的地址，上例中以
 `rel` 开头的一行就是一条重定位项。
 
 链接器读入 `main` 包及其直接、间接依赖的全部包（包括运行时）的目标文件，依次完成四项工作
@@ -61,26 +61,26 @@ $ go tool objdump -s '^main.main$' hello | grep Fprintln
 
 ## 3.4.2 重定位
 
-`CALL` 指令中存放的不是 `fmt.Fprintln` 的绝对地址，而是从下一条指令到 `fmt.Fprintln` 的偏移量，
-CPU 执行时将二者相加得到跳转目标。因此，链接器在这里只需做一次减法：
+`CALL` 指令中存放的不是 `fmt.Fprintln` 的绝对地址，而是从下一条指令到 `fmt.Fprintln` 的偏移量，CPU
+执行时将二者相加得到跳转目标。因此，链接器在这里只需做一次减法：
 
 ```
 $ go tool nm hello | grep ' fmt.Fprintln$'
   499240 T fmt.Fprintln
 ```
 
-`fmt.Fprintln` 位于 `0x499240`。调用指令起始于 `0x49e161`，长 5 字节，下一条指令位于 `0x49e166`。
-`0x499240 - 0x49e166 = -0x4f26`，按小端序写成 4 个字节即 `da b0 ff ff`，与最终文件中 `e8` 之后的
+`fmt.Fprintln` 位于 `0x499240`。调用指令起始于 `0x49e161`，长 5 字节，下一条指令位于 `0x49e166`。`0x499240 - 0x49e166 = -0x4f26`，
+按小端序写成 4 个字节即 `da b0 ff ff`，与最终文件中 `e8` 之后的
 4 个字节一致。
 
-另一类重定位填写的是目标的绝对地址，例如某张表中存放的全局变量地址。编译器以 `R_CALL`、`R_PCREL`、
-`R_ADDR` 等类型区分不同的填写方式，链接器在 `cmd/link/internal/ld/data.go` 中按目标体系结构逐一
+另一类重定位填写的是目标的绝对地址，例如某张表中存放的全局变量地址。编译器以 `R_CALL`、`R_PCREL`、`R_ADDR`
+等类型区分不同的填写方式，链接器在 `cmd/link/internal/ld/data.go` 中按目标体系结构逐一
 处理。
 
 相对寻址的好处在于：只要代码各部分之间的相对位置不变，已经填好的偏移量就无须修改。操作系统因而
 可以在每次加载时把程序放到不同的地址，使攻击者难以预测函数的位置，即地址空间布局随机化（ASLR）。
-能够加载到任意地址的可执行文件称为位置无关可执行文件（position-independent executable，PIE）。
-Go 1.26 在 macOS、Windows、Android 和 iOS 上默认生成 PIE（Windows 上启用竞态检测时除外）；在 Linux
+能够加载到任意地址的可执行文件称为位置无关可执行文件（position-independent executable，PIE）。Go
+1.26 在 macOS、Windows、Android 和 iOS 上默认生成 PIE（Windows 上启用竞态检测时除外）；在 Linux
 上则默认加载到固定地址 `0x400000` 附近，需要时可指定 `-buildmode=pie`。
 
 ## 3.4.3 死代码消除
@@ -174,8 +174,8 @@ $ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o duck . && go tool nm duck | 
 681,250 字节。这张表记录了从任意指令地址到所属函数、源码行号以及栈上指针位置的映射，panic 时打印调用栈、
 垃圾回收时扫描栈（[第 14 章](../../part4memory/ch14stack/readme.md)）都依赖它，因此不能删除。
 可以删除的是供调试器使用的部分：`-ldflags="-s -w"` 去掉符号表（`-s`）和 DWARF 调试信息
-（`-w`）[[Go Authors, 2026b](#ref-go-authors-2026b)]，`hello` 由 2,414,502 字节减小到 1,605,794 字节，
-panic 时仍能打印调用栈。
+（`-w`）[[Go Authors, 2026b](#ref-go-authors-2026b)]，`hello` 由 2,414,502 字节减小到 1,605,794 字节，panic
+时仍能打印调用栈。
 
 链接器还会写入构建信息，包括 Go 版本、所依赖的模块及其版本、构建参数等。`go version -m hello` 无须
 运行程序即可读出这些信息，漏洞扫描工具 `govulncheck` 也依据它判断程序是否包含存在已知漏洞的模块
@@ -205,8 +205,8 @@ func main() {
 }
 ```
 
-在 darwin/arm64 上执行 `go run main.go` 的输出如下。在网站上运行时，最后几行为 `CGO_ENABLED=0`、
-`GOARCH=wasm` 和 `GOOS=js`；在 Git 管理的模块中构建时，还会包含 `vcs.revision` 等版本控制信息。
+在 darwin/arm64 上执行 `go run main.go` 的输出如下。在网站上运行时，最后几行为 `CGO_ENABLED=0`、`GOARCH=wasm`
+和 `GOOS=js`；在 Git 管理的模块中构建时，还会包含 `vcs.revision` 等版本控制信息。
 
 ```
 Go 版本：go1.26.10
@@ -228,8 +228,8 @@ linking）。后一种方式下的库可由多个程序共享，称为**共享�
 
 早期的 Unix 只支持静态链接，几乎每个程序都带有一份 C 库，磁盘和内存中存在大量相同的副本。1980 年代后期，
 共享库出现在主流 Unix 中：System V Release 3（1987 年）的共享库须加载到预先约定的固定地址；SunOS
-4.0（1988 年）则实现了在程序启动时完成的动态链接 [[Gingell et al., 1987](#ref-gingell-et-al-1987)]，
-System V Release 4 随后也采用了这种方式。多个进程由此共享内存中的同一份库，库升级时也无须重新编译依赖它的
+4.0（1988 年）则实现了在程序启动时完成的动态链接 [[Gingell et al., 1987](#ref-gingell-et-al-1987)]，System
+V Release 4 随后也采用了这种方式。多个进程由此共享内存中的同一份库，库升级时也无须重新编译依赖它的
 程序，Linux 和各 BSD 系统沿用至今。其代价是程序每次启动都要查找并链接共享库，能否运行还取决于目标机器上所
 安装的库的版本 [[Drepper, 2011](#ref-drepper-2011)]。
 
@@ -302,8 +302,8 @@ Go 最早的链接器是 Plan 9 的 C 语言链接器，Go 1.5 时随编译器�
 - <a id="ref-go-authors-2021"></a>[Go Authors, 2021] The Go Authors. *Go 1.16 Release Notes*, "Linker".
   https://go.dev/doc/go1.16
   在 Go 1.15 的基础上进一步的提速与内存节省。
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `cmd/link/internal/ld/deadcode.go`
-  （Go 1.26）.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. `cmd/link/internal/ld/deadcode.go`（Go
+  1.26）.
   https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/link/internal/ld/deadcode.go
   https://github.com/golang/go/tree/master/src/cmd/link/internal （`ld/deadcode.go`、`loader`：新对象文件格式与符号索引）
   死代码消除的实现。函数 `deadcode` 之前的注释说明了方法的三种调用途径及各自的处理方式。
@@ -315,7 +315,7 @@ Go 最早的链接器是 Plan 9 的 C 语言链接器，Go 1.5 时随编译器�
 - <a id="ref-go-authors-2018"></a>[Go Authors, 2018] The Go Authors. *Go 1.11 Release Notes*, "Runtime".
   https://go.dev/doc/go1.11#runtime
   macOS 与 iOS 上的运行时改经 `libSystem.dylib` 发起系统调用。
-- 本书 [2.1 Plan 9 汇编](../ch02asm/asm.md)、[3.2 编译流程](./compile.md)、
-  [3.5 启动引导](./boot.md)、[1.1 历史与设计哲学](../ch01intro/history.md)、
-  [17 模块与生态](../../part5toolchain/ch17modules).
+- 本书 [2.1 Plan 9 汇编](../ch02asm/asm.md)、[3.2 编译流程](./compile.md)、[3.5
+  启动引导](./boot.md)、[1.1 历史与设计哲学](../ch01intro/history.md)、[17
+  模块与生态](../../part5toolchain/ch17modules).
 

@@ -96,8 +96,8 @@ wi d est</w>
 ```
 
 第一行是十次合并依次产生的新符号，其余四行是合并之后每个词的切分。`newest` 与 `widest` 共有的后缀
-`est</w>` 在前三步就成了一个符号；`low` 与 `newest` 都成了完整的符号，出现较少的 `lower` 则仍由 `low`、
-`e`、`r` 与词尾符号拼成。这正是 BPE 的性质：常见的词成为一个词元，罕见的词拆成若干子词，词表大小可控，
+`est</w>` 在前三步就成了一个符号；`low` 与 `newest` 都成了完整的符号，出现较少的 `lower` 则仍由 `low`、`e`、`r`
+与词尾符号拼成。这正是 BPE 的性质：常见的词成为一个词元，罕见的词拆成若干子词，词表大小可控，
 而任何输入都能表示。合并顺序与论文中 Python 程序的输出一致。有一处细节是 Go 特有的：Python 的 `max`
 在频次相同时返回字典中先出现的键，而 Go 规范明确规定 map 的迭代顺序未指定，且两次迭代之间也不保证相同，
 所以程序另用切片 `order` 记录符号对首次出现的顺序，结果才是确定的。
@@ -122,8 +122,8 @@ model）两种切分算法 [[Kudo and Richardson, 2018](#ref-kudo-richardson-201
 会产生不理想的合并（例如 `dog.`、`dog!`、`dog?` 各占一个词元），因此 GPT-2 禁止跨越字符类别的合并，
 只对空格开了例外 [[Radford et al., 2019](#ref-radford-et-al-2019)]。
 
-GPT-2 的编码器还做了一步映射：把 256 个字节值一一映射到可打印的码点，使词表成为一组普通的字符串。
-188 个本身可打印的 ASCII 与 Latin-1 字节映射到自身，其余 68 个按字节顺序映射到 U+0100 起的码点
+GPT-2 的编码器还做了一步映射：把 256 个字节值一一映射到可打印的码点，使词表成为一组普通的字符串。188
+个本身可打印的 ASCII 与 Latin-1 字节映射到自身，其余 68 个按字节顺序映射到 U+0100 起的码点
 [[OpenAI, 2019](#ref-openai-2019)]。空格 0x20 是其中第 33 个，映射为 U+0120，即 `Ġ`，
 这就是许多词表中处处可见 `Ġ` 的原因。Forma 照此实现了同一张映射，并强调它是字节上的双射，
 所以解码对任意字节序列都有定义，包括不合法的 UTF-8。它在把字节映射为码点时逐字节处理字符串，
@@ -192,8 +192,8 @@ af ad e8 a8  直接转换：����  缓冲后：语
 
 第一个词元以「语」的首字节 `e8` 结尾，直接转换得到 `Go�`，而缓冲之后只交出 `Go`，把 `e8` 留下；
 第二个词元带来「语」的后两个字节，`Decoder` 交出完整的「语」，同时留下「言」的前两个字节。
-直接转换的一列中，每个无效字节都变成了一个 U+FFFD：这是 `for range` 遇到不合法的 UTF-8 时的行为，
-`[]rune` 转换遵循同样的规则。
+直接转换的一列中，每个无效字节都变成了一个 U+FFFD：这是 `for range` 遇到不合法的 UTF-8 时的行为，`[]rune`
+转换遵循同样的规则。
 
 判断的关键是 `utf8.FullRune`。它的文档写道，`FullRune` 报告 `p` 中的字节是否以一个完整的 UTF-8 编码开头，
 不合法的编码也被视为完整，因为它会被转换为一个宽度为 1 的错误码点。所以它只对「合法但被截断」的编码返回
@@ -257,14 +257,14 @@ int8 装不下时才自动选择 int4，而选择 int4 时嵌入表仍保留为 
 
 量化把内循环带回了整数运算，也就接上了 [18.4](../ch18gpu/model.md) 与 [19.3](../ch19graphics/software.md)
 讨论的 SIMD。`int8` 的点积正是 CPU SIMD 擅长的计算。Go 1.26 在 `GOEXPERIMENT=simd` 下提供
-`simd/archsimd` 包，暴露与架构相关的向量类型，目前只支持 AMD64，且不受 Go 1 兼容性承诺的约束；
-Go 1.27 新增了可移植的 `simd` 包，为每种数值类型提供向量类型（如 `Int8s`、`Float32s`）与 `Float32s.MulAdd`
+`simd/archsimd` 包，暴露与架构相关的向量类型，目前只支持 AMD64，且不受 Go 1 兼容性承诺的约束；Go
+1.27 新增了可移植的 `simd` 包，为每种数值类型提供向量类型（如 `Int8s`、`Float32s`）与 `Float32s.MulAdd`
 这样的三元运算，同样需要该实验开关。在 CPU 上用纯 Go 实现量化推理的内循环，这两个包提供了所需的基本构件。
 
 ## 小结
 
-分词器是文本与模型整数之间的翻译层。BPE 源自一种数据压缩算法，Sennrich 等人把它改造为子词切分方法；
-GPT-2 把它下沉到字节层面，基础词表因此只需 256 项，这与第 5 章「字符串是不可变的字节序列」完全一致。
+分词器是文本与模型整数之间的翻译层。BPE 源自一种数据压缩算法，Sennrich 等人把它改造为子词切分方法；GPT-2
+把它下沉到字节层面，基础词表因此只需 256 项，这与第 5 章「字符串是不可变的字节序列」完全一致。
 字节级设计的代价是词元边界未必对齐 UTF-8 编码的边界，流式解码必须维护字节缓冲，借助 `utf8.FullRune`
 只交出完整的编码。张量是扁平内存、形状与数据类型的组合，同一进程内传给运行时时遵循 cgo 的指针规则，
 需要异步持有时用 `runtime.Pinner` 或原生缓冲。量化把张量压回按块解释的字节，也把内循环交还给 SIMD。
@@ -276,8 +276,8 @@ GPT-2 把它下沉到字节层面，基础词表因此只需 256 项，这与第
 
 - <a id="ref-gage-1994"></a>[Gage, 1994] Philip Gage. A New Algorithm for Data Compression. *C Users
   Journal*, 12(2):23–38, 1994. BPE 作为压缩算法的出处。
-- <a id="ref-ggml-org-2026"></a>[ggml-org, 2026] ggml-org. *llama.cpp b11963*（提交 39febd2adb）：
-  `ggml/src/ggml-common.h` 中的 `block_q4_0` 与 `ggml/src/ggml-quants.c` 中的量化、反量化函数. 2026.
+- <a id="ref-ggml-org-2026"></a>[ggml-org, 2026] ggml-org. *llama.cpp b11963*（提交 39febd2adb）：`ggml/src/ggml-common.h`
+  中的 `block_q4_0` 与 `ggml/src/ggml-quants.c` 中的量化、反量化函数. 2026.
   https://github.com/ggml-org/llama.cpp/blob/b11963/ggml/src/ggml-quants.c
 - <a id="ref-go-authors-nda"></a>[Go Authors, n.d.a] The Go Authors. *Command cgo.*
   https://pkg.go.dev/cmd/cgo
@@ -308,9 +308,9 @@ GPT-2 把它下沉到字节层面，基础词表因此只需 256 项，这与第
   Birch. *Neural Machine Translation of Rare Words with Subword Units.* ACL, 2016.
   https://aclanthology.org/P16-1162/
   BPE 用于子词切分的原始论文。
-- 本书 [5.1 数组与切片](../../part2lang/ch05data/slice.md)、
-  [5.2 字符串与零拷贝转换](../../part2lang/ch05data/string.md)、
-  [15.6 cgo](../../part5toolchain/ch15compile/cgo.md)、
-  [18.3 显存与垃圾回收的分界](../ch18gpu/memory.md)、
-  [18.4 异步编程模型](../ch18gpu/model.md)、[19.3 软件渲染与并行](../ch19graphics/software.md)、
-  [20.1 推理运行时与 FFI](./runtime.md)、[20.3 服务、批处理与流式](./serving.md)。
+- 本书 [5.1 数组与切片](../../part2lang/ch05data/slice.md)、[5.2
+  字符串与零拷贝转换](../../part2lang/ch05data/string.md)、[15.6
+  cgo](../../part5toolchain/ch15compile/cgo.md)、[18.3
+  显存与垃圾回收的分界](../ch18gpu/memory.md)、[18.4
+  异步编程模型](../ch18gpu/model.md)、[19.3 软件渲染与并行](../ch19graphics/software.md)、[20.1
+  推理运行时与 FFI](./runtime.md)、[20.3 服务、批处理与流式](./serving.md)。

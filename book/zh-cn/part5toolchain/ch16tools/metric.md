@@ -11,8 +11,8 @@ title: "16.6 运行时统计量"
 开销很低、可以每隔几秒读取一次的聚合数值与分布，由监控系统长期保存、绘制成图表并据此告警。
 
 Go 有两套读取运行时统计的接口：自 Go 1 起提供的 `runtime.ReadMemStats`
-[[Go Authors, 2026c](#ref-go-authors-2026c)]，以及 Go 1.16 引入的 `runtime/metrics`。两者的差别、
-`runtime/metrics` 的设计动机 [[Knyszek, 2020](#ref-knyszek-2020)]，以及它为什么不必停止一切，已在
+[[Go Authors, 2026c](#ref-go-authors-2026c)]，以及 Go 1.16 引入的 `runtime/metrics`。两者的差别、`runtime/metrics`
+的设计动机 [[Knyszek, 2020](#ref-knyszek-2020)]，以及它为什么不必停止一切，已在
 [12.8.3](../../part4memory/ch12alloc/mstats.md) 与 [12.8.4](../../part4memory/ch12alloc/mstats.md) 讨论。
 本节讨论 `runtime/metrics` 的使用：指标目录如何组织，直方图如何表示分布，若干指标如何测量，
 以及指标如何接入监控系统。
@@ -75,12 +75,12 @@ uint64： 94 float64： 12 直方图： 8
 [[Go Authors, 2026a](#ref-go-authors-2026a)]：
 
 - `/gc` 与 `/memory`：垃圾回收与内存。`/memory/classes` 下的指标把运行时映射的全部内存不重不漏地分类
-  （[12.8.1](../../part4memory/ch12alloc/mstats.md)）；`/gc/heap/live:bytes` 是上一轮回收标记到的存活堆，
-  `/gc/heap/goal:bytes` 是本轮回收结束时的目标堆大小，由调步器根据前者与 `GOGC`、内存限制等设置算出
+  （[12.8.1](../../part4memory/ch12alloc/mstats.md)）；`/gc/heap/live:bytes` 是上一轮回收标记到的存活堆，`/gc/heap/goal:bytes`
+  是本轮回收结束时的目标堆大小，由调步器根据前者与 `GOGC`、内存限制等设置算出
   （[13.3](../../part4memory/ch13gc/pacing.md)）；`/gc/gogc:percent` 与 `/gc/gomemlimit:bytes`
   则是这两项设置的当前值。
-- `/sched`：调度器（[第 9 章](../../part3concurrency/ch09sched)），包括 goroutine 与线程的数量、
-  `GOMAXPROCS`、调度延迟与停止一切的暂停时长。
+- `/sched`：调度器（[第 9 章](../../part3concurrency/ch09sched)），包括 goroutine 与线程的数量、`GOMAXPROCS`、
+  调度延迟与停止一切的暂停时长。
 - `/cpu/classes`：Go 1.20 加入，估计 CPU 时间在用户代码、垃圾回收、内存归还与空闲之间的分配
   [[Knyszek, 2022c](#ref-knyszek-2022c)]。指标的说明特别指出，这些估计值偏高，不能与操作系统测得的 CPU
   时间直接比较，只能在同族的指标之间比较。
@@ -220,8 +220,8 @@ func main() {
 
 `gTrackingPeriod` 为 8：每个 goroutine 每 8 次离开运行状态，才有一次被跟踪，跟踪期间的状态转换要调用
 `nanotime` 读取时间。状态转换位于调度的热路径上，抽样使这部分开销降为原来的八分之一。
-代价是直方图的计数只是全部调度事件中约八分之一的样本：分布的形状有代表性，计数本身却不是调度的总次数。
-`/sync/mutex/wait/total:seconds` 复用同一套跟踪，它是一个总量，因此在累加时乘以 8，注释写道：「because
+代价是直方图的计数只是全部调度事件中约八分之一的样本：分布的形状有代表性，计数本身却不是调度的总次数。`/sync/mutex/wait/total:seconds`
+复用同一套跟踪，它是一个总量，因此在累加时乘以 8，注释写道：「because
 we're sampling, we have to multiply by our sampling period to get a more representative estimate of the
 absolute value」。
 
@@ -246,8 +246,8 @@ absolute value」。
 
 ### goroutine 的状态
 
-Go 1.26 为调度器加入了一组新的指标：按状态统计的 goroutine 数量 `/sched/goroutines/not-in-go:goroutines`、
-`/sched/goroutines/runnable:goroutines`、`/sched/goroutines/running:goroutines` 与
+Go 1.26 为调度器加入了一组新的指标：按状态统计的 goroutine 数量 `/sched/goroutines/not-in-go:goroutines`、`/sched/goroutines/runnable:goroutines`、`/sched/goroutines/running:goroutines`
+与
 `/sched/goroutines/waiting:goroutines`，程序启动以来创建的 goroutine 总数
 `/sched/goroutines-created:goroutines`，以及运行时拥有的线程数 `/sched/threads/total:threads`
 [[Knyszek, 2025](#ref-knyszek-2025); [Go Authors, 2026g](#ref-go-authors-2026g)]。这类指标的需求在
@@ -320,9 +320,9 @@ func init() {
 
 生产环境更常见的做法是由 Prometheus 定期抓取服务暴露的 `/metrics` 端点
 [[Prometheus Authors, n.d.a](#ref-prometheus-authors-nda)]。官方客户端库 `client_golang` 的 Go 采集器在
-1.12.0 版（2022 年 1 月）改为在 Go 1.17 及以上版本使用 `runtime/metrics`，并默认导出约 80 个新指标；
-1.12.2 版（2022 年 5 月）又撤回了这一默认值，恢复为与 `MemStats` 相当的指标集合，新指标改为需要显式启用。
-1.20.0 版（2024 年 8 月）在默认集合中加入了 `go_gc_gogc_percent`、`go_gc_gomemlimit_bytes` 与
+1.12.0 版（2022 年 1 月）改为在 Go 1.17 及以上版本使用 `runtime/metrics`，并默认导出约 80 个新指标；1.12.2
+版（2022 年 5 月）又撤回了这一默认值，恢复为与 `MemStats` 相当的指标集合，新指标改为需要显式启用。1.20.0
+版（2024 年 8 月）在默认集合中加入了 `go_gc_gogc_percent`、`go_gc_gomemlimit_bytes` 与
 `go_sched_gomaxprocs_threads` 三个指标，理由是 Go 团队推荐这几项
 [[Prometheus Authors, n.d.b](#ref-prometheus-authors-ndb)]。更新日志没有说明撤回的原因。笔者认为，
 这段反复反映了默认指标集合的取舍：每个直方图在 Prometheus 中按桶展开为许多条时间序列，导出的指标越多，
@@ -395,8 +395,8 @@ OpenTelemetry 目前支持的信号包括追踪、指标与日志（另有用于
   https://pkg.go.dev/log/slog
   结构化日志。
 - <a id="ref-go-authors-2026e"></a>[Go Authors, 2026e] The Go Authors.
-  src/runtime/histogram.go（`timeHistogram`）、src/runtime/proc.go（`casgstatus`）、
-  src/runtime/runtime2.go（`gTrackingPeriod`）. Go 1.26 源码.
+  src/runtime/histogram.go（`timeHistogram`）、src/runtime/proc.go（`casgstatus`）、src/runtime/runtime2.go（`gTrackingPeriod`）.
+  Go 1.26 源码.
   https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
 - <a id="ref-go-authors-2026f"></a>[Go Authors, 2026f] The Go Authors. *Package runtime/debug, func
   SetMemoryLimit.* https://pkg.go.dev/runtime/debug#SetMemoryLimit
@@ -433,7 +433,7 @@ OpenTelemetry 目前支持的信号包括追踪、指标与日志（另有用于
 - <a id="ref-prometheus-authors-ndb"></a>[Prometheus Authors, n.d.b] Prometheus Authors.
   *client_golang CHANGELOG.* https://github.com/prometheus/client_golang/blob/main/CHANGELOG.md
   1.12.0、1.12.2 与 1.20.0 版中 Go 采集器默认指标的变化。
-- 本书 [12.8 内存统计](../../part4memory/ch12alloc/mstats.md)、
-  [13.3 触发频率及其调步算法](../../part4memory/ch13gc/pacing.md)、[16.3 性能追踪](./trace.md)、
-  [16.5 基准测试与性能剖析](./perf.md)、[7.3 错误格式与上下文](../../part2lang/ch07errors/context.md)、
-  [16.1 死锁检测](./deadlock.md).
+- 本书 [12.8 内存统计](../../part4memory/ch12alloc/mstats.md)、[13.3
+  触发频率及其调步算法](../../part4memory/ch13gc/pacing.md)、[16.3 性能追踪](./trace.md)、[16.5
+  基准测试与性能剖析](./perf.md)、[7.3 错误格式与上下文](../../part2lang/ch07errors/context.md)、[16.1
+  死锁检测](./deadlock.md).

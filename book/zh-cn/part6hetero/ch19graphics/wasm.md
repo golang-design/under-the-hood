@@ -63,8 +63,8 @@ js.CopyBytesToJS(data, img.Pix)        // 一次批量复制
 ctx.Call("putImageData", imgData, 0, 0) // 一次提交
 ```
 
-`ImageData` 的 `data` 是一个按 RGBA 顺序排列的 `Uint8ClampedArray` [[MDN, n.d.a](#ref-mdn-nda)]，
-`js.CopyBytesToJS` 恰好要求目标是 `Uint8Array` 或 `Uint8ClampedArray`，否则会 panic，
+`ImageData` 的 `data` 是一个按 RGBA 顺序排列的 `Uint8ClampedArray` [[MDN, n.d.a](#ref-mdn-nda)]，`js.CopyBytesToJS`
+恰好要求目标是 `Uint8Array` 或 `Uint8ClampedArray`，否则会 panic，
 复制的字节数取两者长度的较小值 [[Go Authors, n.d.b](#ref-go-authors-ndb)]。由 `image.NewNRGBA`
 创建的图像，`Pix` 按行连续存放，长度恰为 `w*h*4`，与 `ImageData` 的布局一致。这里选用 `NRGBA` 而不是
 `RGBA`，是因为 `color.RGBA` 表示预乘 alpha 的颜色，`color.NRGBA` 才是非预乘的
@@ -101,10 +101,10 @@ WebGPU 实现进入 GPU。命令缓冲合并的是第二道边界上的提交；
 
 ## 19.4.4 单线程的 js/wasm
 
-19.3 的外层并行依赖多个核。在浏览器的 `js/wasm` 中，这一层并不存在。运行时的源码写明了这一点：
-`lock_js.go` 开头的注释是「js/wasm has no support for threads yet. There is no preemption.」，即 js/wasm
-尚不支持线程，也没有抢占；`os_wasm.go` 中创建新线程的 `newosproc` 直接抛出「not implemented」，
-`getCPUCount` 固定返回 1；`haveSysmon` 定义为 `GOARCH != "wasm"`，Wasm 上不启动 sysmon
+19.3 的外层并行依赖多个核。在浏览器的 `js/wasm` 中，这一层并不存在。运行时的源码写明了这一点：`lock_js.go`
+开头的注释是「js/wasm has no support for threads yet. There is no preemption.」，即 js/wasm
+尚不支持线程，也没有抢占；`os_wasm.go` 中创建新线程的 `newosproc` 直接抛出「not implemented」，`getCPUCount`
+固定返回 1；`haveSysmon` 定义为 `GOARCH != "wasm"`，Wasm 上不启动 sysmon
 [[Go Authors, 2026a](#ref-go-authors-2026a)]。下面的程序在本书页面中以 `js/wasm` 运行：
 
 ```go {run=true}
@@ -156,8 +156,8 @@ goroutine，如果该函数阻塞，事件循环就一直阻塞到它返回；�
 
 ## 小结
 
-把 Go 搬进浏览器，渲染要跨越一道新的 FFI 边界：Wasm 与 JavaScript 之间的 `syscall/js`。它与 cgo 同构，
-18.1 的原则照样适用：减少穿越的次数，合并提交。最典型的做法是在 Wasm 内用 19.3 的软件渲染算好整帧，再用
+把 Go 搬进浏览器，渲染要跨越一道新的 FFI 边界：Wasm 与 JavaScript 之间的 `syscall/js`。它与 cgo 同构，18.1
+的原则照样适用：减少穿越的次数，合并提交。最典型的做法是在 Wasm 内用 19.3 的软件渲染算好整帧，再用
 `CopyBytesToJS` 与 `putImageData` 一次提交，软件渲染由此成为绕开边界开销的常用手段。需要 GPU
 加速时可以使用 WebGL 或 WebGPU，WebGPU 把显存、命令缓冲与计算着色器这套概念带进浏览器，但叠加了两道边界，
 渲染包可以同时减少两道边界的穿越。`js/wasm` 的运行时只有一个线程且没有抢占：19.3 的外层并行不复存在，
@@ -179,8 +179,8 @@ goroutine，如果该函数阻塞，事件循环就一直阻塞到它返回；�
 - <a id="ref-go-authors-2018"></a>[Go Authors, 2018] The Go Authors. cmd/compile: thread support for
   webassembly. Go issue #28631, 2018. https://go.dev/issue/28631
 - <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *Go 1.26 source code:*
-  `src/runtime/lock_js.go`、`src/runtime/os_wasm.go`、`src/runtime/proc.go`、`src/syscall/js/js.go`、
-  `src/image/color/color.go`. https://github.com/golang/go/tree/release-branch.go1.26/src
+  `src/runtime/lock_js.go`、`src/runtime/os_wasm.go`、`src/runtime/proc.go`、`src/syscall/js/js.go`、`src/image/color/color.go`.
+  https://github.com/golang/go/tree/release-branch.go1.26/src
   js/wasm 的单线程运行时、事件处理与 `js.Value` 的引用编码。
 - <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *Go 1.27 Release Notes.* 2026.
   https://go.dev/doc/go1.27
@@ -211,6 +211,6 @@ goroutine，如果该函数阻塞，事件循环就一直阻塞到它返回；�
 - <a id="ref-whatwg-nd"></a>[WHATWG, n.d.] WHATWG. *HTML Living Standard: The canvas element.*
   https://html.spec.whatwg.org/multipage/canvas.html
   画布以预乘 alpha 存储；`putImageData` 写入时的转换。
-- 本书 [18.1 跨越 FFI 边界](../ch18gpu/boundary.md)、[18.3 显存与垃圾回收的分界](../ch18gpu/memory.md)、
-  [19.1 渲染管线与 Go 的位置](./pipeline.md)、[19.3 软件渲染与并行](./software.md)、
-  [20.1 推理运行时与 FFI](../ch20inference/runtime.md)。
+- 本书 [18.1 跨越 FFI 边界](../ch18gpu/boundary.md)、[18.3 显存与垃圾回收的分界](../ch18gpu/memory.md)、[19.1
+  渲染管线与 Go 的位置](./pipeline.md)、[19.3 软件渲染与并行](./software.md)、[20.1
+  推理运行时与 FFI](../ch20inference/runtime.md)。

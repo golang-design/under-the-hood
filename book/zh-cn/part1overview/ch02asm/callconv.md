@@ -23,8 +23,8 @@ main.Add STEXT nosplit size=4 args=0x10 locals=0x0 funcid=0x0 align=0x0
 函数体只有两条指令：把 BX 加到 AX 上，然后返回。源码并未说明参数 `a`、`b` 从何处取得、结果存放在
 何处，这些由调用方与被调函数事先约定：调用方把 `a` 放入 AX、`b` 放入 BX，`Add` 把结果留在 AX 中。
 双方可能位于不同的包中、在不同的时间编译，只要遵守同一套规则，就能正确地相互调用。这样的规则称为
-**调用约定**（calling convention）。调用约定与数据在内存中的布局规则合称**应用二进制接口**
-（application binary interface，ABI）。上面输出中的 `ABIInternal` 即是 Go 所用的一种 ABI 的名称。
+**调用约定**（calling convention）。调用约定与数据在内存中的布局规则合称**应用二进制接口**（application
+binary interface，ABI）。上面输出中的 `ABIInternal` 即是 Go 所用的一种 ABI 的名称。
 
 ## 2.3.1 栈传参与寄存器传参
 
@@ -209,6 +209,6 @@ $ go tool nm wrap.bin | grep main.add
 - <a id="ref-go-authors-2022b"></a>[Go Authors, 2022b] The Go Authors. *Go 1.19 Release Notes*, "RISC-V".
   https://go.dev/doc/go1.19#riscv64
   riscv64 改用寄存器传参。
-- 本书 [2.1 Plan 9 汇编语言](./asm.md)、[2.4 参数传递与栈帧布局](./args.md)、
-  [6.1 函数调用](../../part2lang/ch06func/func.md).
+- 本书 [2.1 Plan 9 汇编语言](./asm.md)、[2.4 参数传递与栈帧布局](./args.md)、[6.1
+  函数调用](../../part2lang/ch06func/func.md).
 

@@ -6,8 +6,8 @@ title: "17.4 vgo 与 dep 之争"
 # 17.4 vgo 与 dep 之争
 
 前三节讨论了 Go 模块的技术内核：依赖管理的难点（[17.1](./challenges.md)）、
-语义化导入版本（[17.2](./semantics.md)）与最小版本选择（[17.3](./minimum.md)）。本节讲述这套设计的由来。
-2016 年起，一个由社区成员组成的委员会主导开发了依赖管理工具 `dep`；2018 年，Cox 提出了理念不同的 vgo，
+语义化导入版本（[17.2](./semantics.md)）与最小版本选择（[17.3](./minimum.md)）。本节讲述这套设计的由来。2016
+年起，一个由社区成员组成的委员会主导开发了依赖管理工具 `dep`；2018 年，Cox 提出了理念不同的 vgo，
 它在同年被接受为正式提案，并演变为今天的 Go 模块。这段经历留下了两份互相矛盾的叙述：Cox 在 2018 年
 7 月发布的一组推文，以及 Bourgon 随后的逐条回应 [[Bourgon, 2018](#ref-bourgon-2018)]。
 本节尽量引用当时留下的文档，凡是仅凭当事人回忆的内容，都注明出自谁的叙述。最后一小节介绍 17.1 与 17.3
@@ -16,8 +16,8 @@ title: "17.4 vgo 与 dep 之争"
 ## 17.4.1 包管理委员会与 dep
 
 [17.1](./challenges.md) 介绍过，`go get` 没有版本的概念，社区因此出现了 `godep`、`glide` 等多种 vendor
-工具。Go 1.5 引入 vendor 目录的实验，Go 1.6 默认启用它之后，统一工具的讨论变得更加迫切。Boyer 记述，
-2016 年 7 月的 GopherCon 上，上百名开发者聚在一起讨论 vendor 与生态的问题，包括 Rob Pike 在内的 Go
+工具。Go 1.5 引入 vendor 目录的实验，Go 1.6 默认启用它之后，统一工具的讨论变得更加迫切。Boyer 记述，2016
+年 7 月的 GopherCon 上，上百名开发者聚在一起讨论 vendor 与生态的问题，包括 Rob Pike 在内的 Go
 团队成员也到场；此前 Go 团队大体把依赖管理视为留给社区解决的问题，这次会议之后，认真解决它成了明确的任务
 [[Boyer, 2016](#ref-boyer-2016)]。会上成立了一个委员会和一个顾问组，由 Peter Bourgon 召集，委员为 Andrew
 Gerrand、Edward Muller、Jessie Frazelle 与 Sam Boyer，目标是做出一个统一并取代现有工具的新工具；
@@ -115,8 +115,8 @@ Cox 认为这是必须避免的致命缺陷。同年 7 月 GopherCon 期间的�
 会继续得到支持，并在结尾感谢了委员会与 Boyer 的工作 [[Cox, 2018b](#ref-cox-2018b)]。
 
 正式提案于 2018 年 3 月 20 日提交，讨论在 issue #24301 中进行，5 月 21 日被提案评审委员会接受
-[[Cox, 2018a](#ref-cox-2018a)]。Cox 说自己没有参与这一决定，而是交给了其他常规的提案评审者；Bourgon 指出，
-`dep` 之所以从未提交提案，是因为委员会一直在等待与核心团队建立更正式的沟通渠道
+[[Cox, 2018a](#ref-cox-2018a)]。Cox 说自己没有参与这一决定，而是交给了其他常规的提案评审者；Bourgon 指出，`dep`
+之所以从未提交提案，是因为委员会一直在等待与核心团队建立更正式的沟通渠道
 [[Bourgon, 2018](#ref-bourgon-2018)]。提案被接受后，Cox 解释说，接受只意味着设计是合适的、
 可以开始编写正式的实现，`vgo` 本身仍是原型 [[Cox, 2018c](#ref-cox-2018c)]。
 
@@ -159,8 +159,8 @@ MVS, which is an algorithm for solving a math problem, not a community problem.
 ## 17.4.4 两种叙述
 
 2018 年 7 月 26 日，Cox 在一组推文中回顾了 `dep`、vgo 与 Go 模块的经过，次日 Bourgon 发表文章逐条回应；
-由于推文难以原样查阅，下面对 Cox 推文的引用均取自 Bourgon 的转录 [[Bourgon, 2018](#ref-bourgon-2018)]。
-Cox 写道，早在 2016 年 12 月就已向 Boyer 明确表示，`dep` 只是过程中的一步，预计会被取代，
+由于推文难以原样查阅，下面对 Cox 推文的引用均取自 Bourgon 的转录 [[Bourgon, 2018](#ref-bourgon-2018)]。Cox
+写道，早在 2016 年 12 月就已向 Boyer 明确表示，`dep` 只是过程中的一步，预计会被取代，
 但整个社区却普遍以为 `dep` 就是官方的最终答案。对自己的责任，Cox 的总结是：
 
 ```text
@@ -183,8 +183,8 @@ collapse the quantum state.
 ```
 
 按照这一解释，`dep` 团队认为 `dep` 与之前的工具有本质的不同，是经过研究、审慎考虑、由社区推动的 Go
-依赖管理的最终形态；核心团队则认为 `dep` 与之前的工具本质上相同，只是为最终方案提供参考的又一个数据点。
-Bourgon 认为，两方各自的立场都有据可查，但直到为时已晚，双方才意识到彼此的理解并不相同。
+依赖管理的最终形态；核心团队则认为 `dep` 与之前的工具本质上相同，只是为最终方案提供参考的又一个数据点。Bourgon
+认为，两方各自的立场都有据可查，但直到为时已晚，双方才意识到彼此的理解并不相同。
 
 ## 17.4.5 从实验到默认
 
@@ -281,9 +281,9 @@ Go 模块在默认行为、安全性与规模上不断演进，`dep` 则在 2020
   https://research.swtch.com/impver-draft-20171120.pdf
   语义化导入版本的早期草稿。
 - <a id="ref-cox-2018a"></a>[Cox, 2018a] Russ Cox. *Go & Versioning（vgo 系列，2018 年 2 月，共七篇）.*
-  https://research.swtch.com/vgo 。其中 *Minimal Version Selection*
-  （<https://research.swtch.com/vgo-mvs>）给出 MVS 限定在 Horn 公式子类、避开 NP 完全的论证，
-  *Semantic Import Versioning*（<https://research.swtch.com/vgo-import>）阐述主版本进路径的设计。
+  https://research.swtch.com/vgo 。其中 *Minimal Version Selection*（<https://research.swtch.com/vgo-mvs>）
+  给出 MVS 限定在 Horn 公式子类、避开 NP 完全的论证，*Semantic
+  Import Versioning*（<https://research.swtch.com/vgo-import>）阐述主版本进路径的设计。
   系列目录还列出了提案的提交与接受日期，以及此后的续篇。
 - <a id="ref-cox-2018b"></a>[Cox, 2018b] Russ Cox. *Go += Package Versioning.* 2018-02-20.
   https://research.swtch.com/vgo-intro
@@ -309,5 +309,5 @@ Go 模块在默认行为、安全性与规模上不断演进，`dep` 则在 2020
   https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/go.sum
 - <a id="ref-go-authors-nd"></a>[Go Authors, n.d.] The Go Authors. *Go Modules Reference（cmd/go
   模块机制的权威说明）.* https://go.dev/ref/mod
-- 本书 [17.1 依赖管理的难点](./challenges.md)、[17.2 语义化版本管理](./semantics.md)、
-  [17.3 最小版本选择算法](./minimum.md)，与 [1 设计哲学与历史](../../part1overview/ch01intro/readme.md)。
+- 本书 [17.1 依赖管理的难点](./challenges.md)、[17.2 语义化版本管理](./semantics.md)、[17.3
+  最小版本选择算法](./minimum.md)，与 [1 设计哲学与历史](../../part1overview/ch01intro/readme.md)。

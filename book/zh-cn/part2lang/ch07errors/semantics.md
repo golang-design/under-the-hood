@@ -44,14 +44,14 @@ var ErrNoRows = errors.New("sql: no rows in result set")
 为它补充任何上下文。`errors.Is` 缓解了这一点，但 `io.EOF` 这样在 Go 1.13 之前就已发布的哨兵，
 仍然受当初契约的约束。Cheney 认为哨兵最大的问题在于它在两个包之间建立了源码上的依赖：调用方为了检查
 `io.EOF`，必须导入 `io` [[Cheney, 2016b](#ref-cheney-2016b)]。此外，导出的哨兵是变量，
-任何导入该包的代码都可以改写它（见 [7.1.5](./value.md) [[Cheney, 2016e](#ref-cheney-2016e)]）。
-Cheney 的建议是，在自己的代码中尽量避免使用哨兵错误。
+任何导入该包的代码都可以改写它（见 [7.1.5](./value.md) [[Cheney, 2016e](#ref-cheney-2016e)]）。Cheney
+的建议是，在自己的代码中尽量避免使用哨兵错误。
 
 Go 1.13 之后，哨兵的用法有所变化。Go 1.21 加入的 `errors.ErrUnsupported` 的文档
 [[Go Authors, 2026c](#ref-go-authors-2026c)]写道：函数与方法不应直接返回这个错误，
 而应返回一个包含适当上下文、并且满足 `errors.Is(err, errors.ErrUnsupported)` 的错误，可以直接包装
-`ErrUnsupported`，也可以实现 `Is` 方法。哨兵在这里不再是被原样返回的值，而是一个供 `Is` 匹配的类别；
-[7.2.3](./inspect.md) 中 `syscall.Errno` 把 `ENOSYS` 等错误号映射到 `ErrUnsupported`，用的正是这种方式。
+`ErrUnsupported`，也可以实现 `Is` 方法。哨兵在这里不再是被原样返回的值，而是一个供 `Is` 匹配的类别；[7.2.3](./inspect.md)
+中 `syscall.Errno` 把 `ENOSYS` 等错误号映射到 `ErrUnsupported`，用的正是这种方式。
 
 ## 7.4.2 错误类型：承诺一个结构
 
@@ -87,8 +87,8 @@ if pe, ok := errors.AsType[*fs.PathError](err); ok {
 一个更完整的例子是 Rob Pike 与 Andrew Gerrand 在 2017 年描述的 Upspin 错误包
 [[Pike and Gerrand, 2017](#ref-pike-gerrand-2017)]。Upspin 的错误类型只有一个，字段包括路径 `Path`、用户
 `User`、操作 `Op`、类别 `Kind` 与嵌套的下层错误 `Err`，任何字段都可以为空；构造函数
-`errors.E(args ...interface{})` 根据每个实参的类型决定把它放进哪个字段。`Kind` 把错误分为 `Permission`、
-`IO`、`NotExist` 等若干类，调用方用 `errors.Is(kind, err)` 判断类别，而不必关心具体是哪一个错误。
+`errors.E(args ...interface{})` 根据每个实参的类型决定把它放进哪个字段。`Kind` 把错误分为 `Permission`、`IO`、`NotExist`
+等若干类，调用方用 `errors.Is(kind, err)` 判断类别，而不必关心具体是哪一个错误。
 他们列出的设计目标是：易于构造信息丰富的错误消息，便于用户理解，便于程序员诊断。嵌套的错误记录的是请求经过
 了系统中的哪些组件，他们称之为操作轨迹，以区别于记录代码执行路径的调用栈，并特意强调 Upspin
 的错误模型中没有调用栈。他们也说明，这一设计并不是对其他系统的推荐。今天看来，`Kind` 的匹配可以用
@@ -205,8 +205,8 @@ func (e *OpError) Timeout() bool {
 ```
 
 `*fs.PathError` 也有一个同样转发给 `Err` 的 `Timeout` 方法。这类代码写于 `Unwrap` 出现之前：
-每一个会包装其他错误的类型都必须自己转发这个行为，`OpError` 还为 `*os.SyscallError` 这一层多写了一次判断。
-`errors.As` 出现之后，只要包装类型实现了 `Unwrap`，沿树查找就由标准库统一完成，各个包装类型不必再逐一转
+每一个会包装其他错误的类型都必须自己转发这个行为，`OpError` 还为 `*os.SyscallError` 这一层多写了一次判断。`errors.As`
+出现之后，只要包装类型实现了 `Unwrap`，沿树查找就由标准库统一完成，各个包装类型不必再逐一转
 发。
 
 行为断言也有失效的时候，`net.Error` 的第二个方法就是一个例子。`Temporary() bool` 的本意是表示
@@ -221,8 +221,8 @@ func (e *OpError) Timeout() bool {
 
 以异常为主的语言把错误组织成类型层级。`catch (FileNotFoundException e)` 本质上是
 [7.4.2](#742-错误类型承诺一个结构) 中的类型检查，只是借助继承来组织：捕获一个基类，就捕获了其下的
-所有子类。整个异常层级因此都进入了契约。Java 的受检异常更进一步，把异常写进方法签名，
-[7.1.1](./value.md) 介绍的 Hejlsberg 的批评，正是针对这一点。
+所有子类。整个异常层级因此都进入了契约。Java 的受检异常更进一步，把异常写进方法签名，[7.1.1](./value.md)
+介绍的 Hejlsberg 的批评，正是针对这一点。
 
 Rust 把错误类型写进 `Result<T, E>` 的签名，由编译器强制调用方处理。社区中，`thiserror` 用于为
 库定义结构化的错误枚举，相当于 Go 的错误类型；`anyhow` 把错误装箱为不透明的类型，相当于 Go 的

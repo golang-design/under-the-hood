@@ -147,8 +147,8 @@ p = unsafe.Pointer(u + offset)
 程序才会读到错误的数据或崩溃。2017 年的提案 #22218 提出在转换处插入运行时检查，起因是另一类问题：
 栈复制时如果遇到 0 到 `minLegalPointer` 之间的指针值，运行时会以 invalid pointer found on stack 终止程序，
 提案希望在产生这种值的转换处就报告错误 [[amscanne, 2017](#ref-amscanne-2017)]。Matthew Dempsky 于
-2019 年实现了编译器选项 `-d=checkptr`，随 Go 1.14 发布 [[Dempsky, 2019a](#ref-dempsky-2019a)；
-[Go Authors, 2020](#ref-go-authors-2020)]。它在两类转换处插入对运行时函数的调用：
+2019 年实现了编译器选项 `-d=checkptr`，随 Go 1.14 发布 [[Dempsky, 2019a](#ref-dempsky-2019a)；[Go
+Authors, 2020](#ref-go-authors-2020)]。它在两类转换处插入对运行时函数的调用：
 
 - `unsafe.Pointer` 转换为 `*T` 时，调用 `checkptrAlignment`，检查地址是否满足 `T` 的对齐要求，以及
   `T` 所覆盖的内存是否横跨了多个分配。对齐只对本身含指针的类型强制要求。
@@ -182,9 +182,9 @@ func checkptrArithmetic(p unsafe.Pointer, originals []unsafe.Pointer) {
 }
 ```
 
-第一项检查对应提案 #22218 的起因。第二项检查是模式 (3) 中「结果必须仍指向原来的分配」的运行时版本：
-`checkptrBase` 依次判断地址是否位于当前 goroutine 的栈中、某个堆对象中（借助垃圾回收器的 `findObject`，
-[12.2](../../part4memory/ch12alloc/component.md)），或者某个模块的 data 段与 bss 段中，
+第一项检查对应提案 #22218 的起因。第二项检查是模式 (3) 中「结果必须仍指向原来的分配」的运行时版本：`checkptrBase`
+依次判断地址是否位于当前 goroutine 的栈中、某个堆对象中（借助垃圾回收器的 `findObject`，[12.2](../../part4memory/ch12alloc/component.md)），
+或者某个模块的 data 段与 bss 段中，
 返回所在分配的基址。计算结果与某个原始指针的基址相同，才算合法。若算术的操作数中根本没有
 `unsafe.Pointer`，例如地址先被存进了一个 `uintptr` 变量，`originals` 就是空的，只要结果指向堆对象，
 检查必然失败。跨越语句保存 `uintptr` 的写法因此会被当场发现，无须等到垃圾回收恰好发生。
@@ -257,8 +257,8 @@ func NoEscape(p unsafe.Pointer) unsafe.Pointer {
 ## 15.4.4 更安全的原语
 
 模式 (6) 是六种模式中最脆弱的一种。`reflect.SliceHeader` 与 `reflect.StringHeader` 的 `Data` 字段是
-`uintptr`，只有当头部本身是一个真实切片或字符串的别名时，这个字段才同时是指针；单独声明的头部变量中，
-`Data` 只是一个整数，不能使底层数据存活。Go 1.17 加入了 `unsafe.Add` 与 `unsafe.Slice`
+`uintptr`，只有当头部本身是一个真实切片或字符串的别名时，这个字段才同时是指针；单独声明的头部变量中，`Data`
+只是一个整数，不能使底层数据存活。Go 1.17 加入了 `unsafe.Add` 与 `unsafe.Slice`
 [[Dempsky, 2021](#ref-dempsky-2021)]，Go 1.20 又加入 `unsafe.SliceData`、`unsafe.String` 与
 `unsafe.StringData`，至此不依赖头部的内存表示也能构造与拆解切片和字符串
 [[Go Authors, 2021](#ref-go-authors-2021)；[Go Authors, 2023](#ref-go-authors-2023)]。
@@ -281,8 +281,8 @@ Go 1.17 的发布说明强调，这些函数是为了让符合规则的代码更
 总会检查长度是否为负、`ptr` 与长度相乘是否溢出、`ptr` 为 nil 时长度是否为零；启用 checkptr 时，
 编译器改为调用 `unsafeslicecheckptr`，再检查结果是否横跨多个分配，`unsafe.String` 也是如此
 [[Go Authors, 2026b](#ref-go-authors-2026b)；[Go Authors, 2026c](#ref-go-authors-2026c)]。两个头部类型自
-Go 1.20 起被标记为弃用，文档建议改用这些函数 [[hopehook, 2022](#ref-hopehook-2022)；
-[Go Authors, n.d.b](#ref-go-authors-ndb)]。这些函数用于零拷贝转换的方式与前提见
+Go 1.20 起被标记为弃用，文档建议改用这些函数 [[hopehook, 2022](#ref-hopehook-2022)；[Go
+Authors, n.d.b](#ref-go-authors-ndb)]。这些函数用于零拷贝转换的方式与前提见
 [5.2.4](../../part2lang/ch05data/string.md)。
 
 ## 15.4.5 其他语言的做法
@@ -308,8 +308,8 @@ Rust 没有垃圾回收，不存在对象在地址算术期间被移动或回收
 ## 15.4.6 小结
 
 `unsafe.Pointer` 的规则看似繁琐，实际都围绕一个事实：编译器生成的指针位图不认识 `uintptr`。六种合法模式
-要么不把整数转换回指针，要么把整数存活的时间压缩到编译器能够照顾的范围之内。编译器以 `Convert` 操作、
-`//go:uintptrkeepalive` 与 `//go:nosplit` 维持这些范围，运行时以保守扫描兜住异步抢占。checkptr 则把规则
+要么不把整数转换回指针，要么把整数存活的时间压缩到编译器能够照顾的范围之内。编译器以 `Convert` 操作、`//go:uintptrkeepalive`
+与 `//go:nosplit` 维持这些范围，运行时以保守扫描兜住异步抢占。checkptr 则把规则
 变成可以执行的检查，使违反规则的代码在测试中立即失败，而不是在生产环境中偶然崩溃。
 
 ## 延伸阅读
@@ -344,9 +344,7 @@ Rust 没有垃圾回收，不存在对象在地址算术期间被移动或回收
   convert.go 与 builtin.go（checkptr 转换处的插桩、`unsafeslicecheckptr`/`unsafestringcheckptr`）；另见
   cmd/compile/internal/base/flag.go. Go 1.26 源码.
   https://github.com/golang/go/tree/master/src/cmd/compile/internal/walk
-- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/math/unsafe.go、
-  src/cmd/compile/internal/ssa/_gen/genericOps.go、src/runtime/mgcmark.go、src/runtime/stack.go、
-  src/syscall/syscall_linux.go、src/internal/abi/escape.go、src/runtime/unsafe.go、src/runtime/pinner.go.
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/math/unsafe.go、src/cmd/compile/internal/ssa/_gen/genericOps.go、src/runtime/mgcmark.go、src/runtime/stack.go、src/syscall/syscall_linux.go、src/internal/abi/escape.go、src/runtime/unsafe.go、src/runtime/pinner.go.
   Go 1.26 源码. https://github.com/golang/go/tree/release-branch.go1.26/src
 - <a id="ref-hopehook-2022"></a>[hopehook, 2022] hopehook. reflect: deprecate SliceHeader and
   StringHeader. Go commit d734203e39, 2022. https://go.dev/cl/428757
@@ -358,9 +356,9 @@ Rust 没有垃圾回收，不存在对象在地址算术期间被移动或回收
   定稿， `MemorySegment` 作为 `sun.misc.Unsafe` 的受控替代）. 2024. https://openjdk.org/jeps/454
 - <a id="ref-rust-project-nd"></a>[Rust Project, n.d.] The Rust Project. *The Rust Reference*: Unsafety.
   https://doc.rust-lang.org/reference/unsafety.html
-- 本书 [5.1 数组与切片](../../part2lang/ch05data/slice.md)、
-  [5.2 字符串与零拷贝转换](../../part2lang/ch05data/string.md)、
-  [9.7 协作与抢占](../../part3concurrency/ch09sched/preemption.md)、
-  [12.2 组件](../../part4memory/ch12alloc/component.md)、
-  [14.4 栈的拷贝与指针调整](../../part4memory/ch14stack/copy.md)、[15.3 优化器](./optimize.md)、
-  [15.6 cgo](./cgo.md)、[16.2 竞争检查](../ch16tools/race.md)。
+- 本书 [5.1 数组与切片](../../part2lang/ch05data/slice.md)、[5.2
+  字符串与零拷贝转换](../../part2lang/ch05data/string.md)、[9.7
+  协作与抢占](../../part3concurrency/ch09sched/preemption.md)、[12.2
+  组件](../../part4memory/ch12alloc/component.md)、[14.4
+  栈的拷贝与指针调整](../../part4memory/ch14stack/copy.md)、[15.3 优化器](./optimize.md)、[15.6
+  cgo](./cgo.md)、[16.2 竞争检查](../ch16tools/race.md)。

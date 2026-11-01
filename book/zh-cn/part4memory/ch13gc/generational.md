@@ -241,8 +241,8 @@ $ go build -gcflags=-m . 2>&1 | grep 'new(int)'
 `local` 中的对象正是新生代回收所针对的那类短命对象，而在 Go 中它根本不会出现在堆上。
 
 第二，Go 不需要用分代来缩短停顿。Taylor 指出，分代回收器通常以缩短停顿为目标，只回收最年轻的一代，
-停顿便短；而 Go 的回收器是并发的，「在 Go 中，停顿时间与最年轻一代的大小无关，也与任何一代的大小无关」。
-Go 的基本假设是，在多线程程序中，宁可在另一个核上并行回收、总体多花一些 CPU 时间，
+停顿便短；而 Go 的回收器是并发的，「在 Go 中，停顿时间与最年轻一代的大小无关，也与任何一代的大小无关」。Go
+的基本假设是，在多线程程序中，宁可在另一个核上并行回收、总体多花一些 CPU 时间，
 也不愿为了减少回收时间而让整个程序停顿更久 [[Taylor, 2017](#ref-taylor-2017)]。Hudson
 从另一面说明了这一点：
 
@@ -286,8 +286,8 @@ func setGCPhase(x uint32) {
 不如每个线程各自缓存来得高效 [[Taylor, 2017](#ref-taylor-2017)]。Go 的分配器正是按尺寸类组织、按 P
 缓存的（[12.1](../ch12alloc/basic.md)）。
 
-这些理由都有前提。以内存换 CPU 要求内存充裕；在内存受限、设置了内存限制的部署中（[13.3](./pacing.md)），
-`GOGC` 可以调节的余地变小，而降低堆内存开销恰是 Generational ZGC 的目标之一。Taylor 在 2017 年也说明，
+这些理由都有前提。以内存换 CPU 要求内存充裕；在内存受限、设置了内存限制的部署中（[13.3](./pacing.md)），`GOGC`
+可以调节的余地变小，而降低堆内存开销恰是 Generational ZGC 的目标之一。Taylor 在 2017 年也说明，
 分代回收能否减少 Go 的回收工作量尚未经过检验；Hudson 的实验给出的是当时的答案，而非定论。
 
 ## 13.8.6 小结
@@ -319,8 +319,8 @@ func setGCPhase(x uint32) {
 - <a id="ref-go-authors-2022"></a>[Go Authors, 2022] The Go Authors. *A Guide to the Go Garbage
   Collector.* https://go.dev/doc/gc-guide
   当前非移动并发标记清扫回收器的设计说明，以及以 `GOGC` 为中心的成本模型。
-- <a id="ref-go-authors-2026"></a>[Go Authors, 2026] The Go Authors. src/runtime/mgc.go（文件头注释、
-  `setGCPhase`）. Go 1.26 源码. https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mgc.go
+- <a id="ref-go-authors-2026"></a>[Go Authors, 2026] The Go Authors. src/runtime/mgc.go（文件头注释、`setGCPhase`）.
+  Go 1.26 源码. https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mgc.go
 - <a id="ref-hudson-2018a"></a>[Hudson, 2018a] Rick Hudson. *Getting to Go: The Journey of Go's Garbage
   Collector.* ISMM 2018 keynote, 2018. https://go.dev/blog/ismmkeynote
   Go 实现并放弃非移动分代回收的第一手交代。
@@ -351,5 +351,5 @@ func setGCPhase(x uint32) {
   Performance Storage Reclamation Algorithm." *SDE 1984*, 157–167, 1984.
   https://doi.org/10.1145/800020.808261
   「分代清扫」，分代回收的奠基工作。
-- 本书 [13.9 请求假设与事务制导回收](./roc.md)、[13.12 过去、现在与未来](./history.md)、
-  [15.5 逃逸分析](../../part5toolchain/ch15compile/escape.md)。
+- 本书 [13.9 请求假设与事务制导回收](./roc.md)、[13.12 过去、现在与未来](./history.md)、[15.5
+  逃逸分析](../../part5toolchain/ch15compile/escape.md)。

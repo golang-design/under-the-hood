@@ -5,8 +5,8 @@ title: "20.3 服务、批处理与流式"
 
 # 20.3 服务、批处理与流式
 
-前两节讨论了单次推理的底层：[20.1](./runtime.md) 讨论如何接入运行时、如何安置权重与张量，
-[20.2](./tokenize.md) 讨论词元如何进出模型。一个真实的服务要同时处理成千上万个请求，
+前两节讨论了单次推理的底层：[20.1](./runtime.md) 讨论如何接入运行时、如何安置权重与张量，[20.2](./tokenize.md)
+讨论词元如何进出模型。一个真实的服务要同时处理成千上万个请求，
 每个请求都在持续地生成词元。如何把它们高效而稳定地组织起来，是一个并发与调度问题。本节把
 [第 10 章](../../part3concurrency/ch10chan/readme.md) 的通道与
 [11.8](../../part3concurrency/ch11sync/context.md) 的 context 落实到大模型服务上。
@@ -14,8 +14,8 @@ title: "20.3 服务、批处理与流式"
 ## 20.3.1 一个请求的一生
 
 大模型是**自回归**的：每次只生成一个词元，把它接回输入，再计算下一个，直到生成结束符或达到长度上限。
-一次请求因此分为两个阶段。**预填充**（prefill）一次处理完整的提示，计算后续生成所需的键与值；
-**解码**（decode）在此基础上每一步生成一个词元，并复用已缓存的键与值。Orca 的论文描述了这一特点：
+一次请求因此分为两个阶段。**预填充**（prefill）一次处理完整的提示，计算后续生成所需的键与值；**解
+码**（decode）在此基础上每一步生成一个词元，并复用已缓存的键与值。Orca 的论文描述了这一特点：
 处理一个推理请求需要多次运行模型，每次迭代为该请求生成一个输出词元
 [[Yu et al., 2022](#ref-yu-et-al-2022)]。从时间轴上看，一个请求不是一次「请求–响应」，
 而是一条随时间流出的词元流。用户感受到的延迟也随之分为两部分：首词元时间（time to first token, TTFT）
@@ -59,13 +59,13 @@ $B$ 线性增长 [[Ou, 2026](#ref-ou-2026)]。解码是受内存带宽限制的�
 调度器每次只让执行引擎在当前批上运行一次迭代，于是每一步都可以加入新请求、移出已完成的请求。
 由于各请求的注意力计算形状不同，Orca 还提出**选择性批处理**（selective batching），只对部分算子做批处理。
 在 GPT-3 175B 上，Orca 在相同延迟下的吞吐量是 NVIDIA FasterTransformer 的 36.9 倍
-[[Yu et al., 2022](#ref-yu-et-al-2022)]。这一思路如今通常称为**连续批处理**（continuous batching）。
-llama.cpp 的服务器默认启用它，选项说明写作「continuous batching (a.k.a dynamic batching)」，
+[[Yu et al., 2022](#ref-yu-et-al-2022)]。这一思路如今通常称为**连续批处理**（continuous batching）。llama.cpp
+的服务器默认启用它，选项说明写作「continuous batching (a.k.a dynamic batching)」，
 并行处理的请求数由 `-np` 指定的槽位数决定 [[ggml-org, 2026](#ref-ggml-org-2026)]。
 
 批处理还受制于内存。每个请求的 KV 缓存随生成增长，若为每个请求预留一段连续的、按最大长度计算的空间，
-就会产生大量碎片。vLLM 的分析显示，在当时的系统中，KV 缓存内存只有 20.4% 至 38.2% 真正用于存放词元状态。
-PagedAttention 借鉴操作系统的虚拟内存与分页，把 KV 缓存切分为固定大小的块，按需分配；在此基础上，vLLM
+就会产生大量碎片。vLLM 的分析显示，在当时的系统中，KV 缓存内存只有 20.4% 至 38.2% 真正用于存放词元状态。PagedAttention
+借鉴操作系统的虚拟内存与分页，把 KV 缓存切分为固定大小的块，按需分配；在此基础上，vLLM
 做到了 KV 缓存内存几乎零浪费，并在相同延迟下把吞吐量提高到 FasterTransformer 与 Orca 的 2 至 4 倍
 [[Kwon et al., 2023](#ref-kwon-et-al-2023)]。批大小与 KV 缓存的预算因此是绑定的。Ollama 在启动
 `llama-server` 时，把上下文长度设为单个请求的上下文长度乘以并行请求数
@@ -105,8 +105,8 @@ func batchLoop(incoming <-chan *Seq) {
 ```
 
 迭代级调度下，新请求在下一步就能加入，不必为了凑满一批而等待。延迟与吞吐的取舍转移到了别处：
-槽位数决定并发度与 KV 缓存的预算，预填充的分块大小决定长提示在多大程度上拖慢同批中的解码。
-Forma 把这些策略与执行机制分成两个类型：`Scheduler` 决定准入谁、每一步算什么，`Batch` 负责执行；
+槽位数决定并发度与 KV 缓存的预算，预填充的分块大小决定长提示在多大程度上拖慢同批中的解码。Forma
+把这些策略与执行机制分成两个类型：`Scheduler` 决定准入谁、每一步算什么，`Batch` 负责执行；
 注释给出的理由是，二者一起构建时，批处理的缺陷与准入的缺陷将无从区分 [[Ou, 2026](#ref-ou-2026)]。
 
 ## 20.3.3 流式
@@ -203,8 +203,8 @@ func main() {
 取消依靠 context。最关键的一条是：**客户端断开连接时，必须立刻停止生成，归还 KV 缓存。** `net/http`
 为此提供了现成的信号。`Request.Context` 的文档写明，对于服务端收到的请求，当客户端的连接关闭、
 请求被取消（HTTP/2）或 `ServeHTTP` 方法返回时，这个 context 就会被取消（以 Go 1.26 为准）。
-把它一路传入生成循环，循环就能在 `ctx.Done()` 上及时退出 [[Go Authors, n.d.a](#ref-go-authors-nda)]。
-Forma 的 handler 注释特别指出，不读取这个 context 的循环会一直占着会话与它预留的 KV 缓存，直到生成达到
+把它一路传入生成循环，循环就能在 `ctx.Done()` 上及时退出 [[Go Authors, n.d.a](#ref-go-authors-nda)]。Forma
+的 handler 注释特别指出，不读取这个 context 的循环会一直占着会话与它预留的 KV 缓存，直到生成达到
 `max_tokens`；它甚至把 context 交给了等待空闲会话的那一步，在排队期间离开的客户端不应再占用一个它不会读取
 的会话。这种情况以状态码 499 记录，沿用 nginx 表示「客户端已关闭请求」的约定，而不算作服务端的失败
 [[Ou, 2026](#ref-ou-2026)]。
@@ -253,8 +253,8 @@ func (s *Scheduler) signal() {
 向通道发送」的写法。解码受内存带宽限制，批处理让多个序列共享一次权重读取；迭代级调度（连续批处理）
 让请求在每一步加入或离开批次，分页的 KV 缓存则减少了碎片，使批次可以更大。
 准入时既要为提示也要为回答预留缓存，才能避免死锁。流式输出要求每个事件之后刷新，`http.ResponseController`
-能穿过中间件完成刷新。背压与取消决定服务的可靠性：批处理的分发必须是非阻塞的，掉队的客户端要被取消；
-`Request.Context` 在客户端断开时取消，生成循环必须响应它；入口处的队列必须有界，用带缓冲的通道与 `select`
+能穿过中间件完成刷新。背压与取消决定服务的可靠性：批处理的分发必须是非阻塞的，掉队的客户端要被取消；`Request.Context`
+在客户端断开时取消，生成循环必须响应它；入口处的队列必须有界，用带缓冲的通道与 `select`
 的 `default` 分支即可实现过载保护。这些机制都来自第 10 章与 11.8 讨论的并发原语，只是这一次，
 它们保护的是一块被 GB 级模型占用的设备。
 
@@ -264,8 +264,8 @@ func (s *Scheduler) signal() {
 
 ## 延伸阅读
 
-- <a id="ref-ggml-org-2026"></a>[ggml-org, 2026] ggml-org. *llama.cpp b11963*（提交 39febd2adb）：
-  `tools/server/README.md`. 2026. https://github.com/ggml-org/llama.cpp/blob/b11963/tools/server/README.md
+- <a id="ref-ggml-org-2026"></a>[ggml-org, 2026] ggml-org. *llama.cpp b11963*（提交 39febd2adb）：`tools/server/README.md`. 2026.
+  https://github.com/ggml-org/llama.cpp/blob/b11963/tools/server/README.md
   `-cb`（连续批处理，默认启用）与 `-np`（槽位数）等选项。
 - <a id="ref-go-authors-nda"></a>[Go Authors, n.d.a] The Go Authors. *Package context.*
   https://pkg.go.dev/context
@@ -293,7 +293,7 @@ func (s *Scheduler) signal() {
   Transformer-Based Generative Models.* OSDI, 2022.
   https://www.usenix.org/conference/osdi22/presentation/yu
   迭代级调度与选择性批处理，连续批处理思路的出处。
-- 本书 [11.8 上下文](../../part3concurrency/ch11sync/context.md)、
-  [第 10 章 通道与 select](../../part3concurrency/ch10chan/readme.md)、
-  [18.4 异步编程模型](../ch18gpu/model.md)、
-  [20.1 推理运行时与 FFI](./runtime.md)、[20.2 分词与张量](./tokenize.md)。
+- 本书 [11.8 上下文](../../part3concurrency/ch11sync/context.md)、[第
+  10 章 通道与 select](../../part3concurrency/ch10chan/readme.md)、[18.4
+  异步编程模型](../ch18gpu/model.md)、[20.1
+  推理运行时与 FFI](./runtime.md)、[20.2 分词与张量](./tokenize.md)。

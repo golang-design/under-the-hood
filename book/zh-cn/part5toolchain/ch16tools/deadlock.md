@@ -47,8 +47,8 @@ func checkdead() {
 不参与判定的系统 M（`nmsys`，即 sysmon 与模板线程）。差值大于 `run0`，说明还有线程在执行，它可能让某个
 goroutine 重新就绪，检查随即返回。`run0` 通常为零；不使用 cgo 的程序若持有额外的 M（Windows 上
 `syscall.NewCallback` 创建的回调需要它），则取 1。作为 c-shared 或 c-archive 库构建时，宿主程序仍在运行，
-没有 goroutine 运行属于正常；wasm 是单线程的，不在此列。省略的部分还有一项豁免：程序正因 panic 而终止时，
-`freezetheworld` 会使其余线程全部阻塞，此时不应报告死锁。
+没有 goroutine 运行属于正常；wasm 是单线程的，不在此列。省略的部分还有一项豁免：程序正因 panic 而终止时，`freezetheworld`
+会使其余线程全部阻塞，此时不应报告死锁。
 
 差值为零时，所有用户 goroutine 都应处于阻塞状态，`checkdead` 遍历全部 goroutine 加以确认：
 
@@ -142,8 +142,8 @@ Coffman、Elphick 与 Shoshani 在 1971 年的综述中给出了死锁的四个�
 不可抢占与循环等待；检测死锁的经典方法是维护一张等待图（wait-for graph），在其中寻找环
 [[Coffman et al., 1971](#ref-coffman-et-al-1971)]。等待图的每条边回答同一个问题：谁在等谁。
 对带有所有者的锁，这个问题有确定的答案。JVM 的 `jstack` 在转储线程栈的同时进行死锁检测，报告「线程 A
-等待的监视器由线程 B 持有」这样的环 [[Oracle, n.d.a](#ref-oracle-nda)]；
-`ThreadMXBean.findDeadlockedThreads` 查找的同样是「环中每个线程持有一把锁，又在请求另一个线程已持有的锁」
+等待的监视器由线程 B 持有」这样的环 [[Oracle, n.d.a](#ref-oracle-nda)]；`ThreadMXBean.findDeadlockedThreads`
+查找的同样是「环中每个线程持有一把锁，又在请求另一个线程已持有的锁」
 的情形，其文档还注明，它不查找包含虚拟线程的环 [[Oracle, 2023](#ref-oracle-2023)]。InnoDB
 在事务的锁等待上检测死锁，发现后回滚一个或几个事务以打破环，并尽量选择较小的事务
 [[Oracle, n.d.b](#ref-oracle-ndb)]。
@@ -402,8 +402,8 @@ goroutine 的局部变量到达，相应的泄漏便无法识别 [[Go Authors, 2
 
 这项检查只覆盖运行时内部的锁，用户代码没有对应的工具。用户代码中的预防仍依赖约定：
 对同一组锁始终按一致的顺序加锁（[11.2](../../part3concurrency/ch11sync/mutex.md)），
-为可能永久阻塞的操作设置超时或取消（[11.8](../../part3concurrency/ch11sync/context.md)）。死锁已经发生时，
-goroutine 剖面列出每个 goroutine 的栈与阻塞原因，是定位问题的起点
+为可能永久阻塞的操作设置超时或取消（[11.8](../../part3concurrency/ch11sync/context.md)）。死锁已经发生时，goroutine
+剖面列出每个 goroutine 的栈与阻塞原因，是定位问题的起点
 [[Go Authors, n.d.](#ref-go-authors-nd)]（[16.5](./perf.md)）。
 
 ## 16.1.7 小结
@@ -437,8 +437,8 @@ goroutine 剖面列出每个 goroutine 的栈与阻塞原因，是定位问题�
 - <a id="ref-go-authors-2025b"></a>[Go Authors, 2025b] The Go Authors. *Go 1.25 Release Notes.* 2025.
   https://go.dev/doc/go1.25
   `testing/synctest` 转为正式功能。
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/proc.go：`checkdead`、
-  `findRunnable`. Go 1.26 源码.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/proc.go：`checkdead`、`findRunnable`.
+  Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/proc.go
 - <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors.
   src/runtime/mgc.go：`isMaybeRunnable`、`findGoroutineLeaks`. Go 1.26 源码.
@@ -458,8 +458,8 @@ goroutine 剖面列出每个 goroutine 的栈与阻塞原因，是定位问题�
 - <a id="ref-go-authors-2026g"></a>[Go Authors, 2026g] The Go Authors. src/runtime/mklockrank.go 与
   src/runtime/lockrank_on.go. Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mklockrank.go
-- <a id="ref-go-authors-2026h"></a>[Go Authors, 2026h] The Go Authors. src/runtime/sigqueue.go：
-  `signal_recv`. Go 1.26 源码.
+- <a id="ref-go-authors-2026h"></a>[Go Authors, 2026h] The Go Authors. src/runtime/sigqueue.go：`signal_recv`.
+  Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/sigqueue.go
 - <a id="ref-oracle-nda"></a>[Oracle, n.d.a] Oracle. *Java Platform, Standard Edition Troubleshooting
   Guide.* https://docs.oracle.com/javase/8/docs/technotes/guides/troubleshoot/
@@ -486,9 +486,9 @@ goroutine 剖面列出每个 goroutine 的栈与阻塞原因，是定位问题�
 - <a id="ref-vyukov-2013"></a>[Vyukov, 2013] Dmitriy Vyukov. runtime: improved scheduler. Go commit
   779c45a507, 2013. https://golang.org/cl/7314062
   随 Go 1.1 发布。
-- 本书 [9.3 MPG 模型与并发调度单元](../../part3concurrency/ch09sched/mpg.md)、
-  [9.8 系统监控](../../part3concurrency/ch09sched/sysmon.md)、
-  [9.9 网络轮询器](../../part3concurrency/ch09sched/poller.md)、
-  [11.2 互斥锁](../../part3concurrency/ch11sync/mutex.md)、
-  [11.8 上下文](../../part3concurrency/ch11sync/context.md)（用超时预防永久阻塞）、
-  [16.3 性能追踪](./trace.md)、[16.5 基准测试与性能剖析](./perf.md)（用 goroutine 剖面定位局部死锁）。
+- 本书 [9.3 MPG 模型与并发调度单元](../../part3concurrency/ch09sched/mpg.md)、[9.8
+  系统监控](../../part3concurrency/ch09sched/sysmon.md)、[9.9
+  网络轮询器](../../part3concurrency/ch09sched/poller.md)、[11.2
+  互斥锁](../../part3concurrency/ch11sync/mutex.md)、[11.8
+  上下文](../../part3concurrency/ch11sync/context.md)（用超时预防永久阻塞）、[16.3
+  性能追踪](./trace.md)、[16.5 基准测试与性能剖析](./perf.md)（用 goroutine 剖面定位局部死锁）。

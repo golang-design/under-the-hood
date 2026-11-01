@@ -13,8 +13,8 @@ title: "16.2 竞争检查"
 把它变成一项可以检查的性质：以 `-race` 构建的程序在运行中构造先行发生关系，
 一旦发现两次冲突的访问没有被它定序，就报告一次竞争。
 
-本节先用两个例子说明检测器报告什么，再依次讨论它的理论基础（向量时钟）、编译器与运行时各自承担的工作、
-ThreadSanitizer 运行时的数据结构及其代价，最后讨论它的能力边界。
+本节先用两个例子说明检测器报告什么，再依次讨论它的理论基础（向量时钟）、编译器与运行时各自承担的工作、ThreadSanitizer
+运行时的数据结构及其代价，最后讨论它的能力边界。
 
 ## 16.2.1 报告的是缺失的定序
 
@@ -211,8 +211,8 @@ func (s *state) instrument2(t *types.Type, addr, addr2 *ssa.Value, kind instrume
 大小为零的对象不可能竞争；`IsSanitizerSafeAddr` 排除了栈上的地址、只读数据以及初始化后只读的 itab、
 字符串数据与闭包字段；复合对象的写可能落在任何子对象上，因而按范围报告，标量只需报告起始地址。此外，
 编译器还在每个函数的入口与出口插入 `racefuncenter` 与 `racefuncexit`，
-它们维护的影子调用栈使报告能够给出完整的栈。并非所有包都被插桩：`runtime` 及其内部依赖完全不插桩；`sync`、
-`sync/atomic` 等包既不插桩内存访问，也不插桩函数出入口，源码注释的理由是，这些包中的内存访问要么无关紧要，
+它们维护的影子调用栈使报告能够给出完整的栈。并非所有包都被插桩：`runtime` 及其内部依赖完全不插桩；`sync`、`sync/atomic`
+等包既不插桩内存访问，也不插桩函数出入口，源码注释的理由是，这些包中的内存访问要么无关紧要，
 要么会导致误报 [[Go Authors, 2026b](#ref-go-authors-2026b)]。
 
 这些包转而直接报告同步语义。`sync.Mutex` 加锁成功后执行 acquire，解锁时先执行 release
@@ -245,8 +245,8 @@ func (m *Mutex) Unlock() {
 [[Go Authors, 2026d](#ref-go-authors-2026d)]。通道的收发在 `runtime/chan.go` 中报告：
 带缓冲的通道以每个缓冲槽为一个同步对象，收发时对相应的槽执行 release-acquire，由此实现内存模型中「容量为
 C 的通道上第 k 次接收先于第 k+C 次发送完成」的规则；元素大小为零的通道不分配缓冲区，
-所有收发只能共用一个同步对象 [[Go Authors, 2026d](#ref-go-authors-2026d)]。这条规则曾经没有被逐字实现。
-2020 年，Daniel S Fava 发现 `chansend` 与 `chanrecv` 中 acquire 与 release 的次序颠倒，
+所有收发只能共用一个同步对象 [[Go Authors, 2026d](#ref-go-authors-2026d)]。这条规则曾经没有被逐字实现。2020
+年，Daniel S Fava 发现 `chansend` 与 `chanrecv` 中 acquire 与 release 的次序颠倒，
 检测器会因此漏报一些竞争；修复调整了调用次序，并依赖 ThreadSanitizer 新增的一个接口，随 Go 1.16 发布
 [[Fava, 2020](#ref-fava-2020)]。
 
@@ -294,8 +294,8 @@ goroutine 数因此不再受槽位数限制。影子值中的「槽位与纪元�
 在用户看来，代价可以概括为文档给出的经验数字：对典型程序，内存占用增加 5 至 10 倍，执行时间增加 2 至
 20 倍。此外，检测器为每条 `defer` 与 `recover` 语句额外分配 8 字节，直到 goroutine 退出才回收，
 长期运行并周期性地执行 `defer` 与 `recover` 的 goroutine 会使内存无界增长，而这些分配不出现在
-`runtime.ReadMemStats` 或 `runtime/pprof` 的输出中 [[Go Authors, n.d.](#ref-go-authors-nd)]。构建上，
-`-race` 在 macOS 之外要求启用 cgo；Go 1.20 起，macOS 上的检测器改写为不依赖 cgo，无须安装 Xcode
+`runtime.ReadMemStats` 或 `runtime/pprof` 的输出中 [[Go Authors, n.d.](#ref-go-authors-nd)]。构建上，`-race`
+在 macOS 之外要求启用 cgo；Go 1.20 起，macOS 上的检测器改写为不依赖 cgo，无须安装 Xcode
 [[Go Authors, 2023](#ref-go-authors-2023); [Go Authors, 2026f](#ref-go-authors-2026f)]。
 
 ## 16.2.5 能力边界
@@ -364,8 +364,8 @@ cgo 调用的 C 代码中的访问不在其列。
   不插桩的包及其理由。
 - <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/runtime/race.go. Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/race.go
-- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. src/internal/sync/mutex.go、
-  src/runtime/race_amd64.s 与 src/runtime/chan.go：`racenotify`. Go 1.26 源码.
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. src/internal/sync/mutex.go、src/runtime/race_amd64.s
+  与 src/runtime/chan.go：`racenotify`. Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/chan.go
 - <a id="ref-go-authors-2026e"></a>[Go Authors, 2026e] The Go Authors. src/runtime/race/README. Go 1.26
   源码. https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/race/README
@@ -394,5 +394,5 @@ cgo 调用的 C 代码中的访问不在其列。
   随 Go 1.19 发布。
 - <a id="ref-vyukov-and-gerrand-2013"></a>[Vyukov and Gerrand, 2013] Dmitry Vyukov and Andrew Gerrand.
   *Introducing the Go Race Detector.* The Go Blog, 2013-06-26. https://go.dev/blog/race-detector
-- 本书 [11.9 内存一致模型](../../part3concurrency/ch11sync/mem.md)、
-  [11 同步原语与模式](../../part3concurrency/ch11sync)。
+- 本书 [11.9 内存一致模型](../../part3concurrency/ch11sync/mem.md)、[11
+  同步原语与模式](../../part3concurrency/ch11sync)。

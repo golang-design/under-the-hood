@@ -101,8 +101,8 @@ const (
 大小为 `fixedStack << order` 的栈称为第 `order` 级。在大多数平台上，2、4、8、16 KiB
 四级的小栈经由缓存分配，32 KiB 及以上的大栈各自占用专门的 span。Go 1.4 只有三级；Randall 在 Go 1.5
 中增加到四级，并说明了上限的由来：分配器每次以 32 KiB 为单位向页堆申请和归还，缓存 32 KiB
-以上的栈没有意义 [[Randall, 2014b](#ref-randall-2014b)]。表中 windows/32 一行已经过时：自 Go 1.24 起，
-windows/386 与 windows/amd64 一样预留 4096 字节的 `stackSystem` [[Cox, 2024](#ref-cox-2024)]，最小栈也是
+以上的栈没有意义 [[Randall, 2014b](#ref-randall-2014b)]。表中 windows/32 一行已经过时：自 Go 1.24 起，windows/386
+与 windows/amd64 一样预留 4096 字节的 `stackSystem` [[Cox, 2024](#ref-cox-2024)]，最小栈也是
 8 KiB。
 
 两类栈各有一个全局池：
@@ -318,8 +318,8 @@ span，这就是注释描述的情形。Clements 在 2015 年的修改说明中�
 
 可见 `stackLarge` 并不是小栈之后的又一级缓存，而是回收期间暂存大栈 span 的地方。2015 年的修改起初只把这些
 span 留到回收结束再释放，不加以重用；如果程序快速地分配大栈而堆增长缓慢，回收周期之间的间隔很长，暂存的
-span 便越积越多。Clements 随后让新的大栈分配优先重用 `stackLarge` 中的 span，随 Go 1.6 发布。按提交说明，
-issue #13552 中的程序原本在几个小时内内存增长到 1 GB 以上，修改后稳定在 30 MB 左右
+span 便越积越多。Clements 随后让新的大栈分配优先重用 `stackLarge` 中的 span，随 Go 1.6 发布。按提交说明，issue
+#13552 中的程序原本在几个小时内内存增长到 1 GB 以上，修改后稳定在 30 MB 左右
 [[Clements, 2015c](#ref-clements-2015c)]。
 
 下图汇总了小栈与大栈的分配与释放路径：
@@ -491,8 +491,8 @@ func main() {
 - <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/runtime/mheap.go. Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mheap.go
   `allocManual`、`mSpanManual`、`spanAllocStack`。
-- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. src/runtime/malloc.go、proc.go、
-  mgc.go、mgcmark.go. Go 1.26 源码. https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. src/runtime/malloc.go、proc.go、mgc.go、mgcmark.go.
+  Go 1.26 源码. https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
 - <a id="ref-mattis-2016"></a>[Mattis, 2016] Peter Mattis. Go issue #18138. *runtime: new goroutines can
   spend excessive time in morestack.* 2016. https://github.com/golang/go/issues/18138
 - <a id="ref-ou-2019"></a>[Ou, 2019] Changkun Ou. runtime: one lock per order. Go commit 3c56143442, 2019.
@@ -513,7 +513,7 @@ func main() {
 - <a id="ref-tcmalloc-authors-2026"></a>[TCMalloc Authors, 2026] The TCMalloc Authors.
   *TCMalloc: Thread-Caching Malloc.* 2026. https://google.github.io/tcmalloc/design.html
   thread-cache / central-list / page-heap 三级的思想原型。
-- 本书 [12.2 组件](../ch12alloc/component.md)、[12.1 设计原则](../ch12alloc/basic.md)、
-  [9.2 工作窃取式调度](../../part3concurrency/ch09sched/steal.md)、
-  [11.6 缓存池](../../part3concurrency/ch11sync/pool.md)、[14.1 连续栈的设计](./design.md)、
-  [14.3 栈的增长](./grow.md)、[14.4 栈的拷贝与指针调整](./copy.md)、[14.5 栈的收缩与演进](./shrink.md)。
+- 本书 [12.2 组件](../ch12alloc/component.md)、[12.1 设计原则](../ch12alloc/basic.md)、[9.2
+  工作窃取式调度](../../part3concurrency/ch09sched/steal.md)、[11.6
+  缓存池](../../part3concurrency/ch11sync/pool.md)、[14.1 连续栈的设计](./design.md)、[14.3
+  栈的增长](./grow.md)、[14.4 栈的拷贝与指针调整](./copy.md)、[14.5 栈的收缩与演进](./shrink.md)。

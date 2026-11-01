@@ -17,8 +17,8 @@ title: "12.6 微对象分配"
 
 ## 12.6.1 块与偏移
 
-每个 P 的本地缓存中有三个字段服务于微对象：`tiny` 指向当前块的起点，`tinyoffset` 是块内已用到的偏移，
-`tinyAllocs` 统计这个 P 完成的微对象分配次数（[12.2.2](./component.md)）。`mallocgcTiny` 的主体如下，
+每个 P 的本地缓存中有三个字段服务于微对象：`tiny` 指向当前块的起点，`tinyoffset` 是块内已用到的偏移，`tinyAllocs`
+统计这个 P 完成的微对象分配次数（[12.2.2](./component.md)）。`mallocgcTiny` 的主体如下，
 开头省略了一段与 [12.5.1](./smallalloc.md) 相同的序言，结尾省略了与 [12.5.4](./smallalloc.md) 相同的发布、
 标记与采样 [[Go Authors, 2026a](#ref-go-authors-2026a)]：
 
@@ -74,8 +74,8 @@ title: "12.6 微对象分配"
 否则不对齐。一个类型的大小总是其对齐的整数倍，所以按大小推断的对齐不会小于类型实际需要的对齐，
 注释因而称之为保守的对齐。32 位平台上的 12 字节对象是例外。在这些平台上，64 位字段只按 4 字节对齐，
 而对未按 8 字节对齐的 64 位值做原子操作可能出错。惯常的做法是把需要原子访问的 64 位字段放在结构体开头，
-依靠分配器返回 8 字节对齐的地址（[11.3](../../part3concurrency/ch11sync/atomic.md)）；
-`struct { a uint64; b byte }` 在 32 位平台上的大小是 12 字节，微对象分配器按规则只会把它对齐到 4，
+依靠分配器返回 8 字节对齐的地址（[11.3](../../part3concurrency/ch11sync/atomic.md)）；`struct { a uint64; b byte }`
+在 32 位平台上的大小是 12 字节，微对象分配器按规则只会把它对齐到 4，
 使这一做法失效。Knyszek 为此单独把 12 字节的对象对齐到 8 [[Knyszek, 2020](#ref-knyszek-2020)]。
 
 当前块容得下时，分配只是返回 `c.tiny + off` 并推进偏移，不清零，不访问 span，也不检查回收的触发条件。这条
@@ -218,8 +218,8 @@ garbage 基准上，分配次数减少 12.3%，堆占用减少 1.5% [[Vyukov, 20
 
 统计也受到影响。运行时并不跟踪单个微对象的生命周期，只跟踪它们所在的块。`runtime.MemStats`
 出于历史原因把微对象的分配次数同时计入 `Mallocs` 与 `Frees`，源码注释承认这在某种意义上重复计算了内存，
-因为块本身也被计入；逐个跟踪微对象的生命周期则代价太高 [[Go Authors, 2026d](#ref-go-authors-2026d)]。
-`runtime/metrics` 把微对象的分配次数单独列为 `/gc/heap/tiny/allocs:objects`，
+因为块本身也被计入；逐个跟踪微对象的生命周期则代价太高 [[Go Authors, 2026d](#ref-go-authors-2026d)]。`runtime/metrics`
+把微对象的分配次数单独列为 `/gc/heap/tiny/allocs:objects`，
 按大小统计的直方图中只包含块。内存剖析也只按块采样：只有开启新块的分配会扣减 `nextSample`，扣减的是整块的
 16 字节，合并进已有块的分配不会被采样。
 
@@ -250,19 +250,18 @@ garbage 基准上，分配次数减少 12.3%，堆占用减少 1.5% [[Vyukov, 20
 - <a id="ref-clements-2016"></a>[Clements, 2016] Austin Clements. runtime: mark tiny blocks at GC start.
   Go commit 85c22bc3a5, 2016. https://go.dev/cl/31456
   随 Go 1.8 发布。
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/malloc.go
-  （`mallocgcTiny`、`maxTinySize`、对齐与换块逻辑、JSON 基准的实测数据）. Go 1.26 源码.
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/malloc.go（`mallocgcTiny`、`maxTinySize`、
+  对齐与换块逻辑、JSON 基准的实测数据）. Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/malloc.go
-- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. src/runtime/mcache.go
-  （`tiny`/`tinyoffset` 字段与 `tinySpanClass`）. Go 1.26 源码.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. src/runtime/mcache.go（`tiny`/`tinyoffset`
+  字段与 `tinySpanClass`）. Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mcache.go
-- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/runtime/mheap.go
-  （`tinySpanClass = tinySizeClass<<1 | 1`、`makeSpanClass`）. Go 1.26 源码.
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/runtime/mheap.go（`tinySpanClass = tinySizeClass<<1 | 1`、`makeSpanClass`）.
+  Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mheap.go
 - <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors.
-  src/runtime/mfinal.go（`SetFinalizer`）、src/runtime/mcleanup.go（`AddCleanup`）、src/weak/pointer.go、
-  src/runtime/mstats.go、src/runtime/metrics/description.go、src/runtime/mgc.go（`gcStart`）、
-  src/runtime/mgcmark.go（`gcMarkTinyAllocs`）、 src/runtime/malloc_generated.go. Go 1.26 源码.
+  src/runtime/mfinal.go（`SetFinalizer`）、src/runtime/mcleanup.go（`AddCleanup`）、src/weak/pointer.go、src/runtime/mstats.go、src/runtime/metrics/description.go、src/runtime/mgc.go（`gcStart`）、src/runtime/mgcmark.go（`gcMarkTinyAllocs`）、src/runtime/malloc_generated.go.
+  Go 1.26 源码.
   https://github.com/golang/go/tree/release-branch.go1.26/src
 - <a id="ref-knyszek-2020"></a>[Knyszek, 2020] Michael Anthony Knyszek. runtime: align 12-byte objects to
   8 bytes on 32-bit systems. Go commit 5756b35601, 2020. https://go.dev/cl/254057
@@ -279,7 +278,7 @@ garbage 基准上，分配次数减少 12.3%，堆占用减少 1.5% [[Vyukov, 20
 - <a id="ref-vyukov-2014"></a>[Vyukov, 2014] Dmitriy Vyukov. runtime: combine small NoScan allocations. Go
   commit 1fa7029425, 2014. https://codereview.appspot.com/38750047
   随 Go 1.3 发布。
-- 本书 [12.4 大对象分配](./largealloc.md)、[12.5 小对象分配](./smallalloc.md)
-  （微对象路径所依托的两端）。
-- 本书 [12.2 组件](./component.md)（mcache、span、尺寸类）、
-  [第 13 章 垃圾回收器](../ch13gc)（块的整体存活、扫描与清扫）。
+- 本书 [12.4 大对象分配](./largealloc.md)、[12.5 小对象分配](./smallalloc.md)（微
+  对象路径所依托的两端）。
+- 本书 [12.2 组件](./component.md)（mcache、span、尺寸类）、[第
+  13 章 垃圾回收器](../ch13gc)（块的整体存活、扫描与清扫）。

@@ -38,8 +38,8 @@ TEXT ·frame(SB), $24-24
 	RET
 ```
 
-`$24-24` 声明栈帧的大小：减号之前是局部变量所占的字节数，减号之后是参数与返回值合计的字节数（`a`、
-`b`、`ret` 各 8 字节）。中间的减号只是分隔符，并不表示减法 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
+`$24-24` 声明栈帧的大小：减号之前是局部变量所占的字节数，减号之后是参数与返回值合计的字节数（`a`、`b`、`ret`
+各 8 字节）。中间的减号只是分隔符，并不表示减法 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
 
 在 darwin/arm64 上交叉编译到 linux/amd64，再用 `go tool objdump` 反汇编，结果如下：
 
@@ -111,8 +111,8 @@ TEXT ·Cas(SB),NOSPLIT,$0-17
 - `LOCK` 前缀作用于下一条指令，保证 `CMPXCHGL` 的比较与写入在多核环境下作为一个原子操作完成，其他
   核不会观察到中间状态 [[Intel, n.d.](#ref-intel-nd)]。
 
-arm64 上的 `Cas` 位于 `atomic_arm64.s` 中，其声明同样是 `$0-17`，取参数同样写作 `ptr+0(FP)`、
-`old+8(FP)`，只是其间的指令换成了 arm64 的指令。各种体系结构共享的是函数声明、帧大小以及参数的
+arm64 上的 `Cas` 位于 `atomic_arm64.s` 中，其声明同样是 `$0-17`，取参数同样写作 `ptr+0(FP)`、`old+8(FP)`，
+只是其间的指令换成了 arm64 的指令。各种体系结构共享的是函数声明、帧大小以及参数的
 写法，指令本身则各不相同。
 
 ## 2.2.3 把 SP 与 PC 作为数据：`gogo` 与 `morestack`
@@ -162,8 +162,7 @@ TEXT runtime·morestack(SB),NOSPLIT|NOFRAME,$0-0
 - <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. "A Quick Guide to Go's Assembler."
   https://go.dev/doc/asm
   `TEXT`、帧大小、`NOSPLIT` 等标记以及伪寄存器的官方说明。
-- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `runtime/asm_amd64.s`、
-  `internal/runtime/atomic/atomic_amd64.s`、`runtime/textflag.h`.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `runtime/asm_amd64.s`、`internal/runtime/atomic/atomic_amd64.s`、`runtime/textflag.h`.
   https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/asm_amd64.s
   https://github.com/golang/go/tree/master/src/runtime
   本节 `gogo`、`morestack`、`Cas` 的出处；`textflag.h` 列出了 `NOSPLIT` 等全部标记。
@@ -177,8 +176,8 @@ TEXT runtime·morestack(SB),NOSPLIT|NOFRAME,$0-0
 - <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. *Debugging Go Code with GDB.*
   https://go.dev/doc/gdb
   （把汇编与运行时现场对照调试）
-- 本书 [2.1 Plan 9 汇编语言](./asm.md)、[2.3 调用约定与寄存器 ABI](./callconv.md)（自定义 ABI）、
-  [6.1 函数调用](../../part2lang/ch06func/func.md)、
-  [9.4 调度循环](../../part3concurrency/ch09sched/schedule.md)（gogo/mcall 栈切换）、
-  [14.3 栈的增长](../../part4memory/ch14stack/grow.md)（morestack 与栈增长）.
+- 本书 [2.1 Plan 9 汇编语言](./asm.md)、[2.3 调用约定与寄存器 ABI](./callconv.md)（自定义 ABI）、[6.1
+  函数调用](../../part2lang/ch06func/func.md)、[9.4
+  调度循环](../../part3concurrency/ch09sched/schedule.md)（gogo/mcall 栈切换）、[14.3
+  栈的增长](../../part4memory/ch14stack/grow.md)（morestack 与栈增长）.
 

@@ -24,8 +24,8 @@ goroutine；通过通信来共享。
 唤醒全部等待者。Mills 以一个无界队列为例。若队列提供 `GetMany(n)`，等攒够 n 个元素后一次取走，那么 `Put`
 每放入一个元素，都不知道哪一个等待者因此可以继续，只能调用 `Broadcast`。报告列出了这种写法的四个问题：
 
-- 无效的唤醒。一次 `Put` 唤醒所有 `GetMany`，其中至多一个能够取走元素，其余的检查条件之后重新等待。
-  `sync.Cond` 本身不会无故唤醒等待者，Mills 在别处特意澄清过：问题在于同一个条件变量代表了许多个不同的条
+- 无效的唤醒。一次 `Put` 唤醒所有 `GetMany`，其中至多一个能够取走元素，其余的检查条件之后重新等待。`sync.Cond`
+  本身不会无故唤醒等待者，Mills 在别处特意澄清过：问题在于同一个条件变量代表了许多个不同的条
   件，每个等待者都会被与自己无关的变化唤醒 [[Mills, 2017a](#ref-mills-2017a)]。
 - 遗漏的通知。条件变量把通知与数据分开，日后新增一处修改数据的代码，很容易忘记发出通知；
   为减少无效唤醒而删减通知时，又可能删掉必要的一次。
@@ -126,14 +126,14 @@ Mills 的替代办法是在有任务时才启动 goroutine，用带缓冲 channe
 早在 2017 年，Mills 就提议在 Go 2 中删除 `sync.Cond`
 [[Mills, 2017b](#ref-mills-2017b)]，理由是在 #16620 的讨论中，人们描述的大多数用例改用 channel
 都能正常工作：`Broadcast` 对应关闭 channel（[10.4.3](./close.md)），`Signal` 对应发送。
-提案还逐一检查了标准库中为数不多的几处 `sync.Cond`，认为其中多数只用到 `Broadcast`，可以直接换成 channel。
-Go 1.19 起，`sync.Cond` 的文档写道：「对许多简单的用例，使用 channel 会比使用 Cond 更好（Broadcast
+提案还逐一检查了标准库中为数不多的几处 `sync.Cond`，认为其中多数只用到 `Broadcast`，可以直接换成 channel。Go
+1.19 起，`sync.Cond` 的文档写道：「对许多简单的用例，使用 channel 会比使用 Cond 更好（Broadcast
 对应关闭 channel，Signal 对应在 channel 上发送）。」文档还附上了 Mills 这次报告的链接
 [[Burke, 2022](#ref-burke-2022)]。
 
 删除的提议在 2023 年被拒绝。Russ Cox 写道：「即使在 sync 的第 2 版中，我也很难相信我们会删除 Cond。
-条件变量是许多抽象的基本构件。大多数用户确实应当使用更高层的抽象，但 sync 包的存在也正是为了提供这些构件，
-Cond 和 Mutex 都是。」[[Cox, 2023a](#ref-cox-2023a)] Cox 还附上了自己刚写的一个工作队列：起初尝试用
+条件变量是许多抽象的基本构件。大多数用户确实应当使用更高层的抽象，但 sync 包的存在也正是为了提供这些构件，Cond
+和 Mutex 都是。」[[Cox, 2023a](#ref-cox-2023a)] Cox 还附上了自己刚写的一个工作队列：起初尝试用
 channel，但在已经持有一把互斥锁的情况下还要考虑 channel 的同步，令人沮丧，而 `sync.Cond`
 似乎恰好表达了想要表达的意思 [[Cox, 2023b](#ref-cox-2023b)]。文档的建议与这次拒绝合起来，就是 Go
 团队目前的立场：简单的用例用 channel，条件变量作为构件保留。
@@ -195,8 +195,8 @@ func main() {
 无竞争时，`sync.Mutex`（[11.2](../ch11sync/mutex.md)）的加锁是一次比较并交换，
 解锁是一次原子加法（[11.3](../ch11sync/atomic.md)），二者都能内联到调用处，不进入运行时
 [[Go Authors, 2026b](#ref-go-authors-2026b)]。把容量为 1 的 channel 当锁用时，
-发送与接收各调用一次运行时函数，在 `hchan.lock` 的保护下拷贝元素、移动缓冲区的下标（[10.2.6](./impl.md)、
-[10.3.1](./sendrecv.md)），开销近于互斥锁的三倍。只有非阻塞操作失败时可以不加锁
+发送与接收各调用一次运行时函数，在 `hchan.lock` 的保护下拷贝元素、移动缓冲区的下标（[10.2.6](./impl.md)、[10.3.1](./sendrecv.md)），
+开销近于互斥锁的三倍。只有非阻塞操作失败时可以不加锁
 （[10.3.5](./sendrecv.md)），成功的发送和接收总要获取这把锁。
 
 无缓冲 channel 往返一次则要慢一个数量级以上。每一次传递都要让一方挂起、
@@ -278,8 +278,8 @@ type Group struct {
 整个过程不需要 `select`：错误由 `sync.Once` 收集，取消由 context 传播。
 
 2022 年加入的 `SetLimit` 与 `TryGo` [[Ou, 2022a](#ref-ou-2022a)]实现了并发上限，用的正是 10.7.1 中 Mills
-的信号量：`sem` 是容量等于上限的 channel，`Go` 在启动 goroutine 之前向它发送，goroutine 结束时从中接收。
-`TryGo` 把这次发送放进带 `default` 分支的 `select`，名额已满时立即返回 false，
+的信号量：`sem` 是容量等于上限的 channel，`Go` 在启动 goroutine 之前向它发送，goroutine 结束时从中接收。`TryGo`
+把这次发送放进带 `default` 分支的 `select`，名额已满时立即返回 false，
 走的是非阻塞发送的快速路径（[10.3.5](./sendrecv.md)）。
 
 `Wait` 只返回第一个错误。有人提议让它返回全部错误，Mills 表示反对：那样 errgroup
@@ -314,11 +314,11 @@ Go 的 FAQ 在解释为何以 CSP [[Hoare, 1978](#ref-hoare-1978)]为并发的�
 （[1.3.2](../../part1overview/ch01intro/csp.md)），occam 沿用了这一点，另以 `PRI ALT`
 按书写次序给出优先级；occam 的 `ALT` 也与原文一样只能等待输入
 [[SGS-THOMSON, 1995](#ref-sgs-thomson-1995)]，Go 的 `select` 则也能等待发送（[10.5.6](./select.md)）。Go
-把选择规定为均匀随机，不提供优先级（[10.5.3](./select.md)）；core.async 默认随机，可以要求按次序尝试；
-Kotlin 则默认偏向第一个分支，需要随机时另用 `selectUnbiased` [[JetBrains, 2026](#ref-jetbrains-2026)]。
-Hickey 列出的 core.async 与 Go 的四点区别中，有两点就在这里：`alts!` 是函数，操作的个数可以在运行时决定，
-而 Go 的 `select` 分支在编译时确定，运行时可变的选择须借助 `reflect.Select`（[10.5.5](./select.md)）；
-`alt` 支持优先级，Go 的 `select` 不支持。
+把选择规定为均匀随机，不提供优先级（[10.5.3](./select.md)）；core.async 默认随机，可以要求按次序尝试；Kotlin
+则默认偏向第一个分支，需要随机时另用 `selectUnbiased` [[JetBrains, 2026](#ref-jetbrains-2026)]。Hickey
+列出的 core.async 与 Go 的四点区别中，有两点就在这里：`alts!` 是函数，操作的个数可以在运行时决定，
+而 Go 的 `select` 分支在编译时确定，运行时可变的选择须借助 `reflect.Select`（[10.5.5](./select.md)）；`alt`
+支持优先级，Go 的 `select` 不支持。
 
 关闭上，各家差别最大。Go 的 `close` 由发送方宣告「不再有数据」，接收方据此结束（[10.4.2](./close.md)）；
 反过来，接收方全部离开时发送方无从得知，阻塞在发送上的 goroutine 将永远等待，这是 goroutine
@@ -435,5 +435,5 @@ actor 机制都已包含一个队列，队列看来显然是更基本的。」[[
   2018 年 12 月 18 日：关闭提案时的说明。
 - <a id="ref-urlichs-2018"></a>[Urlichs, 2018] Matthias Urlichs. Go issue #29011. *proposal: Go 2: use
   structured concurrency.* 2018. https://github.com/golang/go/issues/29011
-- 本书 [11.2 互斥锁](../ch11sync/mutex.md)、[11.3 原子操作](../ch11sync/atomic.md)、
-  [11.5 同步组](../ch11sync/waitgroup.md)、[11.8 上下文](../ch11sync/context.md).
+- 本书 [11.2 互斥锁](../ch11sync/mutex.md)、[11.3 原子操作](../ch11sync/atomic.md)、[11.5
+  同步组](../ch11sync/waitgroup.md)、[11.8 上下文](../ch11sync/context.md).

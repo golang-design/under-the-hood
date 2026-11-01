@@ -291,8 +291,8 @@ Agent 的每一次「思考」都是一次第 20 章意义上的推理请求，�
 Agent 是第 20 章推理服务的客户端，它的控制循环反复消费 [20.3](../ch20inference/serving.md) 中的那条流。
 
 边界也随之改变。第 18 至 20 章的核心边界是进程内的 FFI，即经由 cgo 通往设备和推理运行时；
-到了 Agent 这一层，模型后端往往在另一个进程甚至另一台机器上，边界变成了网络 RPC。
-[18.1](../ch18gpu/boundary.md) 已经指出，进程内的 FFI 边界与进程间的边界，是同一个设计选择的不同位置。
+到了 Agent 这一层，模型后端往往在另一个进程甚至另一台机器上，边界变成了网络 RPC。[18.1](../ch18gpu/boundary.md)
+已经指出，进程内的 FFI 边界与进程间的边界，是同一个设计选择的不同位置。
 边界的形式变了，要求没有变：依然需要流式、背压与取消。
 
 循环在哪里运行，也会改变失败的语义。managed-agents 面对的厂商形态各不相同：有的在远端托管会话，
@@ -323,8 +323,8 @@ type Runtime interface {
 }
 ```
 
-接口的文档要求，每个可能阻塞的方法都接受一个 context 并遵守它的取消，以便从外部放弃一次会话。
-`Capabilities` 则声明这个运行时能否在进程重启后接续会话、能否取消、能否评分等；
+接口的文档要求，每个可能阻塞的方法都接受一个 context 并遵守它的取消，以便从外部放弃一次会话。`Capabilities`
+则声明这个运行时能否在进程重启后接续会话、能否取消、能否评分等；
 调用方请求的能力超出声明时，`ValidateCapabilities` 会在创建任何远端资源之前拒绝。这与 `io.Reader`
 一类小接口的设计取向一致：接口只规定最少的行为，接口之外的差异不靠调用方猜测，而是被明确地报告出来。
 
@@ -346,18 +346,18 @@ type Runtime interface {
   2024. https://www.anthropic.com/research/building-effective-agents
   （署名 Erik S. 与 Barry Zhang；区分工作流与 Agent，把 Agent 描述为
   在循环中依据环境反馈使用工具的语言模型，并讨论停止条件与编排者-工作者等模式）
-- <a id="ref-ou-2026a"></a>[Ou, 2026a] Changkun Ou. examen. https://github.com/latere-ai/examen, 2026.
-  （对 Agent 与基于模型的程序做实验与评测的服务；每种组合重复运行，比较结果附带区间；尚处于早期版本）
+- <a id="ref-ou-2026a"></a>[Ou, 2026a] Changkun Ou. examen. https://github.com/latere-ai/examen, 2026.（对
+  Agent 与基于模型的程序做实验与评测的服务；每种组合重复运行，比较结果附带区间；尚处于早期版本）
 - <a id="ref-ou-2026b"></a>[Ou, 2026b] Changkun Ou. *运行框架.* AI as an Infrastructure, 2026.
   https://aaai.latere.ai/zh/orchestration/the-harness
   （运行框架的职责划分、显式状态机，以及恢复时先核对外部影响再重放的规则）
 - <a id="ref-ou-2026c"></a>[Ou, 2026c] Changkun Ou. managed-agents.
-  https://github.com/latere-ai/managed-agents, 2026.
-  （托管 Agent 会话的统一 Go 接口；`Runtime`、`Capabilities` 与 `ValidateObservation`）
-- <a id="ref-ou-2026d"></a>[Ou, 2026d] Changkun Ou. topos. https://github.com/latere-ai/topos, 2026.
-  （Agent 会话运行时；只追加的事件日志、纯函数 `session.Fold` 与 `harness` 包中的单步循环）
-- <a id="ref-ou-2026e"></a>[Ou, 2026e] Changkun Ou. agon. https://github.com/latere-ai/agon, 2026.
-  （对 Agent 代码改动的对抗式评审；以稳定状态、轮次上限与共享预算为终止条件）
+  https://github.com/latere-ai/managed-agents, 2026.（托
+  管 Agent 会话的统一 Go 接口；`Runtime`、`Capabilities` 与 `ValidateObservation`）
+- <a id="ref-ou-2026d"></a>[Ou, 2026d] Changkun Ou. topos. https://github.com/latere-ai/topos, 2026.（Agent
+  会话运行时；只追加的事件日志、纯函数 `session.Fold` 与 `harness` 包中的单步循环）
+- <a id="ref-ou-2026e"></a>[Ou, 2026e] Changkun Ou. agon. https://github.com/latere-ai/agon, 2026.（对
+  Agent 代码改动的对抗式评审；以稳定状态、轮次上限与共享预算为终止条件）
 - <a id="ref-schick-et-al-2023"></a>[Schick et al., 2023] Timo Schick 等. *Toolformer: Language Models Can
   Teach Themselves to Use Tools.* NeurIPS, 2023. https://arxiv.org/abs/2302.04761
   （以自监督方式训练模型决定调用哪个 API、何时调用、传什么参数；arXiv 首版 2023 年 2 月 9 日）
@@ -367,10 +367,10 @@ type Runtime interface {
 - <a id="ref-yao-et-al-2023"></a>[Yao et al., 2023] Shunyu Yao 等. *ReAct: Synergizing Reasoning and
   Acting in Language Models.* ICLR, 2023. https://arxiv.org/abs/2210.03629
   （推理与行动交替的循环，Agent 控制循环的代表性形式化；arXiv 首版 2022 年 10 月 6 日）
-- 本书 [第 9 章 goroutine 调度器](../../part3concurrency/ch09sched/readme.md)、
-  [第 10 章 通道与 select](../../part3concurrency/ch10chan/readme.md)、
-  [10.7 工程实践与跨语言对照](../../part3concurrency/ch10chan/pattern.md)、
-  [18.1 跨越 FFI 边界](../ch18gpu/boundary.md)、
-  [18.2 调度器与阻塞的外部调用](../ch18gpu/sched.md)、
-  [20.3 服务、批处理与流式](../ch20inference/serving.md)、
-  [21.2 工具调用与 MCP](./mcp.md)。
+- 本书 [第 9 章 goroutine 调度器](../../part3concurrency/ch09sched/readme.md)、[第
+  10 章 通道与 select](../../part3concurrency/ch10chan/readme.md)、[10.7
+  工程实践与跨语言对照](../../part3concurrency/ch10chan/pattern.md)、[18.1
+  跨越 FFI 边界](../ch18gpu/boundary.md)、[18.2
+  调度器与阻塞的外部调用](../ch18gpu/sched.md)、[20.3
+  服务、批处理与流式](../ch20inference/serving.md)、[21.2
+  工具调用与 MCP](./mcp.md)。

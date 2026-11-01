@@ -137,8 +137,8 @@ JSON：前述 `hello, world` 程序的动作图共有 122 个节点，其中编�
 
 1976 年，贝尔实验室的 Stuart Feldman 编写了 `make`，并于 1979 年发表了描述它的论文
 [[Feldman, 1979](#ref-feldman-1979)]。当时 Unix 上的程序规模日益增大，开发者经常在修改一个文件后忘记重新编
-译依赖它的部分，调试许久才发现运行的仍是旧代码。`make` 的规则可以概括为一句话：
-**若目标文件的修改时间早于它的任何一个依赖文件，就重新生成该目标。**
+译依赖它的部分，调试许久才发现运行的仍是旧代码。`make` 的规则可以概括为一句话：**若
+目标文件的修改时间早于它的任何一个依赖文件，就重新生成该目标。**
 
 这条规则开销低、适用面广，沿用至今。然而它判断的是文件是否被修改过，而不是内容是否发生了变化：
 
@@ -215,8 +215,8 @@ HASH[build hello]: 7658552b3e0283b81aa64fc82972c758fc8120b2cb684550c6c74a5085448
 - `touch` 只改变修改时间。文件内容的哈希不变，键也不变，直接命中缓存。
 - 修改注释后，`greet.go` 的哈希改变，`greet` 的键随之改变，因此必须重新编译。但注释不会进入产物，
   新的 `greet` 产物与原来逐字节相同，content ID 不变，`main` 的键也就不变，重建在此截断。
-- 修改函数体后，`greet` 的产物发生变化（`Hello` 被内联到 `main` 中，见 [3.2](./compile.md)），
-  `main` 的键随之改变，链接动作的键也随之改变。
+- 修改函数体后，`greet` 的产物发生变化（`Hello` 被内联到 `main` 中，见 [3.2](./compile.md)），`main`
+  的键随之改变，链接动作的键也随之改变。
 - 恢复原样后，每个键都与首次构建时相同，而缓存中仍保留着当时的结果。缓存保存所有出现过的「键 →
   产物」，只有 5 天未被使用的条目才会被清除。链接之所以重新执行，是因为 `go build` 不把可执行文件
   存入缓存，而是检查目标文件 `hello` 中的 build ID 是否与本次计算出的键一致，此时的 `hello` 则是
@@ -296,8 +296,7 @@ Ninja，缓存需另行安装 `ccache`，查找依赖库使用 `pkg-config`，�
 - <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *Command go*, "Build and test
   caching". https://pkg.go.dev/cmd/go
   构建缓存、`GOCACHE`、`GODEBUG=gocacheverify` 等的官方说明。
-- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `cmd/go/internal/work/action.go`、
-  `exec.go`、`buildid.go`.
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `cmd/go/internal/work/action.go`、`exec.go`、`buildid.go`.
   https://github.com/golang/go/tree/release-branch.go1.26/src/cmd/go/internal/work
   https://github.com/golang/go/tree/master/src/cmd/go （`cmd/go/internal/cache/hash.go`）
   动作图与 `buildActionID` 的实现；`buildid.go` 开头对 action ID 与 content ID 有详细说明。
@@ -312,13 +311,13 @@ Ninja，缓存需另行安装 `ccache`，查找依赖库使用 `pkg-config`，�
   GOEXPERIMENT=cacheprog to let a child process implement the internal action/output cache." Go issue
   59719, 2023. https://go.dev/issue/59719
   `GOCACHEPROG` 的提案与讨论。
-- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *Go Modules Reference*（`go.mod`、
-  MVS、`go.sum` 与可验证构建）。 https://go.dev/ref/mod
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *Go Modules Reference*（`go.mod`、MVS、`go.sum`
+  与可验证构建）。 https://go.dev/ref/mod
 - <a id="ref-bazel-authors-nd"></a>[Bazel Authors, n.d.] The Bazel Authors. *Bazel: Remote Caching.*
   https://bazel.build/remote/caching （内容寻址 action cache 的工业级形态）。
 - <a id="ref-go-authors-2025"></a>[Go Authors, 2025] The Go Authors. *Go 1.24 Release Notes*, "Go
   command". https://go.dev/doc/go1.24#go-command
   `GOCACHEPROG` 不再需要 `GOEXPERIMENT` 即可使用。
-- 本书 [3.2 编译](./compile.md)、[3.4 链接](./link.md)、
-  [第 17 章 模块](../../part5toolchain/ch17modules/readme.md)。
+- 本书 [3.2 编译](./compile.md)、[3.4 链接](./link.md)、[第
+  17 章 模块](../../part5toolchain/ch17modules/readme.md)。
 

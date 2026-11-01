@@ -12,8 +12,8 @@ title: "18.4 异步编程模型"
 
 ## 18.4.1 三种并行
 
-Rob Pike 在 2012 年的演讲中区分了并发（concurrency）与并行（parallelism）[[Pike, 2012](#ref-pike-2012)]。
-The Go Blog 对这次演讲的介绍概括道 [[Gerrand, 2013](#ref-gerrand-2013)]：
+Rob Pike 在 2012 年的演讲中区分了并发（concurrency）与并行（parallelism）[[Pike, 2012](#ref-pike-2012)]。The
+Go Blog 对这次演讲的介绍概括道 [[Gerrand, 2013](#ref-gerrand-2013)]：
 
 ```text
 In programming, concurrency is the composition of independently executing
@@ -32,8 +32,8 @@ once. Parallelism is about doing lots of things at once.
   启动展开一个由大量线程组成的网格，这些线程执行同一段程序，通常各自处理一个数据元素。CUDA
   编程指南描述了它的执行方式 [[NVIDIA, n.d.b](#ref-nvidia-ndb)]：多处理器以 32 个线程为一组创建、管理、
   调度和执行线程，这样的一组称为 warp；warp 中的线程从同一个程序地址开始，
-  但各有自己的指令地址计数器与寄存器状态，可以独立分支；warp 每次执行一条公共指令，
-  32 个线程的执行路径一致时效率最高，若因数据相关的条件分支而分化，warp 会依次执行每条被选中的路径，
+  但各有自己的指令地址计数器与寄存器状态，可以独立分支；warp 每次执行一条公共指令，32
+  个线程的执行路径一致时效率最高，若因数据相关的条件分支而分化，warp 会依次执行每条被选中的路径，
   并屏蔽不在该路径上的线程。自 Volta 架构起，独立线程调度（Independent Thread Scheduling）
   为每个线程维护程序计数器与调用栈，使线程之间不论是否同属一个 warp 都能完全并发。编程模型是：
   为单个元素写好 kernel，再启动一整个网格。
@@ -63,8 +63,8 @@ func Scale(t accel.Thread, in []float32, out []float32) {
 把每次调用（invocation）映射为一个 goroutine，在语义上是可行的，accel 用于测试的「原样执行」
 形式就是这样做的。正式的执行路径则不把调用映射为 goroutine：编译器在屏障与子组汇合点处把 kernel
 切分为若干状态，每次调用只携带一个程序计数器与自己的局部变量，再由工作组调度器把所有活跃的调用逐一推进到下
-一个挂起点 [[Ou, 2026b](#ref-ou-2026b)]。这与 GPU 上一个工作组的线程在屏障处汇合、再继续执行的方式相对应。
-goroutine 在这里承担的是另一层工作：CPU 后端把一次 dispatch 的各个工作组同时分给多个核执行。
+一个挂起点 [[Ou, 2026b](#ref-ou-2026b)]。这与 GPU 上一个工作组的线程在屏障处汇合、再继续执行的方式相对应。goroutine
+在这里承担的是另一层工作：CPU 后端把一次 dispatch 的各个工作组同时分给多个核执行。
 
 ## 18.4.2 流与事件：设备自带的并发
 
@@ -72,8 +72,8 @@ goroutine 在这里承担的是另一层工作：CPU 后端把一次 dispatch �
 组织这种异步执行的是两个原语。
 
 **流（stream）是设备上的并发单元。** 同一个流中的操作按提交顺序执行；不同的流彼此独立，可以重叠。
-于是可以一边用流 A 把下一批数据拷入显存，一边用流 B 计算上一批的 kernel，使传输与计算并行。
-**事件（event）是流中的标记**：`cudaEventRecord` 在流中插入一个事件，`cudaStreamWaitEvent`
+于是可以一边用流 A 把下一批数据拷入显存，一边用流 B 计算上一批的 kernel，使传输与计算并行。**事
+件（event）是流中的标记**：`cudaEventRecord` 在流中插入一个事件，`cudaStreamWaitEvent`
 让另一个流中此后加入的命令等到该事件完成后再执行。CUDA 编程指南指出，借助多个流与 `cudaStreamWaitEvent`
 建立的跨流依赖，应用程序可以表达一个完整的有向无环图（DAG）[[NVIDIA, n.d.c](#ref-nvidia-ndc)]：
 
@@ -266,8 +266,8 @@ Roofline 模型为这类比较提供了一个简单的框架 [[Williams et al., 
 - <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. *Package simd（Go 1.27 实验特性，需
   GOEXPERIMENT=simd）.* 实现见 `src/simd/`，文档见 `simd/doc.go`：
   https://github.com/golang/go/tree/master/src/simd
-  可移植、向量长度无关的 SIMD 类型与操作，AVX/NEON 后端或纯 Go 模拟。
-  Go 1.27 源码：https://github.com/golang/go/blob/release-branch.go1.27/src/simd/doc.go
+  可移植、向量长度无关的 SIMD 类型与操作，AVX/NEON 后端或纯 Go 模拟。Go
+  1.27 源码：https://github.com/golang/go/blob/release-branch.go1.27/src/simd/doc.go
 - <a id="ref-harris-2012"></a>[Harris, 2012] Mark Harris. *How to Optimize Data Transfers in CUDA C/C++.*
   NVIDIA Technical Blog, 2012. https://developer.nvidia.com/blog/how-optimize-data-transfers-cuda-cc/
   设备内存带宽与主机到设备链路带宽的差距。
@@ -295,8 +295,8 @@ Roofline 模型为这类比较提供了一个简单的框架 [[Williams et al., 
 - <a id="ref-williams-et-al-2009"></a>[Williams et al., 2009] Samuel Williams, Andrew Waterman, David
   Patterson. *Roofline: An Insightful Visual Performance Model for Multicore Architectures.*
   Communications of the ACM, 52(4):65–76, 2009. https://doi.org/10.1145/1498765.1498785
-- 本书 [9 goroutine 调度器](../../part3concurrency/ch09sched/readme.md)、
-  [10 通道与 select](../../part3concurrency/ch10chan/readme.md)、
-  [18.1 跨越 FFI 边界](./boundary.md)、[18.2 调度器与阻塞的外部调用](./sched.md)、
-  [18.3 显存与垃圾回收的分界](./memory.md)、
-  [19.3 软件渲染与并行](../ch19graphics/software.md)。
+- 本书 [9 goroutine 调度器](../../part3concurrency/ch09sched/readme.md)、[10
+  通道与 select](../../part3concurrency/ch10chan/readme.md)、[18.1
+  跨越 FFI 边界](./boundary.md)、[18.2 调度器与阻塞的外部调用](./sched.md)、[18.3
+  显存与垃圾回收的分界](./memory.md)、[19.3
+  软件渲染与并行](../ch19graphics/software.md)。

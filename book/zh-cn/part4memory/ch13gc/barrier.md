@@ -49,8 +49,8 @@ writePointer(slot, ptr):
 这样保留下来、要到下一轮才能回收的对象称为浮动垃圾（floating garbage）。插入屏障同样会产生浮动垃圾，
 因为被置灰的新值可能随即又被覆盖。
 
-两类屏障都只把白色对象置灰，对象的颜色单调地由白变灰、由灰变黑，标记的总工作量因此以堆的大小为上界。
-Steele 的屏障则相反，它把黑色对象退回灰色，同一对象可能被反复扫描
+两类屏障都只把白色对象置灰，对象的颜色单调地由白变灰、由灰变黑，标记的总工作量因此以堆的大小为上界。Steele
+的屏障则相反，它把黑色对象退回灰色，同一对象可能被反复扫描
 [[Clements and Hudson, 2016](#ref-clements-hudson-2016)]。Pirinen 依据赋值器自身的颜色，
 对各种屏障做了系统的分类 [[Pirinen, 1998](#ref-pirinen-1998)]。
 
@@ -272,14 +272,14 @@ flowchart TD
   插入屏障与三色标记的奠基之作。
 - <a id="ref-go-authors-2017"></a>[Go Authors, 2017] The Go Authors. *Go 1.8 Release Notes.* 2017.
   https://go.dev/doc/go1.8
-- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/mbarrier.go、
-  src/runtime/mwbbuf.go、src/runtime/mgc.go（混合屏障实现、批量缓存与 `writeBarrier.enabled` / `gcphase`
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/mbarrier.go、src/runtime/mwbbuf.go、src/runtime/mgc.go（
+  混合屏障实现、批量缓存与 `writeBarrier.enabled` / `gcphase`
   门控）. Go 1.26 源码. https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
 - <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors.
   src/cmd/compile/internal/ssa/writebarrier.go. Go 1.26 源码.
   https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/ssa/writebarrier.go
-- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/runtime/mwbbuf.go、
-  src/runtime/asm_amd64.s （`wbBuf`、`gcWriteBarrier`）. Go 1.26 源码.
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/runtime/mwbbuf.go、src/runtime/asm_amd64.s（`wbBuf`、`gcWriteBarrier`）.
+  Go 1.26 源码.
   https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
 - <a id="ref-hudson-2015"></a>[Hudson, 2015] Richard Hudson. "Go GC: Prioritizing low latency and
   simplicity." *The Go Blog*, 2015. https://go.dev/blog/go15gc
@@ -299,5 +299,5 @@ flowchart TD
   Machines." *Journal of Systems and Software*, 11(3), 1990, 181-198.
   https://doi.org/10.1016/0164-1212(90)90084-Y
   删除屏障 / 起始快照的原始论文。
-- 本书 [13.1 垃圾回收的基本想法](./basic.md)、[13.6 标记终止阶段](./termination.md)、
-  [11.9 内存一致模型](../../part3concurrency/ch11sync/mem.md)。
+- 本书 [13.1 垃圾回收的基本想法](./basic.md)、[13.6 标记终止阶段](./termination.md)、[11.9
+  内存一致模型](../../part3concurrency/ch11sync/mem.md)。

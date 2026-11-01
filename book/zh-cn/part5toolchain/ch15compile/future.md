@@ -79,8 +79,8 @@ Go 1.17（2021 年 8 月）在 Linux、macOS 与 Windows 的 64 位 x86
 用剖析数据在热点调用处更积极地内联，代表性的程序提速约 3% 至 4%
 [[Go Authors, 2023a](#ref-go-authors-2023a)]。Go 1.21 宣布 PGO 可以正式使用：主包目录下的 `default.pgo`
 默认启用，多数程序提速 2% 至 7%；PGO 还开始对部分接口方法调用去虚化，为最常见的被调用者加上一次直接调用。
-同一版本的编译器本身也用 PGO 构建，构建速度因此最多提高 6% [[Go Authors, 2023b](#ref-go-authors-2023b)]。
-Go 1.22 使去虚化覆盖更多的调用，并让去虚化与内联交替进行，多数程序的提升达到 2% 至 14%
+同一版本的编译器本身也用 PGO 构建，构建速度因此最多提高 6% [[Go Authors, 2023b](#ref-go-authors-2023b)]。Go
+1.22 使去虚化覆盖更多的调用，并让去虚化与内联交替进行，多数程序的提升达到 2% 至 14%
 [[Go Authors, 2024](#ref-go-authors-2024)]。编译器中的实现见 [15.3](./optimize.md)。
 
 不依赖剖析数据的优化同样在推进。逃逸分析在 Go 1.13 重写之后，Go 1.25 与 1.26 又先后把大小可变的 `make` 与
@@ -175,10 +175,10 @@ Go 1.22 使去虚化覆盖更多的调用，并让去虚化与内联交替进行
 - <a id="ref-van-dijk-2011"></a>[van Dijk, 2011] Luuk van Dijk. gc: inlining (disabled without -l). Go
   commit a62722bba4, 2011. https://golang.org/cl/5400043
   随 Go 1 发布。
-- 本书 [2.3 调用约定与寄存器 ABI](../../part1overview/ch02asm/callconv.md)、
-  [3.3 语言的自举](../../part1overview/ch03life/bootstrap.md)、
-  [第 8 章 泛型](../../part2lang/ch08generics/readme.md)
-  （[8.1 泛型设计的演进](../../part2lang/ch08generics/history.md)、
-  [8.3 类型检查技术](../../part2lang/ch08generics/checker.md)、
-  [8.4 泛型的未来](../../part2lang/ch08generics/future.md)）、[15.2 中间表示](./ssa.md)、
-  [15.3 优化器](./optimize.md)。
+- 本书 [2.3 调用约定与寄存器 ABI](../../part1overview/ch02asm/callconv.md)、[3.3
+  语言的自举](../../part1overview/ch03life/bootstrap.md)、[第
+  8 章 泛型](../../part2lang/ch08generics/readme.md)（[8.1
+  泛型设计的演进](../../part2lang/ch08generics/history.md)、[8.3
+  类型检查技术](../../part2lang/ch08generics/checker.md)、[8.4
+  泛型的未来](../../part2lang/ch08generics/future.md)）、[15.2 中间表示](./ssa.md)、[15.3
+  优化器](./optimize.md)。

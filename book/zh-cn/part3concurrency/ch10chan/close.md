@@ -256,8 +256,8 @@ done channel 传递的不只是一个事件。内存模型规定，channel 的�
 `racerelease`，以及它为每个被唤醒的 goroutine 执行的 `raceacquireg`。
 
 关闭是一次性的。channel 不能重新打开，重复关闭会 panic（10.4.4），因此一个 channel 只能广播一次；
-需要多次通知时，只能每次准备一个新的 channel，或者改用条件变量（[11.4.6](../ch11sync/cond.md)）。
-`context` 的取消恰好是一次性的事件，与关闭的语义相合 [[Ajmani, 2014b](#ref-ajmani-2014b)]。每个可取消的
+需要多次通知时，只能每次准备一个新的 channel，或者改用条件变量（[11.4.6](../ch11sync/cond.md)）。`context`
+的取消恰好是一次性的事件，与关闭的语义相合 [[Ajmani, 2014b](#ref-ajmani-2014b)]。每个可取消的
 context 持有自己的 done channel，在第一次调用 `Done` 时才创建；`cancel` 在互斥锁内检查是否已经取消，
 保证只关闭一次，若还没有人调用过 `Done`，就存入一个预先关闭的共享 channel 代替；取消沿 context
 树向下传播时，每个后代关闭各自的 channel（[11.8](../ch11sync/context.md)）。
@@ -342,8 +342,8 @@ channel，接收方永远不应关闭」[[Go Authors, 2026d](#ref-go-authors-202
 channel 通知发送方，这正是 done channel 的另一种用途。由接收方关闭 done channel 并不违反惯例，因为在 done
 channel 上，接收方才是「停止」这条消息的发送方。
 
-一个 channel 有多个发送方时，任何一个发送方都不能独自关闭它，因为它无从知道其他发送方是否已经发完。
-Ajmani 给出的做法是另起一个 goroutine 负责关闭，它用 `sync.WaitGroup` 等所有发送方都返回之后再关闭
+一个 channel 有多个发送方时，任何一个发送方都不能独自关闭它，因为它无从知道其他发送方是否已经发完。Ajmani
+给出的做法是另起一个 goroutine 负责关闭，它用 `sync.WaitGroup` 等所有发送方都返回之后再关闭
 [[Ajmani, 2014a](#ref-ajmani-2014a)]。下面的 `merge` 把多个输入合并到一个输出 channel，同时用 `done` 支持
 提前退出：
 
@@ -423,6 +423,6 @@ flowchart TD
 - <a id="ref-randall-2018"></a>[Randall, 2018] Keith Randall. runtime: ignore races between close and
   len/cap. Go commit 83dfc3b001, 2018. https://go.dev/cl/135698
   修复 issue #27070，随 Go 1.11.1 与 Go 1.12 发布。
-- 本书 [10.3 收发与直接传递](./sendrecv.md)、[10.5 select 的实现](./select.md)、
-  [11.8 上下文](../../part3concurrency/ch11sync/context.md)、
-  [11.9 内存一致模型](../../part3concurrency/ch11sync/mem.md).
+- 本书 [10.3 收发与直接传递](./sendrecv.md)、[10.5 select 的实现](./select.md)、[11.8
+  上下文](../../part3concurrency/ch11sync/context.md)、[11.9
+  内存一致模型](../../part3concurrency/ch11sync/mem.md).

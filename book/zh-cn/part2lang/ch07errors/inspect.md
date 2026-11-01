@@ -97,8 +97,8 @@ func (e *wrapErrors) Error() string   { return e.msg }
 func (e *wrapErrors) Unwrap() []error { return e.errs }
 ```
 
-`Unwrap() []error` 是 Go 1.20 引入的第二种形式（Damien Neil，
-4a0a2b33df）[[Go Authors, 2023](#ref-go-authors-2023)]。同一次修改还加入了 `errors.Join`，
+`Unwrap() []error` 是 Go 1.20 引入的第二种形式（Damien Neil，4a0a2b33df）[[Go
+Authors, 2023](#ref-go-authors-2023)]。同一次修改还加入了 `errors.Join`，
 它把若干个错误合并为一个，丢弃其中的 `nil`，全部为 `nil` 时返回 `nil`；合并后的错误消息是各错误消息以换行
 符连接而成：
 
@@ -133,8 +133,8 @@ func (e *joinError) Unwrap() []error {
 `errors` 包的文档 [[Go Authors, 2026a](#ref-go-authors-2026a)]据此定义了**错误树**（error tree）：若错误
 `e` 的 `Unwrap` 方法返回 `w`，或返回的切片中含有 `w`，就称 `e` 包装了 `w`；反复调用 `Unwrap`
 得到的所有错误，连同 `e` 本身，构成一棵以 `e` 为根的树。实现了 `Unwrap() error` 的节点有一个子节点，
-实现了 `Unwrap() []error` 的节点有多个子节点，叶子是不再包装其他错误的错误，通常是哨兵错误或某个具体类型。
-`Is` 与 `As` 以先序、深度优先的顺序遍历这棵树。文档还规定，`Unwrap() []error` 返回的切片中不得含有 `nil`。
+实现了 `Unwrap() []error` 的节点有多个子节点，叶子是不再包装其他错误的错误，通常是哨兵错误或某个具体类型。`Is`
+与 `As` 以先序、深度优先的顺序遍历这棵树。文档还规定，`Unwrap() []error` 返回的切片中不得含有 `nil`。
 
 ```mermaid
 flowchart TD
@@ -277,15 +277,15 @@ func (e Errno) Is(target error) bool {
 ```
 
 因此 `errors.Is(err, fs.ErrNotExist)` 可以识别出包装在 `*fs.PathError` 中的 `ENOENT`。在此之前，
-同样的判断要靠 `os.IsNotExist` 这类函数，它们只认识 `os` 包自己的几种包装类型，无法穿过用户自定义的包装。
-Go 1.26 中 `os.IsNotExist` 的文档写明，该函数早于 `errors.Is`，只支持 `os` 包返回的错误，新代码应当使用
-`errors.Is(err, fs.ErrNotExist)` [[Amsterdam and Mills, 2019](#ref-amsterdam-mills-2019)]。文档还要求，
-`Is` 方法只应浅层地比较 `err` 与 `target`，不应对任何一方调用 `Unwrap`，遍历是 `errors.Is` 的事。
+同样的判断要靠 `os.IsNotExist` 这类函数，它们只认识 `os` 包自己的几种包装类型，无法穿过用户自定义的包装。Go
+1.26 中 `os.IsNotExist` 的文档写明，该函数早于 `errors.Is`，只支持 `os` 包返回的错误，新代码应当使用
+`errors.Is(err, fs.ErrNotExist)` [[Amsterdam and Mills, 2019](#ref-amsterdam-mills-2019)]。文档还要求，`Is`
+方法只应浅层地比较 `err` 与 `target`，不应对任何一方调用 `Unwrap`，遍历是 `errors.Is` 的事。
 
 ## 7.2.4 As 与 AsType
 
-`errors.As(err, target)` 在树中查找第一个可以赋值给 `*target` 的错误，找到后写入 `*target`。
-`target` 的类型是 `any`，因此 `As` 在运行时用 `internal/reflectlite` 检查参数并完成赋值：
+`errors.As(err, target)` 在树中查找第一个可以赋值给 `*target` 的错误，找到后写入 `*target`。`target`
+的类型是 `any`，因此 `As` 在运行时用 `internal/reflectlite` 检查参数并完成赋值：
 
 ```go
 // src/errors/wrap.go
@@ -498,11 +498,9 @@ PEP 3134（Ka-Ping Yee，2005 年）[[Yee, 2005](#ref-yee-2005)]加入了 `raise
   https://go.dev/issue/51945 （go1.26 泛型 `AsType` 的提案与讨论）
 - <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors.
   *src/errors/wrap.go、join.go、 src/fmt/errors.go.* https://github.com/golang/go/tree/master/src/errors
-  （本节实现的一手来源）；
-  Go 1.26：[src/errors/wrap.go](https://github.com/golang/go/blob/release-branch.go1.26/src/errors/wrap.go)、
-  [src/errors/join.go](https://github.com/golang/go/blob/release-branch.go1.26/src/errors/join.go)、
-  [src/fmt/errors.go](https://github.com/golang/go/blob/release-branch.go1.26/src/fmt/errors.go)；
-  Go 1.13 前的回退提交 https://go.googlesource.com/go/+/3e2c522d5c
+  （本节实现的一手来源）；Go
+  1.26：[src/errors/wrap.go](https://github.com/golang/go/blob/release-branch.go1.26/src/errors/wrap.go)、[src/errors/join.go](https://github.com/golang/go/blob/release-branch.go1.26/src/errors/join.go)、[src/fmt/errors.go](https://github.com/golang/go/blob/release-branch.go1.26/src/fmt/errors.go)；Go
+  1.13 前的回退提交 https://go.googlesource.com/go/+/3e2c522d5c
 - <a id="ref-amsterdam-mills-2019"></a>[Amsterdam and Mills, 2019] Jonathan Amsterdam, Bryan C. Mills.
   *Error Values: Frequently Asked Questions.* 2019. https://github.com/golang/go/wiki/ErrorValueFAQ
   （`Is`/`As`/`%w` 实际使用中的常见疑问与权威解答）
@@ -515,8 +513,8 @@ PEP 3134（Ka-Ping Yee，2005 年）[[Yee, 2005](#ref-yee-2005)]加入了 `raise
   2019. https://github.com/golang/go/issues/29934#issuecomment-490087200
 - <a id="ref-neil-2022"></a>[Neil, 2022] Damien Neil. *errors: add support for wrapping multiple errors
   (#53435).* 2022. https://go.dev/issue/53435
-- <a id="ref-oracle-2014"></a>[Oracle, 2014] Oracle. *Java Platform SE 8 API: Class Throwable*（异常链，
-  `getCause` 自 1.4 起）. https://docs.oracle.com/javase/8/docs/api/java/lang/Throwable.html
+- <a id="ref-oracle-2014"></a>[Oracle, 2014] Oracle. *Java Platform SE 8 API: Class Throwable*（异常链，`getCause`
+  自 1.4 起）. https://docs.oracle.com/javase/8/docs/api/java/lang/Throwable.html
 - <a id="ref-yee-2005"></a>[Yee, 2005] Ka-Ping Yee. *PEP 3134: Exception Chaining and Embedded
   Tracebacks.* 2005. https://peps.python.org/pep-3134/
 - <a id="ref-rust-2018"></a>[Rust, 2018] *RFC 2504: fix_error.* Rust RFCs, 2018.

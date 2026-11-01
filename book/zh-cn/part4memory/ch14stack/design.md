@@ -8,8 +8,8 @@ title: "14.1 连续栈的设计"
 操作系统在创建线程时一次性为它分配栈，此后栈的大小不再改变（几种系统的默认大小见 [14.5](./shrink.md)）。
 一个 Go 程序中同时存在的 goroutine 可达数十万个，若每个都预留这样一段栈，内存很快就会耗尽。Go 因此让每个
 goroutine 的栈从 2 KiB 开始，不够用时再扩大。这引出两个问题：运行时如何及时发现栈空间不足，以及如何扩大
-一段正在使用的栈。对后一个问题，Go 先后给出过两种回答。早期的实现在旧栈之外另接一段新的内存，称为分段栈；
-Go 1.3 与 Go 1.4 逐步改为分配一段更大的连续内存，把整个栈复制过去，称为连续栈。本节先介绍栈在运行时中的
+一段正在使用的栈。对后一个问题，Go 先后给出过两种回答。早期的实现在旧栈之外另接一段新的内存，称为分段栈；Go
+1.3 与 Go 1.4 逐步改为分配一段更大的连续内存，把整个栈复制过去，称为连续栈。本节先介绍栈在运行时中的
 表示以及用来检查栈空间的警戒线，再比较这两种方案，说明 Go 改换方案的理由与代价。分配、增长、拷贝与收缩的
 实现依次见 [14.2](./alloc.md) 至 [14.5](./shrink.md)。
 
@@ -53,12 +53,12 @@ type g struct {
 在 amd64 上，`stackguard0` 位于偏移 16 处，[2.4](../../part1overview/ch02asm/args.md) 中序言的第一条指令
 `CMPQ SP, 16(R14)` 比较的正是它。
 
-`stackguard0` 就是 [2.4](../../part1overview/ch02asm/args.md) 所说的警戒线。普通函数的序言把 SP 与它比较，
-SP 不高于警戒线时调用 `morestack` 扩栈（[14.3](./grow.md)）。它平时等于 `stack.lo + stackGuard`；
+`stackguard0` 就是 [2.4](../../part1overview/ch02asm/args.md) 所说的警戒线。普通函数的序言把 SP 与它比较，SP
+不高于警戒线时调用 `morestack` 扩栈（[14.3](./grow.md)）。它平时等于 `stack.lo + stackGuard`；
 运行时也可以把它改写为几个大于任何真实栈地址的特殊值，使下一次检查必然失败，这个 goroutine
 便会在下一次函数调用时进入运行时。`stackPreempt` 用于请求抢占
-（[2.4](../../part1overview/ch02asm/args.md)、[9.7](../../part3concurrency/ch09sched/preemption.md)）。
-`stackFork` 在 `fork` 与 `exec` 之间设置，这段时间里既不允许分配内存，也不允许扩栈，
+（[2.4](../../part1overview/ch02asm/args.md)、[9.7](../../part3concurrency/ch09sched/preemption.md)）。`stackFork`
+在 `fork` 与 `exec` 之间设置，这段时间里既不允许分配内存，也不允许扩栈，
 任何扩栈的尝试都会以「stack growth after fork」终止程序。`stackForceMove` 迫使栈在下一次检查时移动，
 只用于测试与调试 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
 
@@ -164,8 +164,8 @@ flowchart TB
 > 空间里完成系统调用……好消息是，我们这样做是为了最终只用拷贝栈来扩栈。一旦做到这一点，就可以把默认的
 > 栈大小从 8k 降到 4k，这足以弥补我们在这里失去的字节。
 
-余量是每个栈都要扣除的固定部分，最小栈越小，它所占的比例越大；而最小栈能否缩小，取决于扩栈是否廉价。
-Go 1.4 最终把最小栈降到了 2 KiB（14.1.4）。
+余量是每个栈都要扣除的固定部分，最小栈越小，它所占的比例越大；而最小栈能否缩小，取决于扩栈是否廉价。Go
+1.4 最终把最小栈降到了 2 KiB（14.1.4）。
 
 ## 14.1.3 分段栈与热分裂
 
@@ -191,8 +191,8 @@ Go 最早的实现采用**分段栈**（segmented stack）：栈空间不足时�
 文档用一个专门构造的测试度量了这一开销：在分段栈下，调用点恰好落在段边界上的版本耗时 5.37 秒，未落在边界
 上的版本耗时 1.26 秒；改用连续栈后，两个版本都是 1.26 秒。文档还指出了一个更一般的问题：在分段栈下，栈的
 分配与释放永远不会结束，栈的大小每次朝任一方向越过某个阈值，都需要额外的工作。由于调用点是否落在段边界
-上取决于整条调用链的栈帧大小，这类开销很难预料。文档测量了几个标准库基准测试对段大小的敏感程度：
-encoding/json 的 `BenchmarkEncode` 一直受到抱怨（issue #3787），html/template 的 `BenchmarkEscapedExecute`
+上取决于整条调用链的栈帧大小，这类开销很难预料。文档测量了几个标准库基准测试对段大小的敏感程度：encoding/json
+的 `BenchmarkEncode` 一直受到抱怨（issue #3787），html/template 的 `BenchmarkEscapedExecute`
 恰好在当时默认的 4096 字节段大小下表现异常。
 
 Go 1.2 把新 goroutine 的最小栈从 4 KiB 提高到 8 KiB。发布说明给出的理由是：
@@ -230,8 +230,8 @@ Go 1.2 把新 goroutine 的最小栈从 4 KiB 提高到 8 KiB。发布说明给�
 新栈取多大？文档建议按指数增长以限制复制的总量，并采用 2 的幂以方便分配器，实现时每次加倍。
 原型的测量显示了增长倍数的影响：在修改过的 peano 测试中，每次加倍比分段栈快 10%，每次增长 50% 只快 2%，
 每次增长 25% 反而慢 20%；文档也提醒，这个测试对增长倍数非常敏感，数字仅供参考。按倍数增长时，
-历次复制的字节数之和不超过最终栈的大小，扩栈的总代价与栈最终的大小成正比，
-[2.4](../../part1overview/ch02asm/args.md) 中的程序观察了这一过程。
+历次复制的字节数之和不超过最终栈的大小，扩栈的总代价与栈最终的大小成正比，[2.4](../../part1overview/ch02asm/args.md)
+中的程序观察了这一过程。
 
 Keith Randall 在 2014 年 2 月提交了按拷贝扩栈的实现，随 Go 1.3 发布
 [[Randall, 2014a](#ref-randall-2014a)]。当时运行时的大部分代码仍由 C 编写，而栈上有 C 函数的帧时无法拷贝，
@@ -254,10 +254,10 @@ Go 1.4 把运行时的大部分代码改写为 Go，栈上的帧从此全部可�
 设计文档也列出了连续栈的缺点。其一是虚拟内存的压力与碎片：栈越大，越难找到足够大的连续空间。文档考虑过
 折中方案，例如在 1 MiB 以内拷贝、超过后再分段，但认为为此同时保留两套机制并不值得。其二是对指向栈的指针的
 限制：所有指向栈区的指针都必须被准确掌握，将来若想允许其他形式的指向栈的指针，这一实现会成为障碍。其三，
-运行时中的 C 与汇编代码都需要审查，确保没有对栈指针做特殊的处理。第二个缺点很快成为语言实现的一条约束：
-Go 1.3 的发布说明规定，用 `unsafe` 把整数存入指针类型或把指针藏在整数中的程序都是非法的，因为栈的扩展与
-垃圾回收都依赖「只有指针类型的值才含有指针」这一假设 [[Go Authors, 2014a](#ref-go-authors-2014a)]。
-[14.4](./copy.md) 将回到这一点。
+运行时中的 C 与汇编代码都需要审查，确保没有对栈指针做特殊的处理。第二个缺点很快成为语言实现的一条约束：Go
+1.3 的发布说明规定，用 `unsafe` 把整数存入指针类型或把指针藏在整数中的程序都是非法的，因为栈的扩展与
+垃圾回收都依赖「只有指针类型的值才含有指针」这一假设 [[Go Authors, 2014a](#ref-go-authors-2014a)]。[14.4](./copy.md)
+将回到这一点。
 
 ## 14.1.5 小结
 
@@ -283,8 +283,8 @@ Go 1.3 的发布说明规定，用 `unsafe` 把整数存入指针类型或把指
   GCC 4.6.0 的发布日期（2011 年 3 月 25 日）。
 - <a id="ref-go-authors-2013a"></a>[Go Authors, 2013a] The Go Authors. *Go 1.2 Release Notes: Stack size.*
   2013. https://go.dev/doc/go1.2#stack_size
-- <a id="ref-go-authors-2013b"></a>[Go Authors, 2013b] The Go Authors. src/pkg/runtime/stack.h、stack.c、
-  asm_amd64.s. Go 1.2 源码. https://github.com/golang/go/tree/go1.2/src/pkg/runtime
+- <a id="ref-go-authors-2013b"></a>[Go Authors, 2013b] The Go Authors. src/pkg/runtime/stack.h、stack.c、asm_amd64.s.
+  Go 1.2 源码. https://github.com/golang/go/tree/go1.2/src/pkg/runtime
   最后一个只使用分段栈的版本：`Stktop`、`newstack`、`lessstack` 与 `oldstack`。
 - <a id="ref-go-authors-2014a"></a>[Go Authors, 2014a] The Go Authors. *Go 1.3 Release Notes: Stack
   management.* 2014. https://go.dev/doc/go1.3#stacks
@@ -299,9 +299,8 @@ Go 1.3 的发布说明规定，用 `unsafe` 把整数存入指针类型或把指
 - <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. src/runtime/runtime2.go. Go 1.26
   源码. https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/runtime2.go
   `stack`、`gobuf`、`g` 的栈相关字段。
-- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/internal/abi/stack.go、
-  src/internal/runtime/sys/consts.go、src/cmd/internal/obj/x86/obj6.go、
-  src/cmd/compile/internal/ir/abi.go. Go 1.26 源码.
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/internal/abi/stack.go、src/internal/runtime/sys/consts.go、src/cmd/internal/obj/x86/obj6.go、src/cmd/compile/internal/ir/abi.go.
+  Go 1.26 源码.
   https://github.com/golang/go/tree/release-branch.go1.26/src
 - <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. *Setting up and using gccgo.* 2026.
   https://go.dev/doc/install/gccgo
@@ -323,7 +322,7 @@ Go 1.3 的发布说明规定，用 `unsafe` 把整数存入指针类型或把指
   GCC 中分段栈的实现与设计取舍。
 - <a id="ref-thompson-2008"></a>[Thompson, 2008] Ken Thompson. segmented stack. Go commit 1f6828bcdf,
   2008. https://github.com/golang/go/commit/1f6828bcdf27a46160c12b859e6bab216cd11940
-- 本书 [9.3 MPG 模型与并发调度单元](../../part3concurrency/ch09sched/mpg.md)、
-  [9.7 协作与抢占](../../part3concurrency/ch09sched/preemption.md)、
-  [2.4 参数传递与栈帧布局](../../part1overview/ch02asm/args.md)、[14.3 栈的增长](./grow.md)、
-  [14.4 栈的拷贝与指针调整](./copy.md)（栈拷贝、指针修正与 `gobuf` 更新的细节）。
+- 本书 [9.3 MPG 模型与并发调度单元](../../part3concurrency/ch09sched/mpg.md)、[9.7
+  协作与抢占](../../part3concurrency/ch09sched/preemption.md)、[2.4
+  参数传递与栈帧布局](../../part1overview/ch02asm/args.md)、[14.3 栈的增长](./grow.md)、[14.4
+  栈的拷贝与指针调整](./copy.md)（栈拷贝、指针修正与 `gobuf` 更新的细节）。

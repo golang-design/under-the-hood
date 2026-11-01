@@ -70,8 +70,8 @@ goroutine 每次阻塞与唤醒，P 都要在线程之间移交。因此渲染 g
 
 ## 19.2.3 主线程
 
-有些平台的要求更严格：窗口与事件必须由进程的**主线程**处理，即进程启动时执行 `main` 的那条线程。
-GLFW 文档说明了这一约束的范围：
+有些平台的要求更严格：窗口与事件必须由进程的**主线程**处理，即进程启动时执行 `main` 的那条线程。GLFW
+文档说明了这一约束的范围：
 
 ```text
 Initialization, termination, event processing and the creation and
@@ -121,8 +121,8 @@ func main() {
 所有 `init` 函数都在 `doInit` 中执行，因此都运行在主线程上。运行时内部的 `lockOSThread` 与用户调用的
 `LockOSThread` 分别计数，只有两者都归零时锁定才解除（9.5）。若某个 `init` 函数调用了
 `runtime.LockOSThread`，运行时在初始化结束时解除的只是自己那一层，用户的锁定仍然有效，`main.main`
-于是也在主线程上运行。`LockOSThread` 的文档明确写出了这一用法 [[Go Authors, 2026](#ref-go-authors-2026)]，
-go-gl/glfw 的示例程序也以此开头 [[go-gl, n.d.](#ref-go-gl-nd)]。把它与上一小节的渲染 goroutine 结合起来，
+于是也在主线程上运行。`LockOSThread` 的文档明确写出了这一用法 [[Go Authors, 2026](#ref-go-authors-2026)]，go-gl/glfw
+的示例程序也以此开头 [[go-gl, n.d.](#ref-go-gl-nd)]。把它与上一小节的渲染 goroutine 结合起来，
 程序的骨架如下：
 
 ```go
@@ -287,7 +287,7 @@ CPU 上计算像素，并行由 goroutine 与 SIMD 提供，不再经过图形�
 - <a id="ref-purego-nd"></a>[purego, n.d.] The Ebitengine Authors. *purego: A library for calling C
   functions from Go without Cgo.* https://github.com/ebitengine/purego
   不经 cgo 调用 C 函数；项目缘起于 Ebitengine 的纯 Go 构建。
-- 本书 [9.5 线程管理](../../part3concurrency/ch09sched/thread.md)、
-  [15.6 cgo](../../part5toolchain/ch15compile/cgo.md)、
-  [18.2 调度器与阻塞的外部调用](../ch18gpu/sched.md)、[19.1 渲染管线与 Go 的位置](./pipeline.md)、
-  [19.3 软件渲染与并行](./software.md)。
+- 本书 [9.5 线程管理](../../part3concurrency/ch09sched/thread.md)、[15.6
+  cgo](../../part5toolchain/ch15compile/cgo.md)、[18.2
+  调度器与阻塞的外部调用](../ch18gpu/sched.md)、[19.1 渲染管线与 Go 的位置](./pipeline.md)、[19.3
+  软件渲染与并行](./software.md)。

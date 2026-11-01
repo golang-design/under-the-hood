@@ -407,8 +407,8 @@ Go 为通信的管道命名：goroutine 彼此不知道对方是谁，持有 cha
 - <a id="ref-milner-et-al-1992"></a>[Milner et al., 1992] Robin Milner, Joachim Parrow, David Walker. "A
   Calculus of Mobile Processes, I & II." *Information and Computation*, 100(1): 1-77, 1992.（π-演算，
   通道名可传递的移动性）
-- <a id="ref-inmos-1984"></a>[INMOS, 1984] INMOS Ltd. *occam Programming Manual.* Prentice-Hall, 1984.
-  （occam 的 channel 与 ALT）
+- <a id="ref-inmos-1984"></a>[INMOS, 1984] INMOS Ltd. *occam Programming Manual.* Prentice-Hall, 1984.（occam
+  的 channel 与 ALT）
 - <a id="ref-pike-2012"></a>[Pike, 2012] Rob Pike. *Concurrency Is Not Parallelism.* Heroku Waza, 2012;
   The Go Blog, 2013-01-16. https://go.dev/blog/waza-talk
 - <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *Frequently Asked Questions: What

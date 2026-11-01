@@ -62,8 +62,8 @@ func _Cfunc_add(p0 _Ctype_int, p1 _Ctype_int) (r1 _Ctype_int) {
 `_cgo_runtime_cgocall` 经 `//go:linkname` 指向 `runtime.cgocall`，它接收两个参数：C 一侧桩函数（stub）
 的地址，以及参数帧的地址。桩函数名中的十六进制串是 cgo 根据包的导入路径与源文件内容算出的散列值，
 用以区分不同包生成的符号。`//go:cgo_unsafe_args` 使这个函数固定采用栈传参的
-ABI0（[2.3](../../part1overview/ch02asm/callconv.md)），参数 `p0`、`p1` 与结果 `r1` 因此在栈上依次排列，
-`&p0` 就是整个参数帧的起点；出于同一原因，编译器也不会内联这个函数。帧的地址以 `uintptr`
+ABI0（[2.3](../../part1overview/ch02asm/callconv.md)），参数 `p0`、`p1` 与结果 `r1` 因此在栈上依次排列，`&p0`
+就是整个参数帧的起点；出于同一原因，编译器也不会内联这个函数。帧的地址以 `uintptr`
 而非指针的形式传出，`cmd/cgo` 在生成这一行的代码旁注明，这是为了对逃逸分析隐藏这次取址
 [[Go Authors, 2026c](#ref-go-authors-2026c)]，参数帧因此可以留在 goroutine 的栈上。
 
@@ -213,8 +213,8 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 
 `incgo` 与 `ncgo` 记录这个 M 正在执行 C 代码，供信号处理与执行跟踪等使用。真正的工作由其余三步完成。
 
-**进入「系统调用」。** 在调度器看来，cgo 调用与系统调用没有区别：执行流离开了 Go 代码，何时返回无从预知。
-`entersyscall` 把 goroutine 置为 `_Gsyscall`，保存此刻的程序计数器与栈指针，但并不释放 P。C
+**进入「系统调用」。** 在调度器看来，cgo 调用与系统调用没有区别：执行流离开了 Go 代码，何时返回无从预知。`entersyscall`
+把 goroutine 置为 `_Gsyscall`，保存此刻的程序计数器与栈指针，但并不释放 P。C
 函数很快返回时，`exitsyscall` 发现 P 仍在，直接继续执行；C 函数迟迟不返回时，系统监控线程 sysmon 会取走
 P，交给另一个 M 去运行其他 goroutine。这套快慢两条路径以及 Go 1.26 对它的简化见
 [9.5.4](../../part3concurrency/ch09sched/thread.md)。因此，一个阻塞的 C 调用不会妨碍其他 goroutine 运行，
@@ -747,9 +747,9 @@ goroutine 的栈可能在 C 调用期间移动，这一点贯穿了整个设计�
   noescape/nocallback annotations.* Go issue #56378, 2023.
   https://github.com/golang/go/issues/56378#issuecomment-1425002635
   说明 `nocallback` 为何不蕴含 `noescape`。
-- 本书 [2.3 调用约定与寄存器 ABI](../../part1overview/ch02asm/callconv.md)（ABI0 与寄存器 ABI）、
-  [9.5 线程管理](../../part3concurrency/ch09sched/thread.md)（系统调用与 P 的移交、extra M）、
-  [13.7 安全点分析](../../part4memory/ch13gc/safe.md)（栈映射）、
-  [14.4 栈的拷贝与指针调整](../../part4memory/ch14stack/copy.md)（栈会移动，故 C 不能持有栈地址）、
-  [15.4 指针检查器](./unsafe.md)、[15.5 逃逸分析](./escape.md)、
-  [18.1 跨越 FFI 边界](../../part6hetero/ch18gpu/boundary.md)。
+- 本书 [2.3 调用约定与寄存器 ABI](../../part1overview/ch02asm/callconv.md)（ABI0 与寄存器 ABI）、[9.5
+  线程管理](../../part3concurrency/ch09sched/thread.md)（系统调用与 P 的移交、extra M）、[13.7
+  安全点分析](../../part4memory/ch13gc/safe.md)（栈映射）、[14.4
+  栈的拷贝与指针调整](../../part4memory/ch14stack/copy.md)（栈会移动，故 C 不能持有栈地址）、[15.4
+  指针检查器](./unsafe.md)、[15.5 逃逸分析](./escape.md)、[18.1
+  跨越 FFI 边界](../../part6hetero/ch18gpu/boundary.md)。

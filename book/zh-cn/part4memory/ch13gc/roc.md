@@ -5,8 +5,8 @@ title: "13.9 请求假设与事务制导回收"
 
 # 13.9 请求假设与事务制导回收
 
-在尝试分代回收（[13.8](./generational.md)）之前，Go 团队先试验了另一种利用对象寿命规律的回收算法。
-2016 年，Rick Hudson 与 Austin Clements 提出了请求制导回收（request oriented collector，ROC）。
+在尝试分代回收（[13.8](./generational.md)）之前，Go 团队先试验了另一种利用对象寿命规律的回收算法。2016
+年，Rick Hudson 与 Austin Clements 提出了请求制导回收（request oriented collector，ROC）。
 这一算法最初称为事务制导回收（transaction oriented collector，TOC），后来采纳 Randall Farmer 的建议，
 为避免与数据库领域 ACID 意义上的事务相混淆而更名
 [[Hudson and Clements, 2016](#ref-hudson-clements-2016)]，本节标题沿用的是旧名。试验在 `dev.garbage`
@@ -123,8 +123,8 @@ func gcmarkwb_m(slot *uintptr, ptr uintptr) {
 
 `writeBarrier.mark` 对应原有的标记屏障，只在回收的标记阶段开启；`writeBarrier.roc` 则在启用 ROC
 时始终开启。四种写入中，只有从已发布位置指向局部对象的写入需要发布。当时 `mbarrier.go` 的注释已经说明，
-写屏障在发布之前执行：它发生在 `*slot = ptr` 之前，而正是这次写入可能让其他 goroutine 第一次看到 `ptr`。
-ROC 的正确性依赖这一次序。`publish` 的传递遍历最初写成递归，但递归会在不合适的时机引起栈增长，
+写屏障在发布之前执行：它发生在 `*slot = ptr` 之前，而正是这次写入可能让其他 goroutine 第一次看到 `ptr`。ROC
+的正确性依赖这一次序。`publish` 的传递遍历最初写成递归，但递归会在不合适的时机引起栈增长，
 于是改为借用标记阶段的工作缓冲区，以迭代方式完成 [[Hudson, 2016f](#ref-hudson-2016f)]。
 
 写屏障只覆盖了经由指针写入的共享。在 Go 中，一个对象还有许多途径被其他 goroutine 看到，
@@ -176,8 +176,8 @@ Erlang 则从语言语义上消除了判定的需要。进程之间不共享任�
 [[Erlang/OTP, 2026](#ref-erlang-otp-2026)]。
 
 三者分别把判定交给了语言语义（Erlang 禁止共享）、类型系统（ML 区分可变与不可变）和运行时写屏障（Java
-线程局部堆与 ROC）。Go 允许 goroutine 之间共享可变对象，语言与类型都无法保证某个对象只属于某个 goroutine，
-ROC 只能走第三条路，并为此在每次指针写入上付费。Go 的编译器以另一种方式回答了相近的问题：
+线程局部堆与 ROC）。Go 允许 goroutine 之间共享可变对象，语言与类型都无法保证某个对象只属于某个 goroutine，ROC
+只能走第三条路，并为此在每次指针写入上付费。Go 的编译器以另一种方式回答了相近的问题：
 逃逸分析（[15.5](../../part5toolchain/ch15compile/escape.md)）在编译期保守地判定对象是否会离开其所在的函
 数，判定为不逃逸的对象直接分配在栈上，运行时不付出任何代价，但只能处理它能够证明的情形。
 
@@ -218,8 +218,8 @@ ROC 只能走第三条路，并为此在每次指针写入上付费。Go 的编�
   Go CL 33316, 2016. https://go.dev/cl/33316
 - <a id="ref-hudson-2016e"></a>[Hudson, 2016e] Rick Hudson. [dev.garbage] runtime: publish channel
   elements for ROC. Go CL 25305, 2016. https://go.dev/cl/25305
-同一系列的发布处理还有 CL 25304（新 goroutine 的栈）、25306（终结器）、25307（剖析记录）、25308（defer）、
-33307（原子操作）、33317（`memmove`）与 33320（map 溢出桶的追加）。
+同一系列的发布处理还有 CL 25304（新 goroutine 的栈）、25306（终结器）、25307（剖析记录）、25308（defer）、33307（
+原子操作）、33317（`memmove`）与 33320（map 溢出桶的追加）。
 - <a id="ref-hudson-2016f"></a>[Hudson, 2016f] Rick Hudson. [dev.garbage] runtime: TOC write barrier code.
   Go CL 22343, 2016. https://go.dev/cl/22343
   算法尚名为 TOC 时的写屏障实现。
@@ -235,5 +235,5 @@ ROC 只能走第三条路，并为此在每次指针写入上付费。Go 的编�
 - <a id="ref-taylor-2017"></a>[Taylor, 2017] Ian Lance Taylor. Re: Why golang garbage-collector not
   implement Generational and Compact gc? golang-nuts, 2017.
   https://groups.google.com/g/golang-nuts/c/KJiyv2mV2pU/m/wdBUH1mHCAAJ
-- 本书 [13.2 写屏障技术](./barrier.md)、[13.8 分代假设与代际回收](./generational.md)、
-  [13.12 过去、现在与未来](./history.md)。
+- 本书 [13.2 写屏障技术](./barrier.md)、[13.8 分代假设与代际回收](./generational.md)、[13.12
+  过去、现在与未来](./history.md)。

@@ -56,14 +56,14 @@ Go 1.3 及以前，运行时主要以 C 写成，分配器分布在 `malloc.goc`
 同月，Randall 写出了 `mallocgc` 的 Go 版本 `gomallocgc`；提交说明称，当时只有少数调用改用了它，C
 代码中的大量调用仍然使用原来的 C 版本 [[Randall, 2014](#ref-randall-2014)]。Go 1.4 的发布说明解释了迁移的
 原因：运行时的大量代码由 C 翻译为 Go，回收器由此能够扫描运行时自身的栈，准确地获知哪些变量仍然存活
-[[Go Authors, 2014a](#ref-go-authors-2014a)]。不过，Go 1.4 发布时，分配器的主体仍是 C：源码树中，
-`malloc.go` 与 `malloc.c`、`mheap.c`、`mcentral.c`、`mcache.c` 并存。
+[[Go Authors, 2014a](#ref-go-authors-2014a)]。不过，Go 1.4 发布时，分配器的主体仍是 C：源码树中，`malloc.go`
+与 `malloc.c`、`mheap.c`、`mcentral.c`、`mcache.c` 并存。
 
 2014 年 11 月，Cox 在 dev.cc 分支上把分配器与回收器整体转换为 Go。提交说明称，转换由自动化工具完成，
 此后只做了使代码能够编译和运行所必需的修改 [[Cox, 2014](#ref-cox-2014)]。这一分支随 Go 1.5 发布，
 发布说明宣布，编译器与运行时已完全以 Go（另加少量汇编）写成，C 不再参与实现
-[[Go Authors, 2015a](#ref-go-authors-2015a)]。机械翻译保留了 C 代码的结构与注释，至今仍能看到当时的痕迹：
-`mcentral.go` 的头注释仍以 `c->nonempty` 与 `c->empty` 描述两条早已不存在的链表
+[[Go Authors, 2015a](#ref-go-authors-2015a)]。机械翻译保留了 C 代码的结构与注释，至今仍能看到当时的痕迹：`mcentral.go`
+的头注释仍以 `c->nonempty` 与 `c->empty` 描述两条早已不存在的链表
 （[12.2.3](./component.md)）。
 
 以 Go 编写 Go 的分配器，带来了一项 C 时代不存在的约束：分配器不能依赖它自己管理的堆。C
@@ -79,10 +79,10 @@ objects are part of the memory manager itself or if they must be
 allocated in situations where the caller may not have a P.
 ```
 
-`mheap`、`mspan`、`mcentral`、`heapArena` 等结构或者作为全局变量存在，或者由 `fixalloc`、
-`persistentalloc` 等分配在非托管内存中（[12.2.5](./component.md)），并内嵌 `sys.NotInHeap`。
-对于这样的类型，编译器禁止以 `new`、`make` 或隐式的方式在堆上分配，写入指向它们的指针时也可以省去写屏障。
-`NotInHeap` 的注释称，后一点才是这一机制真正的用处：调度器与分配器中的一些地方不允许出现写屏障，
+`mheap`、`mspan`、`mcentral`、`heapArena` 等结构或者作为全局变量存在，或者由 `fixalloc`、`persistentalloc`
+等分配在非托管内存中（[12.2.5](./component.md)），并内嵌 `sys.NotInHeap`。
+对于这样的类型，编译器禁止以 `new`、`make` 或隐式的方式在堆上分配，写入指向它们的指针时也可以省去写屏障。`NotInHeap`
+的注释称，后一点才是这一机制真正的用处：调度器与分配器中的一些地方不允许出现写屏障，
 另一些地方则不值得为它付出开销 [[Go Authors, 2026b](#ref-go-authors-2026b)]。`//go:nowritebarrierrec`
 则要求编译器检查，一个函数及其递归调用的所有函数中都不出现写屏障
 [[Go Authors, 2026a](#ref-go-authors-2026a)]。C 语言天然满足的条件，在 Go 中变成了由编译器逐项检查的规则。
@@ -117,8 +117,8 @@ CPU 时间，换来的是堆的显著缩小，在 32 位平台上尤为明显 [[
 
 逐行对照可以看出，此后的每一次改写，都把某项信息从按字记录的位图中移走，存放到与它的变化粒度相符的位置。
 
-对象的边界由所在 span 的对象大小决定。同一个 span 中的对象大小相同，边界可以由地址算出，不必逐字记录。
-Hudson 去掉边界位时的考虑是，查找边界不再需要读取分散在堆中的位图，可以减少缓存缺失；当时测得 garbage
+对象的边界由所在 span 的对象大小决定。同一个 span 中的对象大小相同，边界可以由地址算出，不必逐字记录。Hudson
+去掉边界位时的考虑是，查找边界不再需要读取分散在堆中的位图，可以减少缓存缺失；当时测得 garbage
 基准变慢 2%，但位图由此可以缩减到每字 2 位 [[Hudson, 2015](#ref-hudson-2015)]。
 
 标记状态与分配状态属于对象而不属于字，每个对象 1 位即可。它们的生命周期也与指针信息不同：
@@ -130,8 +130,8 @@ Hudson 去掉边界位时的考虑是，查找边界不再需要读取分散在�
 都要读取它的堆位图才能判断它是否无须扫描；含指针与不含指针的对象混在一起，还降低了每页中可扫描对象的密度，
 加重了 TLB 的负担 [[Clements, 2017](#ref-clements-2017)]。
 
-指针布局由类型决定。同一类型的所有对象共享一份类型描述，堆位图却要在每次分配时为每个对象展开写入一份副本。
-Go 1.22 让大于 512 字节的对象只保存一个指向类型描述的指针，即分配头，回收器扫描时再依类型展开
+指针布局由类型决定。同一类型的所有对象共享一份类型描述，堆位图却要在每次分配时为每个对象展开写入一份副本。Go
+1.22 让大于 512 字节的对象只保存一个指向类型描述的指针，即分配头，回收器扫描时再依类型展开
 （[12.1.4](./basic.md)）[[Knyszek, 2023a](#ref-knyszek-2023a); [Go Authors, 2024](#ref-go-authors-2024)]。
 较小的对象仍使用位图，因为对它们而言，每个对象多出 8 字节比位图更贵。Go 1.24 又删除了 GC 程序，即编译器
 为大类型生成的压缩形式的指针信息，改由运行时按需构造位图 [[Randall, 2024](#ref-randall-2024)]。
@@ -157,8 +157,8 @@ Go 1.22 让大于 512 字节的对象只保存一个指向类型描述的指针�
 此后几个版本的改动，大体可以归结为关注点的两次转移。第一次是由地址空间转向物理内存。Go 1.11
 把堆改为稀疏的区域，取消了堆大小的上限 [[Go Authors, 2018](#ref-go-authors-2018)]；Go 1.12
 更积极地向操作系统归还内存，尤其是在大分配无法重用现有堆空间时
-[[Go Authors, 2019a](#ref-go-authors-2019a)]；Go 1.13 加入了后台 scavenger（[12.7.7](./pagealloc.md)）。
-Go 1.14 重写页分配器，使它在 `GOMAXPROCS` 较大时的锁争用显著减少
+[[Go Authors, 2019a](#ref-go-authors-2019a)]；Go 1.13 加入了后台 scavenger（[12.7.7](./pagealloc.md)）。Go
+1.14 重写页分配器，使它在 `GOMAXPROCS` 较大时的锁争用显著减少
 [[Go Authors, 2020](#ref-go-authors-2020); [Knyszek, 2019](#ref-knyszek-2019)]。设计文档还指出，
 有了按页记录的位图，scavenger 的工作在概念上简单得多：结合分配位图与记录归还状态的位图，即可找出连续的、
 空闲而未归还的页，以一次系统调用归还 [[Knyszek, 2019](#ref-knyszek-2019)]（[12.7](./pagealloc.md)）。
@@ -185,8 +185,8 @@ Linux 上归还方式的一次反复说明，可观测性与效率同样重要�
 在这些函数中尺寸类是编译期常量（[12.1.4](./basic.md)）。
 
 回收一侧，Green Tea 以 span 为单位累积并扫描对象
-[[Knyszek and Clements, 2025](#ref-knyszek-clements-2025)]，它要求分配器在单页 span 的末尾为标记预留空间，
-span 中的槽位数因此少于尺寸类表中的数目（[12.2.1](./component.md)、[13.11](../ch13gc/greentea.md)）。
+[[Knyszek and Clements, 2025](#ref-knyszek-clements-2025)]，它要求分配器在单页 span 的末尾为标记预留空间，span
+中的槽位数因此少于尺寸类表中的数目（[12.2.1](./component.md)、[13.11](../ch13gc/greentea.md)）。
 分配器摆放对象的方式，直接影响回收器能否利用局部性。
 
 还有一项尝试让 `free` 以另一种形式回到了运行时。Go 1.26 加入了 `runtime.freegc`，由
@@ -226,8 +226,8 @@ span 中的槽位数因此少于尺寸类表中的数目（[12.2.1](./component.
 Go 1.7 在 span 内以位图取代的自由表，以本地缓存中一张旁路链表的形式重新出现；`allocBits`
 仍然只由清扫器改写（[12.5.5](./smallalloc.md)）。对象一经释放即可重用，无须等待下一轮回收。提交说明报告，
 试验性地让 `strings.Builder` 在扩容之后释放旧的缓冲区，写入次数越多，收益越大，最多快了约一倍；同时声明，
-标准库不会显式调用 `freegc`，用户代码也永远无法调用它 [[thepudds, 2025](#ref-thepudds-2025)]。Go 1.26 中，
-`freegc` 只处理 16 字节至 32 KiB 减去分配头大小之间的不含指针对象，含指针的对象留待后续的提交。
+标准库不会显式调用 `freegc`，用户代码也永远无法调用它 [[thepudds, 2025](#ref-thepudds-2025)]。Go 1.26 中，`freegc`
+只处理 16 字节至 32 KiB 减去分配头大小之间的不含指针对象，含指针的对象留待后续的提交。
 
 ## 12.9.5 展望
 
@@ -365,5 +365,5 @@ Go 1.7 在 span 内以位图取代的自由表，以本地缓存中一张旁路�
 - <a id="ref-ziak-2013"></a>[Ziak, 2013] Jan Ziak. runtime: interpret type information during garbage
   collection. Go commit 9204eb4d3c, 2013. https://go.dev/cl/6945069
   随 Go 1.1 发布。
-- 本书 [12.1 设计原则](./basic.md)、[12.2 组件](./component.md)、[12.7 页分配器](./pagealloc.md)、
-  [第 13 章 垃圾回收器](../ch13gc)、[13.12 过去、现在与未来](../ch13gc/history.md).
+- 本书 [12.1 设计原则](./basic.md)、[12.2 组件](./component.md)、[12.7 页分配器](./pagealloc.md)、[第
+  13 章 垃圾回收器](../ch13gc)、[13.12 过去、现在与未来](../ch13gc/history.md).
