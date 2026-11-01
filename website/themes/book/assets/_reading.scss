@@ -944,6 +944,7 @@ html[data-toc="open"] .book-toc { display: block; }
   color: var(--fg);
   text-align: center;        // center the inline SVG
   overflow-x: auto;
+  font-family: var(--font-sans); // the family mermaid-init.js measures labels in
   font-size: inherit;        // not the code-block mono sizing
 
   svg {

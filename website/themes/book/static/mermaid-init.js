@@ -14,9 +14,18 @@
     return v || fallback;
   }
 
-  // Map the book's design tokens onto mermaid's theme variables. The cluster
-  // and edge-label entries matter: without them the subgraph box and the 是/否
-  // labels keep mermaid's stock yellow/white and clash in dark mode.
+  // Mermaid sizes each node from the label text it measures in a hidden
+  // element, so the labels must be drawn in the font it measured with. Name
+  // the family explicitly: "inherit" resolves to the body font when measuring
+  // but to the code font inside <pre>, and the wider code font gets clipped.
+  function fontFamily() {
+    return token("--font-sans", "system-ui, sans-serif");
+  }
+
+  // Map the book's design tokens onto mermaid's theme variables. The cluster,
+  // edge-label and note entries matter: without them the subgraph box, the
+  // 是/否 labels and the notes keep mermaid's stock yellow/white and clash in
+  // dark mode.
   function themeVariables() {
     var surface = token("--surface", "#f7f4ee");
     var bg = token("--bg", "#ece8df");
@@ -27,7 +36,7 @@
     return {
       darkMode: document.documentElement.classList.contains("dark"),
       background: surface,
-      fontFamily: "inherit",
+      fontFamily: fontFamily(),
       primaryColor: surface,
       primaryBorderColor: accent,
       primaryTextColor: fg,
@@ -48,7 +57,11 @@
       edgeLabelBackground: surface,
       labelBackground: surface,
       labelBoxBorderColor: border,
-      labelTextColor: fg
+      labelTextColor: fg,
+      // state and sequence diagram notes, stock yellow otherwise
+      noteBkgColor: bg,
+      noteBorderColor: border,
+      noteTextColor: fg
     };
   }
 
@@ -65,8 +78,10 @@
     });
 
     // Serialize renders so a theme toggle mid-render can't overlap (mermaid.run
-    // is async). Each call enqueues exactly one re-render.
-    var chain = Promise.resolve();
+    // is async). Each call enqueues exactly one re-render. The first waits for
+    // the web fonts, which load with font-display: swap; measuring with the
+    // fallback font would size the nodes for the wrong glyphs.
+    var chain = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
     function render() {
       chain = chain
         .then(function () {
@@ -75,7 +90,7 @@
             theme: "base",
             themeVariables: themeVariables(),
             securityLevel: "strict",
-            fontFamily: "inherit",
+            fontFamily: fontFamily(),
             flowchart: { htmlLabels: true, useMaxWidth: true }
           });
           blocks.forEach(function (el) {
