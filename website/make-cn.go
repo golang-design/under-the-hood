@@ -14,6 +14,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 )
 
 const (
@@ -101,6 +109,9 @@ func walkDocs(path string, info os.FileInfo, err error) error {
 	if err != nil {
 		panic(fmt.Errorf("walkDocs: cannot read: %v", err))
 	}
+	// rules:
+	//   - join hard-wrapped lines between Chinese characters
+	data = joinCJKLines(data)
 
 	dst := dstDoc + strings.TrimPrefix(path, srcDoc)
 	// rules:
@@ -195,7 +206,7 @@ func handleREADME() {
 		panic(fmt.Errorf("handleREADME: cannot read: %v", err))
 	}
 
-	data = append([]byte(head), data...)
+	data = append([]byte(head), joinCJKLines(data)...)
 
 	// HACKs
 	base := "https://golang.design/under-the-hood/"
@@ -355,4 +366,138 @@ func main() {
 
 	// 4. walk all assets once (shared across languages)
 	filepath.Walk(srcAssets, walkAssets)
+}
+
+// joinCJKLines removes the soft line breaks that a browser would render as a
+// space inside Chinese text. The source is hard-wrapped: a line break between
+// two East Asian wide characters, or next to full-width punctuation, stands for
+// no space at all, while a break next to Latin text sits where the source had
+// a space (Go 1.26 为基准) and is kept. Goldmark finds the soft breaks, so
+// code, math blocks, tables, HTML and front matter are left alone.
+//
+// Hugo's CJK extension (markup.goldmark.extensions.cjk) cannot do this: it
+// drops every break before a code span, link or emphasis, keeps every break
+// after one, and counts full-width punctuation such as ， as narrow.
+func joinCJKLines(data []byte) []byte {
+	off := 0
+	if bytes.HasPrefix(data, []byte("---\n")) {
+		if i := bytes.Index(data[3:], []byte("\n---\n")); i >= 0 {
+			off = 3 + i + len("\n---\n")
+		}
+	}
+	src := data[off:]
+	doc := goldmark.New(goldmark.WithExtensions(extension.GFM, extension.Footnote, extension.DefinitionList)).
+		Parser().Parse(text.NewReader(src))
+
+	var cuts [][2]int // byte ranges of src to delete, in source order
+	ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		t, ok := n.(*ast.Text)
+		if !entering || !ok || !t.SoftLineBreak() || t.NextSibling() == nil {
+			return ast.WalkContinue, nil
+		}
+		pos := t.Segment.Stop
+		l, lok := lastVisible(t, src)
+		if t.Segment.Len() == 0 {
+			// The line ends with a code span, link or emphasis; goldmark
+			// leaves an empty text node at the line break.
+			pos = t.Segment.Start
+			l, lok = lastVisible(t.PreviousSibling(), src)
+		}
+		r, rok := firstVisible(t.NextSibling(), src)
+		if !lok || !rok || !(cjkWide(l) && cjkWide(r) || cjkPunct(l) || cjkPunct(r)) {
+			return ast.WalkContinue, nil
+		}
+		// Delete the trailing blanks, the newline, and the next line's indent
+		// (and its > markers inside a block quote).
+		end := pos
+		for end < len(src) && (src[end] == ' ' || src[end] == '\t') {
+			end++
+		}
+		if end == len(src) || src[end] != '\n' {
+			return ast.WalkContinue, nil
+		}
+		end++
+		quote := inBlockquote(t)
+		for end < len(src) && (src[end] == ' ' || src[end] == '\t' || src[end] == '>' && quote) {
+			end++
+		}
+		cuts = append(cuts, [2]int{pos, end})
+		return ast.WalkContinue, nil
+	})
+	if len(cuts) == 0 {
+		return data
+	}
+	out := append([]byte{}, data[:off]...)
+	last := 0
+	for _, c := range cuts {
+		out = append(out, src[last:c[0]]...)
+		last = c[1]
+	}
+	return append(out, src[last:]...)
+}
+
+// lastVisible returns the last character a reader sees in n.
+func lastVisible(n ast.Node, src []byte) (rune, bool) {
+	switch n := n.(type) {
+	case nil, *ast.Image, *ast.RawHTML, *ast.AutoLink:
+		return 0, false
+	case *ast.Text:
+		return lastRune(n.Segment.Value(src))
+	case *ast.String:
+		return lastRune(n.Value)
+	}
+	for c := n.LastChild(); c != nil; c = c.PreviousSibling() {
+		if r, ok := lastVisible(c, src); ok {
+			return r, true
+		}
+	}
+	return 0, false
+}
+
+// firstVisible returns the first character a reader sees in n.
+func firstVisible(n ast.Node, src []byte) (rune, bool) {
+	switch n := n.(type) {
+	case nil, *ast.Image, *ast.RawHTML, *ast.AutoLink:
+		return 0, false
+	case *ast.Text:
+		return firstRune(n.Segment.Value(src))
+	case *ast.String:
+		return firstRune(n.Value)
+	}
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		if r, ok := firstVisible(c, src); ok {
+			return r, true
+		}
+	}
+	return 0, false
+}
+
+func lastRune(b []byte) (rune, bool) {
+	r, size := utf8.DecodeLastRune(b)
+	return r, size > 0
+}
+
+func firstRune(b []byte) (rune, bool) {
+	r, size := utf8.DecodeRune(b)
+	return r, size > 0
+}
+
+func inBlockquote(n ast.Node) bool {
+	for p := n.Parent(); p != nil; p = p.Parent() {
+		if p.Kind() == ast.KindBlockquote {
+			return true
+		}
+	}
+	return false
+}
+
+// cjkWide reports whether r is an East Asian wide or full-width character.
+func cjkWide(r rune) bool {
+	w := util.EastAsianWidth(r)
+	return w == "W" || w == "F"
+}
+
+// cjkPunct reports whether r is full-width punctuation such as ，。「」（）.
+func cjkPunct(r rune) bool {
+	return cjkWide(r) && unicode.IsPunct(r)
 }
