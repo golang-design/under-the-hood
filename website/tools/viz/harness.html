@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<!--
+  Standalone harness for the book's interactive figures. It loads the real
+  viz.js (and, through it, viz/widgets/<name>.js) without Hugo, so a widget can
+  be developed and screenshotted in isolation:
+
+    harness.html?w=init-order            Chinese, light
+    harness.html?w=init-order&lang=en    English
+    harness.html?w=init-order&theme=dark dark theme
+    harness.html?w=a,b,c                 several widgets stacked
+
+  The CSS below mirrors the site tokens (_reading.scss) and the .viz rules in
+  _main.scss closely enough for layout and colour checks. See README.md.
+-->
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>viz harness</title>
+<script>
+  var q = new URLSearchParams(location.search);
+  document.documentElement.lang = q.get("lang") === "en" ? "en" : "zh-cn";
+  if (q.get("theme") === "dark") document.documentElement.classList.add("dark");
+</script>
+<style>
+  :root {
+    --bg: #ece8df; --surface: #f7f4ee; --fg: #232019; --fg-muted: #6a6256; --fg-faint: #9b9385;
+    --border: rgba(35, 32, 25, 0.10); --border-strong: rgba(35, 32, 25, 0.18);
+    --accent: #007d9c; --accent-soft: rgba(0, 125, 156, 0.11); --code-bg: #eae7df;
+    --font-sans: Inter, system-ui, sans-serif; --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  }
+  html.dark {
+    --bg: #14130e; --surface: #1b1914; --fg: #e6e0d2; --fg-muted: #a7a08f; --fg-faint: #736d5e;
+    --border: rgba(255, 255, 255, 0.09); --border-strong: rgba(255, 255, 255, 0.16);
+    --accent: #29bee6; --accent-soft: rgba(41, 190, 230, 0.16); --code-bg: #211e18;
+  }
+  body { margin: 0; padding: 24px; background: var(--bg); color: var(--fg); font-family: var(--font-sans); }
+  .viz { margin: 24px auto; max-width: 760px;
+    --viz-c1: #007d9c; --viz-c2: #c9742a; --viz-c3: #1f9d6b; --viz-c4: #7a5cab;
+    --viz-ink: var(--fg); --viz-muted: var(--fg-muted); --viz-line: var(--border-strong); --viz-fill: var(--surface); }
+  html.dark .viz { --viz-c1: #1aa3c9; --viz-c2: #cc7a33; --viz-c3: #35ad78; --viz-c4: #9b74d6; }
+  .viz-wrap { border: 1px solid var(--border-strong); border-radius: 6px; padding: 16px; background: var(--code-bg); }
+  .viz-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+  .viz-canvas { display: block; width: 100%; }
+  .viz-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+  .viz-btn { font: inherit; font-size: 12px; padding: 4px 12px; border: 1px solid var(--border-strong);
+    border-radius: 4px; background: var(--surface); color: var(--fg); cursor: pointer; }
+  .viz-btn[disabled] { opacity: 0.45; cursor: default; }
+  .viz-btn.is-on { border-color: var(--viz-c1); color: var(--viz-c1); }
+  .viz-slider { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+  .viz-slider input { width: 90px; }
+  .viz-select { font: inherit; font-size: 12px; padding: 2px 6px; border: 1px solid var(--border-strong);
+    border-radius: 4px; background: var(--surface); color: var(--fg); }
+  .viz-fallback { color: var(--fg-faint); font-size: 12px; text-align: center; padding: 16px; }
+  .viz-stage { font-family: var(--font-sans); font-size: 13px; color: var(--viz-ink); }
+  .viz-stage svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .viz-stage svg text { fill: var(--viz-ink); font-family: inherit; }
+  .viz-note { min-height: 1.5em; margin-top: 8px; font-size: 13px; line-height: 1.55; color: var(--viz-muted); }
+  .viz-note:empty { display: none; }
+  .harness-label { font: 12px var(--font-mono); color: var(--fg-faint); max-width: 760px; margin: 0 auto; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  (q.get("w") || "").split(",").filter(Boolean).forEach(function (name) {
+    var lab = document.createElement("div"); lab.className = "harness-label"; lab.textContent = name;
+    var host = document.createElement("div"); host.className = "viz"; host.setAttribute("data-viz", name);
+    document.getElementById("root").appendChild(lab);
+    document.getElementById("root").appendChild(host);
+  });
+</script>
+<script src="../../themes/book/static/viz/viz.js"></script>
+<script>
+  // act=b0,b0,s0:vars,b3 replays control actions on the first widget after it
+  // mounts: bN clicks the N-th button, sN:value sets the N-th <select>.
+  // Useful for screenshotting intermediate states headlessly.
+  (function replay() {
+    var acts = (q.get("act") || "").split(",").filter(Boolean);
+    if (!acts.length) return;
+    setTimeout(function () {
+      var bar = document.querySelector(".viz .viz-controls");
+      if (!bar) return;
+      acts.forEach(function (a) {
+        if (a[0] === "b") { var b = bar.querySelectorAll("button")[+a.slice(1)]; if (b && !b.disabled) b.click(); }
+        else if (a[0] === "s") {
+          var k = a.slice(1).split(":"), s = bar.querySelectorAll("select")[+k[0]];
+          if (s) { s.value = k[1]; s.dispatchEvent(new Event("change")); }
+        }
+      });
+    }, 400);
+  })();
+</script>
+</body>
+</html>

@@ -83,7 +83,14 @@
     var ctx = canvas.getContext("2d");
     var W = opts.width || 760, H = opts.height || 360;
     function size() {
-      var cssW = Math.min(W, host.clientWidth || W);
+      // Fit the padded content box of .viz-wrap, not the host: measuring the
+      // host made the canvas overflow the frame by the wrap's padding.
+      var avail = wrap.clientWidth || host.clientWidth || W;
+      if (wrap.clientWidth && window.getComputedStyle) {
+        var cs = window.getComputedStyle(wrap);
+        avail -= (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+      }
+      var cssW = Math.min(W, avail);
       var scale = cssW / W;
       var cssH = H * scale;
       var dpr = window.devicePixelRatio || 1;
@@ -544,21 +551,111 @@
     });
   }
 
+  // ---- helpers for DOM/SVG widgets -------------------------------------------
+  // Page language decides widget labels: <html lang="en"> gets English, any
+  // other language (the default zh-cn) gets Chinese. L("中文", "English").
+  var LANG = /^en/i.test((document.documentElement && document.documentElement.lang) || "") ? "en" : "zh";
+  function L(zh, en) { return LANG === "en" && en != null ? en : zh; }
+  var SVGNS = "http://www.w3.org/2000/svg";
+  // el("div", {class: "x", text: "hi"}, parent) / svg("rect", {x: 1}, parent).
+  // `text` sets textContent, `style` takes a string, every other key is an
+  // attribute. Colours in SVG should be `style: "fill:var(--viz-c1)"` so they
+  // follow the light/dark theme without a repaint.
+  function build(node, attrs, parent) {
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      var v = attrs[k];
+      if (v == null || v === false) return;
+      if (k === "text") node.textContent = v;
+      else if (k === "html") node.innerHTML = v;
+      else if (k === "on") Object.keys(v).forEach(function (ev) { node.addEventListener(ev, v[ev]); });
+      else node.setAttribute(k, v);
+    });
+    if (parent) parent.appendChild(node);
+    return node;
+  }
+  function el(tag, attrs, parent) { return build(document.createElement(tag), attrs, parent); }
+  function svg(tag, attrs, parent) { return build(document.createElementNS(SVGNS, tag), attrs, parent); }
+  // panel: the DOM counterpart of scaffold() for widgets drawn with SVG/HTML.
+  // Returns {wrap, stage, bar, note}. `note` is an aria-live line under the
+  // figure that narrates the current step, so the state is readable as text.
+  function panel(host, opts) {
+    host.classList.add("viz-mounted");
+    host.innerHTML = "";
+    var wrap = el("div", { class: "viz-wrap" }, host);
+    el("div", { class: "viz-title", text: opts.title || "" }, wrap);
+    var stage = el("div", { class: "viz-stage" }, wrap);
+    var bar = el("div", { class: "viz-controls" }, wrap);
+    var note = el("div", { class: "viz-note", "aria-live": "polite" }, wrap);
+    return { wrap: wrap, stage: stage, bar: bar, note: note };
+  }
+  function select(bar, label, options, val, on) {
+    var s = el("label", { class: "viz-slider" }, bar);
+    el("span", { text: label }, s);
+    var i = el("select", { class: "viz-select" }, s);
+    options.forEach(function (o) {
+      var op = el("option", { value: o.value, text: o.label }, i);
+      if (o.value === val) op.selected = true;
+    });
+    i.addEventListener("change", function () { on(i.value); });
+    return i;
+  }
+
   // ---- registry & mount -----------------------------------------------------
+  // Built-in widgets live in this file. Every other widget is a separate file,
+  // viz/widgets/<name>.js, fetched the first time a page uses it. The file
+  // calls BookViz.register(name, fn) and the pending hosts mount then.
   var REGISTRY = {
     "gmp-scheduler": gmpScheduler,
     "gc-tricolor": gcTricolor,
     "channel": channel,
   };
-  function mountAll() {
-    var hosts = document.querySelectorAll(".viz[data-viz]:not(.viz-mounted)");
-    hosts.forEach(function (h) {
-      var name = h.getAttribute("data-viz");
-      var fn = REGISTRY[name];
-      if (fn) { try { fn(h); } catch (e) { h.innerHTML = '<div class="viz-fallback">可视化加载失败: ' + name + "</div>"; } }
-      else { h.innerHTML = '<div class="viz-fallback">未知可视化: ' + name + "</div>"; }
-    });
+  var BASE = (function () {
+    var s = document.currentScript;
+    if (!s || !s.src) {
+      var all = document.getElementsByTagName ? document.getElementsByTagName("script") : [];
+      for (var i = 0; i < all.length; i++) if (/viz\/viz\.js(\?|$)/.test(all[i].src)) { s = all[i]; break; }
+    }
+    return s && s.src ? s.src.replace(/viz\.js(\?.*)?$/, "") : "";
+  })();
+  var loading = {};
+  function fail(h, msg) { h.innerHTML = '<div class="viz-fallback">' + msg + "</div>"; }
+  function mountOne(h) {
+    var name = h.getAttribute("data-viz");
+    var fn = REGISTRY[name];
+    if (fn) {
+      try { fn(h); } catch (e) {
+        fail(h, L("可视化加载失败：", "Visualization failed: ") + name);
+        if (window.console) console.error(e);
+      }
+      return;
+    }
+    if (!/^[a-z0-9-]+$/.test(name || "") || !BASE) { fail(h, L("未知可视化：", "Unknown visualization: ") + name); return; }
+    if (loading[name]) return;
+    loading[name] = true;
+    var sc = document.createElement("script");
+    sc.src = BASE + "widgets/" + name + ".js";
+    sc.onerror = function () {
+      document.querySelectorAll('.viz[data-viz="' + name + '"]:not(.viz-mounted)').forEach(function (x) {
+        fail(x, L("未知可视化：", "Unknown visualization: ") + name);
+      });
+    };
+    document.head.appendChild(sc);
   }
+  function mountAll() {
+    document.querySelectorAll(".viz[data-viz]:not(.viz-mounted)").forEach(mountOne);
+  }
+  function register(name, fn) {
+    REGISTRY[name] = fn;
+    document.querySelectorAll('.viz[data-viz="' + name + '"]:not(.viz-mounted)').forEach(mountOne);
+  }
+
+  window.BookViz = {
+    register: register, lang: LANG, L: L,
+    col: col, scaffold: scaffold, panel: panel, driver: driver,
+    button: button, slider: slider, select: select,
+    el: el, svg: svg, rr: rr, lerp: lerp,
+  };
+
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mountAll);
   else mountAll();
 })();

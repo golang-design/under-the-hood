@@ -592,6 +592,18 @@ aside nav,
 .viz {
   margin: $padding-16 * 1.5 auto;
   max-width: 760px;
+  // Semantic slots for DOM/SVG widgets, validated (dataviz skill checks) on
+  // the light surface #f7f4ee and the dark surface #1b1914. Use them by
+  // meaning and always pair them with a text label:
+  //   c1 active/current · c2 blocked/attention · c3 done/ok · c4 secondary
+  --viz-c1: #007d9c;
+  --viz-c2: #c9742a;
+  --viz-c3: #1f9d6b;
+  --viz-c4: #7a5cab;
+  --viz-ink: var(--fg, #232019);
+  --viz-muted: var(--fg-muted, #6a6256);
+  --viz-line: var(--border-strong, rgba(35, 32, 25, 0.18));
+  --viz-fill: var(--surface, #f7f4ee);
 
   .viz-wrap {
     border: 1px solid $gray-200;
@@ -639,8 +651,39 @@ aside nav,
     text-align: center;
     padding: $padding-16;
   }
+  .viz-stage {
+    font-family: var(--font-sans, system-ui, sans-serif);
+    font-size: 13px;
+    color: var(--viz-ink);
+    svg { display: block; width: 100%; height: auto; overflow: visible; }
+    svg text { fill: var(--viz-ink); font-family: inherit; }
+  }
+  .viz-select {
+    font: inherit;
+    font-size: $font-size-12;
+    padding: 2px 6px;
+    border: 1px solid $gray-300;
+    border-radius: $padding-4;
+    background: $body-background;
+    color: $body-font-color;
+  }
+  .viz-btn[disabled] { opacity: 0.45; cursor: default; }
+  .viz-btn.is-on { border-color: var(--viz-c1); color: var(--viz-c1); }
+  .viz-note {
+    min-height: 1.5em;
+    margin-top: $padding-8;
+    font-size: $font-size-12 + 1;
+    line-height: 1.55;
+    color: var(--viz-muted);
+    &:empty { display: none; }
+  }
 }
 html.dark .viz {
+  --viz-c1: #1aa3c9;
+  --viz-c2: #cc7a33;
+  --viz-c3: #35ad78;
+  --viz-c4: #9b74d6;
+  .viz-select { background: var(--surface); border-color: var(--border); color: var(--fg); }
   .viz-wrap { background: var(--code-bg); border-color: var(--border); }
   .viz-btn { background: var(--surface); border-color: var(--border); color: var(--fg);
     &:hover { background: var(--accent-soft); } }
