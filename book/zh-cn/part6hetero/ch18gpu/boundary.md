@@ -7,7 +7,7 @@ title: "18.1 跨越 FFI 边界"
 
 [15.6](../../part5toolchain/ch15compile/cgo.md) 分析了一次 cgo 调用的全过程：切换到系统栈、
 `entersyscall`、按 C 的调用约定调用、`exitsyscall`。按该节在 Apple M5 Pro 上的测量（以 Go 1.26.10 为准），
-一次空的 C 调用约 16 ns，是一次不内联的 Go 调用（约 2 ns）的 8 倍左右，相差一个数量级；若 C 函数再回调
+一次空的 C 调用约 16 ns，是一次不内联的 Go 调用（约 2 ns）的 8 倍左右，接近一个数量级；若 C 函数再回调
 Go，开销约为 72 ns。由此得出的建议是：cgo 适合少量、粗粒度的调用，不宜出现在热点循环中。
 
 GPU 程序恰恰需要频繁地跨越这条边界。一次推理或渲染，CPU 一侧的工作主要有三类：把数据从主机内存拷贝到显存，
@@ -182,11 +182,11 @@ accel 的测量也说明运行期代价并未消失。其后端设计文档记�
 `reflect.MakeFunc` 每次重建参数帧，单次消息发送约 667 ns；改为经 `purego.SyscallN` 直接调用
 `objc_msgSend` 后降到约 180 ns，每个节点的开销从 14.7 µs 降到 7.0 µs。文档由此得出的经验是：在不使用 cgo
 的后端上，逐操作的开销首先要在 FFI 绑定中寻找，其次才是驱动 [[Ou, 2026c](#ref-ou-2026c)]。在 Apple M5 Pro
-上以 Go 1.26.10 运行其中的基准（5 次，机器同时承载其他负载，数字波动较大），直接发送的中位数约 143 ns，
-经反射的发送约 294 ns：
+上以 Go 1.26.10 运行其中的基准（10 次），直接发送的中位数约 67 ns，经反射的发送约 207 ns，
+后者仍是前者的三倍左右：
 
 ```shell
-$ CGO_ENABLED=0 go test -run '^$' -bench '^BenchmarkFFICost$' -count 5 ./internal/mtl/
+$ CGO_ENABLED=0 go test -run '^$' -bench '^BenchmarkFFICost$' -count 10 ./internal/mtl/
 ```
 
 15.6.6 在同一台机器上测得的空 C 调用约为 16 ns。两者测量的对象不同，前者是一次完整的 Objective-C

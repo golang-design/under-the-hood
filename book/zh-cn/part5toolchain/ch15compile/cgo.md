@@ -593,7 +593,7 @@ $ go test -run '^$' -bench '^Benchmark(Call|CgoCall|CgoCallWithCallback)$' -coun
 | `BenchmarkCgoCall` | 空的 C 函数 | 16.3 ns |
 | `BenchmarkCgoCallWithCallback` | 回调空 Go 函数的 C 函数 | 72.3 ns |
 
-一次 cgo 调用约为一次不内联的 Go 调用的 8 倍，相差一个数量级；带回调的调用又是不带回调时的约 4.4 倍。
+一次 cgo 调用约为一次不内联的 Go 调用的 8 倍，接近一个数量级；带回调的调用又是不带回调时的约 4.4 倍。
 具体数字随平台与负载变化，量级上的差距则来自上述结构，无法消除。
 
 这一差距在 Go 1.26 中有所缩小。Michael Knyszek 的三次提交精简了系统调用路径：删除 P 的 `_Psyscall` 状态，
@@ -653,7 +653,7 @@ cgo 的实现可以归结为两类转换。调度状态的转换（`entersyscall
 goroutine 的栈可能在 C 调用期间移动，这一点贯穿了整个设计：桩函数要修正参数帧的地址，传给 C
 的指针要分配到堆上，`noescape` 也必须与 `nocallback` 一同使用。Go 1.21 的 `Pinner` 放宽了指针规则，Go
 1.24 的两条指令免去了不必要的堆分配，Go 1.26 降低了调用的固定开销，但跨越边界的代价并没有消失：一次 cgo
-调用仍比一次 Go 调用贵一个数量级。
+调用的耗时仍约为一次 Go 调用的 8 倍。
 
 ## 延伸阅读
 
