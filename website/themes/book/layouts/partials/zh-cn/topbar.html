@@ -15,7 +15,8 @@
 
   <a class="reading-wordmark" href="{{ .Site.Home.RelPermalink }}">
     <span class="wm-title">{{ i18n "Wordmark" }}</span>
-    <span class="wm-sub">under the hood</span>
+    {{/* The English title already says it. */}}
+    {{ if ne .Site.Language.Lang "en" }}<span class="wm-sub">under the hood</span>{{ end }}
   </a>
 
   {{ if not .IsHome }}

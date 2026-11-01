@@ -639,6 +639,14 @@ html[data-toc="open"] .book-toc { display: block; }
   letter-spacing: 0.01em;
   text-wrap: pretty;
 
+  // The leading above suits Chinese, whose square glyphs fill the line box.
+  // Latin text has a lower x-height and ascenders, so at 1.95 English reads as
+  // double-spaced; tracking also hurts a serif text face.
+  &:lang(en) {
+    line-height: 1.7;
+    letter-spacing: 0;
+  }
+
   p {
     margin-top: 0;
     margin-bottom: 1.2em;
@@ -758,6 +766,7 @@ html[data-toc="open"] .book-toc { display: block; }
     font-size: calc(var(--reading-size) * var(--reading-scale) + 2px);
     color: var(--fg-muted);
     line-height: 1.9;
+    &:lang(en) { line-height: 1.65; }
   }
 
   // Prev/next chapter navigation, rendered after the content.

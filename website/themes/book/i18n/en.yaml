@@ -29,7 +29,7 @@
 
 # Reading chrome (top bar, table of contents, page navigation, footer).
 - id: Wordmark
-  translation: Go
+  translation: "Go: Under the Hood"
 - id: PrevSection
   translation: Previous
 - id: NextSection
