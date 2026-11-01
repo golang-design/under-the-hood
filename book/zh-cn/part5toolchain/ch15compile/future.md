@@ -5,179 +5,180 @@ title: "15.7 过去、现在与未来"
 
 # 15.7 过去、现在与未来
 
-编译器是 Go 工具链里改动最频繁、却对用户最透明的部分。同一份源码一行不改，换一个新版本重新
-编译，往往就更快、更小、更优,读者甚至不知道中间发生了什么。这一节把镜头拉远，回看编译器自身
-走过的路，再看它当下在做什么、接下来会往哪里走。贯穿始终的，是一条不变的价值排序:**编译速度
-优先，生成代码质量其次，而两者都要在「可工程化」的前提下取舍**
-（[1.1](../../part1overview/ch01intro/history.md)）。
+前面六节沿着编译流水线考察了 Go 1.26 的编译器：词法与文法分析（[15.1](./parse.md)）、
+中间表示（[15.2](./ssa.md)）、优化器（[15.3](./optimize.md)）、指针检查器（[15.4](./unsafe.md)）、
+逃逸分析（[15.5](./escape.md)）与 cgo（[15.6](./cgo.md)）。本节把它们放回时间轴上。
+编译器的演变大致分为三个阶段：Go 1.4 及以前，它是一个用 C 写成、继承自 Plan 9 的编译器；Go 1.5 至 1.8，
+它被翻译为 Go，并换上了基于 SSA 的后端；此后的改进集中在调用约定、泛型与依据剖析数据的优化上。另外，
+编译器的名字 gc 是「Go compiler」的缩写，`cmd/compile` 的说明文档特意澄清，它与大写的 GC（垃圾回收）
+几乎无关 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
 
-值得先说清楚的是，本节谈的「变」全部发生在引擎盖之下。Go 对语言与工具的兼容性承诺，意味着这些
-重构不该惊动任何一行用户代码。下面要讲的两次大重写，正是在这个约束下完成的。
+## 15.7.1 继承自 Plan 9：Go 1.4 及以前
 
-## 15.7.1 过去:从 C 到 Go，从 Plan 9 到 SSA
+2008 年 3 月，Ken Thompson 提交了最初的编译器 [[Thompson, 2008](#ref-thompson-2008)]。它用 C 写成，文法由
+yacc 文件 `go.y` 描述，结构与命名都沿袭 Plan 9 的 C 编译器：每个目标架构对应一个独立的程序，`6g` 面向
+amd64，`8g` 面向 386，配套的汇编器与链接器也是如此（[2.1](../../part1overview/ch02asm/asm.md)）。
+编译器以语法树为中间表示。
 
-编译器自身经历了两次伤筋动骨的大变，方向却截然不同:一次换的是实现语言，一次换的是后端架构。
+Go 1（2012 年 3 月）发布之前，编译器已经加入了逃逸分析（[15.5](./escape.md)）与内联：内联于 2011 年
+12 月实现，2012 年 1 月默认启用 [[van Dijk, 2011](#ref-van-dijk-2011)] [[Cox, 2012](#ref-cox-2012)]。
+语法树却不便于数据流分析，许多优化难以实现。Keith Randall 在 2015 年的 SSA 后端提案中指出，基于 SSA
+的中间表示能够实现许多在当时的编译器中难以实现的优化 [[Randall, 2015](#ref-randall-2015)]。
 
-**其一，实现语言:C → Go。** 最早（到 Go 1.4 为止）的 `gc` 编译器是用 C 写的，沿用了 Plan 9
-工具链的代码风格与构建方式。Go 1.5 完成了**自举**(bootstrap):编译器被机器翻译成 Go，从此
-是「用 Go 写的 Go 编译器」。这件事的细节见 [3.3](../../part1overview/ch03life/bootstrap.md),
-这里只强调它的意义。换语言不是为了赶时髦:C 版本无法利用 Go 自己的并发、内存安全与丰富的标准
-库，也无法让 Go 社区用熟悉的语言去读、去改编译器。自举之后，编译器才真正成为「社区可维护的
-Go 程序」，这为后续一切重构铺平了路。代价是引入了一个**自举链**:要编译当前版本的 Go，先得有
-一个能跑的旧版本 Go，工具链因此需要小心维护这条向后的依赖。
+## 15.7.2 从 C 到 Go：Go 1.5
 
-顺带澄清一个常被混淆的命名:编译器叫 `gc`，是 "Go compiler" 的缩写，与垃圾回收（大写 GC，
-garbage collection）毫无关系。`cmd/compile/README` 开篇就专门提醒了这一点。
+Go 1.5（2015 年 8 月）的编译器与链接器由原先的 C 代码自动翻译为 Go，`6g`、`8g` 等程序合并为一个由 `GOOS`
+与 `GOARCH` 选择目标的 `go tool compile` [[Go Authors, 2015](#ref-go-authors-2015)]。
+翻译器是专为这批代码编写的，并不是通用的 C 到 Go 翻译工具 [[Pike, 2015](#ref-pike-2015)]。发布说明强调，
+这是一次真正的翻译而非重写，新程序本质上就是旧程序，翻译几乎不会引入新的缺陷，
+反而发现并修复了一些此前未知的缺陷。转换的动机与自举的后果见
+[3.3](../../part1overview/ch03life/bootstrap.md)。
 
-**其二，后端架构:Plan 9 风格 → SSA。** 自举只是换了笔，没换骨架。Go 1.5/1.6 的后端仍大体
-沿用 Plan 9 编译器的传统设计:基于一种较低层的指令表示直接做有限的优化与指派。这套后端能用，
-但难以承载现代优化,它的中间表示不便于做数据流分析，加一个新优化往往要在多处特判，扩展性差。
+翻译的代价是速度。自动翻译所得的代码保留着 C 的写法，性能不如手写的 Go，Go 1.5 的构建因此慢了约一倍
+[[Go Authors, 2015](#ref-go-authors-2015)]。此后数个版本的一项持续工作，就是把这些代码逐步改写为惯用的
+Go。前端也在此后重写：Go 1.6 用手写的递归下降分析器取代了 yacc 生成的分析器（[15.1](./parse.md)），Go 1.8
+换上了新的前端 [[Go Authors, 2017](#ref-go-authors-2017)]。
 
-Go 1.7 引入了 **SSA 后端**（[15.2](./ssa.md)）,这是编译器历史上最关键的一次架构升级。SSA
-(Static Single Assignment，静态单赋值)要求每个变量只被赋值一次，于是「这个值从哪来、到哪去」
-变成显式的图结构，死代码消除、常量传播、冗余消除、边界检查消除等优化都能写成对图的**重写
-规则**，彼此独立、可组合、可逐架构定制。一个直观的例子是边界检查消除:
+## 15.7.3 SSA 后端：Go 1.7 与 1.8
 
-```go
-// 循环里对切片的每次访问，编译器本要插入一次 i < len(s) 的检查
-for i := 0; i < len(s); i++ {
-    s[i] = 0      // SSA 能证明 0 <= i < len(s) 恒成立，于是删掉这次检查
-}
-```
+翻译完成之前，Randall 就提出了下一步：「把当前基于语法树的中间表示改为更现代的、基于 SSA 的中间表示」，
+并主张分阶段转换，先替换后端 [[Randall, 2015](#ref-randall-2015)]。新后端从 walk 之后的中间表示接手，
+此时的代码已相当低级，但大体与机器无关；此后的降级为机器相关的操作、指令调度、寄存器分配与代码生成都在 SSA
+形式上进行。提案原本以 Go 1.6 为目标。
 
-这类「规则」在 SSA 后端里有非常具体的形态。Go 的机器无关与机器相关优化大量写成形如
-`(原模式) -> (替换)` 的重写条目,例如把一条已知右操作数为 2 的幂的乘法改写为移位:
+新后端在 Go 1.7（2016 年 8 月）中首先用于 64 位 x86，基准程序的 CPU 时间减少了 5% 到 35%，
+发布说明特别提到它为边界检查消除等优化提供了更好的平台 [[Go Authors, 2016](#ref-go-authors-2016)]。Go
+1.8（2017 年 2 月）把它推广到所有架构：32 位 ARM 上的基准程序提速 20% 到 30%，已在使用新后端的 64 位 x86
+上则为 0 到 10%；Go 1.7 中用于关闭新后端的临时选项 `-ssa=0` 随之删除
+[[Go Authors, 2017](#ref-go-authors-2017)]。SSA 后端的结构、重写规则与各趟处理见 [15.2](./ssa.md)。
 
-```text
-// 伪规则示意:乘以常数 2^k，替换为左移 k 位（移位通常更快）
-(Mul64 x (Const64 [c])) && isPowerOfTwo(c) => (Lsh64x64 x (Const64 [log2(c)]))
-```
+## 15.7.4 调用约定与泛型：Go 1.17 至 1.20
 
-编译器在构建时把成百上千条这样的规则编译进优化器，逐趟扫过 SSA 图反复套用，直到不再有规则可
-触发。新增一项优化，多数时候就是新增几条规则，而不必改动框架本身,这正是 SSA 后端「可扩展」
-的含义所在。
+Go 1.17（2021 年 8 月）在 Linux、macOS 与 Windows 的 64 位 x86
+上改用寄存器传递函数的参数与结果，代表性的程序与包的性能提升约 5%，二进制文件通常缩小约 2%
+[[Go Authors, 2021](#ref-go-authors-2021)]。Go 1.18 把它推广到 64 位 ARM、64 位 PowerPC
+以及所有操作系统上的 64 位 x86，64 位 ARM 与 PowerPC 上的典型提升达到 10% 以上
+[[Go Authors, 2022](#ref-go-authors-2022)]。这项改动的难点在于兼容：它不能改变任何安全的 Go 代码的行为，
+也要尽量不影响既有的汇编代码。设计见 [[Clements, 2020](#ref-clements-2020)]，两套约定及其转换见
+[2.3](../../part1overview/ch02asm/callconv.md)。
 
-在 Plan 9 风格的后端里，要稳定地做到边界检查消除这类证明并不容易;在 SSA 框架下，它只是「在
-值的关系图上跑几条规则」。这次重构同样对用户透明:人们没改一行代码，只是发现新版本编译出的程序更快了、
-二进制更小了。SSA 后端最初只在 amd64 上启用，随后逐架构铺开，至今仍是 Go 代码生成的主干，
-也是后面 PGO、寄存器 ABI 这些工作得以落地的舞台。
+同一版本加入了泛型。前端的类型检查改由 `types2` 完成（[8.3](../../part2lang/ch08generics/checker.md)），
+泛型代码采用形状模板化加字典的实现（[8.1](../../part2lang/ch08generics/history.md)）。发布说明坦言，
+支持泛型的改动使 Go 1.18 的编译速度比 Go 1.17 慢了约 15%，生成代码的执行时间不受影响
+[[Go Authors, 2022](#ref-go-authors-2022)]。Go 1.20 默认启用统一中间表示（Unified IR），
+它在功能上已与旧的前端持平 [[Dempsky, 2022](#ref-dempsky-2022)]；发布说明的描述是，
+前端改用了一种新的方式处理编译器的内部数据，修复了若干泛型问题，并允许在泛型函数与方法中声明类型
+[[Go Authors, 2023a](#ref-go-authors-2023a)]。今天，Unified IR 同时负责构造中间表示、包的导入导出与内联
+[[Go Authors, 2026a](#ref-go-authors-2026a)]。
 
-把这两次重写放进同行的坐标里看，会更清楚 Go 的取舍。多数主流语言的工业级编译器（如以 C++
-写成的 LLVM、GCC）从一开始就以 SSA 或类 SSA 的中间表示为核心，把代码生成质量放在很高的位置，
-代价是编译速度与实现复杂度。Go 反其道而行:先用一个简单、极快的 Plan 9 风格后端把语言与生态
-立起来，等社区与需求成熟，再补上 SSA 这块「代码质量」的短板。换句话说，别家是「先求好，再调
-快」，Go 是「先求快，再补好」,这正是它「编译速度优先」价值排序的历史投影。
+## 15.7.5 性能制导优化：Go 1.20 起
 
-两次大变合起来看，传递的是同一种工程姿态:**当旧地基撑不起未来时，敢于推倒重写,但每一次
-重写都谨守对用户的透明承诺。** 一条粗线条的时间轴:
+此前，编译器的内联与去虚化都只能依据静态启发式规则判断。性能制导优化（profile-guided optimization，PGO）
+把程序运行时采集的 CPU 剖析数据交给编译器，使它在热点处作出不同的决策
+[[Go Authors, n.d.a](#ref-go-authors-nda)]。Go 1.20 以预览形式加入 PGO，
+用剖析数据在热点调用处更积极地内联，代表性的程序提速约 3% 至 4%
+[[Go Authors, 2023a](#ref-go-authors-2023a)]。Go 1.21 宣布 PGO 可以正式使用：主包目录下的 `default.pgo`
+默认启用，多数程序提速 2% 至 7%；PGO 还开始对部分接口方法调用去虚化，为最常见的被调用者加上一次直接调用。
+同一版本的编译器本身也用 PGO 构建，构建速度因此最多提高 6% [[Go Authors, 2023b](#ref-go-authors-2023b)]。
+Go 1.22 使去虚化覆盖更多的调用，并让去虚化与内联交替进行，多数程序的提升达到 2% 至 14%
+[[Go Authors, 2024](#ref-go-authors-2024)]。编译器中的实现见 [15.3](./optimize.md)。
 
-```text
-Go 1.4   C 写的 gc 编译器（Plan 9 传统后端）
-Go 1.5   自举:编译器译为 Go;并发 GC 雏形
-Go 1.7   SSA 后端落地（amd64 首发），随后逐架构铺开
-Go 1.17  栈式 ABI → 寄存器调用约定，整体约 +5%
-Go 1.18  泛型:types2 前端 + GC 形状 stenciling 后端
-Go 1.21  PGO 正式版:编译器优化从静态猜测转向数据驱动
-```
+不依赖剖析数据的优化同样在推进。逃逸分析在 Go 1.13 重写之后，Go 1.25 与 1.26 又先后把大小可变的 `make` 与
+`append` 的底层存储放到栈上（[15.5](./escape.md)）。Go 1.22 还以预览形式加入了新的内联启发式规则：
+在循环等「重要」的调用处更积极地内联，在 panic 路径等「不重要」的调用处则加以抑制，以
+`GOEXPERIMENT=newinliner` 启用 [[Go Authors, 2024](#ref-go-authors-2024)]。直到 Go 1.26，
+它仍是一个默认关闭的实验。
 
-## 15.7.2 现在:寄存器 ABI 与 PGO
+## 15.7.6 展望
 
-如果说过去是「换地基」，现在的两项进展则是在新地基上盖出的两座楼。它们共同的母题，是把编译器
-从「静态地猜」推向「依据真实信息决策」。
+本书以 Go 1.26 为准。写作时，Go 1.27 已于 2026 年 8 月发布 [[Go Authors, 2026c](#ref-go-authors-2026c)]，
+其中与编译器有关的变化有：语言允许方法声明自己的类型参数，即泛型方法
+（[8.4](../../part2lang/ch08generics/future.md)）；对部分小于 80 字节的分配，
+编译器改为生成对按大小特化的分配函数的调用，这类分配的开销最多降低 30%，代价是二进制文件增大约 60 KB；
+新的实验性 `simd` 包提供可移植、与向量宽度无关的 SIMD 支持，Go 1.26 引入的 `simd/archsimd` 包则在 amd64
+之外增加了 arm64 与 WebAssembly 的 128 位 SIMD。Go 1.26 的发布说明已经预告了这个可移植的高层 SIMD 包
+[[Go Authors, 2026b](#ref-go-authors-2026b)]。
 
-**寄存器调用约定（Go 1.17）。** 长期以来，Go 的函数调用通过**栈**传递参数与返回值:调用方把
-实参写进栈上约定的位置，被调方再从栈上读出。这套约定简单、跨架构一致、对栈扫描友好，但每次
-调用都要做一串内存读写，开销不小。Go 1.17 把它改成了**寄存器**传参
-（[2.3](../../part1overview/ch02asm/callconv.md)、[6.1](../../part2lang/ch06func/func.md)）:
-前若干个参数与返回值直接走寄存器，命中的快路径完全不碰内存。
+主分支上的下一个版本 Go 1.28 预计在 2027 年 2 月发布，截至 2026 年 11 月，
+其发布说明草稿的编译器一节尚无内容；自举方面，Go 1.28 要求以 Go 1.26.0 或更高版本构建
+[[Go Authors, 2026d](#ref-go-authors-2026d)]。主分支上与编译器有关的实验包括 `NewInliner`、`SIMD`、
+需要编译器配合的 `RuntimeFreegc`，以及 2026 年 10 月新加入的、以 Go 类型描述 cgo 绑定的 `CgoBindings`
+[[Go Authors, 2026e](#ref-go-authors-2026e)]。实验能否成为默认行为，要由此后的版本回答。
 
-```text
-// 栈式 ABI（旧）              // 寄存器 ABI（新，amd64 上前若干整型走 AX,BX,CX,...）
-caller:  MOV arg, 0(SP)        caller:  MOV arg, AX
-         CALL f                         CALL f
-f:       MOV 0(SP), reg        f:       (arg 已在 AX，直接用)
-```
+## 15.7.7 小结
 
-整体提速约 5%，且**对用户、对汇编以外的代码都透明**,设计上特意保留了栈上的备份槽，使栈扫描、
-`recover`、`go:nosplit` 等机制无需改写。这条改动的工程难点不在「想到用寄存器」（这是常识），
-而在「在一个有 GC、有抢占、有跨架构汇编的运行时里，把寄存器传参做得不破坏任何既有不变量」。
-它的设计文档（proposal 40724）值得一读，是「兼容约束下做底层优化」的范本。
+编译器的两次重大重构方向不同：Go 1.5 更换了实现语言，Go 1.7 与 1.8 更换了后端的中间表示。
+前者以机械翻译保证新旧程序的等价，付出的是一段时间的构建速度；后者分阶段推进，先在一个架构上启用，
+再推广到全部架构。此后的寄存器调用约定、Unified IR 与 PGO 都建立在这两次重构之上。
+每一项改动都以不改变程序的行为为前提，代价与收益则写在各版本的发布说明里
+[[Go Authors, n.d.b](#ref-go-authors-ndb)]：Go 1.5 的构建慢了约一倍，Go 1.18 的编译慢了约 15%，PGO
+则为提供了剖析数据的多数程序换来 2% 至 14% 的提升（Go 1.22）。
 
-**性能制导优化 PGO（Go 1.21）。** 编译器做内联、去虚化这些决策时，传统上只能**静态地猜**:
-函数小就内联，类型能在编译期定死就去虚化。但「哪条路径是热点」这种信息，静态分析根本拿不到。
-PGO(Profile-Guided Optimization)的思路是把真实运行的**画像**(profile)喂回编译器
-（[15.3](./optimize.md)）:
+## 延伸阅读
 
-```bash
-# 1) 线上或压测时采集 CPU 画像
-go test -cpuprofile cpu.prof -bench .
-# 2) 把它命名为 default.pgo 放进 main 包目录，go build 自动启用
-cp cpu.prof ./cmd/myapp/default.pgo
-go build ./cmd/myapp
-```
-
-机制上，编译器从画像里读出一张带权的调用图:每条调用边有一个采样得到的热度。内联器据此放宽
-对热边的预算,平时一个函数体超过预算就不内联，但若它处在被频繁走到的热路径上，就值得为它
-破例展开;去虚化也类似，热点处某个接口调用若画像显示绝大多数走向同一具体类型，便可生成一条
-直奔该类型的快路径，仅在类型不符时回退。换言之，PGO 不发明新的优化，它只是**给既有优化一把
-更准的尺子**,让有限的「代码膨胀预算」花在真正值钱的地方。实测常带来个位数百分比的提升。PGO
-的关键意义不在那几个百分点，而在它确立了一条新范式:**编译器的优化决策从此可以由数据驱动，
-而非只靠静态启发式猜测。**
-
-**泛型支持的持续打磨。** 与此并行的还有泛型。前端在 Go 1.18 换上了 `types2` 类型检查器
-（[8.3](../../part2lang/ch08generics/checker.md)），后端采用 **GC 形状 stenciling**:按内存
-布局分组生成代码，布局相同的一组类型共用一份机器码，类型相关信息经一个**运行时字典**在调用时
-传入。这条路避免了对每个类型都单态化的代码爆炸，代价是引入了一层字典间接
-（[8.4](../../part2lang/ch08generics/future.md)）。削减这层间接的开销，是编译器至今仍在做的
-功课，也正好接上下一节要谈的未来。
-
-## 15.7.3 未来:在速度与优化之间继续走钢丝
-
-编译器的未来，仍是那条贯穿全书的张力:**编译速度**与**生成代码质量**之间的平衡
-（[1.1](../../part1overview/ch01intro/history.md)）。Go 在这道题上的答案一向鲜明，而几条可
-预见的方向，都是在这个答案的约束下展开的。
-
-**PGO 的进一步发力。** 内联与去虚化只是 PGO 能利用画像的第一批场景。栈分配与逃逸的画像引导、
-基本块布局（把热路径排在一起以改善取指与分支预测）、依据画像的特化，都是自然的延伸。难点在于
-保持「无画像也能很快编译、有画像才换取更优代码」的可选性,PGO 永远不该成为编译的前置负担。
-
-**泛型代码的性能。** GC 形状字典那一层间接，是泛型当前最主要的性能税。把热点处的字典访问内联、
-对单一实例化做更彻底的去虚化与特化，让泛型代码逐步逼近手写单态版本的速度，是一条没有「完成」
-之日、却会持续推进的战线（[8.4](../../part2lang/ch08generics/future.md)）。
-
-**与新 GC 协同的代码生成。** 代码生成从不孤立。新一代 GC（Green Tea，
-[13.11](../../part4memory/ch13gc/greentea.md)）改变了扫描与写屏障的形态，编译器插入屏障、安排
-指针存活信息(liveness)的方式也要随之演化,两者协同进化，才能把 GC 的吞吐改进真正落到生成
-代码上。
-
-**新硬件的利用。** 向量指令(SIMD)、更宽的寄存器、新的原子与内存序原语，这些硬件能力如何在
-不破坏 Go 简单心智模型的前提下被编译器自动用上，是一个长期开放的题目。Go 倾向于在标准库与
-运行时里以受控方式引入，而非把复杂度抛给用户。
-
-但有一条几乎可以肯定不会变:**Go 不会为了多榨几个百分点的运行性能，而牺牲它引以为傲的编译
-速度。** 快速编译是 Go 生产力叙事的立身之本，任何优化若显著拖慢编译，多半会被挡在门外，或
-退化成可选项（如 PGO）。这条不变量，本身就是这台机器最重要的设计参数。
-
-回看编译器这条线，它完美诠释了 Go 工具链的工作方式:**持续地、对用户透明地变好;每一步都在
-既定的价值排序（快、简单、可工程化）下做取舍;敢于推倒重写（C→Go、Plan 9→SSA），也敢于
-引入新范式（PGO 的数据驱动）。** 这台把源码变成飞快二进制的机器，本身就是 Go 工程哲学最精密
-的体现。
-
-## 延伸阅读的文献
-
-1. The Go Authors. *cmd/compile/README:Introduction to the Go compiler.* 编译器四阶段架构、
-   `gc` 命名、types2 与 Unified IR 的演进。
-   https://github.com/golang/go/blob/master/src/cmd/compile/README.md
-2. Keith Randall. *Generating Better Machine Code with SSA.* GopherCon / Go 1.7 SSA 后端的
-   设计动机与重写规则框架。https://go.dev/talks/2015/gogo.slide
-3. The Go Authors. *Profile-guided optimization（PGO 用户文档）.* 采集画像、`default.pgo`
-   约定与当前能利用画像的优化。https://go.dev/doc/pgo
-4. Austin Clements, Cherry Mui, et al. *Proposal 40724:Register-based Go calling convention.*
-   栈 ABI → 寄存器 ABI 的兼容性约束与设计。
-   https://go.googlesource.com/proposal/+/master/design/40724-register-calling.md
-5. The Go Authors. *Go 1.5 / 1.7 / 1.17 / 1.21 Release Notes.* 自举、SSA 后端、寄存器 ABI、
-   PGO 的逐版本落地记录。https://go.dev/doc/devel/release
-6. 本书 [15.2 中间表示与 SSA](./ssa.md)、[15.3 优化器与 PGO](./optimize.md)。
-7. 本书 [8 泛型](../../part2lang/ch08generics)（[8.3](../../part2lang/ch08generics/checker.md)
-   types2、[8.4](../../part2lang/ch08generics/future.md) 字典间接），
-   [3.3 自举](../../part1overview/ch03life/bootstrap.md)。
+- <a id="ref-clements-2020"></a>[Clements, 2020] Austin Clements. "Proposal: Register-based Go calling
+  convention." Go proposal 40724, 2020.
+  https://go.googlesource.com/proposal/+/master/design/40724-register-calling.md
+  栈 ABI 改为寄存器 ABI 的兼容性约束与设计。
+- <a id="ref-cox-2012"></a>[Cox, 2012] Russ Cox. gc: enable inlining by default. Go commit 4a6b07f235,
+  2012. https://golang.org/cl/5531058
+  随 Go 1 发布。
+- <a id="ref-dempsky-2022"></a>[Dempsky, 2022] Matthew Dempsky. internal/buildcfg: enable unified IR by
+  default. Go commit 833367e98a, 2022. https://go.dev/cl/422235
+  随 Go 1.20 发布。
+- <a id="ref-go-authors-nda"></a>[Go Authors, n.d.a] The Go Authors. *Profile-guided optimization.*
+  https://go.dev/doc/pgo
+  PGO 用户文档：采集剖析数据、`default.pgo` 约定与当前能利用剖析数据的优化。
+- <a id="ref-go-authors-ndb"></a>[Go Authors, n.d.b] The Go Authors. *Release History.*
+  https://go.dev/doc/devel/release
+  各版本发布说明的索引，自举、SSA 后端、寄存器 ABI 与 PGO 的逐版本落地记录。
+- <a id="ref-go-authors-2015"></a>[Go Authors, 2015] The Go Authors. *Go 1.5 Release Notes.* 2015.
+  https://go.dev/doc/go1.5
+- <a id="ref-go-authors-2016"></a>[Go Authors, 2016] The Go Authors. *Go 1.7 Release Notes: Compiler
+  Toolchain.* 2016. https://go.dev/doc/go1.7
+- <a id="ref-go-authors-2017"></a>[Go Authors, 2017] The Go Authors. *Go 1.8 Release Notes: Compiler
+  Toolchain.* 2017. https://go.dev/doc/go1.8
+- <a id="ref-go-authors-2021"></a>[Go Authors, 2021] The Go Authors. *Go 1.17 Release Notes: Compiler.*
+  2021. https://go.dev/doc/go1.17
+- <a id="ref-go-authors-2022"></a>[Go Authors, 2022] The Go Authors. *Go 1.18 Release Notes.* 2022.
+  https://go.dev/doc/go1.18
+- <a id="ref-go-authors-2023a"></a>[Go Authors, 2023a] The Go Authors. *Go 1.20 Release Notes: Compiler.*
+  2023. https://go.dev/doc/go1.20
+- <a id="ref-go-authors-2023b"></a>[Go Authors, 2023b] The Go Authors. *Go 1.21 Release Notes: Compiler.*
+  2023. https://go.dev/doc/go1.21
+- <a id="ref-go-authors-2024"></a>[Go Authors, 2024] The Go Authors. *Go 1.22 Release Notes: Compiler.*
+  2024. https://go.dev/doc/go1.22
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. cmd/compile/README.md: Introduction
+  to the Go compiler. Go 1.26 源码.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/README.md
+  编译器各阶段的划分、`gc` 名称的含义与 Unified IR。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *Go 1.26 Release Notes.* 2026.
+  https://go.dev/doc/go1.26
+  其中实验性 `simd/archsimd` 包一节。
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *Go 1.27 Release Notes.* 2026.
+  https://go.dev/doc/go1.27
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. doc/next. Go 主分支源码.
+  https://github.com/golang/go/tree/master/doc/next
+  Go 1.28 发布说明草稿，以 2026 年 11 月 1 日的主分支为准。
+- <a id="ref-go-authors-2026e"></a>[Go Authors, 2026e] The Go Authors. internal/goexperiment/flags.go. Go
+  主分支源码. https://github.com/golang/go/blob/master/src/internal/goexperiment/flags.go
+  `GOEXPERIMENT` 实验的列表与说明，以 2026 年 11 月 1 日的主分支为准。
+- <a id="ref-pike-2015"></a>[Pike, 2015] Rob Pike. "Go in Go." Gopherfest, 2015.
+  https://go.dev/talks/2015/gogo.slide
+  编译器由 C 自动翻译为 Go 的动机与过程。
+- <a id="ref-randall-2015"></a>[Randall, 2015] Keith Randall. "New SSA Backend for the Go Compiler." 2015.
+  https://go.dev/s/go17ssa
+  SSA 后端的提案：分阶段转换，先替换后端。
+- <a id="ref-thompson-2008"></a>[Thompson, 2008] Ken Thompson. SVN=114202. Go commit cb87526ce3, 2008.
+  https://github.com/golang/go/commit/cb87526ce3
+  最初的 gc 编译器源码，位于 `src/c`。
+- <a id="ref-van-dijk-2011"></a>[van Dijk, 2011] Luuk van Dijk. gc: inlining (disabled without -l). Go
+  commit a62722bba4, 2011. https://golang.org/cl/5400043
+  随 Go 1 发布。
+- 本书 [2.3 调用约定与寄存器 ABI](../../part1overview/ch02asm/callconv.md)、
+  [3.3 语言的自举](../../part1overview/ch03life/bootstrap.md)、
+  [第 8 章 泛型](../../part2lang/ch08generics/readme.md)
+  （[8.1 泛型设计的演进](../../part2lang/ch08generics/history.md)、
+  [8.3 类型检查技术](../../part2lang/ch08generics/checker.md)、
+  [8.4 泛型的未来](../../part2lang/ch08generics/future.md)）、[15.2 中间表示](./ssa.md)、
+  [15.3 优化器](./optimize.md)。

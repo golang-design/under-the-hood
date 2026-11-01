@@ -5,241 +5,362 @@ title: "15.4 指针检查器"
 
 # 15.4 指针检查器
 
-Go 是一门内存安全的语言。在常规代码里，类型系统保证每个指针都指向它声明类型的合法对象，
-垃圾回收（[13](../../part4memory/ch13gc)）保证对象在仍被引用时不会被回收，运行时保证越界访问
-被挡在边界检查里。这套保证不是免费的，它建立在「编译器始终知道每个值的类型与布局」之上。
-可总有少数场景需要跳出这套体系：与 C 互操作（[15.6](./cgo.md)）要按 C 的内存布局解释一段字节，
-对接操作系统的系统结构体要逐字节摆放，零拷贝地把 `[]byte` 重解释成 `string`
-（[5.1](../../part2lang/ch05data/slice.md)）要让两个类型共享同一段底层内存。Go 为这些场景留了
-一个逃生舱口：`unsafe` 包。
+Go 的内存安全建立在一个前提之上：编译器知道每个值的类型。类型系统保证指针只指向其声明类型的对象，
+编译器据此为每个栈帧生成指针位图，垃圾回收器（[第 13 章](../../part4memory/ch13gc/readme.md)）与栈的拷贝
+（[14.4](../../part4memory/ch14stack/copy.md)）都依赖这些位图找到全部指针。少数场合需要越过类型系统：
+与 C 代码交换数据（[15.6](./cgo.md)），按操作系统规定的布局填写系统调用的参数，在 `[]byte` 与 `string`
+之间零拷贝地转换（[5.2](../../part2lang/ch05data/string.md)）。`unsafe` 包为这些场合提供了出口。
 
-逃生舱口的代价是，一旦用它绕过类型系统，编译器与运行时原先提供的保证就部分失效，误用不再被
-语言挡住，而要靠程序员自己遵守一组并不直观的规则。这一节先讲清 `unsafe.Pointer` 的能力边界与
-规范列出的合法模式，再讲清其中最隐蔽的一类陷阱（`uintptr` 与垃圾回收的关系），最后讲编译器与
-运行时如何用「指针检查器」（checkptr）把这类潜伏的误用变成当场报错。
+越过类型系统之后，原先由编译器保证的性质改由程序员自己维持。本节先说明 `unsafe.Pointer` 的合法用法及其
+规则的来由，再说明编译器与运行时如何配合这些规则，最后讨论**指针检查器**（checkptr）：它在运行时检查
+`unsafe.Pointer` 的转换，把平时不发作的误用变为当场的错误。
 
-## 15.4.1 unsafe.Pointer：绕过类型系统的四条特权
+## 15.4.1 unsafe.Pointer 的合法模式
 
-普通指针 `*T` 之间不能随意转换，类型系统不允许把 `*int` 当作 `*float64` 来读写。`unsafe.Pointer`
-是一种特殊指针，它在类型系统里开了一道口子，规范赋予它四条普通类型没有的特权：
-
-- 任意类型的指针 `*T` 都可以转换为 `unsafe.Pointer`；
-- `unsafe.Pointer` 可以转换回任意类型的指针 `*T`；
-- `uintptr` 可以转换为 `unsafe.Pointer`；
-- `unsafe.Pointer` 可以转换为 `uintptr`。
-
-前两条合起来，意味着借道 `unsafe.Pointer` 可以把任意 `*T1` 转成任意 `*T2`，从而以另一种类型解释
-同一段内存，这正是类型系统本想禁止的事。后两条让指针与整数互转，从而能对地址做算术。规范因此
-明确写道：`Pointer` 允许程序破坏类型系统、对任意内存读写，使用应格外小心。
+`unsafe.Pointer` 的文档开宗明义地列出了它的四种特殊操作 [[Go Authors, n.d.a](#ref-go-authors-nda)]：
 
 ```go
-// unsafe 包对 Pointer 的定义（ArbitraryType 仅用于文档，表示任意类型）
-type ArbitraryType int
-type Pointer *ArbitraryType
+// Pointer represents a pointer to an arbitrary type. There are four special operations
+// available for type Pointer that are not available for other types:
+//   - A pointer value of any type can be converted to a Pointer.
+//   - A Pointer can be converted to a pointer value of any type.
+//   - A uintptr can be converted to a Pointer.
+//   - A Pointer can be converted to a uintptr.
+//
+// Pointer therefore allows a program to defeat the type system and read and write
+// arbitrary memory. It should be used with extreme care.
 ```
 
-口子开得这么大，规范并不是说怎么用都行。它列出了若干「合法的转换模式」，承诺只有落在这些模式
-里的用法才有定义，偏离则是未定义行为。`go vet` 会检查代码是否落在这些模式内，没过 `go vet` 的
-`unsafe` 代码不受任何保证。下面逐一过这些模式，它们覆盖了 `unsafe` 几乎全部的正当用途。
+前两种操作合起来，可以把任意 `*T1` 转换为任意 `*T2`，以另一种类型解释同一段内存；后两种操作使指针与整数
+可以互相转换，从而对地址做算术。文档随后列出六种合法的模式，并声明不符合这些模式的代码现在或将来可能是
+无效的。`go vet` 可以发现部分不符合模式的用法，但文档特意指出，`go vet` 没有报错并不保证代码有效。
 
-**模式一：把 `*T1` 转成 `*T2`，要求 `T2` 不大于 `T1` 且两者内存布局相容。** 这是最常见、也最安全的
-一类，用于把一段内存重新解释成另一种类型。标准库 `math.Float64bits` 就是范例，它不做任何浮点
-运算，只是把 `float64` 的 8 个字节原样读成 `uint64`：
+| 模式 | 转换 | 要点 |
+|:---|:---|:---|
+| (1) | `*T1` → `Pointer` → `*T2` | `T2` 不大于 `T1`，且二者内存布局相容 |
+| (2) | `Pointer` → `uintptr` | 只用于取得地址的数值，例如打印；不得再转换回去 |
+| (3) | `Pointer` → `uintptr` → `Pointer`，中间做算术 | 两次转换必须在同一个表达式中；结果必须仍指向原来的分配 |
+| (4) | 调用 `syscall.Syscall` 等函数时 `Pointer` → `uintptr` | 转换必须直接出现在调用的参数列表中 |
+| (5) | `reflect.Value.Pointer` 或 `UnsafeAddr` 的结果 → `Pointer` | 必须在调用之后立即转换，在同一个表达式中 |
+| (6) | `reflect.SliceHeader` 或 `StringHeader` 的 `Data` 字段与 `Pointer` 互相转换 | 头部只能是指向真实切片或字符串的指针，不得单独声明 |
+
+模式 (1) 的典型例子是 `math.Float64bits`，它不做任何浮点运算，只是把 `float64` 的 8 个字节按 `uint64` 读出
+[[Go Authors, 2026c](#ref-go-authors-2026c)]：
 
 ```go
-func Float64bits(f float64) uint64 {
-	return *(*uint64)(unsafe.Pointer(&f))
-}
+func Float64bits(f float64) uint64 { return *(*uint64)(unsafe.Pointer(&f)) }
 ```
 
-**模式二：把结构体字段或数组元素的地址，通过 `Pointer` 加 `uintptr` 偏移算出来。** 如果 `p` 指向
-一个已分配的对象，可以先转成 `uintptr`、加上偏移、再转回 `Pointer`：
+模式 (3) 用于访问结构体字段或数组元素，偏移量由 `unsafe.Offsetof` 与 `unsafe.Sizeof` 给出，二者与
+`unsafe.Alignof` 一样在编译期求值。偏移可以加也可以减，也可以用 `&^` 把地址向下对齐，但结果必须仍落在
+原来的分配之内。与 C 不同，Go 不允许把指针移到分配末尾之后哪怕一个字节的位置：
 
 ```go
-// 取结构体字段 s.f 的地址，等价于 &s.f
-f := unsafe.Pointer(uintptr(unsafe.Pointer(&s)) + unsafe.Offsetof(s.f))
-// 取数组元素 x[i] 的地址，等价于 &x[i]
-e := unsafe.Pointer(uintptr(unsafe.Pointer(&x[0])) + i*unsafe.Sizeof(x[0]))
-```
-
-偏移可以是加也可以是减，用 `&^` 把地址向下取整做对齐也合法。但有一条铁律：算出的指针必须仍指向
-原来那个已分配对象的内部。与 C 不同，把指针移到对象边界之外（哪怕只越过末尾一个字节）就是无效的，
-因为越界后的地址不再对应任何活对象，垃圾回收无从判断它该不该被保留：
-
-```go
-// 无效：end 落在已分配内存区之外
+// 无效：end 指向分配之外
 var s thing
-end := unsafe.Pointer(uintptr(unsafe.Pointer(&s)) + unsafe.Sizeof(s))
+end = unsafe.Pointer(uintptr(unsafe.Pointer(&s)) + unsafe.Sizeof(s))
 ```
 
-这里要点出 `unsafe` 包提供的三个编译期常量函数，它们是合法做偏移的基础。`Sizeof(x)` 给出类型占用
-的字节数（对切片返回的是切片头的大小，不含底层数组），`Offsetof(s.f)` 给出字段在结构体内的偏移，
-`Alignof(x)` 给出类型要求的对齐。三者在类型大小确定时都是 Go 常量，由编译器算出，不产生运行时开销。
+这条限制来自垃圾回收器：一个恰好指向分配末尾的地址，可能正是下一个对象的起点，它会使下一个对象被误认为
+仍被引用，原来的对象却失去了引用。按文档的说法，(3) 至 (6) 列举了把 `uintptr` 转换回
+`Pointer` 的全部合法方式，它们都要求转换紧跟在产生地址的操作之后。下一小节说明其原因。
 
-**模式三：调用 `syscall.Syscall` 时把 `Pointer` 转成 `uintptr` 作参数。** 系统调用按 `uintptr` 传参，
-但有些参数会被内核重新解释为指针。这里编译器有一条特殊约定：只要 `uintptr(unsafe.Pointer(p))` 的
-转换直接出现在调用的参数列表里，编译器就保证 `p` 指向的对象在调用返回前不被移动或回收：
+## 15.4.2 uintptr 只是整数
+
+`unsafe` 的文档对 `uintptr` 的性质说得很明确 [[Go Authors, n.d.a](#ref-go-authors-nda)]：
 
 ```go
-syscall.Syscall(SYS_READ, uintptr(fd), uintptr(unsafe.Pointer(p)), uintptr(n))
+// A uintptr is an integer, not a reference.
+// Converting a Pointer to a uintptr creates an integer value
+// with no pointer semantics.
+// Even if a uintptr holds the address of some object,
+// the garbage collector will not update that uintptr's value
+// if the object moves, nor will that uintptr keep the object
+// from being reclaimed.
 ```
 
-**模式四：与反射头部的 `Data` 字段互转。** `reflect.SliceHeader` 与 `reflect.StringHeader` 把 `Data`
-声明为 `uintptr` 而非 `unsafe.Pointer`，是为了让不导入 `unsafe` 的代码无法借它改写任意内存。代价是
-这两个结构只有在覆盖一个真实切片或字符串时才有意义，绝不能单独声明一个 `SliceHeader` 变量再去
-填 `Data`，那样 `Data` 只是个普通整数，不会让垃圾回收认为底层数据仍被引用。这条模式脆弱到 Go
-官方已把这两个类型标记为 `Deprecated`，下文 15.4.4 会给出取代它们的安全写法。
+编译器生成的指针位图只标记指针类型的槽位，`uintptr` 类型的变量不在其中。于是有两种后果。其一，
+如果一个对象只剩一个 `uintptr` 记着它的地址，垃圾回收器会把它当作不可达的对象回收。其二，对象可能移动。Go
+的堆对象目前不会移动，但 goroutine 的栈会：栈增长或收缩时，运行时把整个栈复制到新的位置，
+并按位图调整所有指向栈内的指针（[14.4](../../part4memory/ch14stack/copy.md)），记在 `uintptr`
+中的栈地址却保持原值，此后指向已经废弃的旧栈。
 
-## 15.4.2 最凶险的陷阱：uintptr 只是一个整数
-
-把上面四条模式串起来看，危险几乎都集中在 `unsafe.Pointer` 与 `uintptr` 的互转上。理解这一点，
-要先认清一件容易被忽略的事实：**在 Go 的运行时眼里，`uintptr` 只是一个整数，垃圾回收完全不把它
-当指针看待。**
-
-这意味着两件事。其一，如果一个对象只被某个 `uintptr` 持有的地址「指向」，垃圾回收不会因此认为它
-存活，该对象随时可能被回收。其二，如果垃圾回收移动了对象（栈拷贝就是典型，goroutine 栈增长时
-整段栈连同其上的对象会被搬到新位置，地址随之改变，见 [14.4](../../part4memory/ch14stack/copy.md)），它会
-更新所有真正的指针，却不会更新任何 `uintptr`，因为它根本不知道哪些整数其实是地址。于是一个曾经
-正确的 `uintptr` 会在某次垃圾回收后悄悄指向一片无效内存或别的对象。
-
-把这个事实代入模式二，规范那条「两次转换必须在同一个表达式里完成」的规则就有了由来。看似等价的
-两种写法，命运截然不同：
+两种后果都只在 `uintptr` 存活期间恰好发生垃圾回收或栈复制时才会出现。模式 (3) 要求两次转换出现在同一个
+表达式中，就是把这段时间缩短到一次地址算术：
 
 ```go
-// 合法：Pointer→uintptr→Pointer 一气呵成，中间没有可被 GC 打断的时刻
+// 合法
 p = unsafe.Pointer(uintptr(p) + offset)
 
-// 无效：uintptr 被存进变量 u，跨越了语句边界
+// 无效：uintptr 在转换回 Pointer 之前被存入变量
 u := uintptr(p)
-// 此处若发生 GC，p 指向的对象可能被回收或移动，u 随即失效
 p = unsafe.Pointer(u + offset)
 ```
 
-差别不在语法，而在「`uintptr` 是否跨越了语句边界」。在第一种写法里，从 `unsafe.Pointer` 到 `uintptr`
-再回到 `unsafe.Pointer` 发生在同一条表达式求值的过程中，编译器保证这中间不会插入垃圾回收的安全点，
-对象在整个算术过程里始终被原 `Pointer` 引用着、不会被动。第二种写法把中间的 `uintptr` 存进了变量 `u`，
-两次转换被语句边界隔开，`u` 存活期间发生的任何一次垃圾回收都可能让它失效。同理，模式二里指向 `nil`
-或越界地址的 `uintptr` 算术也无效，因为它们压根不对应一个活对象。
-
-这类 bug 之所以凶险，在于它平时不发作。只有当垃圾回收恰好在那个危险窗口里触发、又恰好回收或移动了
-那个对象，程序才会读到垃圾值或崩溃。它依赖时序，难以复现，可能潜伏很久才在生产环境某次高负载下
-现身。规则本身（「`Pointer` 到 `uintptr` 必须在同一表达式内用于算术，绝不跨语句保存」）并不复杂，
-难的是写代码时未必意识到自己违反了它。这正是下一节那个工具要解决的问题。
-
-## 15.4.3 checkptr：把潜伏的误用变成当场报错
-
-依赖人去严守上述规则并不可靠，于是 Go 给编译器和运行时加了一道「指针检查器」（checkptr）。它的
-思路是在 `unsafe` 转换处插入运行时检查，把原本「平时不出事、偶尔神秘崩溃」的潜伏 bug，变成发生在
-案发现场的明确报错。
-
-checkptr 默认关闭，由编译器的调试开关 `-d=checkptr` 控制。更常见的是间接打开它：编译 `cmd/compile`
-里有一条约定，`-race`、`-msan`、`-asan` 任一开启都会顺带把 `-d=checkptr` 置为 1（[16.2](../ch16tools/race.md)）。
-所以平时跑 `go test -race`，指针检查器就已经在工作了。机制上，编译器在 walk 阶段（[15.3](./ssa.md) 之前
-把语法树降级为更接近运行时调用的形式）扫描那些会破坏类型安全的转换，在其后插入对运行时检查函数的
-调用。运行时 `runtime/checkptr.go` 提供这些检查，核心是三类：
-
-- **对齐检查**（`checkptrAlignment`）：当把 `unsafe.Pointer` 转成 `*T` 时，验证地址满足 `T` 的对齐要求。
-  在多数硬件上，从未对齐的地址读取含指针的类型会出错，因此运行时只对「指向的类型本身含指针」的情形
-  强制对齐，对纯标量类型放宽（见 issue 37298）。检查失败抛出 `checkptr: misaligned pointer conversion`。
-- **跨分配检查**（`checkptrStraddles`，由对齐检查顺带触发）：验证 `(*[n]T)(p)` 覆盖的这段内存不会横跨
-  多个独立的分配。两个相邻对象在地址上挨着，不代表可以当作一个数组一并访问。失败抛出
-  `checkptr: converted pointer straddles multiple allocations`。
-- **算术检查**（`checkptrArithmetic`）：对模式二那样的指针算术，验证算出的指针若落进某个堆对象，则它
-  必须落进参与运算的某个「原始指针」所在的同一个对象里。这正是「不得越界到原分配之外」那条规则的
-  运行时落实。失败抛出 `checkptr: pointer arithmetic result points to invalid allocation`，
-  或在结果是个非法低地址时抛出 `checkptr: pointer arithmetic computed bad pointer value`。
-
-判断一个地址属于哪个分配，靠的是运行时的 `checkptrBase`，它依次在当前 goroutine 栈、堆（`findObject`，
-复用 GC 的对象查找，见 [12.2](../../part4memory/ch12alloc/component.md)）、以及全局 data/bss 段里定位
-地址的基址。两个地址基址相同，才算同属一个分配。
-
-`unsafe.Slice` 与 `unsafe.String` 这两个把指针和长度拼成切片、字符串的辅助函数，也各有专门的检查
-入口（运行时的 `unsafeslicecheckptr`、`unsafestringcheckptr`），在构造出新的切片或字符串视图前先核对
-指针与长度，确保得到的视图不会越过原始分配的边界。
-
-checkptr 也留了豁免的出口。极少数确实需要绕过检查的函数，可以用编译指示 `//go:nocheckptr` 标注，
-让编译器对该函数不插入检查。运行时与某些底层库正是靠它处理那些「确知安全、但形式上会触发误报」的
-转换。这道工具体现了 Go 一贯的态度：即便开了一道绕过安全的口子，也要尽力帮读者别把脚打穿。
-
-## 15.4.4 unsafe 的定位与更安全的辅助函数
-
-`unsafe` 这个名字本身就是警告。Go 的设计立场是默认安全，内存安全与类型安全是常态，`unsafe` 是
-为少数确实必要的场景保留的例外通道，而非日常工具。它的正当用途集中在几处：与 C 互操作时按 C 的
-布局解释内存（[15.6](./cgo.md)），对接系统调用与系统结构体，以及零拷贝地在 `[]byte` 与 `string`
-之间转换（[5.1](../../part2lang/ch05data/slice.md)）以避开一次内存拷贝。这些场景的共同点是，要么
-跨越了 Go 类型系统管不到的边界（C、内核），要么是在性能热点上为省一次拷贝而精确控制内存布局。
-
-即便在这些场景里，`unsafe` 的用法也该尽量收窄：用得少、严格落在规范的合法模式内、并在测试中开启
-race 与 checkptr。Go 还在持续把这个逃生舱口本身变得不那么容易出事。早年要构造一个指定底层数组的
-切片，常见写法是借 `reflect.SliceHeader`，手动填它的 `Data`、`Len`、`Cap` 字段，这正是 15.4.1 模式四
-里那种脆弱写法：`Data` 是 `uintptr`，稍不留神就让底层数据失去被引用的凭据而被回收。Go 1.17 引入
-`unsafe.Add` 与 `unsafe.Slice`，Go 1.20 又补上 `unsafe.String`、`unsafe.SliceData`、`unsafe.StringData`，
-把这些操作收进类型安全、且被 checkptr 覆盖的内建函数里：
+编译器与运行时分别为此提供了保证。其一，在生成 SSA 时，指针与整数之间的转换不是简单地复制一个值，
+而是生成一个专门的 `Convert` 操作 [[Go Authors, 2026c](#ref-go-authors-2026c)]：
 
 ```go
-// Go 1.17+：在 Pointer 上做带类型的偏移，取代手写 uintptr 算术
+	// Convert converts between pointers and integers.
+	// We have a special op for this so as to not confuse GC
+	// (particularly stack maps).  It takes a memory arg so it
+	// gets correctly ordered with respect to GC safepoints.
+	// It gets compiled to nothing, so its result must in the same
+	// register as its argument. regalloc knows it can use any
+	// allocatable integer register for OpConvert.
+	// arg0=ptr/int arg1=mem, output=int/ptr
+	{name: "Convert", argLength: 2, zeroWidth: true, resultInArg0: true},
+```
+
+`Convert` 以内存状态为参数，因而不会被调度到它前后的函数调用之外。同一个表达式中的两次转换之间只有算术，
+没有函数调用，也就没有同步的安全点，栈不会在这里增长，垃圾回收也不会在这里精确地扫描这个栈帧。
+其二是异步抢占（[9.7](../../part3concurrency/ch09sched/preemption.md)）：goroutine
+可能在任意指令处被打断，但运行时对被打断的最内层栈帧做保守扫描，寄存器中任何看起来像指针的整数都使对象存
+活；处于异步安全点的 goroutine 的栈也不会被收缩 [[Go Authors, 2026c](#ref-go-authors-2026c)]。`uintptr`
+一旦被存入变量、跨越语句，这两项保证都不再成立。
+
+模式 (4) 的情形不同：`syscall.Syscall` 的参数类型是 `uintptr`，指针必须先转换为整数才能传入，
+而内核在调用期间会把其中一些参数当作指针使用。标准库用两个编译指示处理这个问题
+[[Go Authors, 2026c](#ref-go-authors-2026c)]：
+
+```go
+// N.B. For the Syscall functions below:
+//
+// //go:uintptrkeepalive because the uintptr argument may be converted pointers
+// that need to be kept alive in the caller.
+//
+// //go:nosplit because stack copying does not account for uintptrkeepalive, so
+// the stack must not grow. Stack copying cannot blindly assume that all
+// uintptr arguments are pointers, because some values may look like pointers,
+// but not really be pointers, and adjusting their value would break the call.
+```
+
+对标有 `//go:uintptrkeepalive` 的函数，逃逸分析把参数列表中的 `uintptr(unsafe.Pointer(p))` 改写为先把 `p`
+存入一个临时变量，并让这个变量一直存活到调用返回。`//go:nosplit` 则保证调用期间栈不会增长，编译器会检查
+标有前者的函数是否同时标有后者。`//go:uintptrkeepalive` 只允许在标准库中使用；另一个指示
+`//go:uintptrescapes` 则让这类参数所指的对象逃逸到堆上，栈增长因而不再构成问题。这正是模式 (4) 要求转换
+「直接出现在参数列表中」的原因：编译器只在那里识别这种写法。
+
+## 15.4.3 checkptr
+
+上述规则并不复杂，违反它们的代码却往往通过所有测试：只有垃圾回收或栈复制恰好落在危险的窗口中，
+程序才会读到错误的数据或崩溃。2017 年的提案 #22218 提出在转换处插入运行时检查，起因是另一类问题：
+栈复制时如果遇到 0 到 `minLegalPointer` 之间的指针值，运行时会以 invalid pointer found on stack 终止程序，
+提案希望在产生这种值的转换处就报告错误 [[amscanne, 2017](#ref-amscanne-2017)]。Matthew Dempsky 于
+2019 年实现了编译器选项 `-d=checkptr`，随 Go 1.14 发布 [[Dempsky, 2019a](#ref-dempsky-2019a)；
+[Go Authors, 2020](#ref-go-authors-2020)]。它在两类转换处插入对运行时函数的调用：
+
+- `unsafe.Pointer` 转换为 `*T` 时，调用 `checkptrAlignment`，检查地址是否满足 `T` 的对齐要求，以及
+  `T` 所覆盖的内存是否横跨了多个分配。对齐只对本身含指针的类型强制要求。
+- `uintptr` 转换为 `unsafe.Pointer` 时，调用 `checkptrArithmetic`。编译器在 walk
+  阶段分析这次转换的操作数，收集算术表达式中所有由 `unsafe.Pointer` 转换而来的「原始指针」（加法的两侧，
+  减法与 `&^` 的左侧），连同计算结果一起交给运行时 [[Go Authors, 2026b](#ref-go-authors-2026b)]。
+
+`checkptrArithmetic` 的实现很短 [[Go Authors, 2026a](#ref-go-authors-2026a)]：
+
+```go
+func checkptrArithmetic(p unsafe.Pointer, originals []unsafe.Pointer) {
+	if 0 < uintptr(p) && uintptr(p) < minLegalPointer {
+		throw("checkptr: pointer arithmetic computed bad pointer value")
+	}
+
+	// Check that if the computed pointer p points into a heap
+	// object, then one of the original pointers must have pointed
+	// into the same object.
+	base := checkptrBase(p)
+	if base == 0 {
+		return
+	}
+
+	for _, original := range originals {
+		if base == checkptrBase(original) {
+			return
+		}
+	}
+
+	throw("checkptr: pointer arithmetic result points to invalid allocation")
+}
+```
+
+第一项检查对应提案 #22218 的起因。第二项检查是模式 (3) 中「结果必须仍指向原来的分配」的运行时版本：
+`checkptrBase` 依次判断地址是否位于当前 goroutine 的栈中、某个堆对象中（借助垃圾回收器的 `findObject`，
+[12.2](../../part4memory/ch12alloc/component.md)），或者某个模块的 data 段与 bss 段中，
+返回所在分配的基址。计算结果与某个原始指针的基址相同，才算合法。若算术的操作数中根本没有
+`unsafe.Pointer`，例如地址先被存进了一个 `uintptr` 变量，`originals` 就是空的，只要结果指向堆对象，
+检查必然失败。跨越语句保存 `uintptr` 的写法因此会被当场发现，无须等到垃圾回收恰好发生。
+
+下面的 `second` 违反了模式 (3)（输出以 Go 1.26.10 为准）：
+
+```go
+package main
+
+import (
+	"fmt"
+	"unsafe"
+)
+
+type pair struct{ a, b int }
+
+var sink *pair
+
+func second(p *pair) int {
+	u := uintptr(unsafe.Pointer(p))
+	q := unsafe.Pointer(u + unsafe.Offsetof(p.b)) // u 跨越了语句，无效
+	return *(*int)(q)
+}
+
+func main() {
+	sink = &pair{1, 2}
+	fmt.Println(second(sink))
+}
+```
+
+```shell
+$ go run .
+2
+$ go vet .
+main.go:14:7: possible misuse of unsafe.Pointer
+$ go run -race . 2>&1 | head -1
+fatal error: checkptr: pointer arithmetic result points to invalid allocation
+```
+
+不加检查时，程序输出了正确的结果，错误被掩盖。`go vet` 能从语法形式上识别这种写法；`-race` 隐含了
+`-d=checkptr`，运行时检查在第 14 行终止了程序。两种工具各有盲区：把同一个程序中的转换改写为模式 (3)
+的形式、但让结果越过分配的末尾，`go vet` 不再报错，checkptr 则仍会在结果落入相邻堆对象时报告同样的错误。
+
+checkptr 在 Go 1.14 中即与 `-race`、`-msan` 绑定，当时 Windows 除外，因为 Windows 部分的标准库中有大量需要
+修改的转换 [[Dempsky, 2019b](#ref-dempsky-2019b)]。在 Go 1.26 中，`-race`、`-msan` 与 `-asan` 三者都隐含
+`-d=checkptr`，除非显式指定了别的值，`-gcflags=all=-d=checkptr=0` 可以将其关闭。`-d=checkptr=2` 更进一步，
+迫使所有转换为 `unsafe.Pointer` 的值分配在堆上，使基于堆对象的检查覆盖更多情形。运行时本身不使用 checkptr
+[[Go Authors, 2026b](#ref-go-authors-2026b)]。
+
+检查也有已知的局限。`checkptrBase` 对栈上的地址一律返回同一个伪基址 1，同一个栈帧中不同变量之间的越界
+算术因此无法发现；`checkptrStraddles` 只比较一段内存首尾两端的基址，中间完整包含了别的分配的情形也检查
+不出来，源码中以 TODO 注明了这两点 [[Go Authors, 2026a](#ref-go-authors-2026a)]。与竞争检查
+（[16.2](../ch16tools/race.md)）一样，checkptr 只能发现测试中实际执行到的错误。
+
+确实需要违反规则的函数可以标注 `//go:nocheckptr`，编译器不为其插入检查。标准库中的 `internal/abi.NoEscape`
+是一个例子，它故意经由整数转换使逃逸分析看不到指针的流向 [[Go Authors, 2026c](#ref-go-authors-2026c)]：
+
+```go
+//go:nosplit
+//go:nocheckptr
+func NoEscape(p unsafe.Pointer) unsafe.Pointer {
+	x := uintptr(p)
+	return unsafe.Pointer(x ^ 0)
+}
+```
+
+`//go:nosplit` 与 `//go:cgo_unsafe_args` 都隐含 `//go:nocheckptr`。启用 checkptr 时，内联器也不内联标有
+`//go:nocheckptr` 的函数（[15.3](./optimize.md)），否则函数体展开到调用者中之后，又会被插入检查。
+
+## 15.4.4 更安全的原语
+
+模式 (6) 是六种模式中最脆弱的一种。`reflect.SliceHeader` 与 `reflect.StringHeader` 的 `Data` 字段是
+`uintptr`，只有当头部本身是一个真实切片或字符串的别名时，这个字段才同时是指针；单独声明的头部变量中，
+`Data` 只是一个整数，不能使底层数据存活。Go 1.17 加入了 `unsafe.Add` 与 `unsafe.Slice`
+[[Dempsky, 2021](#ref-dempsky-2021)]，Go 1.20 又加入 `unsafe.SliceData`、`unsafe.String` 与
+`unsafe.StringData`，至此不依赖头部的内存表示也能构造与拆解切片和字符串
+[[Go Authors, 2021](#ref-go-authors-2021)；[Go Authors, 2023](#ref-go-authors-2023)]。
+它们的签名如下（节选）[[Go Authors, n.d.a](#ref-go-authors-nda)]：
+
+```go
 func Add(ptr Pointer, len IntegerType) Pointer
-
-// Go 1.17+：由指针与长度构造切片，取代填写 reflect.SliceHeader
+// ……
 func Slice(ptr *ArbitraryType, len IntegerType) []ArbitraryType
-// Go 1.20+：反向取出切片底层数组的首地址
+// ……
 func SliceData(slice []ArbitraryType) *ArbitraryType
-
-// Go 1.20+：由 *byte 与长度构造字符串，及反向取出字符串底层字节
+// ……
 func String(ptr *byte, len IntegerType) string
+// ……
 func StringData(str string) *byte
 ```
 
-这组函数把过去散落在用户代码里、靠手写 `uintptr` 算术和反射头部完成的危险操作，收敛成几个语义
-明确的原语。`unsafe.Slice(ptr, n)` 等价于 `(*[n]T)(unsafe.Pointer(ptr))[:]`，但会在运行时检查 `n`
-非负、`ptr` 与 `n` 不越界；`unsafe.String(b, n)` 与 `unsafe.StringData(s)` 让 `[]byte` 与 `string` 的
-零拷贝互转有了规范的写法，而不必再去碰 `StringHeader`。配套地，`reflect.SliceHeader` 与
-`reflect.StringHeader` 已被官方标记 `Deprecated`，文档直接指向这些新函数。
+Go 1.17 的发布说明强调，这些函数是为了让符合规则的代码更容易编写，规则本身没有改变
+[[Go Authors, 2021](#ref-go-authors-2021)]。它们的好处在于检查可以附着在函数上：`unsafe.Slice`
+总会检查长度是否为负、`ptr` 与长度相乘是否溢出、`ptr` 为 nil 时长度是否为零；启用 checkptr 时，
+编译器改为调用 `unsafeslicecheckptr`，再检查结果是否横跨多个分配，`unsafe.String` 也是如此
+[[Go Authors, 2026b](#ref-go-authors-2026b)；[Go Authors, 2026c](#ref-go-authors-2026c)]。两个头部类型自
+Go 1.20 起被标记为弃用，文档建议改用这些函数 [[hopehook, 2022](#ref-hopehook-2022)；
+[Go Authors, n.d.b](#ref-go-authors-ndb)]。这些函数用于零拷贝转换的方式与前提见
+[5.2.4](../../part2lang/ch05data/string.md)。
 
-这就是 Go 对待「不安全」的完整态度。它承认 `unsafe` 有时必要，并不假装能取消它；但它用类型系统把
-危险收进 `unsafe.Pointer` 这一个口子，用规范钉死合法模式，用 checkptr 在测试中把误用变成当场报错，
-再用 1.17/1.20 的新原语把最常见的危险写法替换成安全写法。安全从不是一道是非题，逃生舱口必须存在，
-能做的是层层设防，把它被用错的概率和被用错时的代价都压到最低。
+## 15.4.5 其他语言的做法
 
-## 15.4.5 别家的逃生舱口
+带垃圾回收的语言在提供裸地址时都要处理同一个矛盾：回收器希望自由地回收与移动对象，裸地址却要求对象留在
+原处。C# 的 `fixed` 语句在一个代码块期间钉住一个可移动的变量，块内声明的指针只能在块内使用
+[[Microsoft, n.d.](#ref-microsoft-nd)]。Go 对纯 Go 代码没有这样的语法，而是把「钉住」的时间限制在一次地址
+算术之内，由编译器与运行时隐式保证；需要让 C 代码长期持有 Go 指针时，Go 1.21 起提供 `runtime.Pinner`
+显式地钉住对象（[15.6](./cgo.md)）。
 
-把 Go 的设计放进谱系里看，会更清楚它的取舍落在哪。带垃圾回收的语言几乎都得面对同一个矛盾：
-既要让 GC 自由地移动对象以整理内存，又要偶尔允许程序拿到裸地址做底层操作，而移动与裸地址天然
-冲突。各家的解法不同，恰好照出 Go 这条「`uintptr` 不得跨语句」规则的位置。
+Java 的演进方向与 `unsafe.Slice` 的引入相似。长期以来，Java 的底层库依赖非公开的 `sun.misc.Unsafe`
+读写堆内外的内存，分配与释放完全由程序员控制。JEP 454 认为这种模型给了开发者过多的控制：
+多个内存区域之间可以互相引用，释放顺序一旦出错，悬空指针就会造成释放后使用。Java 22
+中定稿的外部函数与内存 API 以 `MemorySegment` 表示一段内存，每个内存段都有空间与时间两方面的界，
+保证不访问未分配的内存、不在释放之后访问 [[OpenJDK, 2024](#ref-openjdk-2024)]。
 
-C# 给出的是显式的钉扎（pinning）。它的 `fixed` 语句会在一个代码块的期间把一个托管对象「钉」住，
-告诉 GC 在这段时间内不要移动它，于是块内对该对象做指针算术是安全的。Go 没有 `fixed` 这样的构造，
-它用另一种方式达到同样的「对象在算术期间不会被搬走」的保证：禁止承载地址的 `uintptr` 活过那条
-表达式。换句话说，C# 靠程序员显式声明一段钉扎窗口，Go 靠把窗口压缩到单条表达式、由编译器隐式
-保证其间对象始终被原指针引用。两者目标一致，一个把责任交给语法，一个把责任交给规则。
+Rust 没有垃圾回收，不存在对象在地址算术期间被移动或回收的问题，但它同样把绕过检查的代码圈在显式的
+`unsafe` 块中，并在语言参考中逐项列出只能在其中进行的操作，例如解引用裸指针
+[[Rust Project, n.d.](#ref-rust-project-nd)]。Go 的 `unsafe` 是一个包而不是一种语法，绕过类型系统的代码
+必须导入它，导入列表因此成为审查的入口；`reflect.Value.Pointer` 返回 `uintptr` 而非 `unsafe.Pointer`，也是
+为了让不导入 `unsafe` 的代码无法把结果转换为任意类型。
 
-Java 的演进路线则与 Go 的辅助函数演进高度同构。早年 Java 底层代码依赖未公开的 `sun.misc.Unsafe`，
-它的字段偏移同样只是一个 `long` 整数，带着和 `uintptr` 一模一样的「GC 移动后偏移失效」的隐患。
-近年 Java 用 Foreign Function & Memory API（Project Panama，于 Java 22 定稿）取而代之，以
-`MemorySegment` 这种带边界检查、带生命周期作用域的抽象，把裸内存访问收进受控的接口。这正是
-Go 用 `unsafe.Slice`/`unsafe.String` 取代手填 `reflect.SliceHeader` 的同一种思路：把脆弱的裸操作
-升级成有检查、有边界的原语。
+## 15.4.6 小结
 
-Rust 的 `unsafe` 块提供的是另一个维度的参照。它和 Go 共享「逃生舱口必须是被命名、被划定、可审计
-的一小块」这一立场，`unsafe` 关键字把绕过检查的代码圈在显眼的边界内，便于审查。但要说清楚的是，
-Rust 没有垃圾回收，因而没有「算术期间对象被移动」这一类危险，它的 `unsafe` 防的是别的东西
-（解引用裸指针、数据竞争等）。可借鉴的是「把不安全显式圈起来」的姿态，而非具体的危险模型。
+`unsafe.Pointer` 的规则看似繁琐，实际都围绕一个事实：编译器生成的指针位图不认识 `uintptr`。六种合法模式
+要么不把整数转换回指针，要么把整数存活的时间压缩到编译器能够照顾的范围之内。编译器以 `Convert` 操作、
+`//go:uintptrkeepalive` 与 `//go:nosplit` 维持这些范围，运行时以保守扫描兜住异步抢占。checkptr 则把规则
+变成可以执行的检查，使违反规则的代码在测试中立即失败，而不是在生产环境中偶然崩溃。
 
-放在一起看，Go 的选择是一种克制的折中：不引入 `fixed` 那样的显式钉扎构造，把绕过安全的能力收进
-`unsafe.Pointer` 一个口子，用一条「不得跨语句保存 `uintptr`」的规则替代显式窗口，再用 checkptr
-和新原语补上工具与人体工程。它换来的是语言表面的简单，付出的是这条规则不够直观、需要工具兜底。
+## 延伸阅读
 
-## 延伸阅读的文献
-
-1. The Go Authors. *Package unsafe（`Pointer` 的合法转换模式、`Add`/`Slice`/`String`/`SliceData`/`StringData`）.*
-   https://pkg.go.dev/unsafe
-2. The Go Authors. *runtime/checkptr.go（`checkptrAlignment`、`checkptrStraddles`、`checkptrArithmetic`、`checkptrBase`）.*
-   https://github.com/golang/go/blob/master/src/runtime/checkptr.go
-3. The Go Authors. *cmd/compile/internal/walk: convert.go 与 builtin.go（checkptr 转换处的插桩、`unsafeslicecheckptr`/`unsafestringcheckptr`）.*
-   https://github.com/golang/go/tree/master/src/cmd/compile/internal/walk
-4. The Go Authors. *Go 1.17 Release Notes（`unsafe.Add`、`unsafe.Slice`）.* https://go.dev/doc/go1.17
-5. The Go Authors. *Go 1.20 Release Notes（`unsafe.String`、`unsafe.SliceData`、`unsafe.StringData`）.* https://go.dev/doc/go1.20
-6. The Go Authors. *reflect.SliceHeader / StringHeader 的 Deprecated 说明.* https://pkg.go.dev/reflect#SliceHeader
-7. JEP 454: *Foreign Function & Memory API（Java 22 定稿，`MemorySegment` 作为 `sun.misc.Unsafe` 的受控替代）.*
-   https://openjdk.org/jeps/454 ；C# `fixed` 语句与对象钉扎，https://learn.microsoft.com/dotnet/csharp/language-reference/statements/fixed
-8. 本书 [5.1 数组、切片与字符串](../../part2lang/ch05data/slice.md)、[12.2 组件](../../part4memory/ch12alloc/component.md)、[14.4 栈的拷贝与指针调整](../../part4memory/ch14stack/copy.md)、[15.6 cgo](./cgo.md)、[16.2 竞态检测](../ch16tools/race.md).
+- <a id="ref-amscanne-2017"></a>[amscanne, 2017] amscanne. golang/go#22218.
+  *proposal: add GOEXPERIMENT=checkptr.* 2017. https://go.dev/issue/22218
+  提出在 `unsafe.Pointer` 转换处插入运行时检查，由 [Dempsky, 2019a] 实现并关闭。
+- <a id="ref-dempsky-2019a"></a>[Dempsky, 2019a] Matthew Dempsky. cmd/compile: add -d=checkptr to validate
+  unsafe.Pointer rules. Go commit 80a6fedea0, 2019. https://go.dev/cl/162237
+  随 Go 1.14 发布。
+- <a id="ref-dempsky-2019b"></a>[Dempsky, 2019b] Matthew Dempsky. cmd/compile: enable -d=checkptr when
+  -race or -msan is specified. Go commit dded58760d, 2019. https://go.dev/cl/201783
+  随 Go 1.14 发布。
+- <a id="ref-dempsky-2021"></a>[Dempsky, 2021] Matthew Dempsky. spec: add unsafe.Add and unsafe.Slice. Go
+  commit 1da05eb0ce, 2021. https://go.dev/cl/312212
+  随 Go 1.17 发布。
+- <a id="ref-go-authors-nda"></a>[Go Authors, n.d.a] The Go Authors. *Package unsafe*（`Pointer`
+  的合法转换模式、`Add`/`Slice`/`String`/`SliceData`/`StringData`）. https://pkg.go.dev/unsafe
+- <a id="ref-go-authors-ndb"></a>[Go Authors, n.d.b] The Go Authors. *reflect.SliceHeader / StringHeader*
+  的 Deprecated 说明. https://pkg.go.dev/reflect#SliceHeader
+- <a id="ref-go-authors-2020"></a>[Go Authors, 2020] The Go Authors. *Go 1.14 Release Notes*: Compiler.
+  2020. https://go.dev/doc/go1.14
+- <a id="ref-go-authors-2021"></a>[Go Authors, 2021] The Go Authors. *Go 1.17 Release Notes*: Changes to
+  the language（`unsafe.Add`、`unsafe.Slice`）. 2021. https://go.dev/doc/go1.17
+- <a id="ref-go-authors-2023"></a>[Go Authors, 2023] The Go Authors. *Go 1.20 Release Notes*: Changes to
+  the language（`unsafe.String`、`unsafe.SliceData`、`unsafe.StringData`）. 2023.
+  https://go.dev/doc/go1.20
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors.
+  runtime/checkptr.go（`checkptrAlignment`、`checkptrStraddles`、`checkptrArithmetic`、`checkptrBase`）.
+  Go 1.26 源码. https://github.com/golang/go/blob/master/src/runtime/checkptr.go
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. cmd/compile/internal/walk:
+  convert.go 与 builtin.go（checkptr 转换处的插桩、`unsafeslicecheckptr`/`unsafestringcheckptr`）；另见
+  cmd/compile/internal/base/flag.go. Go 1.26 源码.
+  https://github.com/golang/go/tree/master/src/cmd/compile/internal/walk
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/math/unsafe.go、
+  src/cmd/compile/internal/ssa/_gen/genericOps.go、src/runtime/mgcmark.go、src/runtime/stack.go、
+  src/syscall/syscall_linux.go、src/internal/abi/escape.go、src/runtime/unsafe.go、src/runtime/pinner.go.
+  Go 1.26 源码. https://github.com/golang/go/tree/release-branch.go1.26/src
+- <a id="ref-hopehook-2022"></a>[hopehook, 2022] hopehook. reflect: deprecate SliceHeader and
+  StringHeader. Go commit d734203e39, 2022. https://go.dev/cl/428757
+  随 Go 1.20 发布。
+- <a id="ref-microsoft-nd"></a>[Microsoft, n.d.] Microsoft. *fixed statement - pin a variable for pointer
+  operations.* C# language reference.
+  https://learn.microsoft.com/dotnet/csharp/language-reference/statements/fixed
+- <a id="ref-openjdk-2024"></a>[OpenJDK, 2024] OpenJDK. *JEP 454: Foreign Function & Memory API*（Java 22
+  定稿， `MemorySegment` 作为 `sun.misc.Unsafe` 的受控替代）. 2024. https://openjdk.org/jeps/454
+- <a id="ref-rust-project-nd"></a>[Rust Project, n.d.] The Rust Project. *The Rust Reference*: Unsafety.
+  https://doc.rust-lang.org/reference/unsafety.html
+- 本书 [5.1 数组与切片](../../part2lang/ch05data/slice.md)、
+  [5.2 字符串与零拷贝转换](../../part2lang/ch05data/string.md)、
+  [9.7 协作与抢占](../../part3concurrency/ch09sched/preemption.md)、
+  [12.2 组件](../../part4memory/ch12alloc/component.md)、
+  [14.4 栈的拷贝与指针调整](../../part4memory/ch14stack/copy.md)、[15.3 优化器](./optimize.md)、
+  [15.6 cgo](./cgo.md)、[16.2 竞争检查](../ch16tools/race.md)。
