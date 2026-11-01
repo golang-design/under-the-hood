@@ -5,157 +5,258 @@ title: "2.4 参数传递与栈帧布局"
 
 # 2.4 参数传递与栈帧布局
 
-[2.3](./callconv.md) 给出了两套 ABI 的分工与参数分配的递归算法，那是「规则」。本节把规则落到
-一个具体例子上：一个同时含标量与数组的签名，参数究竟在栈帧里怎样摆放，寄存器参数为何还要在
-栈上留一格溢出槽，序言里那条几乎人人都付的栈增长检查又是怎么搭上抢占的便车。最后我们回到
-「为何自定义 ABI」这个总账，把这两节合成一个完整的回答。
+[2.3](./callconv.md) 中的参数改由寄存器传递，但寄存器中的值并不持久，下一次函数调用就可能将其覆盖；
+寄存器也没有内存地址，无法对其取地址。因此即使在 ABIInternal 下，每次调用仍须在栈上保留一块区域。
+本节先说明这块区域中存放的内容，再分析几乎每个函数开头都有的栈空间检查，以及调度器如何借助这项检查
+暂停一个 goroutine，最后讨论 Go 为何不采用 C 的调用约定。
 
-## 2.4.1 一个掺杂栈传与寄存器传的例子
+## 2.4.1 栈上保留的区域
 
-抽象规则不如一个例子来得清楚。取 ABI 规范里那个精心设计的签名，它故意同时含有能进寄存器的
-标量与必须走栈的数组：
-
-```go
-func f(a1 uint8, a2 [2]uintptr, a3 uint8) (
-    r1 struct{ x uintptr; y [2]uintptr }, r2 string)
-```
-
-按 [2.3.1](./callconv.md) 的递归分配，在 amd64（整数寄存器 `RAX, RBX, ...`）上结果是：
-
-- `a1`、`a3` 是能进寄存器的标量，分到 `RAX`、`RBX`；
-- `a2` 是非平凡数组，**整个退回栈上**；
-- 返回值 `r1` 含数组，也走栈；`r2` 是 `string`，拆成 base 与 len 两部分，回填 `RAX`、`RBX`
-  （返回时寄存器重新从头计数，与入参不冲突）。
-
-于是入口时只有 `a2` 在栈上有初值，栈帧布局如下，其余区域调用时一律不初始化：
-
-```mermaid
-flowchart TB
-    spill["a3Spill uint8<br/>a1Spill uint8<br/>（寄存器参数的溢出槽，调用方预留，调用时空着）"]
-    ret["r1.y [2]uintptr<br/>r1.x uintptr<br/>（栈传返回值）"]
-    arg["a2 [2]uintptr<br/>（栈传参数，唯一带初值者）"]
-    spill --> ret --> arg
-    low["↓ 低地址"]
-    arg -.-> low
-```
-
-这个例子把三件事一次说清：标量优先进寄存器，含数组的值整体走栈，而**每个寄存器参数仍在栈上
-留有一格溢出槽**待命。把它和 [2.3.1](./callconv.md) 那条「全栈传」的 ABI0 对照，差别一目了然：ABI0
-下 `a1`、`a3` 连同 `a2` 全在栈上按序排开，没有寄存器、也无需溢出槽；ABIInternal 把能搬的都搬进了
-寄存器，省下的正是那几次进出栈内存的读写。
-
-## 2.4.2 栈帧、溢出槽与寄存器约定
-
-一次调用压入一个**栈帧**，自高地址向低地址，依次容纳：调用方为被调用方预留的栈传参数区与栈传
-返回值区、被调用方的局部变量、需要保存的寄存器、以及返回地址。amd64 上以低地址在下的惯例画出，
-一个含寄存器传参的调用，其栈帧大致是这样：
-
-```mermaid
-flowchart TB
-    spill["寄存器参数的溢出槽（spill）<br/>← 调用方预留，调用时不填"]
-    ret["栈传返回值"]
-    arg["栈传参数"]
-    spill --> ret --> arg
-    low["↓ 低地址"]
-    arg -.-> low
-```
-
-这里的**溢出槽**（spill space）是寄存器 ABI 特有的设计，也是一处精巧的取舍。寄存器传参省下了
-栈读写，但寄存器会被后续指令覆写，一旦函数中途需要扩栈（见下一节），就得有地方把这些寄存器
-实参先「溢」出来暂存。关键在于：**这块暂存空间由调用方在自己的栈帧里预留**，而非被调用方。原因
-是被调用方扩栈时，它自己的栈帧可能根本腾不出空间，让调用方提前备好，扩栈路径才有落脚点。这块
-槽位同时充当实参的「家」，traceback 打印参数、`reflect` 调用归约参数都借它，是一处一举多用的安排。
-
-寄存器还分两类约定。amd64 上 `R14` 恒定指向**当前 goroutine**（即 `g`），`RSP`/`RBP` 是栈指针与
-帧指针，`RDX` 在调用闭包时传递闭包上下文。值得点出的是：Go 的 ABIInternal **没有调用方保存／
-被调用方保存（callee-save）的寄存器**之分，一次调用可以覆写任何没有固定含义的寄存器，包括参数
-寄存器。这简化了实现，代价是调用前后调用方若还要用某个寄存器里的值，得自己负责保存。
-
-## 2.4.3 序言里的栈增长检查，与抢占搭的便车
-
-Go 的调用规范还嵌进了一件别家 ABI 少有的事：**栈增长检查**。Go 的 goroutine 栈很小（初始 2KB），
-按需增长（[14 执行栈](../../part4memory/ch14stack)），这要求几乎每个函数在干正事之前，先确认当前栈
-空间还够用。于是编译器在几乎每个函数的**序言**（prologue）里都插入一小段检查：把栈指针 `SP` 与
-`g.stackguard0` 比一比，不够就跳去 `morestack` 扩栈，扩完再从头执行本函数。下面是 `go tool objdump`
-对一个普通函数序言的实拍（arm64 上 `R28` 即 `g`，`16(R28)` 是 `g.stackguard0`，与 amd64 同构）：
-
-```asm
-MOVD 16(R28), R16            // R16 = g.stackguard0
-CMP  R16, RSP                // 比较栈指针与栈保护边界
-BLS  <morestack tail>        // SP 低于边界，栈快用尽，跳去扩栈
-MOVD.W R30, -32(RSP)         // 检查通过，正常的栈帧建立
-...                          // 函数体
-// 序言开头跳来的尾巴：
-MOVD R30, R3
-CALL runtime.morestack_noctxt.abi0(SB)   // 扩栈
-JMP  本函数(SB)               // 扩栈后回到序言重跑
-```
-
-注意尾巴里那个 `.abi0` 后缀，`morestack` 是用手写汇编实现的，走 ABI0，正是 [2.3.1](./callconv.md)
-所说的边界。
-
-序言代码并非千篇一律，编译器按栈帧大小分三档优化（`StackSmall = 128`、`StackBig = 4096` 字节）：
-帧 $\le$ `StackSmall` 的函数，栈底预留的余量足以容纳它，于是只需一条 `CMP guard, SP` 加一次跳转，
-省掉一条减法指令；帧介于二者之间的，要先算出 `SP - framesize` 再比；帧 $\ge$ `StackBig` 的索性
-不比，无条件调 `morestack`。这种「为小帧函数省一条指令」的斤斤计较，正因为这段检查会出现在
-**几乎每一个函数**里，省下的常数乘以调用频次便相当可观。
-
-真正巧妙的是，这段为栈增长而生的检查，被 Go 的**协作式抢占**搭了便车（[9.7](../../part3concurrency/ch09sched/preemption.md)）。
-运行时想让某个 goroutine 让出 CPU 时，并不需要另设一套打断机制，只消把它的 `stackguard0` 改写成
-一个**永远比任何合法 `SP` 都大**的哨兵值 `stackPreempt`：
+以 Go ABI 规范中的示例为例 [[Go Authors, 2026a](#ref-go-authors-2026a)]：
 
 ```go
-// 请求抢占：把栈保护边界改成哨兵值（runtime/preempt.go 速写）
+func F(a1 uint8, a2 [2]uintptr, a3 uint8) (r1 struct{ x uintptr; y [2]uintptr }, r2 string)
+```
+
+按照 2.3 的规则，`a1` 与 `a3` 分别放入 AX 与 BX；`a2` 是数组，经由栈传递；返回值 `r1` 含有数组，同样
+位于栈上；`r2` 分解为指针和长度两个分量，返回时放在 AX 与 BX 中。调用方在栈上准备的区域自低地址向
+高地址依次为：
+
+| 偏移 | 内容 | 调用时的状态 |
+| --- | --- | --- |
+| 0 | `a2`（16 字节） | 已由调用方写入 |
+| 16 | `r1`（24 字节） | 未初始化，由 `F` 在返回前写入 |
+| 40 | 为 `a1` 预留的 1 字节 | 未初始化 |
+| 41 | 为 `a3` 预留的 1 字节 | 未初始化 |
+| 42 | 对齐填充（6 字节） | |
+
+共 48 字节。编译器的 `-S` 输出中，`F` 的第一行是 `main.F STEXT nosplit size=53 args=0x30 ...`，其中
+`0x30` 即 48。
+
+表中最后几行值得注意：参数虽然经由寄存器传递，调用方仍在栈上为每个寄存器参数预留了位置，但并不写入。
+这块区域称为参数的**溢出区**（spill space），用于以下几种情况：
+
+- `F` 需要扩栈时（2.4.2），必须先把寄存器中的参数保存到内存。此时 `F` 自身的栈已接近耗尽，未必能再
+  为这些参数腾出空间，而调用方预留的区域早已就绪。
+- `F` 对参数取地址（如 `&a1`）时，参数需要一个固定的内存位置。
+- 参数因其他原因需要溢出到内存时，也存放在这里。运行时打印调用栈时从这里读取参数的值；若参数在此后
+  未被写回，打印出的值可能已经过时，运行时会在其后标注 `?`。
+
+其代价是栈空间的占用有所增加。据 ABI 规范估计，这部分空间的浪费中位数为每次调用 16 字节；规范把完全
+去掉预留的溢出区列为长期目标 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
+
+调用之后哪些寄存器的值保持不变，也是调用约定的一部分。C 的调用约定规定了一组**被调方保存寄存器**
+（callee-saved register），被调函数若使用它们，必须在返回前恢复原值。ABIInternal 没有这类寄存器：
+除下表所列具有固定含义的寄存器外，任何寄存器都可能在调用中被改写，调用方若在调用之后仍需要某个值，
+须自行将其保存到栈上。ABI 规范指出，这一设计显著简化了垃圾回收器与编译器的寄存器分配器，
+代价是损失一部分性能 [[Go Authors, 2026a](#ref-go-authors-2026a)]。对垃圾回收器而言，
+扫描栈时无须追查某个指针被哪一层函数暂存在了哪个寄存器中。amd64 上具有固定含义的寄存器如下：
+
+| 寄存器 | 含义 |
+| --- | --- |
+| SP | 栈指针 |
+| BP | 帧指针，调试器与性能剖析工具借助它回溯调用链 |
+| R14 | 指向当前 goroutine |
+| X15 | 在调用与返回时恒为零 |
+
+此外，调用闭包时 DX 传递闭包的上下文指针，但这一含义仅在调用发生的时刻成立。
+
+## 2.4.2 函数开头的栈检查
+
+goroutine 的栈起初很小，不足时再更换为更大的栈。新建 goroutine 的栈从 2 KiB 开始；自 Go 1.19 起，
+运行时还在每轮垃圾回收中统计各 goroutine 栈的平均使用量，据此调整从空闲链表复用的 goroutine 的栈大小
+[[Go Authors, 2022](#ref-go-authors-2022)]（[14.2.5](../../part4memory/ch14stack/alloc.md)）。因此，
+几乎每个函数在开头都要先确认剩余的栈空间是否足够。下面的递归函数 `Deep` 有一个参数 `n`，局部变量中有一个
+16 字节的数组：
+
+```go
+//go:noinline
+func Deep(n int) int {
+	var buf [2]int
+	buf[n&1] = n
+	if n == 0 {
+		return buf[0]
+	}
+	return Deep(n-1) + buf[1]
+}
+```
+
+编译到 linux/amd64 后，函数的开头与结尾如下（省略了中间部分）：
+
+```
+TEXT	main.Deep(SB), ABIInternal, $32-8
+CMPQ	SP, 16(R14)                    // 与当前 goroutine 的警戒线比较
+JLS	69                             // 不高于警戒线：跳转到末尾扩栈
+PUSHQ	BP                             // 检查通过：保存 BP，为局部变量分配空间
+MOVQ	SP, BP
+SUBQ	$24, SP
+……
+MOVQ	AX, 8(SP)                      // 偏移 69：把 AX 中的参数 n 存入调用方预留的溢出区
+CALL	runtime.morestack_noctxt(SB)   // 更换为更大的栈
+MOVQ	8(SP), AX                      // 取回 n
+JMP	0                              // 回到开头重新检查
+```
+
+32 字节的帧由三部分组成：保存 BP 的 8 字节、数组 `buf` 的 16 字节，以及调用 `Deep(n-1)` 时为其参数
+预留的 8 字节溢出区。
+
+函数开头的这几条准备指令称为**函数序言**（prologue）。R14 指向当前 goroutine 的 `g` 结构体，其偏移
+16 处存放该 goroutine 的**警戒线**（stack guard，即字段 `stackguard0`）。一旦 SP 不高于警戒线，函数
+便跳转到末尾：先把寄存器中的参数保存到 2.4.1 所述的溢出区，再调用 `morestack`（[2.2](./frame.md)）
+更换栈，随后取回参数，回到开头重新检查。
+
+警戒线并不位于栈的最底端，而是位于其上方 928 字节处（linux/amd64）。其中 800 字节供不做检查的 `NOSPLIT`
+函数链使用，链接器会核对这类调用链不超出此限；另外 128 字节使栈帧不超过 128 字节的函数可以直接用 SP
+与警戒线比较，不必先减去自身栈帧的大小 [[Go Authors, 2026b](#ref-go-authors-2026b)]。
+栈帧更大的函数需要多做一步计算；栈帧超过 4096 字节时，SP 减去帧大小还可能发生回绕，因此还要检查借位。
+下面两个函数的局部变量分别是 1 KiB 与 8 KiB 的数组：
+
+```
+TEXT	main.Medium(SB), ABIInternal, $1040-0
+LEAQ	-912(SP), R12                  // 912 = 1040 - 128
+CMPQ	R12, 16(R14)
+
+TEXT	main.Huge(SB), ABIInternal, $8208-0
+MOVQ	SP, R12
+SUBQ	$8080, R12                     // 8080 = 8208 - 128
+JCS	63                             // 发生借位（SP 小于 8080）：直接转去扩栈
+CMPQ	R12, 16(R14)
+```
+
+还有一类函数完全省去了检查。[2.3](./callconv.md) 开头 `Add` 的输出中标有 `NOSPLIT`，而源码并未提出
+这一要求。在 amd64 上，若一个函数的栈帧小于 128 字节，且除少数不带参数的运行时函数（如报告下标越界的
+`runtime.panicBounds`）外不调用任何函数，它使用的栈就不会超出警戒线以下预留的余量，`cmd/internal/obj`
+便自动将其标记为 `NOSPLIT`，省去检查 [[Go Authors, 2026b](#ref-go-authors-2026b)]。
+
+扩栈时，运行时分配一块大小为原来两倍的新栈，把旧栈的内容整体复制过去，再调整栈上指向栈内的指针
+（[14.3](../../part4memory/ch14stack/grow.md)）。下面的程序在一个新 goroutine 中逐步加深递归，并观察
+一个局部变量的地址：栈被移动时，该地址随之改变。
+
+```go {run=true}
+package main
+
+import (
+	"fmt"
+	"unsafe"
+)
+
+//go:noinline
+func down(n int) {
+	if n > 0 {
+		down(n - 1)
+	}
+}
+
+func main() {
+	done := make(chan bool)
+	go func() { // 新 goroutine 的栈从 2 KiB 开始
+		var x int // 栈被移动时，x 的地址随之改变
+		old, last := uintptr(unsafe.Pointer(&x)), 0
+		for depth := 1; depth <= 1000; depth++ {
+			down(depth)
+			if now := uintptr(unsafe.Pointer(&x)); now != old {
+				fmt.Printf("递归 %3d 层时栈被移动，比上次多 %3d 层\n", depth, depth-last)
+				old, last = now, depth
+			}
+		}
+		done <- true
+	}()
+	<-done
+}
+```
+
+在 darwin/arm64 上的输出为：
+
+```
+递归  29 层时栈被移动，比上次多  29 层
+递归  93 层时栈被移动，比上次多  64 层
+递归 221 层时栈被移动，比上次多 128 层
+递归 477 层时栈被移动，比上次多 256 层
+递归 989 层时栈被移动，比上次多 512 层
+```
+
+相邻两次移动之间增加的递归层数依次翻倍：64、128、256、512。在这台机器上，`down` 每层占用 32 字节，
+64 层恰好是 2 KiB。栈共移动 5 次，依次增长为 4 KiB、8 KiB、16 KiB、32 KiB 与 64 KiB；每次新增的空间等于
+旧栈的大小，正好对应下一段多出的层数。在网页上运行时，程序被编译为 WebAssembly，每层只占 16 字节，
+输出变为 58、186、442、954 层，间隔同样是 128、256、512 层，逐次翻倍。由于栈的大小每次翻倍，历次复制
+的字节数之和不会超过最终栈的大小，扩栈的总开销与栈的最终大小成正比。
+
+## 2.4.3 抢占借用同一项检查
+
+一个 goroutine 连续运行超过 10 毫秒时，系统监控（[9.8](../../part3concurrency/ch09sched/sysmon.md)）
+会请求它让出处理器，使其他 goroutine 也有机会运行。最直接的做法是借用上述栈检查：把该 goroutine 的
+警戒线改为一个大于任何栈地址的值。它下一次调用函数时，检查必然失败，于是进入 `morestack`。运行时发现
+警戒线是这一特殊值，便知道并非栈空间不足，因此不扩栈，而是如同调用 `runtime.Gosched` 一样让出处理器；
+待它再次被调度执行时，警戒线恢复原值 [[Go Authors, 2026c](#ref-go-authors-2026c)]。
+
+```go
+// runtime/proc.go，preemptone（节选，注释为译文）
 gp.preempt = true
-gp.stackguard0 = stackPreempt   // 一个绝不会被合法 SP 满足的值
+// 每次函数调用都会比较当前的栈指针与 gp.stackguard0，以检查栈是否溢出。
+// 将其设为 stackPreempt，便把抢占并入了常规的栈溢出检查。
+gp.stackguard0 = stackPreempt // 在 64 位平台上为 0xfffffffffffffade
 ```
 
-这样一来，该 goroutine 下一次进入任意函数序言、做那条 `CMP guard, SP` 时，检查必然「失败」，
-跳进 `morestack`。`morestack` 发现 `stackguard0` 是 `stackPreempt` 而非真的栈不足，便顺势把控制权
-交还调度器，完成一次让出，让出后再把 `stackguard0` 复位为 `stack.lo + stackGuard`。一个看似纯粹的
-ABI 细节（序言里那条栈检查），同时服务了**栈增长**与**协作式抢占**两件事。这是 Go 把多种机制叠在
-同一个低成本检查点上的典型手法：检查点你反正每次调用都要付，那就让它一票多用。当然，这条路
-只在函数调用处生效，对不含调用的紧凑循环无能为力，那是异步抢占要补的另一半，[9.7](../../part3concurrency/ch09sched/preemption.md)
-专门展开。
+这种做法无须在代码中增加任何指令，局限也很明显：它只在函数调用时生效。不调用任何函数的循环永远不会
+执行这项检查，在 Go 1.14 之前，这样的循环可以一直占用处理器。Go 1.14 引入了基于操作系统信号的异步
+抢占 [[Clements, 2019](#ref-clements-2019)]，`preemptone` 在设置警戒线之后紧接着发出这一请求，详见
+[9.7](../../part3concurrency/ch09sched/preemption.md)。
 
-## 2.4.4 为何自定义 ABI
+## 2.4.4 为何不采用 C 的调用约定
 
-Go 没有沿用所在平台的标准 ABI（如 amd64 上的 System V AMD64 ABI），而是从头定义了自己的两套
-ABI。这是一个有明确代价、也有明确收益的选择。
+Linux 上的 C 与 C++ 程序遵循同一套平台调用约定，可以直接相互调用。Go 的寄存器传参提案（2.3）明确
+选择不采用平台约定 [[Clements, 2020](#ref-clements-2020)]，理由有两方面。
 
-放进谱系里看会更清楚。多数原生编译型语言（C、C++、Rust）直接复用平台 ABI，于是它们之间、以及
-与操作系统接口之间能零成本互调，代价是被平台约定锁死，难以为自己的运行时定制。带托管运行时的
-语言则普遍另起炉灶：JVM、CLR 都有自己的内部调用约定，与平台 ABI 只在 JNI、P/Invoke 这类受控
-边界处对接。Go 选的是后一条路，且走得更彻底，它连汇编器（[2.1](./asm.md)）都是自有的，整条
-工具链对调用规范握有完全的话语权。System V ABI 用 `rdi, rsi, rdx, rcx, r8, r9` 传整型参数，Go 却
-另选了 `RAX, RBX, RCX, ...` 这一串，并把 `R14` 钉死为当前 goroutine，这些都是平台 ABI 给不了的
-自由。
+其一，共用约定的收益有限。直观上看，与 C 共用约定可以降低调用 C 函数的开销；但 goroutine 的栈会动态
+伸缩，调度也由 Go 运行时而非操作系统完成，调用非 Go 代码时，无论约定是否相同，都必须切换到固定的栈并
+通知调度器。调试器与性能剖析工具普遍依赖 DWARF 调试信息或帧指针回溯，Go 不采用平台约定，也能与之
+配合。
 
-代价是**与外部目标文件不能直接互通**。调用一段 C 代码（cgo），就要跨越 ABI 边界：Go 的寄存器约定、
-栈布局、`g` 指针约定与 C 世界全不一样，每次过界都要切换栈、保存／恢复一批寄存器、调整调用约定，
-这是实打实的开销，也是 cgo「调用一次不便宜」的根源之一（[15 编译器](../../part5toolchain/ch15compile)）。
+其二，C 的约定并不适合 Go。x86-64、arm64 与 RISC-V 的 ELF ABI 都不用寄存器传递超过两个字的聚合类型，
+占三个字的切片因此只能经由内存传递；这些约定通常最多为返回值保留两个寄存器，而 Go
+函数常常返回一个结果加一个占两个字的 `error`，共三个字。平台约定中的被调方保存寄存器会给垃圾回收器带来额外
+负担（2.4.1）。此外，各平台的约定在细节上各不相同，自行定义约定，就可以在所有体系结构上沿用同一种结构
+[[Clements, 2020](#ref-clements-2020)]。
 
-收益是**对调用规范的完全掌控**。最有说服力的证据，正是 [2.3.1](./callconv.md) 那次从栈到寄存器的
-切换：ABI0 演进到 ABIInternal，给整个生态带来约 5% 的提速，而用户代码一行未改。这件事之所以能
-透明地发生，恰恰**因为这套 ABI 是 Go 自己的**，不必兼容任何外部约定，运行时与编译器同属一个
-项目、同步演进，改 ABI 不会惊动谁。若 Go 当初绑定了平台 System V ABI，这类优化要么做不成，
-要么会破坏与外部世界的二进制兼容。
+自行定义的约定还提供了平台约定所没有的便利：R14 始终指向当前 goroutine，函数序言用一条指令即可读到
+警戒线；X15 恒为零；多个返回值都可以放在寄存器中。更重要的是，ABIInternal 由编译器、运行时与汇编器在
+同一个代码库中共同维护，可以随版本演进：Go 1.17 把参数从栈移到寄存器，用户代码无须任何修改；将来去掉
+2.4.1 中预留的溢出区，也是如此。
 
-这与 [2.1](./asm.md) 维护一套自有的 Plan 9 汇编器、[6.1](../../part2lang/ch06func/func.md) 在调用约定上
-反复打磨，是同一种哲学的不同侧面：**Go 宁可牺牲与外部世界的无缝互通，也要保住对自身实现的主权。**
-正是这份主权，让它能在不惊动用户代码的前提下，一次又一次地优化运行时的底层。性能的提升从不
-白来，这一次，它换走的是与 C 世界免费互通的便利。
+代价体现在与 C 交互时。经由 cgo 调用 C 函数，需要从 goroutine 的栈切换到线程的 `g0` 栈（C 代码不做
+栈检查，其栈上的指针也无法在栈移动时得到调整），按 C 的约定重新安排参数、保存和恢复寄存器，还要通知
+调度器该线程暂时脱离 Go 运行时的管理。因此，一次 cgo 调用的开销远大于一次普通的 Go 函数调用，详见
+[15.6](../../part5toolchain/ch15compile/cgo.md)。
 
-## 延伸阅读的文献
+## 延伸阅读
 
-1. The Go Authors. *Go internal ABI specification (ABIInternal).*
-   https://github.com/golang/go/blob/master/src/cmd/compile/abi-internal.md
-   （溢出槽、栈帧布局、各体系结构寄存器映射）
-2. The Go Authors. *runtime/stack.go、preempt.go、internal/abi/stack.go.*
-   https://github.com/golang/go/tree/master/src/runtime
-   （序言栈检查、`stackPreempt` 哨兵、`StackSmall`/`StackBig` 帧分档）
-3. 本书 [2.1 Plan 9 汇编语言](./asm.md)、[2.3 调用约定与寄存器 ABI](./callconv.md)、
-   [6.1 函数调用](../../part2lang/ch06func/func.md)、
-   [14 执行栈管理](../../part4memory/ch14stack)、
-   [9.7 协作与抢占](../../part3concurrency/ch09sched/preemption.md)、
-   [15 编译器](../../part5toolchain/ch15compile)。
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *Go internal ABI specification*.
+  `src/cmd/compile/abi-internal.md`.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/abi-internal.md
+  https://github.com/golang/go/blob/master/src/cmd/compile/abi-internal.md
+  栈帧布局、溢出区的设计理由、具有固定含义的寄存器，以及「未来方向」一节中的改进设想。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `runtime/stack.go` 与
+  `cmd/internal/obj/x86/obj6.go`（`stacksplit`）.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/internal/obj/x86/obj6.go
+  https://github.com/golang/go/tree/master/src/runtime （`runtime/stack.go`、`preempt.go`、`internal/abi/stack.go`）
+  警戒线大小的推导，函数序言中三种检查的生成方式，以及哪些函数可以省去检查。
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. `runtime/preempt.go`.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/preempt.go
+  文件开头的注释说明了各种抢占时机，以及如何借用栈检查实现抢占。
+- <a id="ref-clements-2019"></a>[Clements, 2019] Austin Clements. "Proposal: Non-cooperative goroutine
+  preemption." Go proposal 24543, 2019.
+  https://go.googlesource.com/proposal/+/master/design/24543-non-cooperative-preemption.md
+  仅靠函数调用处的检查为何不够，以及 Go 1.14 基于信号的抢占如何设计。
+- <a id="ref-clements-2020"></a>[Clements, 2020] Austin Clements. "Proposal: Register-based Go calling
+  convention." Go proposal 40724, 2020.
+  https://go.googlesource.com/proposal/+/master/design/40724-register-calling.md
+  其中比较了采用平台约定与自行定义约定的利弊。
+- <a id="ref-go-authors-2022"></a>[Go Authors, 2022] The Go Authors. *Go 1.19 Release Notes*, "Runtime".
+  https://go.dev/doc/go1.19#runtime
+  新 goroutine 的初始栈大小改为依据历史平均用量确定。
+- 本书 [2.1 Plan 9 汇编语言](./asm.md)、[2.3 调用约定与寄存器 ABI](./callconv.md)、
+  [6.1 函数调用](../../part2lang/ch06func/func.md)、
+  [14 执行栈管理](../../part4memory/ch14stack)、
+  [9.7 协作与抢占](../../part3concurrency/ch09sched/preemption.md)、
+  [15 编译器](../../part5toolchain/ch15compile)。
+

@@ -5,133 +5,180 @@ title: "2.2 汇编中的栈帧与符号"
 
 # 2.2 汇编中的栈帧与符号
 
-[2.1](./asm.md) 给出了 Plan 9 汇编的伪寄存器与寻址语法，那是「怎么写一行汇编」。本节把视线
-抬高到一段完整例程：一个手写汇编函数如何用 `TEXT ·name(SB)` 声明自己的符号，如何用 `$framesize-argsize`
-申明栈帧大小，`NOSPLIT` 又意味着什么。我们用运行时里三段真实例程（`Cas`、`gogo`、`morestack`）
-把这些约定逐处对上号，读完之后，调度器与栈管理章节里那些汇编符号就从天书变成可读的现场操作。
-
-## 2.2.1 从 Go 源码到 Plan 9 汇编：CAS 的逐槽对应
-
-把抽象落到实处。运行时的原子比较交换 `Cas` 在 amd64 上是手写汇编，它的 Go 原型与汇编实现
-逐字段对得上，是观察「Go 源码如何映射到 Plan 9 汇编」的好样本。Go 这一侧只有声明（函数体在
-`.s` 文件里）：
-
-```go
-// internal/runtime/atomic：仅声明，实现在 atomic_amd64.s
-//
-//	if *ptr == old { *ptr = new; return true } else { return false }
-func Cas(ptr *uint32, old, new uint32) bool
-```
-
-对应的 amd64 实现：
+运行时中的原子操作 `Cas` 在 amd64 上由一个汇编函数实现，其第一行是：
 
 ```asm
-// internal/runtime/atomic/atomic_amd64.s
 TEXT ·Cas(SB), NOSPLIT, $0-17
-	MOVQ	ptr+0(FP), BX      // BX = ptr        （指针 8 字节，偏移 0）
-	MOVL	old+8(FP), AX      // AX = old        （int32 4 字节，偏移 8）
-	MOVL	new+12(FP), CX     // CX = new        （int32 4 字节，偏移 12）
-	LOCK
-	CMPXCHGL	CX, 0(BX)  // 原子：若 *ptr==AX 则 *ptr=CX
-	SETEQ	ret+16(FP)         // 相等则把 1 写回返回值槽（偏移 16）
+```
+
+要读懂这一行及其后的代码，首先需要了解函数调用时栈上发生的变化。本节先以一段真实的反汇编画出栈的
+布局，再据此阅读 `Cas`，最后阅读运行时中两段直接改写栈指针与程序计数器的代码。
+
+## 2.2.1 栈帧的布局
+
+amd64 的 `CALL` 指令完成两件事：把返回地址（`CALL` 的下一条指令的地址）压入栈中，SP 随之减 8；然后
+跳转到目标函数。`RET` 的操作与之相反，从栈中弹出返回地址并跳回。被调函数开始执行后，通常先把 BP
+寄存器的旧值压入栈中，再下移 SP，为局部变量预留空间。Go 在 amd64 上启用了**帧指针**（frame
+pointer）：BP 始终指向当前函数栈帧中的固定位置，各层栈帧中保存的 BP 构成一条链表，调试器和性能剖析
+工具沿着这条链表即可逐层回溯调用关系。
+
+一次函数调用在栈上占用的区域称为**栈帧**（stack frame）。手写汇编所遵循的调用约定（见
+[2.3](./callconv.md)）通过栈传递参数和返回值：调用方在执行 `CALL` 之前，把它们写在自身栈帧的底部，
+紧邻返回地址。下面的汇编函数有两个参数、一个返回值和 24 字节的局部变量：
+
+```asm
+// func frame(a, b int) int
+TEXT ·frame(SB), $24-24
+	MOVQ	a+0(FP), AX     // 参数 a
+	MOVQ	b+8(FP), BX     // 参数 b
+	MOVQ	AX, x-8(SP)     // 带名字：伪寄存器 SP，局部变量 x
+	MOVQ	BX, 0(SP)       // 不带名字：硬件 SP
+	ADDQ	BX, AX
+	MOVQ	AX, ret+16(FP)  // 返回值
 	RET
 ```
 
-逐处对照即可读通这段代码，也能体会 FP 的作用：
+`$24-24` 声明栈帧的大小：减号之前是局部变量所占的字节数，减号之后是参数与返回值合计的字节数（`a`、
+`b`、`ret` 各 8 字节）。中间的减号只是分隔符，并不表示减法 [[Go Authors, 2026a](#ref-go-authors-2026a)]。
 
-- `TEXT ·Cas(SB)` 用 SB 声明全局符号 `Cas`，`·` 是包名分隔符，工具链会补全为
-  `internal/runtime/atomic.Cas`。函数名以 SB 偏移给出，正是 2.1.2 里 SB 的职责。
-- `$0-17` 是帧大小说明：**局部帧 0 字节，参数加返回值共 17 字节**。`17 = 8 + 4 + 4 + 1`，恰是
-  `*uint32`（8）、两个 `uint32`（各 4）、`bool` 返回值（1）之和。`NOSPLIT` 表示这段代码不插入
-  栈增长检查，本身不会触发 `morestack`。
-- 三条 `MOVx ...(FP)` 把三个**参数**从调用方栈帧搬进寄存器，偏移 0、8、12 与 Go 签名里参数的
-  排布一一对应。`MOVQ` 搬 8 字节（指针），`MOVL` 搬 4 字节（int32），后缀编码了操作宽度
-  （B/W/L/Q 对应 1/2/4/8 字节）。
-- `LOCK` 不是一条指令，而是修饰下一条指令的**前缀**，它令 `CMPXCHGL` 在多核上原子地独占目标
-  缓存行。`CMPXCHGL` 隐式以 AX 为比较基准：若 `*ptr == AX` 则写入 CX，并置标志位。
-- `SETEQ ret+16(FP)` 据标志位把 1 或 0 写回**返回值槽**，偏移 16 紧接在 17 字节区的末尾。
+在 darwin/arm64 上交叉编译到 linux/amd64，再用 `go tool objdump` 反汇编，结果如下：
 
-值得记住的是这份汇编只写一遍语法、却为多架构各有一份后端实现：386、arm64、riscv64 各自的
-`atomic_*.s` 用同样的 `·Cas(SB)`、同样的 `ptr+0(FP)` 写法，落到各家真实的原子指令上。这就是
-2.1.1 所说「一套语法、多个后端」在最小尺度上的样子。
-
-## 2.2.2 运行时下到汇编的两处现场：gogo 与 morestack
-
-CAS 展示了「调用约定 + 一条特殊指令」，调度器里的栈切换则展示了汇编**唯一能做**的事：把执行
-现场整体搬走。Go 用一个 `gobuf` 结构保存 goroutine 的现场（SP、PC、g 指针等），`gogo` 的职责
-就是把某个 `gobuf` 恢复进真实寄存器，从而「跳进」那个 goroutine：
-
-```asm
-// runtime/asm_amd64.s（裁剪：省去 g != nil 校验与实验性分支）
-TEXT gogo<>(SB), NOSPLIT, $0
-	get_tls(CX)
-	MOVQ	DX, g(CX)            // 把目标 g 写回 TLS
-	MOVQ	DX, R14              // R14 恒为当前 g（regabi 约定）
-	MOVQ	gobuf_sp(BX), SP     // 恢复栈指针：换栈在此一句完成
-	MOVQ	gobuf_bp(BX), BP     // 恢复帧基址
-	MOVQ	gobuf_pc(BX), BX     // 取出目标 PC
-	JMP	BX                       // 跳过去，从此 CPU 在新 goroutine 上执行
+```
+PUSHQ BP              // 汇编器插入：保存 BP 的旧值
+MOVQ SP, BP
+SUBQ $0x18, SP        // 汇编器插入：为局部变量预留 24 字节
+MOVQ 0x28(SP), AX     // a+0(FP)
+MOVQ 0x30(SP), BX     // b+8(FP)
+MOVQ AX, 0x10(SP)     // x-8(SP)
+MOVQ BX, 0(SP)        // 0(SP)
+ADDQ BX, AX
+MOVQ AX, 0x38(SP)     // ret+16(FP)
+ADDQ $0x18, SP        // 汇编器插入：释放局部变量的空间
+POPQ BP
+RET
 ```
 
-关键就在 `MOVQ gobuf_sp(BX), SP` 与末尾的 `JMP BX`：一句换掉栈指针，一句换掉程序计数器，CPU
-的执行现场便从一个 goroutine 整体迁移到另一个。这种「把 SP/PC 当普通数据来读写」的操作，
-高级语言里根本没有对应物，只能下到汇编。顺带一提，`R14` 恒等于当前 g 是 `<ABIInternal>`
-寄存器调用约定的一部分，调用约定本身由 [2.3](./callconv.md) 详述，这里只需知道它解释了汇编里
-为何能直接用 `R14` 取到当前 goroutine。
+源码中没有出现的前三行和最后两行由汇编器插入。把每个记号换算为相对硬件 SP 的位置，栈的布局如下：
 
-另一处是栈增长的序言 `morestack`。Go 的栈是按需增长的（[14](../../part4memory/ch14stack)），
-编译器在函数入口插入检查，发现栈不够就跳来这里。`morestack` 必须在切到 g0 系统栈之前，把
-**当前函数的现场**存进 `g.sched`，否则栈一搬走现场就丢了：
+| 位置 | 内容 | 汇编中的写法 |
+| --- | --- | --- |
+| `SP+0x38` | 返回值 | `ret+16(FP)` |
+| `SP+0x30` | 参数 `b` | `b+8(FP)` |
+| `SP+0x28` | 参数 `a` | `a+0(FP)`，伪寄存器 FP 指向此处 |
+| `SP+0x20` | 返回地址 | 由 `CALL` 压入 |
+| `SP+0x18` | BP 的旧值 | 伪寄存器 SP 指向此处 |
+| `SP+0x10` | 局部变量 `x` | `x-8(SP)` |
+| `SP+0x08` | 局部变量 | |
+| `SP+0x00` | 局部变量 | `0(SP)`，硬件 SP 指向此处 |
 
-```asm
-// runtime/asm_amd64.s（裁剪要点）
-TEXT runtime·morestack(SB), NOSPLIT|NOFRAME, $0-0
-	get_tls(CX)
-	MOVQ	g(CX), DI                       // DI = 当前 g
-	MOVQ	g_m(DI), BX                      // BX = m
-	MOVQ	0(SP), AX                        // 取被增长函数的 PC（裸 0(SP)：硬件 SP）
-	MOVQ	AX, (g_sched+gobuf_pc)(DI)       // 存进 g.sched.pc
-	LEAQ	8(SP), AX                        // 算出其 SP
-	MOVQ	AX, (g_sched+gobuf_sp)(DI)       // 存进 g.sched.sp
-	// ...切到 m.g0 栈，最终 CALL runtime·newstack(SB) 完成扩容与重新调度
+表中上面三行位于调用方的栈帧中，下面五行属于本函数的栈帧。`x-8(SP)` 与 `0(SP)` 看上去只差一个名字，
+实际相距 16 字节；伪寄存器 SP 比硬件 SP 高出的 24 字节，恰好是局部变量所占的空间。
+
+这个函数的开头没有栈空间检查。它不调用其他函数，局部变量又少于 128 字节，汇编器据此判定它使用的栈
+不会超出预留的余量，于是省略了检查。这项检查的内容以及余量的来源，见 [2.4](./args.md)。
+
+## 2.2.2 阅读 `Cas`
+
+有了上面的布局，`Cas` 便不难理解。它在 Go 中只有声明，函数体位于汇编文件中：
+
+```go
+// internal/runtime/atomic/stubs.go
+// 原子地执行：if *ptr == old { *ptr = new; return true } else { return false }
+func Cas(ptr *uint32, old, new uint32) bool
 ```
 
-注意这里 `0(SP)`、`8(SP)` 都是**裸偏移**，用的是硬件 SP（2.1.2 的陷阱）：`morestack` 直接在机器
-栈上读返回地址，所以必须用真实栈指针而非伪 SP。它常以 `morestack_noctxt` 的形式出现，那不过是
-先把上下文寄存器清零、再跳进 `morestack` 的两行薄包装：
-
 ```asm
-TEXT runtime·morestack_noctxt(SB), NOSPLIT, $0
-	MOVL	$0, DX
-	JMP	runtime·morestack(SB)
+// internal/runtime/atomic/atomic_amd64.s
+TEXT ·Cas(SB),NOSPLIT,$0-17
+	MOVQ	ptr+0(FP), BX      // BX = ptr（指针 8 字节，偏移 0）
+	MOVL	old+8(FP), AX      // AX = old（uint32 4 字节，偏移 8）
+	MOVL	new+12(FP), CX     // CX = new（uint32 4 字节，偏移 12）
+	LOCK
+	CMPXCHGL	CX, 0(BX)      // 若 *ptr 等于 AX，则将 CX 写入 *ptr，并置 ZF 标志
+	SETEQ	ret+16(FP)         // ZF 置位时写入 1，否则写入 0
+	RET
 ```
 
-读懂这两段，调度与栈管理章节里反复出现的「保存/恢复现场」就不再神秘：它们都是在汇编层精确
-摆布 PC、SP 与少数约定寄存器。
+逐项说明如下：
 
-## 2.2.3 它在本书中的角色与取舍
+- `TEXT ·Cas(SB)` 声明当前包中的函数 `Cas`，即 `internal/runtime/atomic.Cas`。
+- `NOSPLIT` 指示汇编器不在函数开头插入栈空间检查。这类函数只能使用很少的栈，链接器会核对由这类函数
+  组成的调用链，确保它们合计使用的栈不超出余量。
+- `$0-17`：没有局部变量；参数与返回值共 17 字节，其中指针 8 字节，两个 `uint32` 各 4 字节，`bool` 返回值
+  1 字节。偏移 0、8、12、16 正是它们依次紧密排列的位置。`go vet` 的 `asmdecl` 检查器依据 Go
+  声明算出这些偏移，与汇编中的写法逐一核对 [[Go Authors, 2026c](#ref-go-authors-2026c)]。
+- `MOVQ` 传送 8 字节，`MOVL` 传送 4 字节，与参数的大小相对应。
+- `LOCK` 前缀作用于下一条指令，保证 `CMPXCHGL` 的比较与写入在多核环境下作为一个原子操作完成，其他
+  核不会观察到中间状态 [[Intel, n.d.](#ref-intel-nd)]。
 
-[2.1](./asm.md) 与本节合起来是一份阅读词汇表，不是汇编教程。Go 选择维护自己的、Plan 9 风格的
-跨架构汇编器，而不复用 GNU as 这类现成工具，这是一处清晰的工程取舍：**成本**是又多养了一套
-汇编器、链接器与目标文件格式，每加一个架构都要补一个后端；**收益**是对代码生成、调用约定、栈
-布局、与运行时的协同握有完全控制权，并让「一套工具链交叉编译到所有架构」成为可能。性能与可控
-从不白来，它们的对价正是这套自有基础设施的长期维护负担。这与 [2.3 调用约定](./callconv.md)
-选择自定义 ABI、[6.1](../../part2lang/ch06func/func.md) 自管函数调用的取舍同出一辙，三者是同一种
-「为掌控而自造」的设计姿态。
+arm64 上的 `Cas` 位于 `atomic_arm64.s` 中，其声明同样是 `$0-17`，取参数同样写作 `ptr+0(FP)`、
+`old+8(FP)`，只是其间的指令换成了 arm64 的指令。各种体系结构共享的是函数声明、帧大小以及参数的
+写法，指令本身则各不相同。
 
-把这两节当作后续阅读的脚手架即可。当 [9.4](../../part3concurrency/ch09sched/schedule.md) 用 `gogo`/`mcall`
-切换 goroutine、[9.6](../../part3concurrency/ch09sched/signal.md) 在信号里保存现场、
-[14](../../part4memory/ch14stack) 谈栈增长时，读者知道那些汇编符号身处怎样一个抽象层：FP 取参数、
-SP 取局部、SB 取全局、PC 管跳转，由 Go 自有工具链翻译到真实硬件。带着这份词汇表，运行时最底层
-的那几页就读得动了。
+## 2.2.3 把 SP 与 PC 作为数据：`gogo` 与 `morestack`
 
-## 延伸阅读的文献
+一个 goroutine 暂停时，运行时把它的 SP、PC 等寄存器的值保存在一个名为 `gobuf` 的小结构体中；恢复它的执行，
+就是把这些值重新装入寄存器。`gogo` 完成的正是这项工作（节选自 `runtime/asm_amd64.s`
+[[Go Authors, 2026b](#ref-go-authors-2026b)]）：
 
-1. The Go Authors. *runtime/asm_amd64.s、internal/runtime/atomic.* https://github.com/golang/go/tree/master/src/runtime
-   （本节 `gogo`/`morestack`/`Cas` 的出处）
-2. The Go Authors. *Debugging Go Code with GDB.* https://go.dev/doc/gdb
-   （把汇编与运行时现场对照调试）
-3. 本书 [2.1 Plan 9 汇编语言](./asm.md)、[2.3 调用约定与寄存器 ABI](./callconv.md)（自定义 ABI）、
-   [6.1 函数调用](../../part2lang/ch06func/func.md)、
-   [9.4 调度循环](../../part3concurrency/ch09sched/schedule.md)（gogo/mcall 栈切换）、
-   [14 栈管理](../../part4memory/ch14stack)（morestack 与栈增长）.
+```asm
+TEXT gogo<>(SB), NOSPLIT, $0      // BX 指向目标 goroutine 的 gobuf
+	// ……先把当前 goroutine 设为目标 goroutine
+	MOVQ	gobuf_sp(BX), SP       // 切换栈
+	MOVQ	gobuf_bp(BX), BP
+	MOVQ	gobuf_pc(BX), BX
+	JMP	BX                         // 跳转到目标 goroutine 上次暂停的位置
+```
+
+一条 `MOVQ` 替换了栈，一条 `JMP` 替换了接下来要执行的指令。从这一刻起，处理器在另一个栈上执行另一个
+goroutine 的代码。这两步无法用 Go 语言表达，因此 `gogo` 只能用汇编实现。
+
+`morestack` 在 goroutine 的栈即将耗尽时被调用（[2.4](./args.md)）。它需要先记录调用它的函数（记作 f）及其
+执行位置，待换上更大的栈之后再回到该处继续执行：
+
+```asm
+TEXT runtime·morestack(SB),NOSPLIT|NOFRAME,$0-0
+	// ……DI 指向当前 goroutine 的 g
+	MOVQ	0(SP), AX                    // 栈顶为返回地址，即调用者 f 的执行位置
+	MOVQ	AX, (g_sched+gobuf_pc)(DI)   // 保存为 f 的 PC
+	LEAQ	8(SP), AX                    // 越过返回地址即为 f 的 SP
+	MOVQ	AX, (g_sched+gobuf_sp)(DI)   // 保存为 f 的 SP
+	// ……切换到当前线程的 g0 栈
+	CALL	runtime·newstack(SB)         // 分配更大的栈，并把旧栈的内容迁移过去
+```
+
+这里的 `0(SP)`、`8(SP)` 不带名字，指硬件 SP。`NOFRAME` 表示 `morestack` 不建立自己的栈帧，因此进入
+时 SP 恰好指向 `CALL` 刚压入的返回地址，可以直接读取。原来的栈已接近耗尽，`morestack` 不能继续在其上
+运行，于是切换到当前线程的 `g0` 栈（[3.5](../ch03life/boot.md)），再调用以 Go 实现的 `newstack`。
+
+调度（[9.4](../../part3concurrency/ch09sched/schedule.md)）、信号
+（[9.6](../../part3concurrency/ch09sched/signal.md)）和栈
+（[第 14 章](../../part4memory/ch14stack/readme.md)）等章节中出现的汇编，大多属于这两种形式：通过 `FP`
+访问参数，或者把 SP、PC 作为普通数据读写。在 GDB 中可以对照源码反汇编，并逐个查看 goroutine 的调用栈，
+把这些汇编与运行时的现场对照阅读 [[Go Authors, 2026d](#ref-go-authors-2026d)]。
+
+## 延伸阅读
+
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. "A Quick Guide to Go's Assembler."
+  https://go.dev/doc/asm
+  `TEXT`、帧大小、`NOSPLIT` 等标记以及伪寄存器的官方说明。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. `runtime/asm_amd64.s`、
+  `internal/runtime/atomic/atomic_amd64.s`、`runtime/textflag.h`.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/asm_amd64.s
+  https://github.com/golang/go/tree/master/src/runtime
+  本节 `gogo`、`morestack`、`Cas` 的出处；`textflag.h` 列出了 `NOSPLIT` 等全部标记。
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. `asmdecl` 检查器.
+  https://pkg.go.dev/golang.org/x/tools/go/analysis/passes/asmdecl
+  `go vet` 借助它核对汇编中的参数名、偏移与 Go 声明是否一致。
+- <a id="ref-intel-nd"></a>[Intel, n.d.] Intel. *Intel 64 and IA-32 Architectures Software Developer's
+  Manual*, Volume 2, "CMPXCHG" 与 "LOCK".
+  https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html
+  `LOCK CMPXCHG` 的原始说明。
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. *Debugging Go Code with GDB.*
+  https://go.dev/doc/gdb
+  （把汇编与运行时现场对照调试）
+- 本书 [2.1 Plan 9 汇编语言](./asm.md)、[2.3 调用约定与寄存器 ABI](./callconv.md)（自定义 ABI）、
+  [6.1 函数调用](../../part2lang/ch06func/func.md)、
+  [9.4 调度循环](../../part3concurrency/ch09sched/schedule.md)（gogo/mcall 栈切换）、
+  [14.3 栈的增长](../../part4memory/ch14stack/grow.md)（morestack 与栈增长）.
+
