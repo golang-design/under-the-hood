@@ -5,224 +5,353 @@ title: "14.3 栈的增长"
 
 # 14.3 栈的增长
 
-[14.1](./readme.md) 交代了 Go 选择连续栈的理由：栈起步只有 2KB，溢出时换一块两倍大的新栈，
-把旧栈整个拷过去。这一节只回答其中一个问题：运行时是怎么在「正确的时刻」知道栈快满了，又是
-怎么把控制权一路交到那段负责扩容的代码手里的。栈拷贝本身的细节留到 [14.4](./copy.md)。
+[14.1](./design.md) 说明了 Go 为什么采用连续栈：栈空间不足时，分配一段更大的栈，把旧栈整个复制过去。
+本节讨论这一过程如何被触发、新栈的大小如何确定，以及栈最大能增长到多少。一次**栈增长**（stack growth）
+依次经过四个环节：函数序言中的检查发现空间不足，调用汇编函数 `morestack`；`morestack` 保存现场并切换到
+g0，调用 `newstack`；`newstack` 确定新栈的大小，调用 `copystack` 复制栈；最后回到触发增长的函数，
+从头重新执行。复制本身留到 [14.4](./copy.md) 讨论。
 
-困难在于，栈增长这件事必须在栈快要溢出、却还没真正溢出的瞬间发生，而触发它的又恰恰是普通的
-函数调用。换言之，每一次进入函数都要先问一句「我这一帧放得下吗」，放不下才去扩容。这道检查不能
-靠程序员手写，它由编译器在每个函数的开头自动埋下，这就是**函数序言**（prologue）里的分段检查。
-整条链路是：序言检查 → `morestack`（汇编）→ `newstack`（Go）→ `copystack` → 返回原处继续执行。
-我们顺着这条链走一遍。
+## 14.3.1 函数序言中的检查
 
-## 14.3.1 函数序言：每次调用都先问一句
+编译器在每个函数的开头插入栈检查，标记为 `//go:nosplit` 的函数以及被自动判定无需检查的小函数除外
+（[2.4](../../part1overview/ch02asm/args.md)）。检查按栈帧的大小分为三种形式：栈帧不超过
+`abi.StackSmall`（128 字节）时直接比较 SP 与警戒线；不超过 `abi.StackBig`（4096 字节）时先从 SP
+中减去帧大小超出 128 字节的部分；更大的栈帧还要检查减法是否发生回绕
+[[Go Authors, 2026d](#ref-go-authors-2026d)]。三种形式在 amd64 上的具体指令见
+[2.4](../../part1overview/ch02asm/args.md)，警戒线以下余量的构成见 [14.1](./design.md)。生成这些指令的
+`cmd/internal/obj/x86/obj6.go` 对第三种形式的解释是 [[Go Authors, 2026c](#ref-go-authors-2026c)]：
 
-每个 Goroutine 的 `g` 结构里有一个字段 `stackguard0`，它是「栈还能用到哪里」的警戒线
-（[2.2](../../part1overview/ch02asm/callconv.md)）。正常情况下它等于 `stack.lo + stackGuard`，
-即栈底再抬高一个保护区的位置。函数序言要做的，就是拿当前的栈指针 SP 和这条警戒线比较：栈向
-低地址生长，一旦 SP 跌到 `stackguard0` 之下，就说明剩余空间不足以容纳即将压入的这一帧，必须
-先扩容。
-
-编译器并不会对所有函数都生成同样的检查。帧越大，越要把帧本身的大小算进去，于是检查分三档
-（常量 `StackSmall = 128`、`StackBig = 4096` 见 `internal/abi/stack.go`）。下面是 amd64 上
-序言的伪汇编，对应 `cmd/internal/obj/x86/obj6.go` 里的 `stacksplit`：
-
-```asm
-// 小帧 framesize <= StackSmall：直接比较 SP 与警戒线
-    CMPQ    SP, stackguard0     // SP 是否已跌破警戒线？
-    JHI     ok                  // SP 仍在警戒线之上，放得下，跳过
-    CALL    runtime·morestack(SB)
-ok:
-
-// 中帧 StackSmall < framesize <= StackBig：把帧大小一并算进去
-    LEAQ    -(framesize-StackSmall)(SP), AX
-    CMPQ    AX, stackguard0
-    JHI     ok
-    CALL    runtime·morestack(SB)
-
-// 大帧 framesize > StackBig：还要防 SP 接近 0 时的回绕（wraparound），
-// 并显式检查警戒线是否被改成了 stackPreempt 这种「故意大于任何真实 SP」的值
+```go
+		// Such a large stack we need to protect against underflow.
+		// The runtime guarantees SP > objabi.StackBig, but
+		// framesize is large enough that SP-framesize may
+		// underflow, causing a direct comparison with the
+		// stack guard to incorrectly succeed. We explicitly
+		// guard against underflow.
 ```
 
-警戒线被读成内存操作数 `stackguard0`，它在 `g` 中的偏移恰是第 3 个字（前两个字是
-`stack.lo`、`stack.hi`），所以汇编里写作 `2*PtrSize` 处；C 函数则比对 `stackguard1`
-（第 4 个字）。被 `//go:nosplit` 标记的函数不插入这段检查，代价是它们的帧必须挤进栈底那块
-`stackGuard - StackSmall` 的保留区里，链接器会遍历所有不分段函数的调用链，确保这块预留够用。
+同一个文件还把检查与随后的 `morestack` 调用标记为不可异步抢占：若 goroutine 恰好在这几条指令之间被抢占，
+恢复后抢占请求已被清除，它却仍会调用 `morestack`，栈会被无谓地加倍（issue #35470）。
 
-这里有一处容易被忽略的设计：小帧只需一条 `CMPQ` 加一条跳转，绝大多数函数都落在这一档，因此
-分段检查在快路径上几乎免费。把帧大小算进比较、防回绕这些麻烦，只加在少数大帧函数上。检查的
-成本是「每次函数调用都付」的，所以它被压到了极致。
+`runtime/stack.go` 开头有一段描述这些检查的长注释，它其实描述的是分段栈的年代
+[[Go Authors, 2026a](#ref-go-authors-2026a)]：
 
-## 14.3.2 morestack：搬到 g0 上去扩容
+```go
+/*
+Stack layout parameters.
+Included both by runtime (compiled via 6c) and linkers (compiled via gcc).
 
-序言判定空间不足，就 `CALL runtime·morestack`。这是一段汇编（`asm_amd64.s`），它要解决一个
-绕不开的矛盾：扩容的本质是「把当前这条栈整个拷到别处」，可拷贝逻辑自己也得跑在某条栈上，它
-绝不能跑在那条正要被搬走的用户栈上。`morestack` 的职责就是先把当前执行现场封存，再切换到
-**g0 系统栈**（[9.3](../../part3concurrency/ch09sched/mpg.md)）去执行真正的扩容函数 `newstack`。
-
-封存现场分两步。第一步，把触发增长的那个函数 f 的现场（PC、SP、BP、ctxt）写进 `g.sched`，
-这样扩容完毕后能凭它精确地回到 f 的下一条指令继续执行。第二步，把 f 的**调用方**现场记进
-`m.morebuf`，供 `newstack` 在需要时回溯栈。随后它确认当前不是在 g0 或信号栈上（这两条栈不
-允许增长，否则直接崩溃），最后切到 g0，调用 `newstack`：
-
-```asm
-TEXT runtime·morestack(SB),NOSPLIT|NOFRAME,$0-0
-    get_tls(CX)
-    MOVQ    g(CX), DI              // DI = g（当前用户 g）
-    MOVQ    g_m(DI), BX            // BX = m
-
-    // 将 f 的执行现场存入 g.sched，扩容后据此恢复
-    MOVQ    0(SP), AX
-    MOVQ    AX, (g_sched+gobuf_pc)(DI)   // f 的 PC
-    LEAQ    8(SP), AX
-    MOVQ    AX, (g_sched+gobuf_sp)(DI)   // f 的 SP
-    MOVQ    BP, (g_sched+gobuf_bp)(DI)
-    MOVQ    DX, (g_sched+gobuf_ctxt)(DI) // f 的 ctxt（闭包上下文）
-
-    // 不能增长 g0 / gsignal 栈，命中则崩溃
-    MOVQ    m_g0(BX), SI
-    CMPQ    DI, SI
-    JNE     3(PC)
-    CALL    runtime·badmorestackg0(SB)
-    CALL    runtime·abort(SB)
-    // ...（gsignal 同理省略）
-
-    // 将 m.morebuf 设为 f 的调用方现场，供 newstack 回溯
-    MOVQ    8(SP), AX
-    MOVQ    AX, (m_morebuf+gobuf_pc)(BX)
-    LEAQ    16(SP), AX
-    MOVQ    AX, (m_morebuf+gobuf_sp)(BX)
-    MOVQ    DI, (m_morebuf+gobuf_g)(BX)
-
-    // 切换到 m.g0 栈，在其上调用 newstack
-    MOVQ    m_g0(BX), BX
-    MOVQ    BX, g(CX)
-    MOVQ    (g_sched+gobuf_sp)(BX), SP   // SP 换到 g0 栈
-    MOVQ    $0, BP
-    CALL    runtime·newstack(SB)
-    CALL    runtime·abort(SB)            // newstack 不应返回，返回即崩溃
+The per-goroutine g->stackguard is set to point StackGuard bytes
+above the bottom of the stack.  Each function compares its stack
+pointer against g->stackguard to check for overflow.  To cut one
+instruction from the check sequence for functions with tiny frames,
+the stack is allowed to protrude StackSmall bytes below the stack
+guard.  Functions with large frames don't bother with the check and
+always call morestack.  The sequences are (for amd64, others are
+similar):
+	// ……
+	stack frame size >= StackBig:
+		MOVQ m->morearg, $((argsize << 32) | frame)
+		CALL morestack(SB)
+	// ……
+*/
 ```
 
-那个 `DX`（ctxt）是哪来的？序言里若函数不需要闭包上下文，调用的并不是 `morestack` 而是它的
-薄包装 `morestack_noctxt`：把 ctxt 清零再跳进来，省去保存一个无意义的寄存器。
+这段注释与 Go 1.2 的 `stack.h` 几乎逐字相同 [[Go Authors, 2013b](#ref-go-authors-2013b)]，「compiled via
+6c」「g->stackguard」都是 C 语言运行时的写法。分段栈扩栈时要把参数复制到新段，`morestack`
+因此需要知道参数的大小，序言便把它存入 `m->morearg`；栈帧很大时，新段的大小也取决于帧的大小，
+于是干脆不做比较，直接调用 `morestack`。连续栈不再复制参数，也无须知道帧的大小：设计文档写道，
+只要把栈加倍后重试，仍不够就再触发一次检查，直到放得下 [[Randall, 2013](#ref-randall-2013)]。今天的 `m`
+中已没有 `morearg` 字段，大栈帧的函数也同样执行比较，[2.4](../../part1overview/ch02asm/args.md)
+中帧大小为 8208 字节的 `Huge` 即是一例。
+
+标为 `//go:nosplit` 的函数不做检查，它们只能使用警戒线以下预留的空间，这一约束由链接器在构建时核对。
+Russ Cox 在 2011 年为链接器加入了这项检查，提交时就借此发现并修正了若干超出预留的运行时函数
+[[Cox, 2011](#ref-cox-2011)]。今天的检查位于 `cmd/link/internal/ld/stackcheck.go`
+[[Go Authors, 2026e](#ref-go-authors-2026e)]：
+
+```go
+	// limit is number of bytes a splittable function ensures are
+	// available on the stack. If any call chain exceeds this
+	// depth, the stack check test fails.
+	//
+	// The call to morestack in every splittable function ensures
+	// that there are at least StackLimit bytes available below SP
+	// when morestack returns.
+	limit := objabi.StackNosplit(*flagRace) - sc.callSize
+	if buildcfg.GOARCH == "arm64" {
+		// Need an extra 8 bytes below SP to save FP.
+		limit -= 8
+	}
+```
+
+在 amd64 上，`StackNosplit` 为 800 字节，减去 `CALL` 指令压入返回地址的 8 字节，限额为 792 字节。arm64 的
+调用把返回地址存入链接寄存器，不占栈，但要多留 8 字节保存帧指针，限额同样是 792 字节。下面的函数带有
+1 KiB 的局部数组，却被标记为 `//go:nosplit`：
+
+```go
+//go:nosplit
+//go:noinline
+func f(i int) byte {
+	var buf [1024]byte
+	for j := range buf {
+		buf[j] = byte(j)
+	}
+	return buf[i]
+}
+
+func main() { println(f(3)) }
+```
+
+为 linux/amd64 构建时，链接器拒绝了它：
+
+```shell
+$ GOOS=linux GOARCH=amd64 go build
+# ex
+main.f: nosplit stack over 792 byte limit
+main.f<1>
+    grows 1040 bytes, calls runtime.panicBounds<1>
+        grows 160 bytes, calls runtime.panicBounds64<1>
+            grows 8 bytes, calls runtime.morestack<0>
+            416 bytes over limit
+```
+
+链接器报告的是最深的一条调用链。`buf[i]` 需要下标检查，越界时调用 `runtime.panicBounds`，后者又调用
+`runtime.panicBounds64`；`panicBounds64` 做栈检查，可能调用 `morestack`，而 `morestack` 也必须放得下。
+1040 + 160 + 8 = 1208 字节，超出限额 416 字节。在 darwin/arm64 上，最后一次调用不压栈，输出为
+「grows 0 bytes」与「408 bytes over limit」。
+
+## 14.3.2 从 morestack 到 newstack
+
+检查失败后，函数调用 `morestack`；若函数不使用闭包上下文，则调用 `morestack_noctxt`，它把保存上下文的
+寄存器清零后跳转到 `morestack`：
 
 ```asm
 TEXT runtime·morestack_noctxt(SB),NOSPLIT,$0
-    MOVL    $0, DX
-    JMP     runtime·morestack(SB)
+	MOVL	$0, DX
+	JMP	runtime·morestack(SB)
 ```
 
-到此，用户 g 的现场已完整封存在 `g.sched` 与 `m.morebuf` 里，执行已经站在 g0 栈上，可以放心
-地去搬那条用户栈了。
+`morestack` 把触发增长的函数 f 的现场存入 `g.sched`，把 f 的调用方的现场存入 `m.morebuf`，再切换到 g0
+的栈调用 `newstack` [[Go Authors, 2026b](#ref-go-authors-2026b)]。这段汇编的逐行解读见
+[2.2](../../part1overview/ch02asm/frame.md)。切换到 g0 是必须的：用户栈即将被复制，
+扩栈的代码不能在它上面执行；g0 自身的栈不能增长，在 g0 上触发 `morestack`
+会直接终止程序（[9.3](../../part3concurrency/ch09sched/mpg.md)）。
 
-## 14.3.3 newstack：先辨抢占，再谈扩容
-
-`newstack`（`runtime/stack.go`）跑在 g0 上，但它处理的对象是被封存的用户 g（`thisg.m.curg`）。
-它做的第一件要紧事不是扩容，而是**辨别这次进来到底是不是真的要扩容**。
-
-原因在于 `stackguard0` 被复用成了一条抢占信道。运行时想抢占某个 Goroutine 时
-（[9.7](../../part3concurrency/ch09sched/preemption.md)），会把它的 `stackguard0` 改写成
-`stackPreempt`,一个故意大于任何真实 SP 的哨兵值（`0xfffffade`）。这样一来，该 Goroutine
-的下一次序言检查必然「失败」，被导进 `morestack`，再到 `newstack`。也就是说，序言检查这条
-本为栈增长铺设的路，被借用成了协作式抢占的同步安全点：
+`newstack` 开头是几项一致性检查，任何一项失败都意味着运行时自身出了错：
 
 ```go
 func newstack() {
-    thisg := getg()
-    gp := thisg.m.curg          // 被封存的用户 g
+	thisg := getg()
+	// TODO: double check all gp. shouldn't be getg().
+	if thisg.m.morebuf.g.ptr().stackguard0 == stackFork {
+		throw("stack growth after fork")
+	}
+	if thisg.m.morebuf.g.ptr() != thisg.m.curg {
+		// ……
+		throw("runtime: wrong goroutine in newstack")
+	}
 
-    // stackguard0 可能被另一线程并发改写，只读一次，下面统一用这个值
-    stackguard0 := atomic.Loaduintptr(&gp.stackguard0)
-    preempt := stackguard0 == stackPreempt
-
-    if preempt {
-        // 这是一次抢占请求，不是真的要扩容。
-        // 但若此刻持锁 / 正在分配 / 禁止抢占，则不宜让出，
-        // 放它继续跑，下次再说。
-        if !canPreemptM(thisg.m) {
-            gp.stackguard0 = gp.stack.lo + stackGuard  // 还原警戒线
-            gogo(&gp.sched)                            // 直接回去继续执行
-        }
-        // ...（条件满足则在此让出：gopreempt_m / preemptPark，见 9.7）
-    }
-
-    // 走到这里，才是一次真正的栈增长。
-    oldsize := gp.stack.hi - gp.stack.lo
-    newsize := oldsize * 2                        // 默认翻倍
-
-    // 若翻倍仍装不下即将进入的那一帧，继续翻，直到放得下
-    if f := findfunc(gp.sched.pc); f.valid() {
-        needed := uintptr(funcMaxSPDelta(f)) + stackGuard
-        used := gp.stack.hi - gp.sched.sp
-        for newsize-used < needed {
-            newsize *= 2
-        }
-    }
-
-    // 超过上限即视为失控（多半是无限递归），致命退出
-    if newsize > maxstacksize || newsize > maxstackceiling {
-        print("runtime: goroutine stack exceeds ", maxstacksize, "-byte limit\n")
-        throw("stack overflow")
-    }
-
-    // 标记为 Gcopystack，使并发 GC 在拷贝期间不扫描这条栈
-    casgstatus(gp, _Grunning, _Gcopystack)
-    copystack(gp, newsize)                        // 真正的搬栈，见 14.4
-    casgstatus(gp, _Gcopystack, _Grunning)
-    gogo(&gp.sched)                               // 凭 g.sched 回到 f，继续执行
+	gp := thisg.m.curg
+	// ……
+	if thisg.m.curg.throwsplit {
+		// ……
+		throw("runtime: stack split at bad time")
+	}
+	// ……
 }
 ```
 
-几处值得点出。栈大小**默认翻倍**而非线性增长，是为了把增长摊销成均摊 $O(1)$：一个会反复触
-发增长的栈，总的拷贝代价与最终大小成正比，而不是与触发次数的平方成正比。翻倍之上还有一道
-「若一帧本身就比翻倍后还大就继续翻」的兜底，保证至少装得下当前这一帧。
+`stackFork` 的含义见 [14.1](./design.md)。`throwsplit` 在进入系统调用时设置
+（[9.5](../../part3concurrency/ch09sched/thread.md)）。`entersyscall` 的注释说明了原因：
+系统调用进行期间不能安全地移动栈，因为运行时不知道哪些 `uintptr` 参数其实是指回栈内的指针
+[[Go Authors, 2026f](#ref-go-authors-2026f)]。随后 `newstack` 读出警戒线，判断这是否是一次抢占请求；
+抢占的处理见 [9.7](../../part3concurrency/ch09sched/preemption.md)，
+其中也包括推迟到这里执行的栈收缩（[14.5](./shrink.md)）。若 SP 已经低于 `stack.lo`，
+说明某段代码越过了警戒线以下的预留，运行时以「split stack overflow」终止程序。
 
-`maxstacksize` 是失控的护栏。它在 64 位上是 1GB，32 位上是 250MB（`runtime/proc.go` 中由
-`runtime.main` 设定，启动早期临时值为 1MB），另有 `maxstackceiling = 2 * maxstacksize`
-作硬顶。无限递归正是靠它被发现：递归不断触发增长，栈一路翻倍，撞上限后 `throw("stack overflow")`
-让程序立刻崩溃，而不是悄悄吃光内存。这也解释了为何 Go 里的 stack overflow 是一条 fatal
-而非可恢复的 panic,栈空间已无处可去，恢复无从谈起。
+## 14.3.3 新栈的大小
 
-最后两行是这条链路闭合的关键。`copystack` 在把旧栈搬到新栈的同时，会更新 `g.sched` 里的 SP
-等现场使其指向新栈（[14.4](./copy.md)），于是 `gogo(&gp.sched)` 就能跳回 f 当初被打断的地方,
-对 f 而言，它对这一切毫不知情，只觉得那次普通的函数调用照常返回了。
+排除了以上情况，剩下的才是真正的栈增长：
 
-## 14.3.4 整条链路
+```go
+	// Allocate a bigger segment and move the stack.
+	oldsize := gp.stack.hi - gp.stack.lo
+	newsize := oldsize * 2
 
-把四步连起来，一次因空间不足触发的栈增长是这样走完的：
+	// Make sure we grow at least as much as needed to fit the new frame.
+	// (This is just an optimization - the caller of morestack will
+	// recheck the bounds on return.)
+	if f := findfunc(gp.sched.pc); f.valid() {
+		max := uintptr(funcMaxSPDelta(f))
+		needed := max + stackGuard
+		used := gp.stack.hi - gp.sched.sp
+		for newsize-used < needed {
+			newsize *= 2
+		}
+	}
+
+	if stackguard0 == stackForceMove {
+		// Forced stack movement used for debugging.
+		// Don't double the stack (or we may quickly run out
+		// if this is done repeatedly).
+		newsize = oldsize
+	}
+
+	if newsize > maxstacksize || newsize > maxstackceiling {
+		if maxstacksize < maxstackceiling {
+			print("runtime: goroutine stack exceeds ", maxstacksize, "-byte limit\n")
+		} else {
+			print("runtime: goroutine stack exceeds ", maxstackceiling, "-byte limit\n")
+		}
+		print("runtime: sp=", hex(sp), " stack=[", hex(gp.stack.lo), ", ", hex(gp.stack.hi), "]\n")
+		throw("stack overflow")
+	}
+
+	// The goroutine must be executing in order to call newstack,
+	// so it must be Grunning (or Gscanrunning).
+	casgstatus(gp, _Grunning, _Gcopystack)
+
+	// The concurrent GC will not scan the stack while we are doing the copy since
+	// the gp is in a Gcopystack status.
+	copystack(gp, newsize)
+	// ……
+	casgstatus(gp, _Gcopystack, _Grunning)
+	gogo(&gp.sched)
+}
+```
+
+新栈默认是旧栈的两倍。函数开头的注释写道：「Stack growth is multiplicative, for constant amortized cost.」
+按倍数增长时，历次复制的字节数之和不超过栈最终的大小，摊到每个字节上是常数
+（[2.4](../../part1overview/ch02asm/args.md) 用一个程序观察了这一点）；若每次只增加固定的大小，
+复制总量将随栈的大小平方增长。第一行注释中的「segment」则是分段栈留下的用词。
+
+加倍之后，若新栈仍放不下触发增长的那一帧，就继续加倍。`funcMaxSPDelta` 给出该函数执行中 SP 的最大下降量，
+加上警戒线以下的余量，就是这一帧所需的空间。Randall 在 Go 1.15 中加入这一循环，提交说明指出它对大量小帧
+的情形没有帮助，但对少数大帧的情形可能有所改善 [[Randall, 2020](#ref-randall-2020)]；注释也说明这只是一项
+优化，`morestack` 返回后，函数会从头重新执行序言中的检查。`stackForceMove` 只要求移动而不要求增长，因此
+保持原有大小。
+
+复制期间，goroutine 处于 `_Gcopystack` 状态。并发运行的回收器不会扫描这样的栈；需要暂停这个 goroutine 的
+`suspendG` 遇到这一状态时，也会等待复制完成。`copystack` 结束后，`g.sched` 中保存的 SP 已经指向新栈，
+`gogo` 据此回到 f 中 `morestack` 调用之后的位置，f 随即取回溢出到栈上的参数，
+跳回开头重新执行序言中的检查，这一次检查通过。
+
+## 14.3.4 栈的上限
+
+新栈的大小若超过 `maxstacksize`，运行时便判定为栈溢出。程序启动之初，这个值暂定为 1 MiB；`runtime.main`
+随后把它设为正式的上限 [[Go Authors, 2026f](#ref-go-authors-2026f)]：
+
+```go
+	// Max stack size is 1 GB on 64-bit, 250 MB on 32-bit.
+	// Using decimal instead of binary GB and MB because
+	// they look nicer in the stack overflow failure message.
+	if goarch.PtrSize == 8 {
+		maxstacksize = 1000000000
+	} else {
+		maxstacksize = 250000000
+	}
+
+	// An upper limit for max stack size. Used to avoid random crashes
+	// after calling SetMaxStack and trying to allocate a stack that is too big,
+	// since stackalloc works with 32-bit sizes.
+	maxstackceiling = 2 * maxstacksize
+```
+
+这一上限始于 Go 1.2。发布说明写道，在此之前，失控的递归很容易耗尽机器的全部内存；新增的
+`runtime/debug.SetMaxStack` 可以调整单个 goroutine 栈的最大值，默认在 64 位系统上为 1 GB，在
+32 位系统上为 250 MB [[Go Authors, 2013a](#ref-go-authors-2013a)]。`maxstackceiling` 是 `SetMaxStack`
+也不能突破的硬上限，因为 `stackalloc` 以 32 位整数表示大小。
+
+由于栈的大小总是 2 的幂，十进制的上限并不对应某个实际的栈大小。在 64 位系统上，512 MiB 的栈再加倍就是
+1 GiB，即 1073741824 字节，超过了 1000000000，因此 goroutine 的栈实际最大为 512 MiB。下面的递归没有终止
+条件：
+
+```go
+func f(n int) int {
+	var buf [64]byte
+	buf[n%64] = byte(n)
+	return f(n+1) + int(buf[0])
+}
+
+func main() { f(0) }
+```
+
+在 darwin/arm64 上运行，数秒后程序以如下信息终止（随后的栈回溯从略）：
+
+```shell
+$ go run .
+runtime: goroutine stack exceeds 1000000000-byte limit
+runtime: sp=0x52b849d60390 stack=[0x52b849d60000, 0x52b869d60000]
+fatal error: stack overflow
+……
+exit status 2
+```
+
+终止时栈的区间为 0x20000000 字节，正是 512 MiB。栈溢出由 `throw` 报告，是致命错误而不是 panic，`recover`
+无法捕获它，程序直接退出。
+
+下图汇总了本节的流程：
 
 ```mermaid
 flowchart TD
-    A["函数 f 被调用：序言分段检查\nCMPQ SP, g.stackguard0"] -->|SP 仍在警戒线之上| OK["空间充足，正常执行 f"]
-    A -->|SP 跌破警戒线| MS["CALL morestack（汇编）"]
-    MS --> SAVE["封存现场：\nf 的 PC/SP/BP/ctxt 存入 g.sched\nf 的调用方存入 m.morebuf"]
-    SAVE --> SW["切换到 g0 系统栈\nCALL newstack"]
-    SW --> CHK{"stackguard0 == stackPreempt ?"}
-    CHK -->|是：抢占请求| PRE["让出或还原警戒线后继续\n（见 9.7）"]
-    CHK -->|否：真的要扩容| GROW["newsize = oldsize * 2\n（不够再翻；超 maxstacksize 则 stack overflow）"]
-    GROW --> CP["Gcopystack 状态下 copystack\n搬栈并修正 g.sched（见 14.4）"]
-    CP --> GOGO["gogo(&g.sched)\n回到 f 被打断处继续执行"]
-    PRE --> GOGO
+    A["函数 f 的序言<br/>比较 SP 与 g.stackguard0"] -->|"SP 高于警戒线"| OK["执行函数体"]
+    A -->|"SP 不高于警戒线"| MS["morestack<br/>现场存入 g.sched 与 m.morebuf，切换到 g0"]
+    MS --> NS["newstack：一致性检查"]
+    NS --> P{"stackguard0 == stackPreempt？"}
+    P -->|"是"| PRE["处理抢占（9.7）"]
+    P -->|"否"| SZ["newsize = 2 × oldsize<br/>仍放不下这一帧则继续加倍"]
+    SZ --> LIM{"超过 maxstacksize？"}
+    LIM -->|"是"| DIE["fatal error: stack overflow"]
+    LIM -->|"否"| CP["_Gcopystack 状态下 copystack（14.4）"]
+    CP --> BACK["gogo：回到 f，重新检查"]
 ```
 
-这条链路里没有一处是程序员显式写下的：序言由编译器埋设，现场切换由汇编完成，扩容判定与抢占
-辨识由运行时承担，而被增长的那个函数自始至终以为自己只是做了一次普通调用。连续栈的代价,每次
-调用的那条 `CMPQ`、增长时的整栈拷贝,被精心地摊到了最不影响热路径的地方。这正是 Go「栈廉价、
-Goroutine 可以成千上万」这一承诺背后的工程实现。下一节 [14.4](./copy.md) 进入 `copystack`，
-看它如何在搬栈的同时修正栈上所有指向旧栈的指针,那才是连续栈真正棘手的地方。
+## 14.3.5 小结
 
-## 延伸阅读的文献
+栈增长的每一个环节都由编译器、汇编与运行时完成，被增长的函数并不知情：
+序言中的检查对绝大多数函数只是一次比较和一次条件跳转，`morestack` 在 g0 上调用 `newstack`，`newstack`
+把栈加倍、复制，再让函数重新执行检查。加倍使复制的总代价与栈的最终大小成正比，
+十进制的上限则让失控的递归在 512 MiB 处以致命错误终止。
 
-1. The Go Authors. *runtime/stack.go: `newstack`, `maxstacksize`, stack growth comment block.*
-   https://github.com/golang/go/blob/master/src/runtime/stack.go （扩容判定、抢占辨识、上限护栏）
-2. The Go Authors. *runtime/asm_amd64.s: `morestack`, `morestack_noctxt`.*
-   https://github.com/golang/go/blob/master/src/runtime/asm_amd64.s （现场封存与切换 g0）
-3. The Go Authors. *cmd/internal/obj/x86/obj6.go: `stacksplit`.*
-   https://github.com/golang/go/blob/master/src/cmd/internal/obj/x86/obj6.go （编译器插入的序言分段检查）
-4. The Go Authors. *internal/abi/stack.go: `StackSmall`, `StackBig`.*
-   https://github.com/golang/go/blob/master/src/internal/abi/stack.go （三档检查的阈值常量）
-5. Brad Fitzpatrick et al. *Contiguous stacks design document.*
-   https://docs.google.com/document/d/1wAaf1rYoM4S4gtnPh0zOlGzWtrZFQ5suE8qr2sD8uWQ （连续栈替换分段栈的设计依据）
-6. 本书 [2.2 调用规范](../../part1overview/ch02asm/callconv.md)（stackguard0 的设立）、
-   [9.7 协作与抢占](../../part3concurrency/ch09sched/preemption.md)（stackPreempt 借道序言检查）、
-   [14.4 栈的拷贝](./copy.md)（copystack 与指针修正）。
+## 延伸阅读
+
+- <a id="ref-cox-2011"></a>[Cox, 2011] Russ Cox. ld: detect stack overflow due to NOSPLIT. Go commit
+  d9fd11443c, 2011. https://golang.org/cl/4188061
+  随 Go 1 发布。
+- <a id="ref-go-authors-2013a"></a>[Go Authors, 2013a] The Go Authors. *Go 1.2 Release Notes: Stack size.*
+  2013. https://go.dev/doc/go1.2#stack_size
+- <a id="ref-go-authors-2013b"></a>[Go Authors, 2013b] The Go Authors. src/pkg/runtime/stack.h. Go 1.2
+  源码. https://github.com/golang/go/blob/go1.2/src/pkg/runtime/stack.h
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/stack.go: `newstack`,
+  `maxstacksize`, stack growth comment block. Go 1.26 源码.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/stack.go
+  扩容判定、抢占辨识、上限护栏。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. src/runtime/asm_amd64.s:
+  `morestack`, `morestack_noctxt`. Go 1.26 源码.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/asm_amd64.s
+  现场封存与切换 g0。
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/cmd/internal/obj/x86/obj6.go:
+  `stacksplit`. Go 1.26 源码.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/internal/obj/x86/obj6.go
+  编译器插入的序言分段检查。
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. src/internal/abi/stack.go:
+  `StackSmall`, `StackBig`. Go 1.26 源码.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/internal/abi/stack.go
+  三档检查的阈值常量。
+- <a id="ref-go-authors-2026e"></a>[Go Authors, 2026e] The Go Authors.
+  src/cmd/link/internal/ld/stackcheck.go. Go 1.26 源码.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/link/internal/ld/stackcheck.go
+- <a id="ref-go-authors-2026f"></a>[Go Authors, 2026f] The Go Authors. src/runtime/proc.go、preempt.go. Go
+  1.26 源码. https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
+- <a id="ref-randall-2013"></a>[Randall, 2013] Keith Randall. *Contiguous stacks.* Go design document,
+  2013. https://docs.google.com/document/d/1wAaf1rYoM4S4gtnPh0zOlGzWtrZFQ5suE8qr2sD8uWQ
+  连续栈替换分段栈的设计依据。
+- <a id="ref-randall-2020"></a>[Randall, 2020] Keith Randall. runtime: grow stack more than 2x if the new
+  frame is large. Go commit b1760f3a27, 2020. https://go.dev/cl/225800
+  随 Go 1.15 发布。
+- 本书 [2.4 参数传递与栈帧布局](../../part1overview/ch02asm/args.md)（stackguard0 的设立）、
+  [2.2 汇编中的栈帧与符号](../../part1overview/ch02asm/frame.md)、
+  [9.3 MPG 模型与并发调度单元](../../part3concurrency/ch09sched/mpg.md)、
+  [9.7 协作与抢占](../../part3concurrency/ch09sched/preemption.md)（stackPreempt 借道序言检查）、
+  [14.1 连续栈的设计](./design.md)、[14.4 栈的拷贝与指针调整](./copy.md)（copystack 与指针修正）。
