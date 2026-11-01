@@ -5,285 +5,427 @@ title: "5.4 Swiss Table 与 Go 1.24 实现"
 
 # 5.4 Swiss Table 与 Go 1.24 实现
 
-[5.3](./map.md) 讲清了散列表的一般原理与攻防：两条碰撞处理路线，以及哈希洪水的防御。本节落到
-Go 自己的两代实现，先剖开 Swiss Table 这一现代开放定址设计，再看 Go 1.24 如何把它落地、为此
-取代了什么，以及由实现倒推出的两条语言规则，最后把 Go 放进各家散列表的更大图景里对照。
+[5.3](./map.md) 讨论了散列表的一般原理与安全问题。本节讨论 Go 的两代主要实现：先介绍 Swiss Table 这一现代
+开放定址设计，再介绍 Go 1.1 至 Go 1.23 使用的桶式实现，然后讨论 Go 1.24 如何在 Swiss Table 的基础上满足
+Go 的额外要求，以及由实现决定的两条语言规则，最后与其他语言的散列表作比较。
 
-## 5.4.1 Swiss Table 设计（abseil）
+## 5.4.1 Swiss Table 的设计
 
-Swiss Table 由 Google 的 abseil 团队提出，Kulukundis 在 CppCon 2017 上公开。它是开放定址法的
-现代化身，核心创新是把「哪个槽是空的、哪个槽该比较」这件事，从逐槽试探变成一次并行操作。
+Swiss Table 由 Google 的工程师设计，Matt Kulukundis 在 CppCon 2017 上作了公开介绍
+[[Kulukundis, 2017](#ref-kulukundis-2017)]，2018 年随 Abseil C++ 库开源。它属于开放定址法，核心改进在于：
+判断一组槽位中哪些为空、哪些值得进一步比较，不再逐个槽位进行，而是用一次并行操作完成。
 
-它把哈希值劈成两段：高 57 位 **H1** 决定从哪一组（group）开始探测，低 7 位 **H2** 作为该键的
-「指纹」。槽位以 8 个为一组排列，每组配一个 8 字节的**控制字**（control word），其中每个控制
-字节对应组内一个槽：
+它把哈希值分为两部分：高 57 位称为 **H1**，用于确定从哪一组（group）开始探测；低 7 位称为 **H2**，作为键的
+指纹。槽位每 8 个组成一组，每组配有一个 8 字节的**控制字**（control word），其中每个字节对应组内的一个
+槽位：
 
 ```
-空槽    empty    1000 0000   （0x80）
-墓碑    deleted  1111 1110   （0xfe）
-占用    full     0hhh hhhh   （最高位 0，低 7 位即该键的 H2 指纹）
+空槽      empty     1000 0000   （0x80）
+墓碑      deleted   1111 1110   （0xfe）
+已占用    full      0hhh hhhh   （最高位为 0，低 7 位为该键的 H2）
 ```
 
-最高位区分「空/墓碑」与「占用」，占用槽的低 7 位直接存指纹。查找一个键时，先算 H1 定位到起始
-组，再拿 H2 与整组 8 个控制字节并行比较：在支持 SIMD 的机器上，这是一条 `PCMPEQB` 指令（16
-字节甚至能比 16 个槽），一步完成本应 8 步的探测。比较结果是一个位掩码，标出哪些槽的指纹匹配；
-逐个核对这些候选槽的真实键即可。指纹只有 7 位，约 $1/128 \approx 0.7\%$ 的概率假阳性，但既然
-匹配后总要做一次完整键比较，假阳性只是偶尔多比一次，不影响正确性。
+最高位区分空槽或墓碑与已占用的槽位，已占用槽位的低 7 位直接保存指纹。查找一个键时，先由 H1 确定起始组，
+再用 H2 与该组的 8 个控制字节同时比较，相当于一次完成 8 步探测；借助 SIMD 指令，还可以把一组扩展到 16 个
+槽位。比较的结果是一个位掩码，标出指纹相符的槽位，再逐个比较这些候选槽位中的实际键即可。指纹只有 7 位，
+每个槽位约有 $1/128 \approx 0.78\%$ 的概率误判为相符；但匹配之后本来就要比较完整的键，误判只会偶尔多一次
+比较，不影响正确性。
 
 ```mermaid
 flowchart LR
     K["键 key"] --> H["hash(key, seed)"]
-    H --> H1["H1：高 57 位<br/>选组起点"]
+    H --> H1["H1：高 57 位<br/>选择起始组"]
     H --> H2["H2：低 7 位<br/>指纹"]
-    H1 --> G["定位到第 i 组<br/>(8 槽 + 控制字)"]
-    H2 --> M["控制字 XOR H2<br/>SIMD 并行比较 8 槽"]
+    H1 --> G["定位到第 i 组<br/>（8 个槽位 + 控制字）"]
+    H2 --> M["以 H2 与控制字<br/>并行比较 8 个槽位"]
     G --> M
-    M --> B["位掩码：候选槽"]
-    B --> C{"逐候选<br/>比较真实键"}
-    C -->|相等| F["命中，返回槽"]
-    C -->|全不等且本组有空槽| E["未命中"]
-    C -->|全不等且本组无空槽| N["探测下一组"]
+    M --> B["位掩码：候选槽位"]
+    B --> C{"逐个比较<br/>实际的键"}
+    C -->|相等| F["命中，返回该槽位"]
+    C -->|均不相等且本组有空槽| E["未命中"]
+    C -->|均不相等且本组无空槽| N["探测下一组"]
 ```
 
-控制字还让另外两个高频判断同样退化成一次位运算：「本组有没有空槽」（`matchEmpty`，决定探测
-何时停止）、「哪些槽空或被删」（`matchEmptyOrDeleted`，插入时找落脚点）。这些都是对 8 字节控制
-字的 SWAR（SIMD Within A Register）技巧，即便在没有向量指令的平台上，也只是几条普通的整数
-加减与位运算。
+控制字使另外两个频繁的判断也只需一次位运算：本组是否有空槽（`matchEmpty`，决定探测何时停止），以及哪些
+槽位为空或为墓碑（`matchEmptyOrDeleted`，插入时寻找位置）。这些操作都可以用 **SWAR**（SIMD Within A
+Register）技巧实现，即在一个普通的 64 位整数上并行处理 8 个字节，在没有向量指令的平台上也只需几条整数
+运算与位运算。
 
-## 5.4.2 Go 1.24 的 Swiss Table 重写
+## 5.4.2 此前的桶式实现（Go 1.1 至 Go 1.23）
 
-### 经典桶式设计（1.0 至 1.23）
-
-要理解重写，先看它取代了什么。Go 自 1.0 起用的是一种桶式（bucketed）链地址法。顶层是 `hmap`，
-持有 $2^B$ 个桶组成的数组；每个桶 `bmap` 存 8 个键值对，外加 8 个 `tophash`（哈希高 8 位，
-充当指纹以加速跳过不匹配槽）；同一桶装满后挂一个溢出桶（overflow bucket），碰撞由溢出链承接。
+要理解 Go 1.24 的重写，先要了解它所取代的实现。Go 1.0 的 `map` 采用一种多级子表的设计；2013 年 3 月，
+Keith Randall 重写了 `map`，提交说明写道：散列表由 8 个槽位一组的桶构成的数组组成，
+以链接的溢出桶处理冲突，每个桶为每个键额外保存 8 位哈希以加速桶内查找，并且表是渐进增长的
+[[Randall, 2013](#ref-randall-2013)]。这一设计随 Go 1.1 发布，一直使用到 Go 1.23。其顶层结构 `hmap`
+如下（Go 1.23 `runtime/map.go`，注释为笔者所译）：
 
 ```go
-// runtime/map.go（go1.23）：经典桶式 map 的顶层结构（速写）
 type hmap struct {
-	count     int            // 元素数，len() 直接读它
-	B         uint8          // 桶数 = 2^B
-	hash0     uint32         // 哈希种子
-	buckets    unsafe.Pointer // 2^B 个桶的数组
-	oldbuckets unsafe.Pointer // 扩容时的旧桶数组，渐进搬迁的来源
-	nevacuate  uintptr        // 搬迁进度：下标小于它的旧桶已迁完
-	extra     *mapextra       // 溢出桶簿记等
-}
+	count     int    // 元素个数，len() 直接读取该字段
+	flags     uint8
+	B         uint8  // 桶数的以 2 为底的对数
+	noverflow uint16 // 溢出桶的大致数量
+	hash0     uint32 // 哈希种子
 
-type bmap struct {
-	tophash [8]uint8 // 每槽哈希高 8 位，兼作搬迁状态标记
-	// 紧随其后是 8 个 key、8 个 elem，最后是 *overflow 指针（由编译器按类型排布）
+	buckets    unsafe.Pointer // 2^B 个桶组成的数组
+	oldbuckets unsafe.Pointer // 扩容期间大小为一半的旧桶数组
+	nevacuate  uintptr        // 搬迁进度：下标小于它的旧桶均已搬迁
+
+	extra *mapextra // 溢出桶等可选字段
 }
 ```
 
-它的装填因子上限是 $6.5/8 \approx 0.81$（源码以 `loadFactorNum/loadFactorDen` 即 $13/2$ 表示，
-对 8 槽桶即「平均每桶 6.5 个」）。一旦超过就翻倍扩容，并采用**渐进式搬迁**：不一次性重排全部
-元素，而是把旧桶数组留在 `oldbuckets`，每次写操作顺手迁移一两个桶，把扩容成本摊到后续操作里，
-避免单次插入的长暂停。这套设计稳健服役了十四年，痛点也清楚：键值与指纹分离存放，比较时先扫
-`tophash` 再跳到键，访存不连续；溢出链在高负载下退化；以及链表式的溢出桶对缓存不友好。
+每个桶 `bmap` 保存 8 个键值对，以及 8 个 `tophash`，即各键哈希值的高 8 位（小于 5 的值被保留，用于标记槽位
+的空闲与搬迁状态）。8 个键与 8 个值分别连续存放，桶装满后再链接一个溢出桶。装载因子的上限是平均每桶 6.5 个
+元素（源码中写作 `loadFactorNum / loadFactorDen`，即 13/2），超过后桶数翻倍；溢出桶过多时，则进行一次桶数
+不变的整理。扩容采用**渐进式搬迁**：旧桶数组保留在 `oldbuckets` 中，此后每次写操作顺带搬迁一两个旧桶，从而
+把扩容的代价分摊到后续操作中，避免单次插入出现长时间的停顿。
 
-### Swiss Table 的落地：从一张表到一个目录
+这一设计使用了约 12 年，其不足也很明显：指纹与键分开存放，查找时先扫描 `tophash` 再跳到键所在的位置，访存
+不连续；溢出桶以链表相连，负载较高时链变长，缓存局部性差。
 
-Go 1.24 的新实现位于 `internal/runtime/maps`，照搬了 abseil 的控制字与并行探测，又针对 Go 的
-两条额外要求做了改造：一是要支持像旧版那样的渐进式扩容，避免大 `map` 扩容时的长暂停；二是
-`map` 本身要能被 GC 精确扫描。难点在于，开放定址法的探测序列依赖组数，一旦组数翻倍，全表所有
-元素都得按新序列重排,这与「渐进」天然冲突。abseil 原版整表扩容，Go 不能照抄。
+## 5.4.3 Go 1.24 的实现
 
-Go 的解法是**可扩展哈希**（extendible hashing）：把一个大 `map` 拆成多张独立的 `table`，每张
-table 是一张完整的小 Swiss Table，只服务哈希空间的一个子段；顶层 `Map` 持有一个指向这些 table
-的**目录**（directory）。哈希的最高 `globalDepth` 位作为目录下标，选出该键所属的 table。
+2022 年 8 月，YunHao Zhang 提出议题 #54766，建议 Go 的 `map` 改用 Swiss Table
+[[Zhang, 2022](#ref-zhang-2022)]。此后 YunHao Zhang、PJ Malloy 与 andy-wm-arthur 先后实现了 Go 版 Swiss
+Table 的早期版本；CockroachDB 的 Peter Mattis 在这些工作的基础上，实现了一个满足 Go 规范要求的版本
+`github.com/cockroachdb/swiss` [[Mattis, 2024](#ref-mattis-2024)]。Go 1.24 的内置 `map` 由 Michael Pratt
+实现，位于 `internal/runtime/maps` 包中，按照 Go 官方博客的说法，它在很大程度上基于 Peter Mattis 的工作
+[[Pratt, 2025a](#ref-pratt-2025a)]。Go 1.24 默认启用新实现，仍可以用 `GOEXPERIMENT=noswissmap` 退回旧实现
+[[Go Authors, 2025](#ref-go-authors-2025)]；Go 1.26 删除了这一开关以及约 6000 行旧实现的代码
+[[Pratt, 2025b](#ref-pratt-2025b)]。
+
+### 两项额外要求
+
+Abseil 的设计不能直接照搬，因为 Go 的 `map` 有两项额外的要求。
+
+其一是限制扩容的停顿。开放定址法的探测序列依赖组的数量，组数翻倍后所有元素都必须按新的探测序列重新放置，
+即整张表必须一次性扩容。Go 常用于对延迟敏感的服务器程序，不能允许一次插入因为扩容一张巨大的表而产生任意长
+的停顿。
+
+其二是遍历语义。Go 允许在遍历 `map` 的过程中修改它，规范的要求可以概括为：遍历期间增删元素不得导致同一个
+元素被返回两次；遍历期间新增的元素可能被返回，也可能不被返回；遍历期间被修改的元素必须返回最新的值；遍历
+期间被删除的元素不得被返回；遍历顺序不作规定。Abseil 等许多散列表则禁止在遍历期间修改表。
+
+### 目录与可扩展哈希
+
+对于第一项要求，Go 的做法是**可扩展哈希**（extendible
+hashing）[[Fagin et al., 1979](#ref-fagin-et-al-1979)]：把一个 `map` 的内容分散到多张 `table` 中，每张
+table 都是一个完整的 Swiss Table，但只负责哈希空间的一部分；顶层的 `Map` 持有一个由这些 table 组成的
+**目录**（directory），以哈希值的高 `globalDepth` 位作为目录下标，选出键所属的 table。`Map`
+的字段如下（Go 1.26 `internal/runtime/maps/map.go` [[Go Authors, 2026](#ref-go-authors-2026)]，
+注释为笔者所加）：
 
 ```go
-// internal/runtime/maps/map.go：顶层 Map（速写）
 type Map struct {
-	used    uint64        // 元素总数，len() 直接读它
-	seed    uintptr       // 本 map 私有的哈希种子（见 5.3.2）
+	used uint64  // 元素个数，len() 直接读取该字段
+	seed uintptr // 该 map 的哈希种子（5.3.2）
 
-	dirPtr  unsafe.Pointer // 目录：*[1<<globalDepth]*table 的数组
-	dirLen  int            // 目录长度；小 map 优化时为 0，dirPtr 直指单个 group
+	dirPtr unsafe.Pointer // 目录：*[dirLen]*table；小 map 时直接指向唯一的组
+	dirLen int
 
-	globalDepth uint8      // 目录下标用哈希的高几位
-	globalShift uint8      // = 64 - globalDepth，移位取下标用
+	globalDepth uint8 // 选择 table 所用的哈希高位位数
+	globalShift uint8 // 64 - globalDepth，取目录下标时的移位量
 
-	writing uint8          // 写入中标志，并发写检测靠它（见 5.4.3）
-	tombstonePossible bool // 是否可能存在墓碑，无墓碑可走快路径
-	clearSeq uint64        // Clear 计数，遍历中检测 clear
+	writing uint8 // 写操作进行中的标志，用于检测并发写（5.4.4）
+
+	tombstonePossible bool   // 是否可能存在墓碑
+	clearSeq          uint64 // clear 的次数，用于在遍历中发现 clear
 }
 ```
 
-每张 table 自带容量与装填上限，独立扩容：
+每张 table 有自己的容量与装载上限，独立扩容（`table.go`）：
 
 ```go
-// internal/runtime/maps/table.go：单张 Swiss 表（速写）
 type table struct {
-	used       uint16 // 本表元素数
-	capacity   uint16 // 槽位总数，恒为 2^N
-	growthLeft uint16 // 还能填几个槽才需 rehash（含墓碑计入）
-	localDepth uint8  // 本表在目录中占用的高位数，可小于 globalDepth
-	index      int    // 在目录中的首个下标；-1 表示已失效
+	used       uint16 // 元素个数
+	capacity   uint16 // 槽位总数，总是 2 的幂
+	growthLeft uint16 // 在需要扩容之前还能填入的槽位数
+	localDepth uint8  // 创建该 table 时目录所用的位数
+	index      int    // 在目录中的第一个下标；-1 表示已失效
 
-	groups groupsReference // 一组组 8 槽 + 控制字的连续数组
+	groups groupsReference // 由各组（8 个槽位与控制字）组成的数组
 }
 ```
 
-关键常量：每组 `MapGroupSlots = 8` 个槽，装填上限 `maxAvgGroupLoad = 7`，即每组 8 槽最多填 7
-个，留一个空槽保证探测序列总能终止（开放定址法的不变量：表永不 100% 填满）。单张 table 的容量
-上限 `maxTableCapacity = 1024`，这正是「渐进」的旋钮所在：
+相关的常量有三个：每组有 `MapGroupSlots = 8` 个槽位；平均每组最多填入 `maxAvgGroupLoad = 7` 个元素，以保证
+表中总有空槽，探测序列最终会遇到一个含空槽的组而终止；单张 table 的容量上限为 `maxTableCapacity = 1024`。
+扩容规则因此分为两种情形：
 
-- table 容量未达 1024 时，扩容就是把这张表换成一张双倍容量的新表，整表重排,但表小，代价有界。
-- 一旦达到 1024 还需扩容，便不再翻倍，而是把这张表**分裂**（split）成两张，各承接原哈希子段的
-  一半。分裂时 `globalDepth` 视需要加一、目录翻倍，于是单次扩容触及的元素永远不超过 1024 个，
-  大 `map` 的扩容成本被自然摊开。
+- table 的容量未达到 1024 时，扩容就是用一张容量加倍的新 table 替换它，所有元素重新放置；由于表不大，代价
+  有界。
+- 容量达到 1024 后，扩容不再加倍，而是把这张 table **分裂**（split）为两张，各负责原哈希区间的一半。若该
+  table 的 `localDepth` 等于 `globalDepth`，目录也随之加倍。
 
-目录允许多个下标指向同一张 table（当某表的 `localDepth` 小于 `globalDepth` 时），这样目录翻倍
-并不强制每张表都立即分裂,只有真正满了的表才分裂。这套结构以可扩展哈希的弹性，换来了开放定址法
-所缺的渐进扩容能力。把这三层画出来，目录共享与分裂的关系便清晰了：
+这样，单次扩容涉及的元素数始终不超过 1024 个。目录允许多个下标指向同一张 table（该 table 的 `localDepth`
+小于 `globalDepth` 时），因此目录加倍并不要求每张 table 都立即分裂，只有装满的 table 才会分裂：
 
 ```mermaid
 flowchart LR
     H["hash(key)<br/>取高 globalDepth 位"] --> DIR
-    subgraph DIR["directory（*[1&lt;&lt;globalDepth]*table）"]
+    subgraph DIR["目录（globalDepth = 2）"]
       D0["[00]"]
       D1["[01]"]
       D2["[10]"]
       D3["[11]"]
     end
-    D0 --> TA["table A<br/>localDepth=1<br/>capacity=1024"]
+    D0 --> TA["table A<br/>localDepth = 1"]
     D1 --> TA
-    D2 --> TB["table B<br/>localDepth=2"]
-    D3 --> TC["table C<br/>localDepth=2"]
-    TA --> GA["groups：一组组 8 槽 + 控制字"]
+    D2 --> TB["table B<br/>localDepth = 2"]
+    D3 --> TC["table C<br/>localDepth = 2"]
+    TA --> GA["groups：各组 8 个槽位与控制字"]
     TB --> GB["groups"]
     TC --> GC["groups"]
 ```
 
-A 表的 `localDepth=1` 小于 `globalDepth=2`，于是目录前两项 `[00]`、`[01]` 共享它,只有当 A 真正
-填满需要分裂时，才会拆成两张并把 `localDepth` 提到 2。
+table A 的 `localDepth` 为 1，小于 `globalDepth` 的 2，因此目录的 `[00]` 与 `[01]` 两项共享它；只有当 A
+装满需要分裂时，才会拆成两张 `localDepth` 为 2 的 table。这一结构不再像旧实现那样逐桶渐进搬迁，
+而是通过限制单张 table 的大小来限制单次扩容的代价。
 
-### 探测序列：三角数与「恰好覆盖」
+### 探测序列
 
-新版的探测序列写法极简，却暗含一条要紧的数学不变量：
+table 内的探测序列如下（`table.go`）：
 
 ```go
-// internal/runtime/maps/table.go：探测序列（速写）
 func makeProbeSeq(hash uintptr, mask uint64) probeSeq {
-	return probeSeq{mask: mask, offset: uint64(hash) & mask, index: 0}
+	return probeSeq{
+		mask:   mask,
+		offset: uint64(hash) & mask,
+		index:  0,
+	}
 }
+
 func (s probeSeq) next() probeSeq {
 	s.index++
-	s.offset = (s.offset + s.index) & s.mask // offset += 1,2,3,...
+	s.offset = (s.offset + s.index) & s.mask
+	return s
 }
 ```
 
-每步把递增的 `index` 累加到 `offset`，于是从起点算起的偏移依次是 $0, 1, 3, 6, 10, 15, \dots$，
-即三角数 $T_k = \frac{k(k+1)}{2}$。源码与 abseil 都称之为「二次探测」，因为 $T_k$ 是 $k$ 的二次
-多项式，两个名字指的是同一序列。它之所以可用，靠的是一条数论事实：当组数为 $2^n$ 时，
-$T_k \bmod 2^n$ 在 $k = 0, 1, \dots, 2^n - 1$ 上恰好取遍全部余数，即探测序列不重不漏地走遍每一组。
-这正是「组数必须是 2 的幂」这条探测不变量的来由,少了它，探测可能在还有空槽时就开始绕圈，
-查找会错判为未命中。
+每一步把递增的 `index` 累加到 `offset` 上，于是相对于起始组的偏移依次为 $0, 1, 3, 6, 10, \dots$，即三角数
+$T_k = k(k+1)/2$。源码与 Abseil 都称之为二次探测，因为 $T_k$ 是 $k$ 的二次多项式。它之所以可用，
+依赖一个数论事实：当组数为 $2^n$ 时，$T_k \bmod 2^n$ 在 $k = 0, 1, \dots, 2^n-1$ 上恰好取遍所有余数，
+即探测序列不重不漏地访问每一组。这就是「组数必须是 2 的幂」这一探测不变量的由来；否则探测序列可能在仍有空
+槽时陷入循环，查找会误判为未命中。
 
 ### 控制字的并行匹配
 
-查找的内层就是 [5.4.1](#541-swiss-table-设计abseil) 描述的并行匹配。`matchH2` 是其核心，amd64
-上由编译器替换成 SIMD 内建函数，其余平台走 SWAR 软件实现：
+查找的内层循环就是 5.4.1 所述的并行匹配。`ctrlGroupMatchH2` 的可移植实现如下（`group.go`，
+注释为笔者所加）：
 
 ```go
-// internal/runtime/maps/group.go：H2 并行匹配的可移植实现（速写）
 const (
-	ctrlEmpty   ctrl = 0b10000000 // 0x80
-	ctrlDeleted ctrl = 0b11111110 // 0xfe，墓碑
-	bitsetLSB        = 0x0101010101010101
-	bitsetMSB        = 0x8080808080808080
+	ctrlEmpty   ctrl = 0b10000000
+	ctrlDeleted ctrl = 0b11111110
+
+	bitsetLSB = 0x0101010101010101
+	bitsetMSB = 0x8080808080808080
 )
 
 func ctrlGroupMatchH2(g ctrlGroup, h uintptr) bitset {
-	// 把 8 个控制字节同时异或上 H2：相等的字节变成全 0
+	// 把 8 个控制字节同时与 H2 异或：相等的字节变为 0
 	v := uint64(g) ^ (bitsetLSB * uint64(h))
-	// 经典 SWAR：哪些字节为 0，就在该字节最高位置 1
+	// 经典的 SWAR 技巧：在值为 0 的字节的最高位置 1
 	return bitset(((v - bitsetLSB) &^ v) & bitsetMSB)
 }
 ```
 
-查找循环据此展开：定位起始组，`matchH2` 拿到候选位掩码，逐位核对真实键；若组内有空槽
-（`matchEmpty` 非零）则探测终止、返回未命中；否则 `next()` 到下一组。删除则要小心：从一个已满
-的组里删键，不能直接标空,否则探测序列会在此提前断开，让后续本该被找到的键变成「找不到」。
-此时该槽改标为 `ctrlDeleted` 墓碑，探测会越过它继续；只有当组内尚有空槽时，删除才可直接标空。
-墓碑平时只增不减，统一在扩容重排时清除，以免就地清理打乱正在进行的遍历。
+源码的注释指出，这一通用实现在少数情形下会产生误报：减法的借位可能使紧邻一个真实匹配的字节也被标记为匹配。
+但误报只在确有真实匹配时出现，且不会落在空槽或墓碑上，随后的键比较会将其排除，因此只是偶尔的低效，
+并不影响正确性。在 amd64 上，自 Go 1.24 起编译器把 `matchH2`、`matchEmpty` 等函数替换为 SSE 指令；
+组的大小仍保持 8 个槽位，以免改变内存布局。
 
-### 小 map 优化与一处工程提醒
+查找时，先定位起始组，由 `matchH2` 得到候选槽位并逐个比较键；若该组含有空槽，则探测终止，返回未命中；否则
+沿探测序列进入下一组。
 
-当一个 `map` 自始至终不超过 8 个元素时，它整张表恰好就是一个 group，运行时索性省掉目录与 table
-两层间接，让 `dirPtr` 直指这唯一的 group（此时 `dirLen == 0`）。绝大多数 `map` 都很小，这条优化
-免去了小 `map` 的目录开销。
+### 删除与墓碑
 
-需要给读者一处提醒：Go 1.24 的发布说明把性能收益表述为「在一组代表性基准上，运行时的若干改进
-使 CPU 开销平均降低 2 至 3%」，而这 2 至 3% 是 Swiss Table、更高效的小对象分配、新的运行时内部
-互斥锁三项改动**合计**的结果，并非 `map` 一项独得，具体到 `map` 还因键类型、负载、访问模式而
-异。在 1.24 中，可用 `GOEXPERIMENT=noswissmap` 在构建期退回旧实现（该开关于后续版本随旧实现
-移除而退役）。把这次重写理解为「一笔会随工作负载浮动的整体收益」，比记住一个具体百分比更贴近事实。
+删除需要格外小心。探测在遇到含空槽的组时停止，因此若从一个满组中删除元素后直接把槽位标记为空，
+后续本应沿探测序列找到的键就会因探测提前终止而找不到。此时该槽位须标记为墓碑 `ctrlDeleted`，
+探测遇到墓碑时继续向前；只有当该组仍有空槽时，才可以直接把槽位标记为空。插入时优先复用墓碑。
+由于就地清理墓碑会使遍历变得复杂，墓碑原则上只在扩容时被完全清除。
 
-## 5.4.3 两条语言规则的由来
+对于反复插入与删除的负载，墓碑可能不断积累，使 table 在元素并不多时也频繁扩容
+[[thepudds, 2024](#ref-thepudds-2024)]。Go 1.25 因此增加了 `pruneTombstones`：扩容之前，
+若墓碑数达到容量的 10%，先尝试清除不再需要的墓碑 [[Randall, 2025](#ref-randall-2025)]。源码注释强调，
+清理必须能够移除 $O(n)$ 个墓碑才值得进行，否则为找到一个可移除的墓碑付出 $O(n)$ 的代价，
+下一次插入又要重复这一过程。Go 1.25 起，`clear(m)` 也会同时清除墓碑。
 
-`map` 的两条常被问及的语言规则，其实都是上述实现的直接后果。
+### 小 map
 
-**`&m[k]` 不可取址。** Go 规范禁止对 map 元素取地址。原因在实现里一目了然：无论旧版的搬迁还是
-新版的扩容与分裂，元素都会在内存中被移动，先前取得的指针随即悬空。语言索性在编译期就禁止取址，
-把一个本会在运行时酿成内存安全事故的操作，挡在了门外。要修改一个 struct 类型的元素，只能整体
-读出、改完再整体写回。
+不超过 8 个元素的 `map` 恰好可以放进一个组中。此时运行时省去目录与 table 两层间接，`dirPtr` 直接指向这唯一
+的组，`dirLen` 为 0。小 map 不需要探测序列，因此可以用满全部 8 个槽位，删除时也无须墓碑。绝大多数 `map` 都
+很小，这项优化省去了它们的目录开销。
 
-**并发读写直接致命。** 对同一 `map` 并发地读写或写写，不是数据竞争那样「结果未定义」，而是运行时
-主动 `fatal("concurrent map ...")` 终止进程。检测靠 `Map.writing` 这个标志：每个写操作进入时把它
-**异或翻转**（`writing ^= 1`），完成时再翻转回去。
+### 遍历
+
+Go 官方博客称遍历是 `map` 实现中最复杂的部分 [[Pratt, 2025a](#ref-pratt-2025a)]。若遍历期间 `map`
+没有扩容，只需依次遍历目录中的每张 table 及其中的每个组和槽位即可。若遍历期间发生了扩容，新的 table
+有不同的探测序列，仅记录当前的组与槽位下标已不足以避免重复返回元素。Go 的做法是：迭代器保留对当前正在遍历
+的旧 table 的引用，即使它已被替换，仍按旧 table 的顺序继续遍历，以保证不会重复返回同一元素；只存在于新
+table 中的新增元素被跳过，这是规范所允许的。但旧 table 中的数据可能已经过时，因此每取得一个键，都要到新
+table 中重新查找一次，以确定它是否已被修改或删除。
+
+### 性能
+
+Go 1.24 的发布说明称，在一组有代表性的基准测试中，运行时的若干改进使 CPU 开销平均降低 2% 至 3%；
+这些改进包括基于 Swiss Table 的新 `map`、更高效的小对象分配，以及新的运行时内部互斥锁实现
+[[Go Authors, 2025](#ref-go-authors-2025)]。也就是说，这一数字是三项改动合计的结果。Go 官方博客给出了
+`map` 本身的数据：在微基准测试中，`map` 操作比 Go 1.23 最多快 60%，少数边缘情形有所退化；
+在完整应用的基准测试中，CPU 时间的几何平均改善约为 1.5% [[Pratt, 2025a](#ref-pratt-2025a)]。
+具体的收益随键的类型、负载与访问模式而异。
+
+## 5.4.4 两条语言规则的由来
+
+`map` 有两条常被问到的语言规则，它们都可以从上述实现得到解释。
+
+**不能对 `map` 元素取址。** 无论是旧实现的搬迁，还是新实现的扩容与分裂，元素都可能在内存中移动，此前取得的
+指针便会失效。语言因此在编译期禁止对 `map` 元素取址，同样也禁止直接给 `map` 中结构体元素的字段赋值：
 
 ```go
-// internal/runtime/maps/map.go：写操作的并发检测（速写）
-func (m *Map) PutSlot(...) unsafe.Pointer {
-	if m.writing != 0 {
-		fatal("concurrent map writes") // 进门发现已有写者，立即终止
-	}
-	m.writing ^= 1 // 翻转，标记自己正在写
-	// ... 真正的插入 ...
-	if m.writing == 0 {
-		fatal("concurrent map writes") // 出门发现标志被别人动过
-	}
-	m.writing ^= 1 // 翻回
+package main
+
+type point struct{ x, y int }
+
+func main() {
+	m := map[string]point{"a": {1, 2}}
+	p := &m["a"]  // 不能对 map 元素取址
+	m["a"].x = 10 // 也不能直接给元素的字段赋值
+	_ = p
 }
 ```
 
-读操作则只检查、不修改这个标志：进门若发现 `writing != 0`，说明有写者在场，立即终止。用异或
-而非简单置 1，是一个刻意的概率设计：若两个 writer 同时闯入，两次翻转可能让标志回到 0，使「出门
-检查」一方察觉异常的概率更高。这是一种**尽力而为**（best-effort）的检测，不加锁、不保证必然
-抓到每一次竞争，只在几乎零成本的前提下，把绝大多数误用尽早暴露成清晰的崩溃，而非埋成一个日后
-难查的诡异 bug。要在多 goroutine 间共享 `map`，仍须由使用者用 `sync.Mutex` 或 `sync.RWMutex`
-自行保护，或改用 `sync.Map`（[11](../../part3concurrency/ch11sync)）。
+```
+./main.go:7:8: invalid operation: cannot take address of m["a"] (map index expression of struct type point)
+./main.go:8:2: cannot assign to struct field m["a"].x in map
+```
 
-## 5.4.4 别家的散列表
+要修改结构体元素的某个字段，须先整体读出，修改后再整体写回；或者在 `map` 中存放指针。
 
-把 Go 的两代设计放进更大的图景，能看清哪些是共识、哪些是取舍。
+**并发写会使程序终止。** 若多个 goroutine 同时写同一个 `map`，或一个读一个写，运行时会调用 `fatal`
+直接终止程序，而不是像一般的数据竞争那样留下未定义的结果：
 
-| 语言 / 库 | 设计 | 碰撞处理 | 要点 |
-|---|---|---|---|
-| Go ≥ 1.24 | Swiss Table + 可扩展哈希目录 | 开放定址，二次探测 | 控制字并行探测；目录分裂实现渐进扩容 |
-| Rust `HashMap` | hashbrown（Swiss Table 移植） | 开放定址，SIMD 组探测 | 标准库直接采用 abseil 设计，默认 SipHash 抗洪水 |
-| C++ `absl::flat_hash_map` | Swiss Table 原版 | 开放定址，SIMD 组探测 | 键值内联连续存储，缓存友好 |
-| C++ `std::unordered_map` | 链地址 | 桶 + 链表 | 标准规定了节点稳定性与桶接口，锁死了实现，无法换成开放定址 |
-| Java `HashMap` | 链地址 + 红黑树化 | 链表，超阈值转树 | 单桶冲突过 8 个即 treeify，把最坏 $O(n)$ 压到 $O(\log n)$（JEP 180） |
-| Python `dict` | 紧凑开放定址 | 扰动探测 + 索引表 | 紧凑数组保插入序，索引与数据分离省内存 |
+```go
+package main
 
-值得点出的对照有两处。其一，`std::unordered_map` 是「标准把实现钉死」的反面教材：C++ 标准要求
-桶接口与元素引用在 rehash 间稳定，这等于强制链地址法，使它无法享受 Swiss Table 的缓存收益,
-这也正是 abseil 另起 `flat_hash_map` 的原因。Go 没有这层包袱，`map` 的内存布局从不进入语言契约，
-于是能在 1.24 整体换血而不破坏任何用户代码。其二，Rust 标准库直接吸纳 hashbrown，与 Go 各自独立
-地走向同一个 abseil 设计，是 Swiss Table 成为现代开放定址事实标准的有力旁证。
+import "sync"
 
-性能的提升从不白来。Swiss Table 用控制字的额外空间、SIMD/SWAR 的实现复杂度、可扩展哈希的目录
-间接，换来了高装填因子下仍连续、仍可并行探测的查找。Go 把这笔复杂度连同渐进扩容、GC 扫描、并发
-检测一并咽下，只为给上层留一个依旧朴素的 `m[k]`。这正是运行时存在的意义：把复杂藏在用户看不见的
-地方。
+func main() {
+	m := map[int]int{}
+	var wg sync.WaitGroup
+	for g := range 2 {
+		wg.Go(func() {
+			for i := range 1_000_000 {
+				m[i] = g // 两个 goroutine 同时写同一个 map
+			}
+		})
+	}
+	wg.Wait()
+}
+```
 
-## 延伸阅读的文献
+```
+fatal error: concurrent map writes
+```
 
-- [Kulukundis, M. "Designing a Fast, Efficient, Cache-friendly Hash Table, Step by Step." *CppCon*, 2017.](https://www.youtube.com/watch?v=ncHmEUmJZf4) Swiss Table 设计的公开讲解；另见 [abseil swisstables 设计文档](https://abseil.io/about/design/swisstables)。
-- [golang/go#54766: "runtime: use Swiss Tables for maps."](https://github.com/golang/go/issues/54766) Go 采用 Swiss Table 的提案与讨论；落地见 [Go 1.24 Release Notes](https://go.dev/doc/go1.24)。
-- [internal/runtime/maps 顶层注释：可扩展哈希、目录与分裂的权威说明。Go source tree, 2024.](https://github.com/golang/go/blob/master/src/internal/runtime/maps/map.go) 新实现的设计文档即写在源码注释里。
-- [JEP 180: Handle Frequent HashMap Collisions with Balanced Trees. OpenJDK, 2014.](https://openjdk.org/jeps/180) Java `HashMap` 的链表树化方案，对照另一条最坏情况防御路线。
+检测依靠 `Map.writing` 字段。每个写操作开始时检查它是否为 0，然后将它翻转（`writing ^= 1`）；
+结束前再检查它是否仍为 1，然后翻转回来。以 `PutSlot` 为例（Go 1.26，有删节）：
+
+```go
+func (m *Map) PutSlot(typ *abi.MapType, key unsafe.Pointer) unsafe.Pointer {
+	if m.writing != 0 {
+		fatal("concurrent map writes")
+	}
+
+	hash := typ.Hasher(key, m.seed)
+
+	// 在调用 Hasher 之后才设置 writing，因为 Hasher 可能 panic，
+	// 那种情况下实际上并没有发生写操作。
+	m.writing ^= 1 // 翻转，参见 writing 字段的注释
+
+	// ……插入……
+
+	if m.writing == 0 {
+		fatal("concurrent map writes")
+	}
+	m.writing ^= 1
+	// ……
+}
+```
+
+读操作只检查该字段，发现它不为 0 时报告 `concurrent map read and map write`。源码对 `writing`
+字段的注释解释了为什么用翻转而不是简单地置 1：若有多个写者同时进入，翻转可以提高双方都检测到竞争的概率。
+例如两个写者先后翻转，标志回到 0，结束前的检查便会发现异常。这是一种尽力而为（best-effort）的检测：
+它不加锁，不保证捕获每一次竞争，但以几乎为零的代价把大多数误用尽早暴露为明确的崩溃，
+而不是留下难以排查的错误。在多个 goroutine 之间共享 `map` 时，仍须使用 `sync.Mutex` 或 `sync.RWMutex`
+加以保护，或者改用 `sync.Map`（[第 11 章](../../part3concurrency/ch11sync/readme.md)）。
+
+## 5.4.5 其他语言的散列表
+
+把 Go 的两代实现与其他语言的散列表放在一起比较，可以看出哪些是共识，哪些是取舍：
+
+| 语言或库 | 设计 | 冲突处理 | 要点 |
+| --- | --- | --- | --- |
+| Go 1.24 及以后 | Swiss Table 与可扩展哈希目录 | 开放定址，二次探测 | 控制字并行匹配；以 table 分裂限制单次扩容的代价 |
+| Rust `HashMap` | hashbrown（Swiss Table 的移植） | 开放定址，按组 SIMD 探测 | 自 Rust 1.36 起为标准库实现；默认使用 SipHash 1-3 |
+| C++ `absl::flat_hash_map` | Swiss Table 原始实现 | 开放定址，按组 SIMD 探测 | 键值内联连续存放，对缓存友好 |
+| C++ `std::unordered_map` | 链地址 | 桶与链表 | 标准规定的桶接口与元素引用稳定性，实际上要求链地址法 |
+| Java `HashMap` | 链地址，必要时转为红黑树 | 链表，超过阈值转为树 | 单个桶中的元素达到 8 个（且表足够大）时转为树，最坏情况由 $O(n)$ 降为 $O(\log n)$（JEP 180 [[OpenJDK, 2014](#ref-openjdk-2014)]） |
+| Python `dict` | 紧凑的开放定址 | 扰动探测与独立的索引表 | 索引表与按插入顺序存放的数据数组分离，节省内存并保持插入顺序 |
+
+其中有两点值得注意。其一，C++ 标准要求 `std::unordered_map` 提供桶接口，并保证元素的引用在重新散列后仍然有
+效，这实际上要求采用链地址法，使它无法获得开放定址法在缓存上的优势；这也是 Abseil 另行提供
+`flat_hash_map` 的原因。Go 没有这方面的约束，`map` 的内存布局从未成为语言规范的一部分，因此 Go 1.24
+可以整体替换实现而不影响任何用户代码。其二，Rust 与 Go 各自独立地采用了 Abseil 的设计
+[[Rust Release Team, 2019](#ref-rust-release-team-2019)]，这说明 Swiss Table 已经成为现代开放定址散列表的
+一种主流设计。
+
+性能的提升并非没有代价。Swiss Table 以控制字占用的额外空间、SIMD 与 SWAR 带来的实现复杂度以及目录的间接访
+问，换取了在高装载因子下仍然连续、可以并行探测的查找。Go 在此之上还要满足有界扩容、垃圾回收器的精确扫描、
+遍历语义与并发写检测等要求，而这些复杂性都隐藏在运行时内部，使用者面对的仍然只是 `m[k]`。
+
+## 延伸阅读
+
+- <a id="ref-kulukundis-2017"></a>[Kulukundis, 2017] Matt Kulukundis. "Designing a Fast, Efficient,
+  Cache-friendly Hash Table, Step by Step." CppCon, 2017. https://www.youtube.com/watch?v=ncHmEUmJZf4
+  Swiss Table 设计的公开讲解。另见 Abseil 的设计说明：https://abseil.io/about/design/swisstables
+- <a id="ref-pratt-2025a"></a>[Pratt, 2025a] Michael Pratt. "Faster Go maps with Swiss Tables." The Go
+  Blog, 2025. https://go.dev/blog/swisstable
+  Go 1.24 实现的缘起、有界扩容与遍历语义的处理，以及性能数据。
+- <a id="ref-zhang-2022"></a>[Zhang, 2022] YunHao Zhang. "runtime: use SwissTable." golang/go#54766, 2022.
+  https://github.com/golang/go/issues/54766
+  Go 采用 Swiss Table 的提案与讨论。
+- <a id="ref-mattis-2024"></a>[Mattis, 2024] Peter Mattis. `github.com/cockroachdb/swiss`. 2024.
+  https://github.com/cockroachdb/swiss
+  Go 1.24 实现所依据的、满足 Go 规范要求的 Swiss Table 实现。
+- <a id="ref-go-authors-2026"></a>[Go Authors, 2026] The Go Authors. `internal/runtime/maps/map.go`.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/internal/runtime/maps/map.go
+  （开发版本：https://github.com/golang/go/blob/master/src/internal/runtime/maps/map.go）
+  包注释详细说明了可扩展哈希、目录、分裂与遍历的设计。
+- <a id="ref-openjdk-2014"></a>[OpenJDK, 2014] OpenJDK. "JEP 180: Handle Frequent HashMap Collisions with
+  Balanced Trees." 2014. https://openjdk.org/jeps/180
+  Java `HashMap` 以红黑树应对最坏情况的方案。
+- <a id="ref-go-authors-2025"></a>[Go Authors, 2025] The Go Authors. Go 1.24 Release Notes.
+  https://go.dev/doc/go1.24
+  Runtime 一节说明了新 `map` 实现、`GOEXPERIMENT=noswissmap` 开关，以及三项运行时改进合计的性能数据。
+- <a id="ref-randall-2013"></a>[Randall, 2013] Keith Randall. "runtime: faster hashmap implementation." Go
+  commit 00224a356a, 2013. https://go.dev/cl/7504044
+  Go 1.1 至 Go 1.23 所用桶式实现的最初提交，提交说明概括了桶、溢出链与渐进扩容的设计。
+- <a id="ref-thepudds-2024"></a>[thepudds, 2024] thepudds. "runtime: Swiss Table maps can double size
+  multiple times when deleting/adding elements." golang/go#70886, 2024.
+  https://github.com/golang/go/issues/70886
+  反复插入与删除时墓碑积累、导致 table 反复扩容的问题报告。
+- <a id="ref-randall-2025"></a>[Randall, 2025] Keith Randall. "internal/runtime/maps: prune tombstones in
+  maps before growing." Go commit 05ed8a00e0, 2025. https://go.dev/cl/640955
+  随 Go 1.25 发布的 `pruneTombstones`，扩容之前先尝试清除墓碑。
+- <a id="ref-pratt-2025b"></a>[Pratt, 2025b] Michael Pratt. "all: remove GOEXPERIMENT=swissmap." Go commit
+  2ae059ccaf, 2025. https://github.com/golang/go/commit/2ae059ccaf
+  Go 1.26 删除旧实现与实验开关的提交，删去约 6100 行代码。
+- <a id="ref-fagin-et-al-1979"></a>[Fagin et al., 1979] Ronald Fagin, Jürg Nievergelt, Nicholas Pippenger,
+  H. Raymond Strong. "Extendible Hashing—A Fast Access Method for Dynamic Files." ACM Transactions on
+  Database Systems 4(3):315–344, 1979. https://doi.org/10.1145/320083.320092
+  可扩展哈希的原始论文：以目录与局部深度把文件的增长限制在单个桶的分裂上。
+- <a id="ref-rust-release-team-2019"></a>[Rust Release Team, 2019] The Rust Release Team. "Announcing Rust
+  1.36.0." Rust Blog, 2019-07-04. https://blog.rust-lang.org/2019/07/04/Rust-1.36.0/
+  Rust 标准库的 `HashMap` 改用基于 Swiss Table 的 hashbrown，默认哈希函数仍为 SipHash 1-3。
+

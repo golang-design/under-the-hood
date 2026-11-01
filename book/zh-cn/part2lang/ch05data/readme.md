@@ -13,17 +13,17 @@ bookCollapseSection: true
 
 <div class="quote">
 <i class="quote-mark fas fa-thumbtack"></i>
-<I>数据为王。选对了数据结构、组织得当，算法往往便不言自明。</I></br>
+<I>数据压倒一切。如果已经选择了正确的数据结构并且把一切都组织得井井有条，正确的算法也就不言自明。</I></br>
 <I>Data dominates. If you've chosen the right data structures and organized things well, the algorithms will almost always be self-evident.</I></br>
 <div class="quote-right">
 -- Rob Pike, "Notes on Programming in C"
 </div>
 </div>
 
-切片与散列表是 Go 仅有的两种泛型容器，也是日常代码里出现得最频繁的两种数据结构。它们把
-「一段连续内存如何被描述、被共享、被增长」这一组看似朴素的问题，落成了具体的运行时布局与
-增长策略，于是 `append` 的种种「惊喜」、切片别名的陷阱、`map` 的随机遍历与并发即崩，都不再是
-需要死记的规则，而是布局与权衡的必然推论。本章分四个主题展开：先把数组与切片的内存模型与
-增长策略摆清，再单独看字符串不可变所带来的零拷贝转换与安全契约；随后讲透散列表的一般原理与
-哈希洪水攻防，最后落到 Go 1.24 基于 Swiss Table 的彻底重写，看它如何在缓存、安全与渐进扩容
-之间取舍。一路看 Go 如何把这些复杂藏进用户看不见的地方，只在上层留下朴素的 `s[i]` 与 `m[k]`。
+切片、字符串与 `map` 是 Go 程序中最常用的三种数据结构。它们的语法都很简单，背后却各有一套运行时布局与增长
+策略。`append` 何时复制，切片之间何时共享内存，字符串转换何时需要分配，`map` 为何遍历无序、
+为何不能并发写，这些问题都可以从其布局与实现中推出，而不必作为孤立的规则记忆。
+
+本章分四节讨论。5.1 讨论数组与切片的内存布局、增长策略，以及编译器为减少分配所做的工作；5.2 讨论字符串的
+不可变性、UTF-8 以及零拷贝转换；5.3 讨论散列表的一般原理与哈希洪水攻击；5.4 讨论 Go 1.24 基于 Swiss Table
+的 `map` 实现。
