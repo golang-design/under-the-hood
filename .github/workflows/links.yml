@@ -1,0 +1,40 @@
+name: Links
+
+# Check every external link and DOI cited in the book. References are often
+# written without network access, so this is where they get verified.
+#
+# Publishers (ACM, Springer, Wiley, ...) answer automated clients with 403 or
+# 429 after a DOI redirect, so those codes are accepted. An unknown DOI still
+# fails: doi.org answers it with 404 before any redirect happens.
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'book/**'
+      - '.github/workflows/links.yml'
+  pull_request:
+    paths:
+      - 'book/**'
+  workflow_dispatch:
+
+jobs:
+  lychee:
+    name: Check links
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Check links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --no-progress
+            --max-concurrency 8
+            --timeout 30
+            --max-retries 3
+            --accept '100..=103,200..=299,403,429'
+            --exclude-path book/assets
+            'book/**/*.md'
+          fail: true
