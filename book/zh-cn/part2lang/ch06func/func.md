@@ -5,227 +5,365 @@ title: "6.1 函数调用"
 
 # 6.1 函数调用
 
-函数是 Go 的一等公民，可以赋值、传递、返回、捕获外部变量成为闭包。这背后是两件事的实现：
-函数值（闭包）在内存里如何表示，以及一次函数调用在底层如何传参与返回。后者还藏着 Go 1.17
-一次悄无声息却影响全局的变革：从栈传参改为寄存器传参。这一节把这两件事讲透，并在它们的接缝处
-点出一个关键事实，正是这个事实把「闭包是什么」与「调用怎么发生」焊成同一件事。
+函数在 Go 中是一等公民：可以赋值给变量、作为参数传递、作为结果返回，也可以捕获外部变量而成为闭包。
+这一能力的实现涉及两个问题：函数值（尤其是闭包）在内存中如何表示，以及调用一个函数值时，
+被调函数如何找到它所捕获的变量。本节讨论这两个问题，并讨论由此派生的几项特性：Go 1.22
+对循环变量语义的修改、方法值与方法表达式、变参，以及 Go 1.23 引入的对函数的 `range`。
+函数调用的参数传递与栈帧布局已在第 2 章讨论（[2.3](../../part1overview/ch02asm/callconv.md)、
+[2.4](../../part1overview/ch02asm/args.md)），本节只在需要时引用其结论。
 
 ## 6.1.1 函数值与闭包
 
-一个 `func` 类型的值，本质是一个指向**闭包对象**的指针。运行时给这个对象起的名字是 `funcval`，
-它在 `runtime/runtime2.go` 里的定义短得出奇：
+一个 `func` 类型的值，是一个指向**闭包对象**的指针。运行时把这个对象称为 `funcval`，它在
+`runtime/runtime2.go` 中的定义只有一个字段 [[Go Authors, 2026c](#ref-go-authors-2026c)]：
 
 ```go
-// funcval：函数值在运行时的表示（来自 runtime2.go，已加注释）
 type funcval struct {
-    fn uintptr
-    // 后面紧跟变长的、与具体函数相关的数据，即被捕获的环境
+	fn uintptr
+	// 其后是长度可变、与具体函数相关的数据
 }
 ```
 
-只有一个固定字段 `fn`,函数代码的入口地址。注释里那句「variable-size, fn-specific data here」
-才是闭包的灵魂：紧随 `fn` 之后，编译器排布着这个闭包捕获的外部变量。一个不捕获任何变量的
-普通函数，它的 `funcval` 只有 `fn` 一字，全局唯一、只读；一旦它捕获了外部变量，编译器就要为每次
-求值在堆上构造一个带捕获数据的 `funcval`。可以把它画成这样：
+`fn` 是函数代码的入口地址；源码中的注释说明，其后紧跟着与具体函数相关、长度可变的数据，即闭包捕获的变量。
+不捕获任何变量的函数，其 `funcval` 只有 `fn` 一个字，由编译器静态生成并存放在只读数据中，同一个函数的所有
+函数值共享这一对象。捕获了变量的闭包则须在每次求值时构造一个新的 `funcval`，把捕获的变量放在 `fn` 之后；若
+该闭包逃逸（[15.5](../../part5toolchain/ch15compile/escape.md)），这个对象分配在堆上，否则分配在栈上。
 
 ```mermaid
 flowchart LR
     FV["func 值<br/>（一个指针）"] --> CO
     subgraph CO["闭包对象 funcval"]
         direction TB
-        FN["fn：函数代码入口地址"]
-        CAP["captured：被捕获的变量<br/>（如 &x, &y，按引用）"]
+        FN["fn：函数代码的入口地址"]
+        CAP["被捕获的变量<br/>（值或变量的地址）"]
         FN --- CAP
     end
-    CALL["调用 f()"] -.->|取 fn 字段间接跳转| FN
+    CALL["调用 f()"] -.->|取出 fn 并间接调用| FN
 ```
 
-调用一个函数值，就是取出 `fn` 字段间接跳转过去，与接口的方法分发
-（[4.2](../ch04type/interface.md)）异曲同工。关键细节是**捕获按引用**：闭包捕获的是变量本身，
-不是它当时的值。下面这段代码里，`counter` 返回的两个闭包共享同一个 `n`，因为它们捕获的是
-`n` 这个变量的地址，而非某个快照：
+在语义上，闭包捕获的是变量本身，而非变量在某一时刻的值。下面的 `counter` 返回的两个闭包共享同一个 `n`：
 
-```go
+```go {run=true}
+package main
+
+import "fmt"
+
 func counter() (inc, get func() int) {
-    n := 0
-    inc = func() int { n++; return n } // 捕获 &n
-    get = func() int { return n }      // 捕获同一个 &n
-    return
+	n := 0
+	inc = func() int { n++; return n } // 捕获变量 n
+	get = func() int { return n }      // 捕获同一个 n
+	return
 }
-// inc(); inc(); get() == 2，两个闭包看到同一个 n
+
+func main() {
+	inc, get := counter()
+	inc()
+	inc()
+	fmt.Println(get())
+}
 ```
 
-「按引用」既是闭包的表达力，也是那个经典陷阱的根源。在 Go 1.21 及之前，循环变量是**整个循环
-共用一个**的，于是：
+```
+2
+```
+
+由于 `n` 在 `counter` 返回之后仍被两个闭包使用，逃逸分析会把它分配到堆上，两个闭包对象中保存的都是 `n`
+的地址。不过，按引用捕获只是语义上的规定。若一个变量在被捕获之后从未被重新赋值、从未被取地址，
+且大小不超过 128 字节，编译器便直接把它的值复制到闭包对象中（`cmd/compile/internal/escape`
+[[Go Authors, 2026d](#ref-go-authors-2026d)]）。这样做不改变程序的行为，因为该变量此后不会再变化，
+却可以省去一次堆分配和一层间接访问。
+
+## 6.1.2 闭包的调用：上下文寄存器
+
+被调函数要读取捕获的变量，首先需要得到闭包对象的地址。为此，Go 的内部调用约定在传递普通参数的寄存器之外，
+另外指定了一个**闭包上下文寄存器**：调用函数值之前，调用方把 `funcval` 的地址放入该寄存器，
+被调函数从中取得捕获的变量。在 amd64 上它是 `RDX`，在 arm64 上是 `R26`
+[[Go Authors, 2026a](#ref-go-authors-2026a)]。`RDX` 不在 amd64 用于传递整数参数的
+9 个寄存器之中（[2.3](../../part1overview/ch02asm/callconv.md)），专门留作此用。
+
+以下面的程序为例：
 
 ```go
-// Go 1.21 及之前：所有 goroutine 捕获同一个 v
-for _, v := range s {
-    go func() { use(v) }() // 全部读到循环结束时 v 的终值
+package main
+
+//go:noinline
+func adder(base int) func(int) int {
+	return func(x int) int { return base + x }
+}
+
+func main() {
+	f := adder(40)
+	println(f(2))
 }
 ```
 
-所有 goroutine 捕获的是同一个 `v`,它们启动时循环往往早已结束，于是清一色读到最后一个元素。
-十余年间，老练的 Go 程序员靠手写 `v := v` 在每轮迭代里造一个新变量来回避它。Go 1.22 把这条
-惯用法升格为语言规则：**`for` 循环的循环变量改为每轮迭代一个新实例**，对三段式 `for` 与
-`for range` 一律生效。修复的着眼点值得玩味,它没有改变「捕获按引用」这一捕获**方式**，而是
-改变了被捕获的**对象**：既然每轮都是新变量，按引用捕获到的自然也是各轮独立的地址。一个困扰
-Go 用户十余年的设计缺陷，最终以最小的语义改动落幕。
+以 `GOOS=linux GOARCH=amd64 go build -gcflags=-S` 编译，`adder` 构造闭包对象的部分如下（省略了栈检查等代
+码）：
 
-这次修改还示范了 Go 改动语言语义的一套审慎做法。它本是一处不向后兼容的语义变更，可能让依赖旧
-行为的代码悄悄改变结果，因此 Go 把它与 `go.mod` 里声明的语言版本绑定：仅当模块声明 `go 1.22`
-及以上时新语义才生效，旧模块的行为原样保留。在 Go 1.21 的过渡期，它先以 `GOEXPERIMENT=loopvar`
-的形式供人预览。对于行为可能因此改变的代码，官方还提供了 `bisect` 工具，能在新旧语义之间二分
-搜索，精确定位是哪一处循环受了影响。把语义变更与版本声明挂钩、辅以预览开关与定位工具，是 Go
-在「向前演进」与「不破坏既有代码」之间找到的折中,这套机制本身，比循环变量这一处修复影响更深远。
-
-## 6.1.2 调用约定的演进：从栈到寄存器
-
-一次函数调用如何传递参数与返回值，由**调用约定**（calling convention / ABI）规定。Go 1.16 及
-之前用的是**基于栈**的约定（现称 ABI0）：所有参数与返回值都通过栈内存传递。调用方把实参逐个
-写到栈上约定的位置，被调方再从栈上读出来，返回值同理。这套办法简单、可移植、易于让编译器与
-手写汇编对接，代价是每个参数都要经历一次写内存加一次读内存，在调用密集的程序里相当可观。
-
-Go 1.17 引入了**基于寄存器**的内部调用约定 ABIInternal。它的核心规则是「优先用寄存器，放不下
-才落栈」：每种架构定义一组整数寄存器与一组浮点寄存器，参数与返回值按声明顺序依次占用，单个
-参数要么整个进寄存器、要么整个落栈。在 amd64 上，可用于传递整数参数与返回值的是这 9 个寄存器：
-
-```
-RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11   // amd64：9 个整数参数/返回寄存器
+```asm
+LEAQ  type:noalg.struct { F uintptr; X0 int }(SB), AX
+CALL  runtime.newobject(SB)           // 在堆上分配闭包对象
+LEAQ  main.adder.func1(SB), CX
+MOVQ  CX, (AX)                        // 第一个字：函数入口地址 fn
+MOVQ  main.base+32(SP), CX
+MOVQ  CX, 8(AX)                       // 第二个字：捕获的 base
 ```
 
-arm64 则用 `R0`–`R15` 共 16 个。分配规则可以用一个小例子说清：函数 `func(a, b int, x float64)`
-在 amd64 上，`a` 占 `RAX`、`b` 占 `RBX`、`x` 占第一个浮点寄存器，三个参数全在寄存器里，没有一次
-访存；而若参数足够多、整数寄存器用满，第 10 个整数参数便落到栈上。聚合类型（结构体、数组）按
-其字段递归地展开参与分配，能整体进寄存器就进，否则整个落栈,这条「要么全进、要么全落」的规则
-避免了一个值被劈成寄存器加栈两半的复杂账目。把这套「按序占用寄存器、放不下才落栈」的分配，连同
-寄存器参数在调用方栈帧里那块溢出空间，画成一张图：
+闭包对象的类型是编译器合成的 `struct { F uintptr; X0 int }`：`F` 即 `fn`，`X0` 是捕获的 `base`。由于
+`base` 从未被重新赋值，它按值捕获，直接存放在对象中。`main` 中调用 `f(2)` 的代码为：
 
-```mermaid
-flowchart LR
-    ARGS["实参按声明顺序<br/>a, b int, x float64"] --> ALLOC{"整数/浮点寄存器<br/>还有空位?"}
-    ALLOC -- 有 --> REG
-    ALLOC -- 满 --> ST["落栈：写入调用方<br/>栈帧的参数区"]
-    subgraph REG["寄存器（amd64）"]
-        direction TB
-        RAX["RAX ← a"]
-        RBX["RBX ← b"]
-        XMM["X0 ← x（浮点）"]
-    end
-    subgraph FRAME["调用方栈帧"]
-        direction TB
-        SPILL["溢出空间 spill space<br/>安全点/取地址时<br/>把寄存器参数落回此处"]
-    end
-    REG -.->|"GC 或栈增长前回写"| SPILL
+```asm
+MOVQ  (AX), CX     // AX 是 adder 返回的闭包对象地址，取出其中的 fn
+MOVQ  AX, DX       // 闭包对象地址放入上下文寄存器 DX
+MOVL  $2, AX       // 参数 x
+CALL  CX           // 间接调用
 ```
 
-少了大量栈内存读写，这次改动带来约 5% 的整体性能提升与更小的二进制，且对用户**完全透明**：
-代码一行不改，重新编译就更快了。值得一提的是，寄存器约定为何到 Go 1.17 才落地：早期 Go 选择
-基于栈的 ABI0，是因为它实现简单、跨架构一致、且与 GC 的精确栈扫描天然契合：参数都在栈上有
-固定位置，扫描器照常能找到其中的指针。寄存器约定要落地，前提是编译器先有成熟的 SSA 后端来做
-寄存器分配，并解决一个随之而来的问题,GC 与栈展开发生时，活在寄存器里的指针参数该如何被找到。
-Go 的答案不是去扫描寄存器，而是依靠前面提到的溢出空间：在可能触发 GC 或栈增长的安全点上，
-寄存器里的参数会被落回调用方栈帧中那块固定的溢出空间，于是扫描器仍只需扫栈。寄存器约定也并非
-全无栈的参与，
-调用方仍要在自己的栈帧里为每个寄存器参数预留一块**溢出空间**（spill space），以便栈增长
-（[6.1.3](#613-栈帧与可增长栈)）或需要取参数地址时把寄存器里的值落回内存,把溢出空间放在
-调用方栈帧而非被调方，是为了让栈增长的代码路径有固定位置可写，简化实现。
+而闭包的函数体只有两条指令：
 
-这里要接住 [6.1.1](#611-函数值与闭包) 留下的线头。闭包对象是一个指针，被调方要先拿到这个指针，
-才能找到自己捕获的变量。ABI 为此专门指定一个**闭包上下文寄存器**：调用闭包前，调用方把
-`funcval` 的地址放进这个寄存器，被调方从中取出捕获环境。在 amd64 上它是 `RDX`，在 arm64 上是
-`R26`。读者或许已经注意到，`RDX` 恰好不在上面那 9 个整数参数寄存器之列,它被留作上下文专用，
-正是为闭包腾出的位置。一句话：闭包之所以能「带着环境被调用」，靠的就是 ABI 在普通传参之外
-额外约定的这一个寄存器。
+```asm
+TEXT  main.adder.func1(SB), NOSPLIT|NEEDCTXT|NOFRAME|ABIInternal, $0-8
+ADDQ  8(DX), AX    // 从 DX 指向的闭包对象中读取 base，加到参数 x 上
+RET
+```
 
-ABI0 并未消失。它仍用在 Go 与汇编的边界上,手写汇编（[2.2](../../part1overview/ch02asm/callconv.md)）
-遵循 ABI0，因为汇编作者需要一套稳定、显式、不随版本漂移的传参规则。两套 ABI 之间由编译器生成
-的「桥接包装」（ABI wrapper）互相调用：一个 ABIInternal 的函数要调到 ABI0 的汇编例程，中间会经
-一层把寄存器里的参数搬到栈上的包装，反之亦然。Go 把内部 ABI 与对外（汇编）ABI 分开，正是为了
-能自由演进前者而不惊动后者,从栈到寄存器这场变革之所以能做到对用户透明，根子就在这道分界上。
+`NEEDCTXT` 标记表明该函数需要上下文寄存器。调用函数值的方式与接口的动态分派
+（[4.2](../ch04type/interface.md)）相似，都是从一个对象中取出代码地址后间接调用；不同之处在于，接口通过
+`itab` 中的方法表找到地址，函数值则直接把地址保存在闭包对象的第一个字中。
 
-## 6.1.3 栈帧与可增长栈
+## 6.1.3 循环变量与 Go 1.22
 
-每次函数调用在 goroutine 的栈上压入一个**栈帧**，存放局部变量、溢出到栈的参数与溢出空间、
-返回地址等。Go 的栈是**可增长的连续栈**：函数序言（prologue）里有一段栈检查，比较当前栈指针
-与栈边界，发现剩余空间不足时跳去 `morestack`,它分配一段更大的栈，把旧栈内容整段拷贝过去，
-再调整所有指向旧栈的指针。这段栈检查也是抢占（[9.7](../../part3concurrency/ch09sched/preemption.md)）
-搭便车的地方。栈的具体管理见 [14 执行栈管理](../../part4memory/ch14stack)。
+按引用捕获的语义，曾与 `for` 循环的变量作用域结合，造成 Go 中最常见的错误之一。在 Go 1.21 及以前，`for`
+循环声明的变量在整个循环中只有一个实例，每轮迭代只是给它赋新值：
 
-可增长栈对闭包有一个不容回避的后果。既然栈会**移动**，而 [6.1.1](#611-函数值与闭包) 又说闭包是
-**按引用**捕获，那么一旦某个局部变量的地址被闭包捕获、并且这个闭包可能**活得比创建它的栈帧更久**
-（比如被返回、被存入全局、被交给一个 goroutine），这个变量就不能再待在会被回收或搬迁的栈上。
-解决之道是**逃逸分析**（[15.5](../../part5toolchain/ch15compile/escape.md)）：编译器在编译期判断
-一个变量的地址是否「逃逸」出当前函数的生命周期，若是，就把它从栈搬到堆上分配，让闭包捕获的那个
-地址在栈搬迁后依然有效。前面 `counter` 里的 `n` 之所以能在 `counter` 返回后继续被 `inc`/`get`
-读写，正是因为它逃逸到了堆上。换言之，闭包的「按引用捕获」与栈的「可增长、可搬迁」这两个设计，
-是靠逃逸分析这第三方仲裁才得以共存的。
+```go {run=true}
+package main
+
+import "fmt"
+
+func main() {
+	var fs []func()
+	for i := 0; i < 3; i++ {
+		fs = append(fs, func() { fmt.Print(i, " ") })
+	}
+	for _, f := range fs {
+		f()
+	}
+	fmt.Println()
+}
+```
+
+若模块的 `go.mod` 声明 `go 1.21`，这个程序输出 `3 3 3`：三个闭包捕获的是同一个 `i`，
+调用它们时循环早已结束。在 `go 1.22` 及以上的模块中，它输出：
+
+```
+0 1 2
+```
+
+Go 1.22 把循环变量改为每轮迭代一个新的实例，对三段式 `for` 与 `for range` 都适用
+[[Go Authors, 2024a](#ref-go-authors-2024a)]。这一修改并没有改变捕获的方式，而是改变了被捕获的对象：
+既然每轮迭代都有一个新变量，闭包按引用捕获到的自然也是各自独立的变量。在此之前，Go
+程序员通常在循环体内写一行 `i := i` 来为每轮迭代创建一个新变量，Go 1.22 相当于把这一惯用写法变成了语言规则
+[[Cox, 2022](#ref-cox-2022)]。
+
+这一修改也体现了 Go 修改语言语义的一种审慎做法。它不向后兼容，可能使依赖旧行为的代码悄然改变结果，
+因此新语义与 `go.mod` 中声明的语言版本绑定：只有声明 `go 1.22` 及以上的模块才采用新语义，
+旧模块的行为保持不变 [[Chase and Cox, 2023b](#ref-chase-cox-2023b)]。Go 1.21 先以 `GOEXPERIMENT=loopvar`
+提供预览；对于行为可能因此改变的代码，还可以借助 `bisect` 工具在新旧语义之间二分查找，
+定位受影响的具体循环 [[Chase and Cox, 2023a](#ref-chase-cox-2023a)]。把语义变更与版本声明绑定，
+并辅以预览开关与定位工具，是 Go 在演进语言与保持兼容之间所作的折中，这套机制的意义超出了循环变量这一处修改
+本身。
 
 ## 6.1.4 方法值、方法表达式与变参
 
-几个由函数一等公民身份派生出来的特性，落到 `funcval` 上都不神秘。
+**方法值** `t.M` 把接收者 `t` 绑定到方法上，得到一个可以单独传递的函数值；它本质上就是一个闭包，
+捕获的变量是接收者的副本（接收者为指针时，复制的是指针）。**方法表达式** `T.M` 不绑定接收者，
+得到一个以接收者为第一个参数的普通函数：
 
-**方法值** `t.M` 把接收者 `t` 绑进一个闭包，得到一个可单独传递的 `func`。它本质就是
-[6.1.1](#611-函数值与闭包) 的闭包，被捕获的变量正是接收者 `t`。**方法表达式** `T.M` 则不绑定
-任何接收者，得到的是一个把接收者作为第一个显式参数的普通函数：
+```go {run=true}
+package main
 
-```go
+import (
+	"fmt"
+	"testing"
+)
+
 type T struct{ x int }
+
 func (t T) Add(d int) int { return t.x + d }
 
-f := t.Add        // 方法值：func(int) int，t 被捕获进闭包
-g := T.Add        // 方法表达式：func(T, int) int，接收者成为显式首参
-f(1)  == t.x+1
-g(t, 1) == t.x+1
+var sink func(int) int
+
+func main() {
+	t := T{x: 1}
+	f := t.Add // 方法值：func(int) int，接收者 t 被复制进闭包
+	g := T.Add // 方法表达式：func(T, int) int，接收者成为第一个参数
+	fmt.Println(f(1), g(t, 1))
+
+	fmt.Println(testing.AllocsPerRun(100, func() { sink = t.Add }))     // 方法值逃逸
+	fmt.Println(testing.AllocsPerRun(100, func() { f := t.Add; f(1) })) // 方法值不逃逸
+}
 ```
 
-两者形态不同：`f` 是一个携带捕获环境的 `funcval`（故 `t.Add` 这种写法会触发一次闭包分配，
-接收者被复制进闭包对象，若接收者是指针类型则复制的是指针），`g` 则是一个不捕获任何东西、签名里
-多一个参数的普通函数值。这解释了一个常被问起的现象：在热路径上反复写 `t.M` 取方法值会带来隐性的
-堆分配，而 `T.M` 不会。编译器对方法值的处理可以看作一次「自动闭包化」,它合成一个以接收者为唯一
-捕获变量的 `funcval`，本质与 [6.1.1](#611-函数值与闭包) 里手写的闭包别无二致。
+```
+2 2
+1
+0
+```
 
-**变参** `f(args ...int)` 在调用方被打包成一个切片传入：
+编译器为方法值合成一个包装函数（如 `main.T.Add-fm`），它从闭包对象中取出接收者，再调用真正的方法。与一般的
+闭包一样，方法值的闭包对象只有在逃逸时才分配在堆上：上例中赋给全局变量的方法值引起一次分配，只在局部使用
+的则不分配。方法表达式不捕获任何东西，是一个静态的函数值，从不需要分配。
+
+**变参** `f(xs ...int)` 在调用方被打包成一个切片传入：`sum(1, 2, 3)` 由编译器构造一个底层数组并生成切片
+头，`sum(s...)` 则直接传入已有的切片。被构造的底层数组遵循 [5.1](../ch05data/slice.md) 所述的规则，
+若不逃逸，便分配在栈上。
+
+## 6.1.5 对函数的 range：把循环体变成闭包
+
+Go 1.23 允许对函数使用 `range`：若 `f` 的类型为 `func(yield func(T) bool)`，则 `for x := range f { ... }`
+会反复执行循环体，每次的 `x` 由 `f` 通过调用 `yield` 提供 [[Cox, 2023](#ref-cox-2023)]
+[[Go Authors, 2024b](#ref-go-authors-2024b)]。标准库的 `iter.Seq` 与 `iter.Seq2` 就是这种函数类型，
+`maps.Keys`、`slices.Values` 等函数都返回这样的迭代器 [[Taylor, 2024](#ref-taylor-2024)]。
+
+这一特性完全由编译器通过改写实现，运行时没有为它提供专门的机制。`cmd/compile/internal/rangefunc` 包的注释
+[[Go Authors, 2026b](#ref-go-authors-2026b)]说明，其基本思路是把
 
 ```go
-func sum(xs ...int) (s int) { for _, x := range xs { s += x }; return }
-
-sum(1, 2, 3)        // 编译器构造 []int{1,2,3} 再传入
-sum(s...)           // 已是切片，直接传，不再构造
+for x := range f {
+	...
+}
 ```
 
-变参的本质是「语法糖加一个切片」。理解了 [5.1 切片](../ch05data/slice.md)，就理解了变参的开销
-所在：以散列实参调用变参函数，调用方要构造一个底层数组并据此生成切片头；若实参本就是切片并以
-`s...` 形式传入，则零额外构造。
+改写为
 
-## 6.1.5 跨语言对照
+```go
+f(func(x T) bool {
+	...
+	return true
+})
+```
 
-闭包如今几乎是现代语言的标配（C++ lambda、Java、Python、Rust 的 `Fn`/`FnMut`/`FnOnce`），
-差别在**捕获语义**。Go 一律按引用捕获，简洁但把「何时该复制」的判断交给逃逸分析与程序员的警觉；
-C++ 让你在捕获列表里显式选值捕获 `[=]` 还是引用捕获 `[&]`，控制力强但容易写出悬垂引用；Rust 用
-`move` 关键字与 `Fn`/`FnMut`/`FnOnce` 三个 trait 同时区分捕获方式与可调用次数，把所有权与可变性
-检查提前到编译期。简洁、控制力、安全，各家在这个三角里站在不同位置。
+即把循环体变成一个闭包，作为 `yield` 传给 `f`。循环体中的 `continue` 改写为 `return true`，告诉 `f` 继续；
+`break` 改写为 `return false`，告诉 `f` 停止。循环体中的 `return`、带标签的 `break`、`continue` 与 `goto`
+则较为复杂：编译器引入一个隐藏变量 `#next` 记录闭包返回后应执行的控制流，由闭包设置该变量并返回 `false`，
+待 `f` 返回之后，再根据 `#next` 执行相应的跳转或返回。
 
-调用约定上，C/C++ 遵循平台的标准 ABI（如 System V AMD64），以便与系统库和他人的目标文件直接
-互操作；这份契约一旦公开就难以更改。Go 则**自定义**了内部 ABI，牺牲与外部目标文件的直接互通
-（cgo 调用要跨 ABI 边界，有成本，见 [15 编译器](../../part5toolchain/ch15compile)），换来按
-自己的需要演进调用约定的自由,从栈到寄存器的平滑切换，正得益于此。又一次，Go 用一点互操作性的
-代价，换取了对自身实现的掌控。
+由于循环体成了一个可以被任意调用的函数，编译器还须防范行为不当的迭代器，例如在 `yield` 返回 `false` 之后
+仍继续调用它。每个改写后的循环都有一个状态变量，记录循环体是否已经退出，并在每次调用时检查：
 
-## 延伸阅读的文献
+```go {run=true}
+package main
 
-1. The Go Authors. *Go internal ABI (ABIInternal) specification.*
-   https://github.com/golang/go/blob/master/src/cmd/compile/abi-internal.md
-   （amd64 的 9 个整数寄存器、闭包上下文寄存器 RDX/R26、溢出空间的设计与缘由）
-2. Austin Clements 等. *Proposal: Register-based Go calling convention*（Go 1.17）.
-   https://go.googlesource.com/proposal/+/master/design/40724-register-calling.md
-3. The Go Authors. *Go 1.17 Release Notes（新的寄存器调用约定，约 5% 性能提升）.*
-   https://go.dev/doc/go1.17
-4. Go 1.22 Release Notes（循环变量按迭代作用域）. https://go.dev/doc/go1.22 ；
-   David Chase, Russ Cox. *Fixing for loops in Go 1.22.* https://go.dev/blog/loopvar-preview
-5. Russ Cox 等. *Proposal: Less error-prone loop variable scoping*（discussion #56010）.
-   https://github.com/golang/go/discussions/56010
-6. The Go Authors. *runtime/runtime2.go：funcval*（闭包在运行时的表示）.
-   https://github.com/golang/go/blob/master/src/runtime/runtime2.go
-7. 本书 [4.2 接口](../ch04type/interface.md)、[5.1 切片](../ch05data/slice.md)、
-   [14 执行栈管理](../../part4memory/ch14stack)、[15.5 逃逸分析](../../part5toolchain/ch15compile/escape.md).
+import "fmt"
+
+// 一个不遵守约定的迭代器：yield 返回 false 之后仍继续调用它
+func bad(yield func(int) bool) {
+	for i := range 3 {
+		yield(i)
+	}
+}
+
+func main() {
+	for x := range bad {
+		fmt.Println(x)
+		break
+	}
+}
+```
+
+```
+0
+panic: runtime error: range function continued iteration after function for loop body returned false
+```
+
+panic 的调用栈中，循环体所在的函数名为 `main.main-range1`，这正是编译器为循环体生成的闭包。
+改写在编译器前端完成，生成的闭包因此可以像普通函数一样参与内联；当迭代器函数与循环体都被内联时，
+这层间接调用便不复存在。
+
+## 6.1.6 栈帧、可增长栈与逃逸
+
+每次函数调用在 goroutine 的栈上占用一个栈帧。Go 的栈是**可增长的连续栈**：函数开头的栈空间检查发现剩余空间
+不足时，调用 `morestack` 分配一段更大的栈，把旧栈的内容复制过去，并调整所有指向旧栈的指针
+（[2.4](../../part1overview/ch02asm/args.md)、[第 14 章](../../part4memory/ch14stack/readme.md)）。
+
+可增长栈与闭包之间有一个不可回避的关系。栈会移动，而闭包按引用捕获变量；若一个局部变量的地址被一个可能比当
+前栈帧存活得更久的闭包所持有（例如闭包被返回、被存入全局变量或交给另一个 goroutine），
+这个变量就不能留在栈上。逃逸分析（[15.5](../../part5toolchain/ch15compile/escape.md)）
+在编译期判断变量的地址是否会逃出当前函数，若会，则把变量分配在堆上。6.1.1 中 `counter` 的 `n` 能在
+`counter` 返回后继续被使用，正是因为它被分配到了堆上。按引用捕获的闭包与可移动的栈，依靠逃逸分析得以共存。
+
+## 6.1.7 与其他语言的比较
+
+「闭包」（closure）一词出自 Peter Landin。1964 年，Landin 在描述如何机械地对表达式求值时，把一个 λ
+表达式与其求值时所处的环境合称为闭包 [[Landin, 1964](#ref-landin-1964)]。闭包已是现代语言的普遍特性，
+各语言的主要差别在于捕获的语义。Go 在语义上一律按引用捕获，较为简洁，复制与否由编译器在不改变行为的前提下
+决定，生命周期则交给逃逸分析与垃圾回收处理。C++ 的 lambda 要求在捕获列表中显式选择按值（`[=]`）
+或按引用（`[&]`）捕获，控制更精细，但按引用捕获的局部变量一旦超出作用域，便会留下悬空引用。Rust 以 `move`
+关键字区分按值与按引用捕获，并以 `Fn`、`FnMut`、`FnOnce` 三个 trait 区分闭包能否修改所捕获的变量、
+能否被多次调用，把所有权与可变性的检查放在编译期完成 [[Rust Project, n.d.](#ref-rust-project-nd)]。简洁、
+控制力与安全性之间，各语言的取舍不同。
+
+在调用约定上，C 与 C++ 遵循平台的标准 ABI（如 System V AMD64 psABI），以便与系统库及其他编译器生成的目标文
+件直接互操作，这一约定一经公开便难以更改。Go 则为内部调用定义了自己的 ABI，放弃了与外部目标文件的直接互通
+（cgo 调用须跨越 ABI 边界，代价见 [15.6](../../part5toolchain/ch15compile/cgo.md)），
+换取了按自身需要演进调用约定的自由，Go 1.17 从栈传参到寄存器传参的切换
+[[Clements, 2020](#ref-clements-2020)] [[Go Authors, 2021](#ref-go-authors-2021)]
+（[2.3](../../part1overview/ch02asm/callconv.md)）正得益于此。
+
+## 延伸阅读
+
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. "Go internal ABI specification."
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/abi-internal.md
+  （开发版本：https://github.com/golang/go/blob/master/src/cmd/compile/abi-internal.md）
+  闭包上下文寄存器（amd64 的 RDX、arm64 的 R26）与寄存器传参的规定。
+- <a id="ref-chase-cox-2023a"></a>[Chase and Cox, 2023a] David Chase, Russ Cox. "Fixing For Loops in Go
+  1.22." The Go Blog, 2023. https://go.dev/blog/loopvar-preview
+  循环变量语义修改的缘由、兼容策略与 `bisect` 工具。
+- <a id="ref-cox-2022"></a>[Cox, 2022] Russ Cox. "redefining for loop variable semantics." golang/go
+  discussion #56010, 2022. https://github.com/golang/go/discussions/56010
+  修改循环变量语义的最初讨论。
+- <a id="ref-taylor-2024"></a>[Taylor, 2024] Ian Lance Taylor. "Range Over Function Types." The Go Blog,
+  2024. https://go.dev/blog/range-functions
+  对函数的 `range` 的设计与用法。
+- <a id="ref-cox-2023"></a>[Cox, 2023] Russ Cox. "spec: add range over int, range over func."
+  golang/go#61405, 2023. https://github.com/golang/go/issues/61405
+  对整数与函数的 `range` 的提案。
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors.
+  `cmd/compile/internal/rangefunc/rewrite.go`.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/rangefunc/rewrite.go
+  包注释详细说明了 `range` 循环的改写规则与迭代器检查。
+- <a id="ref-clements-2020"></a>[Clements, 2020] Austin Clements. "Proposal: Register-based Go calling
+  convention." Go design document, 2020.
+  https://go.googlesource.com/proposal/+/master/design/40724-register-calling.md
+  Go 1.17 寄存器调用约定的设计文档，Cherry Zhang、Michael Knyszek、David Chase 等参与了讨论。
+- <a id="ref-go-authors-2021"></a>[Go Authors, 2021] The Go Authors. Go 1.17 Release Notes.
+  https://go.dev/doc/go1.17
+  新的寄存器调用约定：代表性基准测试的性能提升约 5%，二进制体积约减小 2%。
+- <a id="ref-go-authors-2024a"></a>[Go Authors, 2024a] The Go Authors. Go 1.22 Release Notes.
+  https://go.dev/doc/go1.22
+  循环变量改为每轮迭代一个新的实例。
+- <a id="ref-go-authors-2024b"></a>[Go Authors, 2024b] The Go Authors. Go 1.23 Release Notes.
+  https://go.dev/doc/go1.23
+  `for range` 接受迭代器函数。
+- <a id="ref-chase-cox-2023b"></a>[Chase and Cox, 2023b] David Chase, Russ Cox. "Proposal: Less
+  Error-Prone Loop Variable Scoping." Go design document, 2023.
+  https://go.googlesource.com/proposal/+/master/design/60078-loopvar.md
+  循环变量语义修改的正式设计：与 `go.mod` 语言版本绑定的兼容策略及其论证。
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. `runtime/runtime2.go`：`funcval`。
+  https://github.com/golang/go/blob/master/src/runtime/runtime2.go
+  闭包在运行时的表示。
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors.
+  `cmd/compile/internal/escape/escape.go`.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/escape/escape.go
+  闭包变量按值捕获的条件：从未被重新赋值、从未被取地址，且不超过 128 字节。
+- <a id="ref-landin-1964"></a>[Landin, 1964] Peter J. Landin. "The Mechanical Evaluation of Expressions."
+  The Computer Journal 6(4):308–320, 1964. https://doi.org/10.1093/comjnl/6.4.308
+  SECD 机器的出处，「闭包」一词即在此文中提出：λ 表达式与其求值环境的组合。
+- <a id="ref-rust-project-nd"></a>[Rust Project, n.d.] The Rust Project. *The Rust Reference*, "Closure
+  types". https://doc.rust-lang.org/reference/types/closure.html
+  Rust 闭包的捕获模式与 `Fn`、`FnMut`、`FnOnce` 三个 trait。
+- 本书 [4.2 接口](../ch04type/interface.md)、[5.1 切片](../ch05data/slice.md)、
+  [14 执行栈管理](../../part4memory/ch14stack)、
+  [15.5 逃逸分析](../../part5toolchain/ch15compile/escape.md).
+
