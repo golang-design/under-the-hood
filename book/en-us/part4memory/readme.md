@@ -18,4 +18,20 @@ bookCollapseSection: true
 </div>
 </div>
 
-Memory management is the most hidden part of the runtime, and also the part that most shapes how the system feels: out of sight of the programmer, it decides latency, throughput, and scalability. This foundational paper captures the essence of modern concurrent garbage collection in a single word, cooperation. The collector no longer seizes the whole world and bluntly stops the program; instead it moves forward together with the user code that keeps producing garbage, each yielding to and coordinating with the other. This part unfolds along that same thread: first we look at how the memory allocator carves up and reuses memory on top of many cores with a lock-free fast path, then we go deep into the garbage collector's tricolor marking, write barriers, and concurrent collection, to understand how Go pushes pauses down to the sub-millisecond level, and finally we return to each goroutine's execution stack, to see how the stack's on-demand growth and shrinkage support millions of coroutines. Allocation, collection, and the stack together form the memory foundation that supports the running of Go programs.
+Go programmers request memory with `new`, `make` and composite literals, but never release it
+explicitly. Where memory comes from and when it can be reused is decided entirely by the runtime,
+and these decisions directly affect a program's latency, throughput and memory footprint. The
+quotation above is the title of a 1978 paper by Dijkstra, Lamport and others. The paper introduced
+tri-color marking, which lets a collector run concurrently with a program that keeps modifying
+pointers, hence "on-the-fly" collection; Go's concurrent collector is built on this idea
+([13.1](./ch13gc/basic.md)).
+
+This part has three chapters. Chapter 12 covers the memory allocator: it descends from TCMalloc,
+divides objects into size classes, serves the vast majority of allocations from a per-P private
+cache, and when that cache runs out requests memory from the central cache and then the page heap,
+level by level. Chapter 13 covers the garbage collector: tri-color marking and the write barrier,
+pacing, the implementation of marking and sweeping, and recent developments such as finalizers and
+the Green Tea collector. Chapter 14 covers how a goroutine's execution stack is allocated, grown and
+shrunk. The allocator decides where objects are placed, the collector decides when they can be
+reused, and the stack holds data that does not escape to the heap; together they determine the
+memory behavior of a Go program.

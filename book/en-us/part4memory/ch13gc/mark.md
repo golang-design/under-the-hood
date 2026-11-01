@@ -5,284 +5,440 @@ title: "13.4 Scan Marking and Mark Assist"
 
 # 13.4 Scan Marking and Mark Assist
 
-Marking is the main body of GC's work: starting from the roots (global variables, each goroutine's stack, registers),
-it follows pointers and blackens every reachable object (the tricolor abstraction of [13.1](./basic.md)). A naive
-implementation would stop the whole world and walk the object graph single-threaded, which is exactly where early Go's
-unbearable pauses came from. After go1.5, marking was reshaped into a form where two things hold at once: it advances
-**concurrently with the user program**, and when the user allocates too fast it can **amortize the cost** onto the
-allocator itself. This section answers three questions: how marking unfolds in parallel without the workers stepping on
-each other; how, when scanning an object, we know which of its fields are pointers; and what guarantees that marking
-will never be left permanently behind while the user allocates and marking chases.
+Marking is the main work of a collection: starting from the roots ([13.1](./basic.md)), follow
+pointers to find every reachable object and turn it from white to black. Since Go 1.5, marking runs
+concurrently with the mutator, which raises three questions. Who does the marking, and how much CPU
+may it use? How do several markers share the gray objects waiting to be scanned without contending
+on a shared data structure? And since the mutator keeps allocating during marking, what guarantees
+that marking finishes before the heap grows to its goal? This section covers the mark workers and
+their CPU budget, the queues of gray objects, the scanning of a single object, and mark assists,
+which make allocating goroutines share the marking work.
 
-## 13.4.1 Who Does the Marking: Background Workers and the 25% Budget
+## 13.4.1 Mark Workers and the 25% Budget
 
-The main force of marking is a group of background goroutines, `gcBgMarkWorker`. The runtime prepares one for each P,
-but does not let them spin at full speed and seize CPU. Instead it pins the entire mark phase's CPU budget at
-**25% of GOMAXPROCS**:
+Marking is done mainly by a set of background goroutines called **mark workers**, whose entry point
+is `gcBgMarkWorker`. At the start of each cycle the runtime ensures that every P has a mark worker;
+they normally sit parked in a pool and are scheduled only during the mark phase. The pacer sets the
+CPU used by background marking to 25% of `GOMAXPROCS` ([13.3](./pacing.md)), and `startCycle`
+converts this budget into a number of workers [[Go Authors, 2026c](#ref-go-authors-2026c)]:
 
 ```go
-// runtime/mgcpacer.go (sketch)
-const gcBackgroundUtilization = 0.25 // fixed CPU utilization target for background GC during the mark phase
+	// Compute the background mark utilization goal. In general,
+	// this may not come out exactly. We round the number of
+	// dedicated workers so that the utilization is closest to
+	// 25%. For small GOMAXPROCS, this would introduce too much
+	// error, so we add fractional workers in that case.
+	totalUtilizationGoal := float64(procs) * gcBackgroundUtilization
+	dedicatedMarkWorkersNeeded := int64(totalUtilizationGoal + 0.5)
+	utilError := float64(dedicatedMarkWorkersNeeded)/totalUtilizationGoal - 1
+	const maxUtilError = 0.3
+	if utilError < -maxUtilError || utilError > maxUtilError {
+		// Rounding put us more than 30% off our goal. With
+		// gcBackgroundUtilization of 25%, this happens for
+		// GOMAXPROCS<=3 or GOMAXPROCS=6. Enable fractional
+		// workers to compensate.
 ```
 
-Why a fixed fraction rather than "do as much as we can"? This is a core covenant of the pacer ([13.3](./pacing.md)):
-nail GC's erosion of throughput at a predictable level, and leave the remaining 75% to the user program. The number 25%
-is itself an engineering compromise: higher hurts throughput, lower lets marking fall behind allocation (the gap, when
-marking falls behind, is then filled by the mark assist discussed below).
-
-When the fixed budget is mapped onto concrete workers, it computes how many "dedicated" workers are needed from
-`GOMAXPROCS × 0.25`, with the remainder made up by one "odd-job" worker. This gives three working modes:
+A quarter of `GOMAXPROCS`, rounded, gives the number of dedicated workers: 2 when `GOMAXPROCS` is 8,
+and 1 when it is 5 (an actual utilization of 20%, within the 30% error bound). When the error
+exceeds 30%, fractional workers make up the difference. With `GOMAXPROCS` equal to 6, 1.5 rounds to
+2, which is a third too many, so only 1 dedicated worker is kept and the remaining 0.5 of a P is
+shared among the Ps, each spending about 8.3% of its time. With `GOMAXPROCS` of 3 or less there are
+no dedicated workers, and the fractional workers carry the whole budget. The three worker modes are
+defined as follows:
 
 ```go
-// the three background mark worker modes (runtime)
-gcMarkWorkerDedicatedMode  // dedicated: holds a P exclusively for the whole mark phase, not preempted
-gcMarkWorkerFractionalMode // fractional: makes up the fractional part of the 25% budget, yields when its quota is hit
-gcMarkWorkerIdleMode       // idle: marks opportunistically when a P has no user goroutine to run
+	// gcMarkWorkerDedicatedMode indicates that the P of a mark
+	// worker is dedicated to running that mark worker. The mark
+	// worker should run without preemption.
+	gcMarkWorkerDedicatedMode
+
+	// gcMarkWorkerFractionalMode indicates that a P is currently
+	// running the "fractional" mark worker. The fractional worker
+	// is necessary when GOMAXPROCS*gcBackgroundUtilization is not
+	// an integer and using only dedicated workers would result in
+	// utilization too far from the target of gcBackgroundUtilization.
+	// The fractional worker should run until it is preempted and
+	// will be scheduled to pick up the fractional part of
+	// GOMAXPROCS*gcBackgroundUtilization.
+	gcMarkWorkerFractionalMode
+
+	// gcMarkWorkerIdleMode indicates that a P is running the mark
+	// worker because it has nothing else to do. The idle worker
+	// should run until it is preempted and account its time
+	// against gcController.idleMarkTime.
+	gcMarkWorkerIdleMode
 ```
 
-For example, when `GOMAXPROCS = 8`, $8 \times 0.25 = 2$, so there are 2 dedicated workers each holding a P; if
-$5 \times 0.25 = 1.25$, then there is 1 dedicated worker plus one fractional worker making up the $0.25$. The dedicated
-worker is not preempted by the scheduler during marking; the fractional worker voluntarily yields once it reaches the
-`fractionalUtilizationGoal` ratio; the idle worker is woken only when some P cannot find user work to do, opportunistically
-through `findRunnable` ([9.4 The Scheduling Loop](../../part3concurrency/ch09sched/schedule.md)). Together the three hold the
-average at 25% while wasting no spare compute.
+A dedicated worker is assigned to a P when marking starts and the world restarts, and holds that P
+for the whole mark phase. It first runs until its first preemption, using that preemption to move
+the goroutines in the P's local run queue to the global queue so that other Ps can run them. After
+that it no longer yields the P for ordinary preemption requests and marks until no work remains;
+only a stop-the-world or a `forEachP` request ([13.6](./termination.md)) can stop it midway. A
+fractional worker is chosen by the scheduler when a P is behind its fractional target, and exits
+voluntarily once it passes 1.2 times that target. An idle worker is started by `findRunnable` when a
+P finds no runnable goroutine ([9.4](../../part3concurrency/ch09sched/schedule.md)). It does not
+count toward the 25% budget and uses only CPU that would otherwise be idle. Its number is capped at
+`GOMAXPROCS` minus the number of dedicated workers, and a cycle triggered by the two-minute timer
+lowers the cap to 0 or 1 [[Go Authors, 2026a](#ref-go-authors-2026a)], because the program is idle
+anyway and has no need for a full-speed collection [[Go Authors, 2022](#ref-go-authors-2022)].
 
-## 13.4.2 The Gray Queue: gcWork's Layering and Stealing
+This arrangement goes back to Go 1.5. Clements originally envisioned scheduling background marking
+dynamically from measured CPU utilization; the final implementation instead hands 25% of
+`GOMAXPROCS` directly to background marking: some Ps are dedicated to marking and the remainder is
+time-shared among the other Ps, because this avoids fine-grained measurement and control of CPU
+utilization [[Clements, 2015](#ref-clements-2015)].
 
-Marking is naturally suited to parallelism: different workers scan different regions of the object graph, independent of
-each other. The difficulty is not parallelism itself but how to let multiple workers efficiently **share one to-do list of
-gray objects** without contending for the same lock day in and day out. Go's answer is a structure you have already met
-twice in this book: per-P local buffers + a global queue + stealing. The scheduler's run queue
-([9.2](../../part3concurrency/ch09sched/steal.md)) is built this way, the allocator's mcache and mcentral
-([12.2](../ch12alloc/component.md)) are built this way, and marking's `gcWork` is built this way too.
+## 13.4.2 Queues of Gray Objects
+
+Marking is naturally parallel; the difficulty is how several workers share the gray objects waiting
+to be scanned. Each P holds a `gcWork` that serves as a local cache of gray objects; globally there
+is a list of full buffers, `work.full`, which is a lock-free stack. A `gcWork` has two buffers, and
+a source comment explains the design [[Go Authors, 2026b](#ref-go-authors-2026b)]:
 
 ```go
-// gcWork: a per-P local buffer of gray objects (sketch)
-type gcWork struct {
-    // Two work buffers form a double buffer stack with "hysteresis".
-    // wbuf1 is the buffer currently pushed to / popped from; wbuf2 is the next one to be dropped.
-    // Keeping a whole buffer of slack lets the cost of "requesting from / returning a buffer to
-    // the global queue" be amortized over at least one buffer's worth of work, reducing contention
-    // on the global queue.
-    wbuf1, wbuf2 *workbuf
+	// wbuf1 and wbuf2 are the primary and secondary work buffers.
+	//
+	// This can be thought of as a stack of both work buffers'
+	// pointers concatenated. When we pop the last pointer, we
+	// shift the stack up by one work buffer by bringing in a new
+	// full buffer and discarding an empty one. When we fill both
+	// buffers, we shift the stack down by one work buffer by
+	// bringing in a new empty buffer and discarding a full one.
+	// This way we have one buffer's worth of hysteresis, which
+	// amortizes the cost of getting or putting a work buffer over
+	// at least one buffer of work and reduces contention on the
+	// global work lists.
+	//
+	// wbuf1 is always the buffer we're currently pushing to and
+	// popping from and wbuf2 is the buffer that will be discarded
+	// next.
+```
 
-    bytesMarked  uint64 // bytes this gcWork has blackened, rolled up into work.bytesMarked
-    heapScanWork int64  // heap scan work this gcWork has done, fed to the pacer and assist credit
+A full buffer is fetched from the global list only when both buffers are empty, and one is handed
+over only when both are full, so at least one whole buffer (2 KiB) of local operations separates two
+accesses to the global list. This follows the same idea as the local cache fetching and returning
+spans from the central cache in batches ([12.2](../ch12alloc/component.md)). Work moves between Ps
+by sharing, not by stealing. Before processing each object, a worker that finds the global list
+empty calls `balance` and pushes a buffer onto it; a worker that has run out of local work takes
+only from the global list and never touches another P's `gcWork`.
+
+The workers' main loop is `gcDrain`. It first claims root marking tasks (`markroot`), then
+repeatedly takes a gray object, scans it, and queues the white objects it discovers as gray, until
+no work is left. A trimmed sketch follows:
+
+```go
+// The skeleton of gcDrain (a sketch that omits the Green Tea span queue and the various exit conditions)
+for !(gp.preempt && preemptible) {
+	if work.full == 0 {
+		gcw.balance() // the global list is empty: hand over part of the local work
+	}
+	b := gcw.tryGetObjFast() // local buffer
+	if b == 0 {
+		b = gcw.tryGetObj() // exchange buffers with the global list if necessary
+	}
+	if b == 0 {
+		wbBufFlush() // the write barrier buffer may still hold gray objects
+		b = gcw.tryGetObj()
+	}
+	if b == 0 {
+		break // no work for now
+	}
+	scanObject(b, gcw)
+	if gcw.heapScanWork >= gcCreditSlack {
+		// after about every 2000 bytes of scan work, report it to the pacer
+		// and make it available as scan credit that mark assists can draw on (13.4.4)
+	}
 }
 ```
 
-A worker's main loop is "take a gray object, scan it, gray and enqueue the newly discovered white objects, and turn
-itself black," repeated until the queue is empty. When taking a gray object, it first reaches into the local buffer
-(lock-free); when the local buffer is empty it goes to the global queue; only when the global queue is also empty does
-it go **steal** another P's buffer. This loop is `gcDrain`:
-
-```go
-// gcDrain: "drain" the gray object queue (trimmed to the trunk)
-func gcDrain(gcw *gcWork, flags gcDrainFlags) {
-    // ... first handle root marking tasks (markroot): scan global variables, each goroutine's stack ...
-
-    // then the main loop of heap marking
-    for !(gp.preempt && (preemptible || ...)) {
-        if work.full == 0 {
-            gcw.balance() // the local buffer has grown too full, share some back to global so others have work
-        }
-        // take an object to scan: local fast get -> local slow get -> steal
-        b := gcw.tryGetObjFast()
-        if b == 0 {
-            b = gcw.tryGetObj() // if needed, request a buffer from the global queue
-        }
-        if b == 0 {
-            break // truly no work, exit
-        }
-        scanObject(b, gcw) // scan, following pointers to gray and enqueue white objects
-
-        // once a batch has accumulated, flush the scan credit to the pacer for mark assist to draw on (see 13.4.4)
-        if gcw.heapScanWork >= gcCreditSlack {
-            gcController.heapScanWork.Add(gcw.heapScanWork)
-            ...
-            gcw.heapScanWork = 0
-        }
-    }
-}
-```
-
-The "hysteresis" of the double buffer (`wbuf1` / `wbuf2`) is the key bit of craftsmanship here: if it went to the global
-queue to swap every time it emptied a buffer, and returned every time it filled one, the global queue would be read and
-written at high frequency. Keeping a whole buffer of slack means it only requests a new one from global when it empties
-two buffers in a row, and only returns one when it fills two in a row, pushing the global queue's access frequency down by
-an order of magnitude. This is the same line of thinking as mcache's "bulk restock" from mcentral: amortize the expensive
-shared access over a batch of local operations.
+When the local queue is empty, the worker also flushes the write barrier buffer
+([13.2](./barrier.md)), because the pointers in the buffer are another source of gray objects. The
+following diagram summarizes the flow of work:
 
 ```mermaid
 flowchart LR
-    subgraph P0["P0's gcWork"]
-        L0["wbuf1 / wbuf2 local buffer"]
+    subgraph P0["gcWork of P0"]
+        L0["wbuf1 / wbuf2"]
     end
-    subgraph P1["P1's gcWork"]
-        L1["wbuf1 / wbuf2 local buffer"]
+    subgraph P1["gcWork of P1"]
+        L1["wbuf1 / wbuf2"]
     end
-    GQ["global work queue<br/>(list of full buffers)"]
-    L0 -->|"full, return a buffer"| GQ
-    GQ -->|"empty, request a buffer"| L0
-    L1 -->|"full, return a buffer"| GQ
-    GQ -->|"empty, request a buffer"| L1
-    L0 -.->|"steal when global is empty"| L1
+    GQ["work.full<br/>lock-free stack of full buffers"]
+    L0 -->|"both buffers full, or balance when the global list is empty"| GQ
+    GQ -->|"both buffers empty"| L1
 ```
 
-Marking also grew one more layer of "scan-by-span" optimization (Green Tea GC, introduced in go1.25 and on by default since go1.26): besides the per-object gray queue, `gcWork` also maintains a pending **span queue** (`spanq`), which groups
-multiple objects to scan within the same span into one batch scan, improving memory-access locality in scenarios dense
-with small objects. Structurally it is an extension of the queue machinery above; the semantics of gray objects do not
-change. This section narrates the classic "per-object gray queue," which is enough to understand the skeleton of marking;
-batch scanning by span, as a separate layer of performance evolution, is given its own treatment in [13.11 Green Tea](./greentea.md) of this chapter.
+The Green Tea collector, enabled by default in Go 1.26, adds a span-organized queue on top of this:
+it gathers the objects waiting to be scanned in the same span and processes them in batches, and
+stealing is allowed between span queues. It extends this queue structure without changing what a
+gray object means; see [13.11](./greentea.md).
 
-## 13.4.3 Scanning One Object: How Do We Know Where the Pointers Are
+## 13.4.3 Scanning an Object
 
-For `scanObject` to advance along pointers, the prerequisite is knowing **which fields in the object are pointers**.
-Otherwise it has nothing to advance along, and it might mistake an integer that happens to look like a heap address for a
-pointer, wrongly "marking" a swath of object graph that does not exist. Go is a **precise** GC: it has exact metadata for
-the pointerness of every word and does not rely on conservative guessing.
+When an object is found reachable, `greyobject` sets its bit in the mark bitmap of the span that
+owns it. If the span holds no pointers (noscan), the object has no fields to trace and becomes black
+directly without entering a queue; otherwise the object becomes gray and enters the local queue to
+await scanning [[Go Authors, 2026a](#ref-go-authors-2026a)]. With Green Tea disabled, every object
+takes this path. With Green Tea enabled by default in Go 1.26, this path serves only the remaining
+objects: small objects of 16 to 512 bytes instead set a mark bit inside their own span and then
+enter a span queue as a unit, to be scanned in batches ([13.11](./greentea.md)).
 
-This metadata is exactly the redemption of what [12.1](../ch12alloc/basic.md) called "the allocator and GC are symbiotic":
-when an object is allocated, the runtime records its pointer layout according to its type, and marking takes it straight
-to use. Since go1.22, the way this layout is stored was refactored once. Earlier, each heap arena had a pointer bitmap
-covering the whole heap (one bit per word); go1.22 changed it to place the pointer information closer to the object itself:
+Scanning a gray object requires knowing which of its words are pointers. This information was
+recorded by type at allocation time ([12.5](../ch12alloc/smallalloc.md)). Since Go 1.22 there are
+three ways of recording it. For objects of at most 512 bytes, a pointer bitmap with one bit per word
+sits at the end of the owning span. Larger objects carry a one-word allocation header at the start
+that points to the object's type descriptor, and scanning looks up pointers word by word using the
+pointer mask in the type. For a large object that occupies a span by itself, the type is recorded in
+the span [[Go Authors, 2026a](#ref-go-authors-2026a)]. Before that, Go 1.20 changed each arena's
+heap bitmap from two bits per word to one bit per word [[Randall, 2022](#ref-randall-2022)]; the
+allocation header of Go 1.22 removed the work of expanding the bitmap at allocation time
+[[Knyszek, 2022](#ref-knyszek-2022)], and the release notes say the change improves CPU performance
+of programs by 1% to 3% and reduces memory overhead by about 1%
+[[Go Authors, 2024](#ref-go-authors-2024)].
 
-```go
-// runtime/mbitmap.go (sketch): decide where the pointer bitmap lives
-// Small objects: the ptr/scalar bitmap is stored directly at the end of the span, addressable by word.
-func heapBitsInSpan(userSize uintptr) bool { ... }
+Given the pointer locations, `scanObject` reads the pointer fields one by one: it skips nil and
+pointers into the object itself, looks up the heap object each one points to, and passes it to
+`greyobject`; under Green Tea, pointers to small objects go to the span queue. Two details affect
+the cost of scanning. First, the number of bytes credited as scan work counts only up to the last
+pointer field in the object; the plain data after the last pointer is not counted, and an object
+without pointers is not scanned at all. Second, a large object above 128 KiB is cut into 128 KiB
+pieces called oblets, of which only one is scanned at a time while the rest are put back on the
+queue. This began in Go 1.8 and bounds the time of a single scan to about 100 microseconds. Before
+that, a goroutine performing a mark assist could be blocked for a long time once it picked up a
+large object, and background workers could not hand in scan credit until they had scanned the entire
+large object [[Clements, 2016](#ref-clements-2016)].
 
-// Large objects: an allocation header is placed in the object's first word,
-// pointing to the type descriptor; on scanning, the full pointer layout is read from there.
-```
+The following program retains a 16 MiB `[]int64`, which holds no pointers, and a 16 MiB `[]*int64`
+whose elements are all nil, and after each collection reads the live heap and the scannable heap:
 
-So scanning splits into two cases: for objects small enough, the bitmap is at the tail of the span they belong to, and
-the bit is read by word offset; for larger objects, the first word is an "allocation header" pointing to the type
-descriptor ([4.1](../../part2lang/ch04type/type.md)), and the scanner follows it to obtain the type's complete pointer
-bitmap. Either way, once `scanObject` has the bitmap, what it does is the same:
+```go {run=true}
+package main
 
-```text
-// the trunk logic of scanObject (pseudocode)
-for each word w of the object:
-    if the bitmap marks w as a pointer:
-        p := *w
-        if p points to some white heap object obj:
-            gray obj and enqueue into gcw   // the object to scan in the next round
-            gcw.bytesMarked += size of obj
-```
+import (
+	"fmt"
+	"runtime"
+	"runtime/metrics"
+)
 
-Scanning the stack uses another set of metadata. The layout of a heap object is derived by the runtime from its type,
-but the layout of a stack frame varies with the function and with the program counter position, so the pointer
-information is generated by the **compiler**: each function has, at each of its safe points ([13.7](./safe.md)), a
-**stack frame pointer map** (stack map) indicating which slots on the stack at that point are live pointers. A worker
-scanning a goroutine's stack looks up, based on which safe point the goroutine is currently stopped at, the corresponding
-stack map, and grays the objects pointed to by the live pointers according to the map. Putting these two together (the
-heap's type bitmap and the stack's stack map), marking can precisely traverse the entire object graph starting from the
-roots.
+var (
+	ints []int64  // no pointers
+	ptrs []*int64 // contains pointers, all elements nil
+)
 
-Precision has a cost: the compiler must generate and store a stack map for each function, and the runtime must maintain a
-pointer bitmap for each type, both of which are space and compile-time overhead. What it buys is a GC that will neither
-miss a live object nor "pin" a large swath of garbage on the heap by misjudging an integer as a pointer, the latter being
-exactly the pain that conservative GC (such as some early C/C++ collectors) cannot fully cure.
+func report(label string) {
+	runtime.GC()
+	s := []metrics.Sample{
+		{Name: "/gc/heap/live:bytes"}, // live heap after the previous mark
+		{Name: "/gc/scan/heap:bytes"}, // scannable heap
+	}
+	metrics.Read(s)
+	fmt.Printf("%-14s live heap %4.1f MiB, scannable heap %4.1f MiB\n",
+		label, mib(s[0].Value.Uint64()), mib(s[1].Value.Uint64()))
+}
 
-## 13.4.4 Mark Assist: Whoever Allocates, Helps
+func mib(b uint64) float64 { return float64(b) / (1 << 20) }
 
-Concurrent marking has an unavoidable hazard ([13.3](./pacing.md) already touched on it): marking is running, and so is
-the user allocating. The worker blackens steadily at its 25% budget, but if the user goroutine allocates fiercely enough,
-newborn white objects appear faster than the worker can blacken them, and the heap fills up before marking completes. The
-fixed 25% budget cannot rein in a program that allocates especially aggressively.
-
-**Mark assist** is the backstop set up for this: during the mark phase, every goroutine, when it allocates memory, must
-first **pay off the marking debt it has run up**. The runtime keeps an "assist credit" `gcAssistBytes` for each goroutine,
-deducted on allocation; once it goes negative (in debt), the goroutine must, before it can keep allocating, personally do
-a stretch of marking work proportional to the debt:
-
-```go
-// gcAssistAlloc: check and repay marking debt on allocation (trimmed to the trunk)
-func gcAssistAlloc(gp *g) {
-    // convert "bytes owed" into "scan work owed" by the exchange rate the pacer gives
-    assistWorkPerByte := gcController.assistWorkPerByte.Load()
-    debtBytes  := -gp.gcAssistBytes
-    scanWork   := int64(assistWorkPerByte * float64(debtBytes))
-
-    // first "borrow" some from the scan credit the background workers have accumulated; if we can borrow it, we need not do it ourselves
-    if bgScanCredit := gcController.bgScanCredit.Load(); bgScanCredit > 0 {
-        stolen := min(bgScanCredit, scanWork)
-        gcController.bgScanCredit.Add(-stolen)
-        scanWork -= stolen
-    }
-    if scanWork == 0 {
-        return // the debt is offset by credit, keep allocating
-    }
-    // not enough credit: personally do scanWork units of marking, and only after that is allocation allowed
-    gcDrainN(&getg().m.p.ptr().gcw, scanWork)
+func main() {
+	report("initial")
+	ints = make([]int64, 2<<20) // 16 MiB
+	report("add []int64")
+	ptrs = make([]*int64, 2<<20) // 16 MiB
+	report("add []*int64")
 }
 ```
 
-There are two layers of design here. The first is that **exchange rate** `assistWorkPerByte`, computed in real time by the
-pacer ([13.3](./pacing.md)); in essence it is "how much scan work must be repaid per byte allocated, so that marking
-finishes on time." The more is allocated, and the closer to the mark goal, the heavier the debt per byte. The second is
-`bgScanCredit`: each time the background worker scans a batch, it records the over-fulfilled amount of work as "credit"
-and deposits it into a global account (see the flush of credit at the end of `gcDrain` in 13.4.2), and the allocator draws
-on this credit first; only when the credit runs dry is it truly conscripted into marking. So a lightly-allocating
-goroutine almost never marks personally (its debt is repaid by the workers' credit), and only a goroutine allocating
-faster than marking gets pulled down to work.
+The output is:
 
-The effect is to forcibly bind "allocation rate" to "marking rate": the more fiercely you allocate, the more marking you
-are penalized into doing, and the speed of allocation is therefore dragged down by the marking debt you yourself created,
-so marking can never be shaken off. This also explains a commonly observed phenomenon: during GC marking, an
-allocation-intensive business goroutine sees latency spikes, because it is being conscripted to repay GC's debt.
+```
+initial        live heap  0.3 MiB, scannable heap  0.3 MiB
+add []int64    live heap 16.3 MiB, scannable heap  0.3 MiB
+add []*int64   live heap 32.4 MiB, scannable heap 16.3 MiB
+```
 
-Putting it back in a global view, mark assist and the write barrier ([13.2](./barrier.md)) are exactly a complementary
-pair of mechanisms:
+Right after a collection finishes, the scannable heap equals the amount of heap scan work actually
+done in that cycle. Both slices increased the live heap by 16 MiB, but only the one with pointers
+increased the scan work: the `[]int64` lives in a span without pointers and turns black as soon as
+it is marked, whereas the `[]*int64`, although all nil, still requires every pointer field to be
+read, and it is scanned as 128 pieces. The initial values vary by platform and are smaller in the
+browser's WebAssembly environment; what matters is the two increments. This is also why the headroom
+in 13.3 is computed from scannable memory only.
 
-| Mechanism | What it guarantees | How it guarantees it |
+Stacks are not in the heap and are scanned differently. The layout of a stack frame varies with the
+function and the execution position, and the pointer information is generated by the compiler as
+stack maps. Scanning a goroutine's stack means looking up the stack map of each frame at the
+position where the goroutine stopped and graying the objects that the live pointers in it refer to.
+Since Go 1.14, a frame that was asynchronously preempted has no precise stack map and must be
+scanned conservatively. Stack maps and conservative scanning are covered in [13.7](./safe.md).
+
+## 13.4.4 Mark Assist
+
+The 25% background budget is a steady-state estimate ([13.3](./pacing.md)). If the mutator allocates
+faster than expected, the heap may exceed its goal before marking completes. **Mark assist** is the
+backstop: during marking, a goroutine that allocates memory must perform marking work in proportion
+to what it allocates.
+
+Each goroutine has an assist credit measured in bytes, `gcAssistBytes`. During marking, every
+allocation in `mallocgc` deducts the allocated size from it; when the credit goes negative, that is,
+when mark debt is owed, `gcAssistAlloc` repays it before the allocation. The following is the
+trimmed source, with the tracing and synctest parts omitted
+[[Go Authors, 2026a](#ref-go-authors-2026a)]:
+
+```go
+retry:
+	if gcCPULimiter.limiting() {
+		// If the CPU limiter is enabled, intentionally don't
+		// assist to reduce the amount of CPU time spent in the GC.
+		return
+	}
+	// Compute the amount of scan work we need to do to make the
+	// balance positive. When the required amount of work is low,
+	// we over-assist to build up credit for future allocations
+	// and amortize the cost of assisting.
+	assistWorkPerByte := gcController.assistWorkPerByte.Load()
+	assistBytesPerWork := gcController.assistBytesPerWork.Load()
+	debtBytes := -gp.gcAssistBytes
+	scanWork := int64(assistWorkPerByte * float64(debtBytes))
+	if scanWork < gcOverAssistWork {
+		scanWork = gcOverAssistWork
+		debtBytes = int64(assistBytesPerWork * float64(scanWork))
+	}
+
+	// Steal as much credit as we can from the background GC's
+	// scan credit. This is racy and may drop the background
+	// credit below 0 if two mutators steal at the same time. This
+	// will just cause steals to fail until credit is accumulated
+	// again, so in the long run it doesn't really matter, but we
+	// do have to handle the negative credit case.
+	// ... (draw on background credit; return if it suffices)
+
+	// Perform assist work
+	systemstack(func() {
+		gcAssistAlloc1(gp, scanWork)
+	})
+	// ...
+	if gp.gcAssistBytes < 0 {
+		if gp.preempt {
+			Gosched()
+			goto retry
+		}
+		if !gcParkAssist() {
+			goto retry
+		}
+	}
+```
+
+Repayment proceeds in several steps. If the collector's CPU limit has already been reached, the
+assist is skipped altogether ([13.3](./pacing.md)). Otherwise the owed bytes are converted into scan
+work using the assist ratio supplied by the pacer; if the amount is too small, at least 64 KiB
+(`gcOverAssistWork`) is done, and the excess becomes credit for later allocations, which amortizes
+the fixed cost of each assist. The goroutine then first draws on the credit that background marking
+has accumulated, `bgScanCredit`, and if it suffices there is no need to mark at all. When the credit
+is insufficient, `gcAssistAlloc1` calls `gcDrainN` to complete the remaining scan work; it obtains
+work the same way a background worker does, and also claims root marking tasks when there are no
+gray objects. If the debt is still not repaid, a preempted goroutine yields the processor and
+retries; otherwise it joins the assist queue `work.assistQueue` and parks, waiting for background
+marking to produce new credit.
+
+When a background worker hands in credit, `gcFlushBgCredit` first repays the goroutines parked in
+the queue and records only the remainder in `bgScanCredit`. A goroutine that can be repaid only in
+part is moved to the back of the queue, so that a large debt does not block small ones for long. A
+woken goroutine is not placed in the P's `runnext`; a source comment explains that otherwise user
+code could exploit the higher scheduling priority of the background worker to always run ahead of
+other goroutines [[Go Authors, 2026a](#ref-go-authors-2026a)].
+
+Mark assist ties the allocation rate to the marking rate: the faster a goroutine allocates, the more
+marking it takes on, and the allocation itself slows down as a result. In the design of the 1.18
+pacer, when the trigger point is estimated accurately, the credit accumulated by background marking
+is enough to pay for allocation and the mutator need not mark itself
+[[Knyszek, 2021](#ref-knyszek-2021)]; only when the trigger is late do allocation-heavy goroutines
+feel a delay during marking. The GC guide lists mark assist as one source of collection-induced
+latency and gives a test: if the cumulative time of `runtime.gcAssistAlloc` in a CPU profile exceeds
+5%, the program is most likely allocating faster than the collector can keep up
+[[Go Authors, 2026d](#ref-go-authors-2026d)]. Mark assist and the write barrier thus form a
+complementary pair:
+
+| Mechanism | What it guarantees | How |
 | --- | --- | --- |
-| Write barrier | **Correctness**: concurrent marking does not miss a live object | record when the user changes a pointer, maintaining the tricolor invariant |
-| Mark assist | **Timeliness**: marking finishes before the heap fills up | the allocator repays marking work by its debt, binding allocation and marking rates |
+| Write barrier | Correctness: concurrent marking misses no live object | When the mutator modifies a pointer, it records the objects involved, preserving the tri-color invariant |
+| Mark assist | Timeliness: marking completes before the heap grows to its goal | Allocating goroutines take on marking work in proportion to their allocation |
 
-The write barrier governs "marking correctly," mark assist governs "finishing marking," and without either, "concurrent
-marking with almost no pause" does not stand. Understanding this pair is to understand why Go's GC can squeeze pauses down
-to sub-millisecond, yet still pays about 25% of background CPU plus occasional allocation latency. The gain in performance
-never comes for free; the price of low latency is spread across exactly these two places. When marking runs until there
-are no more gray objects, it enters mark termination and the subsequent sweep ([13.5](./sweep.md)), returning this round's
-dead object slots to the allocator.
+When the gray objects are exhausted, marking enters the termination phase; how the collector
+confirms that marking is truly complete is covered in [13.6](./termination.md).
 
-## 13.4.5 Design Trade-offs, Evolution, and Lineage
+## 13.4.5 Design Trade-offs and Evolution
 
-- **Fixed 25% background budget + mark assist backstop**: nailing GC's erosion of throughput into a predictable constant
-  is the most fundamental shift of go1.5's concurrent GC over the early STW marking. The cost is that an aggressively
-  allocating program gets dragged down by assist, throughput further eaten into, which is exactly why the pacer
-  ([13.3](./pacing.md)) must carefully calibrate `GOGC` and the trigger timing.
-- **gcWork's per-P buffer + double-buffer hysteresis + stealing**: the same "layered contention reduction" isomorphic to
-  the scheduler's run queue ([9.2](../../part3concurrency/ch09sched/steal.md)) and the allocator's mcache
-  ([12.2](../ch12alloc/component.md)). This move appears again and again in the Go runtime; it is the general solution for
-  high-concurrency data structures.
-- **Evolution of precise-scan metadata**: from the early per-arena whole-heap pointer bitmap, to go1.22 collecting the
-  pointer layout into the span's tail and the object's first-word "allocation header," with the aim of improving
-  memory-access locality and shrinking metadata footprint; the Green Tea GC ([13.11](./greentea.md)), introduced in go1.25 and on by default since go1.26, adds one more layer
-  of batch scanning by span, further optimizing scenarios dense with small objects.
+- Fixed budget plus mark assist: Go 1.5 fixed the CPU used by background marking at 25% and made
+  allocators pay for anything beyond it, which makes the collector's effect on throughput
+  predictable; the cost is that allocation-heavy programs are slowed down during marking
+  [[Clements, 2015](#ref-clements-2015)].
+- Local buffers plus global sharing: the double buffering in `gcWork` amortizes access to the global
+  list over a whole buffer of work, and work is shared among Ps through the global list. Go 1.8
+  introduced 128 KiB pieces to bound the time of a single scan
+  [[Clements, 2016](#ref-clements-2016)].
+- Pointer metadata: the heap bitmap became one bit per word in Go 1.20
+  [[Randall, 2022](#ref-randall-2022)], and in Go 1.22 became an in-span bitmap for small objects
+  and an allocation header for large ones [[Knyszek, 2022](#ref-knyszek-2022)]. The Green Tea
+  collector, introduced as an experiment in Go 1.25 and enabled by default in Go 1.26, adds batched
+  scanning by span ([13.11](./greentea.md)).
 
-Placed in the lineage, "concurrent tricolor marking + write barrier + mark assist" is not Go's invention: concurrent
-marking traces back to the foundational work of Dijkstra and others in 1978, and low-latency concurrent collectors beyond
-generational ones (such as Java's G1, ZGC, Shenandoah) take a similar concurrent-marking route. Go's trade-offs are
-distinct: no generations, trading non-moving for implementation simplicity and predictable low pause, and putting the
-engineering effort into the feedback control of pacing and assist that "keeps marking always able to catch up with
-allocation." This main line, and the layer of metadata born for precise GC in [12 Memory Allocation](../ch12alloc),
-formally converge at this step of marking.
+The theoretical starting point of concurrent marking is the 1978 work of Dijkstra and colleagues
+[[Dijkstra et al., 1978](#ref-dijkstra-1978)]. Go's collector neither moves objects nor is
+generational ([13.1](./basic.md), [13.8](./generational.md)), and Hudson explained these trade-offs
+in his 2018 keynote [[Hudson, 2018](#ref-hudson-2018)]; the engineering effort therefore
+concentrates on pacing and mark assist, so that marking always keeps up with allocation.
+
+## 13.4.6 Summary
+
+Marking is done by the mark workers on each P: dedicated and fractional workers together use 25% of
+`GOMAXPROCS`, and idle workers use the remaining idle CPU. Gray objects are held in each P's double
+buffer and shared through a global lock-free list; under Green Tea, small objects are queued
+separately by span. When an object is scanned, the pointer locations come from the bitmap or
+allocation header recorded at allocation time; objects without pointers turn black directly, and
+large objects are scanned in pieces. Allocators take on marking work in proportion to their
+allocation, or draw on credit accumulated by background marking, which guarantees that marking
+completes before the heap grows to its goal.
 
 ## Further Reading
 
-1. Rick Hudson. *Getting to Go: The Journey of Go's Garbage Collector.* ISMM 2018 keynote.
-   https://go.dev/blog/ismmkeynote (a first-person account of the design of concurrent marking, write barrier, and mark assist)
-2. The Go Authors. *runtime/mgcmark.go.* `gcDrain`, `scanObject`, `gcAssistAlloc`, `gcDrainN`.
-   https://github.com/golang/go/blob/master/src/runtime/mgcmark.go
-3. The Go Authors. *runtime/mgcwork.go.* `gcWork`, `workbuf`, and the double-buffer steal queue.
-   https://github.com/golang/go/blob/master/src/runtime/mgcwork.go
-4. The Go Authors. *runtime/mgcpacer.go.* `gcBackgroundUtilization`, assist credit, and the exchange rate.
-   https://github.com/golang/go/blob/master/src/runtime/mgcpacer.go
-5. The Go Authors. *A Guide to the Go Garbage Collector.* https://go.dev/doc/gc-guide
-6. E. W. Dijkstra, L. Lamport, A. J. Martin, et al. *On-the-Fly Garbage Collection: An Exercise in
-   Cooperation.* CACM, 1978. (the theoretical foundation of concurrent tricolor marking)
-7. This book's [13.2 Write Barrier](./barrier.md), [13.3 Pacing Algorithm](./pacing.md), [13.7 Safe Point Analysis](./safe.md),
-   [12.1 Allocator Design Principles](../ch12alloc/basic.md).
+- <a id="ref-clements-2015"></a>[Clements, 2015] Austin Clements. *Go 1.5 concurrent garbage
+  collector pacing.* 2015. https://golang.org/s/go15gcpacing The original design of mark assist and
+  background mark scheduling; the end of the document records the 25% dedicated-plus-fractional
+  scheme that Go 1.5 finally adopted.
+- <a id="ref-clements-2016"></a>[Clements, 2016] Austin Clements. runtime: bound scanobject to ~100
+  µs. Go commit cf4f1d07a1, 2016. https://go.dev/cl/23540 Released with Go 1.8.
+- <a id="ref-dijkstra-1978"></a>[Dijkstra et al., 1978] E. W. Dijkstra, L. Lamport, A. J. Martin, et
+  al. *On-the-Fly Garbage Collection: An Exercise in Cooperation.* CACM, 1978.
+  https://doi.org/10.1145/359642.359655 (The theoretical foundation of concurrent tri-color
+  marking.)
+- <a id="ref-go-authors-2022"></a>[Go Authors, 2022] The Go Authors. *Go 1.19 Release Notes.* 2022.
+  https://go.dev/doc/go1.19
+- <a id="ref-go-authors-2024"></a>[Go Authors, 2024] The Go Authors. *Go 1.22 Release Notes.* 2024.
+  https://go.dev/doc/go1.22
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. *runtime/mgcmark.go.*
+  `gcDrain`, `scanObject`, `gcAssistAlloc`, `gcDrainN`. See also src/runtime/mgcmark_greenteagc.go,
+  src/runtime/mgc.go, src/runtime/mgcpacer.go, src/runtime/mbitmap.go. Go 1.26 source.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mgcmark.go
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. *runtime/mgcwork.go.*
+  `gcWork`, `workbuf` and the double-buffered queue. Go 1.26 source.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mgcwork.go
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. *runtime/mgcpacer.go.*
+  `gcBackgroundUtilization`, assist credit and the exchange ratio. Go 1.26 source.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mgcpacer.go
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors. *A Guide to the Go Garbage
+  Collector.* https://go.dev/doc/gc-guide
+- <a id="ref-hudson-2018"></a>[Hudson, 2018] Rick Hudson. *Getting to Go: The Journey of Go's
+  Garbage Collector.* ISMM 2018 keynote. https://go.dev/blog/ismmkeynote (The designers' own account
+  of concurrent marking, the write barrier and mark assist.)
+- <a id="ref-knyszek-2021"></a>[Knyszek, 2021] Michael Knyszek. *GC Pacer Redesign.* Go proposal
+  44167,
+  2021. https://github.com/golang/proposal/blob/master/design/44167-gc-pacer-redesign.md
+- <a id="ref-knyszek-2022"></a>[Knyszek, 2022] Michael Knyszek. runtime: implement experiment to
+  replace heap bitmap with alloc headers. Go commit 38ac7c41aa, 2022. https://go.dev/cl/437955
+  Released with Go 1.22.
+- <a id="ref-randall-2022"></a>[Randall, 2022] Keith Randall. runtime: redo heap bitmap. Go commit
+  6a9c674a09, 2022. https://go.dev/cl/422634
+  Released with Go 1.20.
+- This book: [13.2 Write Barrier Techniques](./barrier.md),
+  [13.3 Trigger Frequency and the Pacing Algorithm](./pacing.md),
+  [13.7 Safe-Point Analysis](./safe.md), [12.1 Design Principles](../ch12alloc/basic.md).

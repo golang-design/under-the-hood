@@ -5,120 +5,299 @@ title: "13.9 The Request Hypothesis and the Request-Oriented Collector"
 
 # 13.9 The Request Hypothesis and the Request-Oriented Collector
 
-[13.8](./generational.md) explained why Go did not adopt the generational hypothesis. The reader may go on to ask: did Go ever try a different "object lifetime hypothesis"? It did. This section is about an experiment the Go team took seriously and ultimately abandoned, the Request-Oriented Collector (ROC). We discuss it not because it made it into Go, but because an abandoned design often reveals where the constraints lie better than a successful one. ROC is like a proof done wrong: the spot where it goes wrong marks exactly the boundary in Go's GC design space that cannot be crossed.
+Before trying generational collection ([13.8](./generational.md)), the Go team experimented with a
+different algorithm that also exploits regularities in object lifetimes. In 2016, Rick Hudson and
+Austin Clements proposed the request oriented collector (ROC). The algorithm was first called the
+transaction oriented collector (TOC); it was renamed, on a suggestion from Randall Farmer, to avoid
+confusion with transactions in the ACID sense of databases
+[[Hudson and Clements, 2016](#ref-hudson-clements-2016)]. The experiment ran on the `dev.garbage`
+branch from 2016 into 2017, and no part of it ever reached the main line. This section presents the
+hypothesis, the algorithm and its implementation, and the reasons it was abandoned.
 
 ## 13.9.1 The Request Hypothesis
 
-Server programs have a strong structural feature: work is done in units of requests. A request comes in, a batch of objects is allocated to handle it, and once the request finishes, the vast majority of that batch should be dead. In 2016, Rick Hudson and Austin Clements turned this observation into the request hypothesis:
-
-> Objects created by a request tend to die together when that request finishes being processed.
-
-This is not the same thing as the generational hypothesis ([13.8](./generational.md)). The generational hypothesis says "young objects die easily," a statistical regularity about age; the request hypothesis says "objects of the same request live and die together," a structural regularity about ownership. For server programs the latter fits reality better and is also more powerful: it does not merely say that some batch of objects will die, it specifies when they die and that they die in a batch. The typical goroutine in the cloud has exactly this shape: receive a message, deserialize it, compute once, serialize, drop the result back into a channel or socket, then exit.
+The ROC design document states the **request hypothesis** as follows: objects created by a request
+tend to die once that request completes [[Hudson and Clements, 2016](#ref-hudson-clements-2016)].
+The observation comes from cloud services. Such a program typically has one goroutine handle a
+request that arrives from the network or from another goroutine: it receives a message, deserializes
+it, computes, serializes the result into a channel or socket, and then exits or goes to sleep to
+wait for the next request. The computation may read a large shared heap, but the data it writes into
+the heap and that remains alive after the request ends is usually small. Take the following handler
+as an example:
 
 ```go
-// One goroutine per request: most allocated objects die when the goroutine exits
 func handle(conn net.Conn) {
-	req := decode(conn)        // these intermediate objects
-	result := compute(req)     // are almost all active only within this goroutine
-	conn.Write(encode(result)) // and become garbage once the function returns
+	req := decode(conn)        // intermediate objects produced by deserialization
+	result := compute(req)     // temporary objects allocated during computation
+	conn.Write(encode(result)) // the encoded result is not needed once written
 }
 ```
 
-If we could exploit this regularity, reclamation could degrade from "global scan to find garbage" into "when a request finishes, hand its batch of objects back wholesale," which is both fast and avoids stopping the whole program for a global GC. Only one question remains: how do we know which objects "belong only to this request"?
+The request hypothesis and the generational hypothesis look at different aspects of object
+lifetimes. The generational hypothesis distinguishes objects by age and says that young objects are
+more likely to die. The request hypothesis distinguishes objects by ownership and says that the
+lifetimes of a batch of objects are bounded by the request. The latter also says when the batch
+dies: when the goroutine handling the request finishes.
 
-## 13.9.2 The ROC Design: Local Objects and Published Objects
+## 13.9.2 Local Objects and Publication
 
-The core of ROC is to split heap objects into two classes. An object is local from the moment it is allocated, reachable only by the goroutine that created it; once it is written into a location that another goroutine can see (a global variable, an object on the shared heap, a message sent over a channel), it becomes published. This local / published division is the entire pivot of ROC:
+The design document calls an object that a goroutine has just allocated and that no other goroutine
+has seen a local object. Once the goroutine shares the object with another goroutine, the object is
+said to be published. The key observation of ROC is that if a goroutine exits before publishing an
+object, the object must be unreachable, and the memory it occupies can be reclaimed and reused
+immediately, without waiting for the next global collection
+[[Hudson and Clements, 2016](#ref-hudson-clements-2016)].
 
-- When a goroutine reaches the end of its life, the objects it created that were never published must, at that moment, be unreachable: no other goroutine can reference them. So there is no need to scan, no need to wait for the next round of global GC; we can reclaim the whole batch directly. In implementation, ROC makes this an extremely light action: when a goroutine exits, it rewinds the sweep pointer back to where it began, and the objects in that span that have no mark bit set are freed in place.
-- Published objects are left to the regular global concurrent mark-sweep ([13.3](./mark.md)-[13.5](./sweep.md)) to handle: they may be referenced by any goroutine, and only global reachability can decide whether they live or die.
+The algorithm builds on the bitmap allocation of Go 1.7 ([12.5](../ch12alloc/smallalloc.md)). The
+allocator advances along a span's bitmap and allocates objects at positions whose bit is unset; each
+span maintains a current sweep pointer that marks the part of the bitmap already passed. ROC
+additionally records an initial sweep pointer for each running goroutine. A bit between the two
+pointers is either set, meaning the object survived the previous collection or has been published,
+or unset, meaning the object was allocated by this goroutine and has not been published. The design
+document calls these bits mark bits; in the implementation they are the span's allocation bitmap
+[[Hudson, 2016a](#ref-hudson-2016a)].
+
+The algorithm maintains an invariant: the mark bit of every published object is set. The write
+barrier maintains it ([13.2](./barrier.md)). When a pointer is written into a field of some object,
+if the object holding the field is published and the object being written is not, the latter is
+about to be published, and so are the objects reachable from it. The write barrier first sets the
+bit of the object being written, then sets the bits of all reachable objects with unset bits,
+transitively along pointers, stopping a branch when it reaches an object whose bit is already set;
+only after all bits are set does the write actually happen. The whole process needs no
+synchronization: local objects are visible only to the goroutine that owns them, and until the write
+completes these objects are still local.
+
+With this invariant, collection becomes very simple. When a goroutine exits, it only needs to reset
+its current sweep pointer to the initial sweep pointer: published objects in between all have their
+bits set and are skipped by the allocator, while unpublished objects have unset bits and can be
+allocated to other goroutines immediately. For a goroutine that goes to sleep after handling a
+request, the algorithm first scans its stack and sets the bits of local objects reachable from it,
+and then resets the sweep pointer. As time passes, most bits in the bitmap become set, and a full
+global collection is then performed [[Hudson and Clements, 2016](#ref-hudson-clements-2016)]. The
+state changes of an object in ROC are shown below:
 
 ```mermaid
-flowchart LR
-	subgraph G1["goroutine A's local heap"]
-		A1["local object"]:::local
-		A2["local object"]:::local
-	end
-	subgraph G2["goroutine B's local heap"]
-		B1["local object"]:::local
-	end
-	subgraph SH["shared heap (published objects)"]
-		P1["published object"]:::pub
-		P2["published object"]:::pub
-	end
-	A1 -->|"pointer write triggers publication"| P1
-	A2 --> A1
-	P1 --> B1
-	classDef local fill:#e8f0ff,stroke:#5a7;
-	classDef pub fill:#ffeede,stroke:#c84;
+stateDiagram-v2
+    [*] --> Local: allocated within this epoch
+    Local --> Published: written to a published location, bit set by the write barrier
+    Local --> Reusable: goroutine exits, sweep pointer reset
+    Published --> Reusable: global collection finds it unreachable
+    Reusable --> [*]
 ```
 
-This design is beautiful. When a request finishes, its memory is handed back cleanly, most reclamation work never even enters the view of the global GC, and both throughput and scalability should improve as a result. It shares the same intuition as Erlang/BEAM's per-process heap: reclaim at the granularity of a "unit of work," and release the whole unit as soon as it finishes. The difference is that the Erlang language itself forbids a shared mutable heap; processes can only pass copied messages, so "this object belongs only to this process" holds for free at the language level. Go allows goroutines to share mutable objects, so this premise is no longer free and must be verified by the runtime at execution time. The entire cost of ROC comes out of this verification.
+## 13.9.3 Implementation: Epochs and the Exits of Publication
 
-Widening the view a little, ROC belongs to a larger family: local collection (local / thread-local collection). This line of thinking has a long history in the literature: the early "ML region inference," the per-thread minor heap plus shared major heap that Doligez and Leroy designed for Concurrent Caml Light, and later the thread-local allocation buffer (TLAB) and various escape optimizations on the JVM are all the same attempt: give each execution unit a chunk of memory that belongs only to it, reclaim the whole unit cheaply when it finishes, and squeeze the burden of global reclamation down to "the small set of objects that are truly shared." The watershed of their success or failure almost always falls on the same question: deciding "whether an object has been shared," at what moment and at what cost. Erlang moves the cost forward into language semantics (no sharing, message copying), the ML family hands it to the static inference of types and regions, and ROC chose dynamic decision at execution time. Of the three paths, dynamic decision is the most precise but also the most expensive, because it must keep paying for that precision on every write.
+In the implementation, ROC calls the interval in which a goroutine runs continuously on a P an
+epoch, and defines three basic operations around it [[Hudson, 2016c](#ref-hudson-2016c)]. `startG`
+begins a new epoch when a goroutine is scheduled to run; `recycleG` returns the local objects of the
+epoch to the allocator when the goroutine exits; `publishG` publishes all local objects of the
+epoch, ending the epoch early. The epoch is bounded by the P because allocation goes through the P's
+local cache ([12.2](../ch12alloc/component.md)); once another goroutine may run on this P, the
+epoch's records can no longer be maintained. The initial implementation ended the epoch directly at
+the places where a goroutine may lose its P, namely park, system calls and scheduler calls, by
+setting the span's `startindex` to `freeindex`, which treats all objects allocated in the epoch as
+published. This is conservative and lets objects that could have been reclaimed live at least until
+the next collection. It was later changed to scan the stack first, publish the reachable objects,
+and then recycle the remaining local objects [[Hudson, 2016d](#ref-hudson-2016d)]; for system calls,
+publication is deferred until the call actually blocks and the P is handed off
+[[Hudson, 2017](#ref-hudson-2017)].
 
-## 13.9.3 The Cost of Verifying "Unpublished": The Write Barrier Tax
-
-To maintain the local / published division, ROC must mark an object as published the moment it is shared out. And an object becomes shared during a pointer write: the pointer to a local object is written into a published object (or a global variable). So ROC needs a write barrier ([13.2](./barrier.md)) that performs a check on every pointer write. The cost of this barrier has two layers:
+The function that decides whether an address is published is `isPublic`. An address on the stack is
+local. Addresses in the data segment, in the BSS segment, and outside the heap are always treated as
+published. For an object in the heap, it is published if its span has not yet been swept or its
+allocation bit is set. Among the remaining objects with unset bits, one whose index is not less than
+the span's new field `startindex` is a local object allocated in this epoch and not yet published;
+the rest are treated as published [[Hudson, 2016a](#ref-hudson-2016a)]. The decision is
+conservative: any object not known to belong to this epoch is treated as published. The write
+barrier part was added to the then-current `gcmarkwb_m` [[Hudson, 2016b](#ref-hudson-2016b)]:
 
 ```go
-// The logic of the ROC write barrier (schematic): every pointer write must pass this gate
-func rocWriteBarrier(slot *unsafe.Pointer, ptr unsafe.Pointer) {
-	if isPublished(slot) && isLocal(ptr) {
-		// A local object is being written into a published location: it is about to "be published"
-		publish(ptr) // not just marking ptr itself...
+//go:nowritebarrierrec
+//go:systemstack
+func gcmarkwb_m(slot *uintptr, ptr uintptr) {
+	if writeBarrier.mark {
+		// ...
 	}
-	*slot = ptr
-}
 
-// publish must be recursive: every local object reachable from ptr must be published too
-func publish(p unsafe.Pointer) {
-	for _, q := range pointersFrom(p) {
-		if isLocal(q) {
-			markPublished(q)
-			publish(q) // transitive closure, may walk a large swath of the object graph
+	if ptr == 0 {
+		return
+	}
+
+	// ROC: publish local ptrs being written into public slots.
+	if writeBarrier.roc {
+		// local -> public
+		// local -> local
+		// If slot is local then we are done.
+		if !isPublic(uintptr(unsafe.Pointer(slot))) {
+			return
 		}
+		// public -> public
+		// if ptr is public we are done
+		if isPublic(ptr) {
+			return
+		}
+		// public -> local
+		// Turn into a public -> public
+		if inheap(ptr) {
+			publish(ptr)
+			// ...
+		}
+		return
 	}
 }
 ```
 
-The first layer is a constant overhead: this check is always on, weighing on the highest-frequency operation in the program, the pointer write. Whether or not a given write actually causes a publication, every write must first pass this judgment. The second layer is the transitive closure at publication time: once some local object is judged to need publishing, every local object reachable from it must be published along with it, which is a transitive traversal along the pointer graph that, in Hudson's words, "causes many cache misses."
+`writeBarrier.mark` corresponds to the original marking barrier and is on only during the mark phase
+of a collection, whereas `writeBarrier.roc` is on all the time when ROC is enabled. Of the four
+kinds of writes, only a write from a published location to a local object needs publication. A
+comment in `mbarrier.go` at the time already explained that the write barrier runs before
+publication: it happens before `*slot = ptr`, and it is this very write that may let another
+goroutine see `ptr` for the first time. The correctness of ROC depends on this ordering. The
+transitive traversal in `publish` was first written recursively, but recursion causes stack growth
+at inopportune moments, so it was changed to an iterative form that borrows the work buffers of the
+mark phase [[Hudson, 2016f](#ref-hudson-2016f)].
 
-To see why this tax is so heavy, it helps to do a rough dimensional estimate. Suppose the program executes $W$ pointer writes during one collection cycle and reclaims $R$ bytes of memory; the net gain of ROC is roughly
+The write barrier covers only sharing through pointer writes. In Go an object can be seen by other
+goroutines in many other ways, and each needs its own publication handling: elements sent through a
+channel, the arguments of `go f(p)` that are placed on the new goroutine's stack, objects referenced
+by defers, finalizers and profile records, pointers written by atomic operations, source data copied
+by `memmove`, and the appending of map overflow buckets [[Hudson, 2016e](#ref-hudson-2016e)]. These
+CLs show that, in a language that allows sharing of mutable memory, determining precisely at run
+time whether an object is shared requires finding every exit through which sharing can occur.
 
-$$
-\text{gain} \;\approx\; \underbrace{c_{\text{free}}\cdot R}_{\text{reclamation work saved}} \;-\; \underbrace{c_{\text{wb}}\cdot W}_{\text{write barrier constant tax}} \;-\; \underbrace{c_{\text{pub}}\cdot P}_{\text{transitive traversal at publication}}
-$$
+## 13.9.4 Evaluation and Abandonment
 
-where $c_{\text{wb}}$ is the cost of the few extra judgment instructions added to each write, and $P$ is the number of objects published transitively. The problem is that $W$ is almost always huge: the pointer write is one of the densest operations in a program, so the term $c_{\text{wb}}\cdot W$, even with an extremely low unit price, multiplies out into a permanent recurring cost, deducted for nothing and independent of the reclamation gain $c_{\text{free}}\cdot R$. The gain turns positive only when the program "writes little and dies a lot," and real programs, especially pointer-intensive ones, fall far short of that condition.
+In May 2017, Ian Lance Taylor still described this work on the mailing list as ongoing research,
+with no clear sign yet of whether it would be beneficial in practice
+[[Taylor, 2017](#ref-taylor-2017)]. Hudson announced the results in his ISMM 2018 keynote
+[[Hudson, 2018](#ref-hudson-2018)]. The ROC write barrier is always on: every write has to check
+whether it stores a pointer to a local object into a published object, and if so, to publish the
+referenced object and traverse its reachable objects transitively, a traversal that can cause many
+cache misses. In an end-to-end RPC benchmark, with little sharing, programs scaled quite well with
+ROC on. But the team also had to ensure that ROC did not slow down the rest of the system, and
+compilers were exactly the programs on which ROC did worst, with slowdowns of 30%, 40%, 50% and
+more, which was unacceptable. On the set of performance benchmarks chosen by the compiler team, the
+results were uniformly poor as well. Hudson concluded that ROC did bring scalability, but the
+machines of the time had only 4 to 12 hardware threads, and the benefit of scaling could not
+outweigh the write barrier tax; perhaps the conclusion deserves to be revisited once 128-core
+machines are common.
 
-Stacking these two layers together, the write barrier becomes a heavy tax. The Go team's measured conclusion matches this estimate: on end-to-end RPC benchmarks that lean toward little sharing, ROC did indeed scale well ($R$ large and $W/R$ small, so the gain term dominates); but as soon as it moved to pointer-write-intensive programs ($W$ exploding), the overhead drowned out the gain. The most glaring case was the compiler itself as a benchmark, which slowed down by thirty to forty percent, even fifty percent or more. Go takes pride in its compilation speed, and a regression like this was unacceptable. The overall verdict Hudson gave in his ISMM keynote was that these numbers were "uniformly bad," and that with the test machines of the time having only 4 to 12 hardware threads, no amount of scalability could fill the hole left by this write barrier tax. The conclusion was a sentence that settled the matter: ROC was a losing proposition.
+This result is consistent with the analysis in [13.8](./generational.md). Go's current write barrier
+is on only during marking: before a pointer store that needs a barrier, the compiler inserts a check
+of the global flag `writeBarrier.enabled`, and while the collector is idle the mutator pays only
+this one check per write. ROC and card-table-based generational collection both require the barrier
+to stay on for as long as the mutator runs, and the ROC barrier also includes a transitive
+traversal, which makes it more expensive. Pointer writes are among the most frequent operations in a
+program; however small the cost of an always-on barrier per write, multiplied by the number of
+writes it is a considerable fixed expense.
 
-Here we should draw clear a line that is easy to confuse. ROC deciding at execution time "whether this object has been published," and the compiler's escape analysis ([13.8](./generational.md), [15 Compiler](../../part5toolchain/ch15compile)) deciding at compile time "whether this object will escape," are answering similar questions, but they are two mechanisms at different moments and by different means. Escape analysis is static, fixed once at compilation, with zero runtime cost, but it can only handle conservatively the cases it can prove; ROC's publication decision is dynamic, able to capture precisely the real sharing at runtime, at the cost of spreading the cost across every pointer write. The root cause of ROC's failure is precisely that the runtime price tag of this dynamic precision is too high.
+## 13.9.5 A Lineage of Local Collection
 
-## 13.9.4 The Hard Constraint the Failure Drew
+ROC belongs to the family of local collection: give each execution unit a region of memory that
+belongs only to it, collect that region separately and cheaply, and hand only the shared objects to
+global collection. This idea had been put into practice several times before ROC; the
+implementations differ in who decides whether an object is shared, and when.
 
-ROC did not make it into Go, but this failure was valuable: it confirmed a hard constraint of Go's GC design:
+In the collector that Doligez and Leroy designed for Concurrent Caml Light, each thread has a
+private heap that serves as its young generation, and the heap shared by all threads serves as the
+old generation. When a private heap fills up, the thread copies its live objects to the shared heap
+on its own, without synchronizing with other threads. The design requires that no pointer from the
+shared heap points into a private heap, so when a private object is written into a mutable object in
+the shared heap, the runtime copies it and its private descendants into the shared heap and writes
+the address of the copy. Copying is feasible because the ML type system distinguishes mutable from
+immutable objects at compile time: copying an immutable object is semantically unobservable, while
+mutable objects are allocated directly in the shared heap
+[[Doligez and Leroy, 1993](#ref-doligez-leroy-1993)].
 
-> Any scheme that tries to trade a heavier write barrier for reclamation efficiency must first pass the "write barrier overhead" test, and this test is extremely strict, because the write barrier weighs on the highest-frequency operation (the pointer write), and its constant cost gets multiplied by a vast number of writes.
+The thread-local heaps that Domani et al. designed for Java are the closest to ROC. Each thread
+allocates in its own heap partition and can perform local collections on its own. On every pointer
+modification, a write barrier checks whether a local object is becoming a descendant of a global
+object; if so, before the write it marks all of its descendants global with a depth-first traversal,
+again without synchronization. The paper reports that, combined with direct global allocation, total
+collection time is greatly reduced and most long pauses are eliminated; however, the write barrier
+was not implemented in the JIT, and the measurements were made in interpreter mode
+[[Domani et al., 2002](#ref-domani-2002)].
 
-This constraint conversely confirms why Go's current hybrid write barrier ([13.2](./barrier.md)) is so penny-pinching about keeping its own overhead down: the mix of the two barriers, Dijkstra's and Yuasa's, and the trade-off of dropping the stack rescan are all the result of repeated weighing on the same cost line. The hybrid write barrier was accepted precisely because it compressed the extra action on the write path down to the order of "one or two branchless instructions"; ROC wanting to stuff "publication decision plus transitive publication" into the write barrier amounts to piling more onto this already taut cost line, and so it snaps. From another angle, this also explains why the "cross-generational pointer remembered set" required by generational collection in the previous section ([13.8](./generational.md)) is equally unwelcome in Go: like ROC, it relies on the write barrier to record a class of pointer writes at execution time, and that is exactly the place Go is least willing to pay for. Two cases of "this path is blocked" hit the same wall. An abandoned experiment thus draws the boundary of the design space: it tells those who come after that the path of "taking a shortcut via a structural hypothesis about object lifetime" will be blocked in Go by write barrier cost, unless you can find a way to exploit the same structure that does not require paying on the write path.
+Erlang removes the need for the decision through language semantics. Processes share no data and
+communicate only through messages [[Armstrong, 2003](#ref-armstrong-2003)]. The runtime gives each
+process a separate heap, collected by a per-process generational semi-space copying collector, and
+sending a message copies its contents to the receiver. The exception is binary data larger than 64
+bytes, which is stored in a global, reference-counted binary heap, with only references to it kept
+on the process heap [[Erlang/OTP, 2026](#ref-erlang-otp-2026)].
 
-The spirit of ROC, exploiting request and locality structure to improve reclamation, did not vanish along with it. The Green Tea GC ([13.11](./greentea.md)) of go1.25/1.26 set out again from a related but different angle: instead of verifying "who belongs to whom," it improves the memory locality of marking and sweeping, organizing scans to run more along the grain of caches and huge pages, and thereby recovers part of the "locality" dividend without touching the write barrier. This is the normal state of engineering evolution: when a path is blocked by cost, switch to an angle that does not have to pay at that tollbooth, and approach the same goal anew.
+The three hand the decision to language semantics (Erlang forbids sharing), the type system (ML
+distinguishes mutable from immutable), and a run-time write barrier (Java thread-local heaps and
+ROC). Go lets goroutines share mutable objects, and neither the language nor its types guarantees
+that an object belongs to a single goroutine, so ROC could take only the third route, and pay for it
+on every pointer write. Go's compiler answers a similar question in another way: escape analysis
+([15.5](../../part5toolchain/ch15compile/escape.md)) conservatively decides at compile time whether
+an object can leave the function that owns it, and objects judged not to escape are allocated
+directly on the stack at no run-time cost, but only the cases it can prove are handled.
+
+## 13.9.6 Summary
+
+The request hypothesis says that, in server programs, objects created by a request tend to die once
+the request completes. ROC accordingly divides new objects into local and published ones. The write
+barrier marks an object and everything reachable from it as published before the object is shared,
+and when a goroutine exits, unpublished objects can be reused simply by resetting one pointer. The
+implementation showed that, in Go, which allows sharing of mutable memory, every way of sharing
+needs publication handling, and an always-on write barrier with transitive traversal slowed programs
+such as the compiler by more than 30%. ROC and the generational experiments that followed were
+blocked at the same point: both require the mutator to pay for the write barrier continuously. Go
+then turned to improving the locality of marking without changing the write barrier, which is Green
+Tea ([13.11](./greentea.md)), enabled by default in Go 1.26.
 
 ## Further Reading
 
-1. Rick Hudson, Austin Clements. *Request Oriented Collector (ROC) Algorithm.* 2016.
-   Design document (short link `golang.org/s/gctoc`):
-   https://docs.google.com/document/d/1gCsFxXamW8RRvOe5hECz98Ftk-tcRRJcDFANj2VwCB0/view
-   (local / published objects, the publishing write barrier, and the original design of wholesale reclamation on goroutine exit).
-2. Rick Hudson. *Getting to Go: The Journey of Go's GC.* ISMM 2018 keynote.
-   https://go.dev/blog/ismmkeynote (a firsthand account of ROC's experimental results, the write barrier tax, and the reasons for abandoning it).
-3. Joe Armstrong. *Making reliable distributed systems in the presence of software errors.*
-   PhD thesis, KTH, 2003. (Erlang/BEAM's per-process heap and copy-message semantics, a language-level counterpart to the request hypothesis).
-4. Damien Doligez, Xavier Leroy. *A concurrent, generational garbage collector for a
-   multithreaded implementation of ML.* POPL 1993. https://doi.org/10.1145/158511.158611
-   (the precedent of local collection with a per-thread minor heap plus shared major heap, a design intuition sharing the same origin as ROC).
-5. David Chase et al. *runtime: ROC write barrier implementation and discussion.*
-   https://github.com/golang/go/issues (code and benchmark discussion of the ROC experimental branch).
-6. This book, [13.2 Write Barrier Techniques](./barrier.md), [13.8 The Generational Hypothesis and Generational Collection](./generational.md), [13.12 Past, Present, and Future](./history.md).
+- <a id="ref-armstrong-2003"></a>[Armstrong, 2003] Joe Armstrong. *Making Reliable Distributed
+  Systems in the Presence of Software Errors.* PhD thesis, Royal Institute of Technology
+  (KTH), 2003. https://erlang.org/download/armstrong_thesis_2003.pdf Erlang/BEAM per-process heaps
+  and copying message semantics, the language-level counterpart of the request hypothesis.
+- <a id="ref-doligez-leroy-1993"></a>[Doligez and Leroy, 1993] Damien Doligez, Xavier Leroy. "A
+  Concurrent, Generational Garbage Collector for a Multithreaded Implementation of ML." *POPL '93*,
+  113–123, 1993. https://doi.org/10.1145/158511.158611 An earlier local collector with small
+  per-thread heaps and a shared major heap, sharing its design intuition with ROC.
+- <a id="ref-domani-2002"></a>[Domani et al., 2002] Tamar Domani, Gal Goldshtein, Elliot K.
+  Kolodner, Ethan Lewis, Erez Petrank, Dafna Sheinwald. "Thread-Local Heaps for Java." *ISMM '02*,
+  76–87, 2002. https://doi.org/10.1145/512429.512439
+- <a id="ref-erlang-otp-2026"></a>[Erlang/OTP, 2026] Erlang/OTP. Erlang Garbage Collector. ERTS
+  User's Guide, 2026. https://www.erlang.org/doc/apps/erts/garbagecollection.html
+- <a id="ref-hudson-2016a"></a>[Hudson, 2016a] Rick Hudson. [dev.garbage] runtime: determine if an
+  object is public. Go CL 25056, 2016. https://go.dev/cl/25056 `isPublic` and `mspan.startindex`;
+  this is the only CL of the ROC series that was merged, and it went into the `dev.garbage` branch,
+  not the main line.
+- <a id="ref-hudson-2016b"></a>[Hudson, 2016b] Rick Hudson. [dev.garbage] runtime: ROC write barrier
+  code. Go CL 25058, 2016. https://go.dev/cl/25058 The write barrier implementation on the ROC
+  experimental branch `dev.garbage`.
+- <a id="ref-hudson-2016c"></a>[Hudson, 2016c] Rick Hudson. [dev.garbage] runtime: invoke core ROC
+  routines. Go CL 25303, 2016. https://go.dev/cl/25303
+  The three basic operations `startG`, `publishG` and `recycleG`.
+- <a id="ref-hudson-2016d"></a>[Hudson, 2016d] Rick Hudson. [dev.garbage] runtime: add ROC recycle
+  calls. Go CL 33316, 2016. https://go.dev/cl/33316
+- <a id="ref-hudson-2016e"></a>[Hudson, 2016e] Rick Hudson. [dev.garbage] runtime: publish channel
+  elements for ROC. Go CL 25305, 2016. https://go.dev/cl/25305 The same series also handles
+  publication in CL 25304 (stacks of new goroutines), 25306 (finalizers), 25307 (profile records),
+  25308 (defer), 33307 (atomic operations), 33317 (`memmove`) and 33320 (appending map overflow
+  buckets).
+- <a id="ref-hudson-2016f"></a>[Hudson, 2016f] Rick Hudson. [dev.garbage] runtime: TOC write barrier
+  code. Go CL 22343, 2016. https://go.dev/cl/22343 The write barrier implementation from when the
+  algorithm was still called TOC.
+- <a id="ref-hudson-2017"></a>[Hudson, 2017] Rick Hudson. [dev.garbage] runtime: lazy publish on
+  syscall. Go CL 37101, 2017. https://go.dev/cl/37101
+- <a id="ref-hudson-2018"></a>[Hudson, 2018] Rick Hudson. *Getting to Go: The Journey of Go's
+  Garbage Collector.* ISMM 2018 keynote, 2018. https://go.dev/blog/ismmkeynote The first-hand
+  account of ROC's experimental results, the write barrier tax, and the reasons for abandoning it.
+- <a id="ref-hudson-clements-2016"></a>[Hudson and Clements, 2016] Rick Hudson, Austin Clements.
+  *Request Oriented Collector (ROC) Algorithm.* 2016. Design document (short link
+  `golang.org/s/gctoc`):
+  https://docs.google.com/document/d/1gCsFxXamW8RRvOe5hECz98Ftk-tcRRJcDFANj2VwCB0/view The original
+  design: local and published objects, the publication write barrier, and collecting a batch at
+  goroutine exit.
+- <a id="ref-taylor-2017"></a>[Taylor, 2017] Ian Lance Taylor. Re: Why golang garbage-collector not
+  implement Generational and Compact gc? golang-nuts, 2017.
+  https://groups.google.com/g/golang-nuts/c/KJiyv2mV2pU/m/wdBUH1mHCAAJ
+- Go issue tracker: https://github.com/golang/go/issues (code and benchmark discussion of the ROC
+  experimental branch).
+- This book: [13.2 Write Barrier Techniques](./barrier.md),
+  [13.8 The Generational Hypothesis and Generational Collection](./generational.md),
+  [13.12 Past, Present, and Future](./history.md).

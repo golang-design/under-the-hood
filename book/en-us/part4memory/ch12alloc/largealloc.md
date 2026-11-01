@@ -5,148 +5,408 @@ title: "12.4 Large Object Allocation"
 
 # 12.4 Large Object Allocation
 
-The allocation hierarchy of [12.2](./component.md) was built for objects that are "small and frequent": a per-P mcache, a mcentral shared by size class, and a global mheap. These three cache layers collapse the vast majority of allocations into a handful of lock-free bit operations. But this delicate machine carries an implicit premise, that the object is small enough to fit into a size class. Once an object exceeds `maxSmallSize` (32768 bytes in go1.26, that is 32KB), it no longer fits into any size class slot, and the whole replenishment chain loses its meaning for it.
+In Go 1.26, an object larger than 32760 bytes is a **large object**. Large objects bypass the local
+and central caches. Each one occupies a span of whole pages by itself and is requested directly from
+the page heap ([12.1.4](./basic.md)). This section covers where the boundary between small and large
+objects comes from, how `mallocgcLarge` arranges preemptible points among allocation, zeroing and
+publication, how the page heap supplies whole pages for large objects, and what this path costs.
 
-A large object takes a different road: it skips the mcache and mcentral and **requests a contiguous stretch of memory directly from the mheap by the page**, building a span for it alone. In terms of code this road is far shorter than the one for small objects, but short does not mean cheap. This section makes clear why it was designed to "bypass the cache", how exactly the road is walked, and what bypassing the cache costs in engineering terms.
+## 12.4.1 The Boundary Between Large and Small
 
-## 12.4.1 Why Large Objects Do Not Enter the Cache
+The boundary value is inherited from TCMalloc. The 2005 design document by Ghemawat and Menage
+treats objects of up to 32K as small; larger objects are rounded up to the page size and allocated
+from the central page heap, so they are always page-aligned and occupy a whole number of pages
+[[Ghemawat and Menage, 2005](#ref-ghemawat-menage-2005)]. `MaxSmallSize` in Go 1.0 was likewise 32
+KiB, and it has stayed so ever since. Other allocators draw the line differently. The original
+design of jemalloc divides sizes into small, large and huge: an object larger than half a page is
+large and is served by contiguous pages in a chunk; one larger than half a chunk (the default chunk
+is 2 MB) is huge and is carried directly by a dedicated chunk [[Evans, 2006](#ref-evans-2006)].
+TCMalloc today draws the line at `kMaxSize`; objects above it are allocated directly by the back end
+and are cached neither in the front end nor in the middle tier
+[[TCMalloc Authors, 2026](#ref-tcmalloc-authors-2026)].
 
-A cache pays off because of two assumptions: that the cached thing is **reused frequently**, and that its **size is uniform** enough to be stocked by class in advance. Small objects satisfy both, so the mcache keeps a span on hand for each size class, hits often, and amortizes down to nearly free. Large objects satisfy neither.
+Go's size class table shows why a boundary near 32 KiB is a good fit. The purpose of a size class is
+to let many objects of the same size share one span, and with it the cost of one span refill. At the
+end of the table, the span of size class 66 (28672 bytes) holds only 2 objects, and the span of size
+class 67 (32768 bytes) takes 4 pages and holds only 1 object
+[[Go Authors, 2026d](#ref-go-authors-2026d)]. At that point allocating by size class is no different
+from allocating by page, and adding more size classes would only add caches without any gain from
+sharing.
 
-They are infrequent. Allocations above 32KB in a program are orders of magnitude fewer than small ones, and most are large buffers, large slices, or the backing arrays of large hash tables. Maintaining a per-P cache for infrequent objects means stocking goods that sit idle most of the time while the hit rate fails to rise, so the cache becomes pure memory waste.
-
-Their sizes are scattered. Small objects are grouped into 68 size classes because sizes in that range are dense enough that the waste of quantizing to fixed tiers stays bounded (about 12.5% in the worst case, see [12.1](./basic.md)). Large object sizes span from 32KB to hundreds of MB. If we still stocked by size class, the number of classes would explode, and each class would rarely be reused even once. Rather than caching by class, it is better to take them one at a time, cutting the actual number of pages on demand.
-
-This is the trade-off the layered allocator holds to throughout: **polish the hot path to the extreme, keep the cold path simple**. Small objects are the hot path, worth trading three cache layers and bitmaps for speed; large objects are the cold path, where the extra cache logic saves little time but adds memory and complexity out of nowhere. So go1.26 simply opens a separate entry for them, `mallocgcLarge`, which `mallocgc` routes to by size alongside the small-object `mallocgcSmall*` and the tiny-object `mallocgcTiny` (see [12.5](./smallalloc.md)). Each runs its own code, none dragging on the others.
-
-## 12.4.2 Asking the Heap for Pages Directly
-
-The trunk of large object allocation is very short. `mallocgcLarge` takes the mcache only to borrow its statistics and sampling fields; the real work of obtaining a span is handed to `mcache.allocLarge`. The latter does two things: it rounds the byte count up to a page count, then asks the mheap for that many pages:
+After Go 1.22 introduced allocation headers, the boundary became 32760 bytes. A pointerful object
+larger than 512 bytes stores an 8-byte allocation header in front of the object
+([12.1.4](./basic.md)), so a pointerful object of 32768 bytes plus its header no longer fits in the
+largest size class. The comparison at the boundary does not distinguish whether an object contains
+pointers; it subtracts the size of the header for all objects uniformly. The commit that introduced
+this comparison explains the reasoning in a comment [[Knyszek, 2023](#ref-knyszek-2023)]:
 
 ```go
-// mcache.allocLarge: build a dedicated span for one large object (sketch)
-func (c *mcache) allocLarge(size uintptr, noscan bool) *mspan {
-    // round the byte count up to a page count (page size is 8KB in go1.26)
-    npages := size >> gc.PageShift
-    if size&pageMask != 0 {
-        npages++
-    }
-    // pre-deduct sweep credit: before allocating n pages, help sweep and reclaim n pages, to curb disorderly heap growth
-    deductSweepCredit(npages*pageSize, npages)
+	// Note: This comparison looks a little strange, but it exists to smooth out
+	// the crossover between the largest size class and large objects that have
+	// their own spans. The small window of object sizes between maxSmallSize-mallocHeaderSize
+	// and maxSmallSize will be considered large, even though they might fit in
+	// a size class. In practice this is completely fine, since the largest small
+	// size class has a single object in it already, precisely to make the transition
+	// to large objects smooth.
+	if size <= maxSmallSize-mallocHeaderSize {
+```
 
-    // size class 0 marks a "large object span"; noscan means the object holds no pointers
-    spc := makeSpanClass(0, noscan)
-    s := mheap_.alloc(npages, spc) // request pages from the global heap
-    if s == nil {
-        throw("out of memory")
-    }
-    // ... update largeAlloc statistics, advance heapLive, attach the span to the sweep list ...
-    s.limit = s.base() + size // tighten limit down to where the object actually ends
-    return s
+So objects of 32761 to 32768 bytes are allocated as large objects even if they contain no pointers.
+Since size class 67 is already one object per span, and 32761 bytes rounded up to pages is again 4
+pages, or 32768 bytes, objects on either side of the boundary occupy the same amount of memory; they
+differ only in the path they take. Go 1.24 removed this comment when it refactored `mallocgc`, and
+the comparison itself remains today [[Knyszek, 2024](#ref-knyszek-2024)].
+
+The runtime's metrics can tell the two paths apart. `/gc/heap/allocs-by-size:bytes` in
+`runtime/metrics` is a histogram of heap allocation counts by size, with one bucket per size class;
+all large objects, whatever their size, count toward the last bucket:
+
+```go {run=true}
+package main
+
+import (
+	"fmt"
+	"runtime"
+	"runtime/metrics"
+)
+
+var sink []byte
+
+// counts returns the last two buckets of the allocation-count histogram:
+// size class 67 and large objects.
+func counts() (class67, large uint64) {
+	s := []metrics.Sample{{Name: "/gc/heap/allocs-by-size:bytes"}}
+	runtime.GC() // at the end of a GC the Ps return their spans, so small-object counts are flushed
+	metrics.Read(s)
+	h := s[0].Value.Float64Histogram()
+	n := len(h.Counts)
+	return h.Counts[n-2], h.Counts[n-1]
+}
+
+func main() {
+	for _, size := range []int{32760, 32761} {
+		c0, l0 := counts()
+		sink = make([]byte, size)
+		c1, l1 := counts()
+		fmt.Printf("%d bytes: size class 67 +%d, large +%d\n", size, c1-c0, l1-l0)
+	}
 }
 ```
 
-Note the 0 in `makeSpanClass(0, noscan)`. Size class 0 is a reserved tier, dedicated to marking "this span holds only one large object". In a small-object span, `elemsize` is the fixed slot size looked up from the size class, and one span is cut into dozens or hundreds of equal slots; in a size class 0 span, `elemsize` equals the entire byte count of the span, `nelems` is 1, and the whole run of contiguous pages is a single object. Back in `mallocgcLarge`, once the span is obtained, all it takes is `freeindex = 1` and `allocCount = 1` to declare this sole slot occupied, and the object's address is the span's base address:
+The result is:
 
-```go
-span := c.allocLarge(size, typ == nil || !typ.Pointers())
-span.freeindex = 1
-span.allocCount = 1
-span.largeType = nil          // do not let GC scan yet; wait until memory is zeroed and the type is written, then publish
-size = span.elemsize
-x := unsafe.Pointer(span.base())
+```
+32760 bytes: size class 67 +1, large +0
+32761 bytes: size class 67 +0, large +1
 ```
 
-The `mheap.alloc` that asks the heap for pages pushes the work to `allocSpan`, run on the system stack, because it may need to hold the heap lock, and while holding it we cannot trigger a stack growth that would request heap memory again. Inside `allocSpan`, contiguous pages are obtained along one of two paths:
+The allocation counts of small objects are folded into the global statistics only when the local
+cache returns its span, so the program runs a GC before reading the metric; the count of large
+objects is recorded immediately at allocation.
+
+## 12.4.2 mallocgcLarge: Allocation, Zeroing and Publication
+
+The main body of `mallocgcLarge` is as follows [[Go Authors, 2026a](#ref-go-authors-2026a)]:
 
 ```go
-// mheap.allocSpan: obtain npages contiguous pages and assemble a span (sketch, omitting sweep/alignment details)
-func (h *mheap) allocSpan(npages uintptr, typ spanAllocType, spc spanClass) (s *mspan) {
-    pp := getg().m.p.ptr()
-    // when the page count is small, first try the per-P page cache (pcache); this path needs no heap lock
-    if pp != nil && npages < pageCachePages/4 {
-        base, scav = pp.pcache.alloc(npages)
-        if base != 0 {
-            s = h.tryAllocMSpan()
-            if s != nil {
-                goto HaveSpan   // page cache hit, lock-free throughout
-            }
-        }
-    }
-    // page cache not enough, or too many pages wanted: fall to the heap lock, ask the page allocator (see 12.7) for contiguous pages
-    lock(&h.lock)
-    base, scav = h.pages.alloc(npages)
-    if base == 0 {
-        if _, ok := h.grow(npages); !ok { // no room left in the heap, grow from the operating system (see 12.7)
-            unlock(&h.lock); return nil
-        }
-        base, scav = h.pages.alloc(npages)
-    }
-    s = h.allocMSpanLocked()
-    unlock(&h.lock)
-HaveSpan:
-    h.initSpan(s, typ, spc, base, npages, scav) // set state, elemsize, zeroing flags, bitmap
-    return s
+func mallocgcLarge(size uintptr, typ *_type, needzero bool) (unsafe.Pointer, uintptr) {
+	// Set mp.mallocing to keep from being preempted by GC.
+	mp := acquirem()
+	// ...
+	mp.mallocing = 1
+
+	c := getMCache(mp)
+	// For large allocations, keep track of zeroed state so that
+	// bulk zeroing can be happen later in a preemptible context.
+	span := c.allocLarge(size, typ == nil || !typ.Pointers())
+	span.freeindex = 1
+	span.allocCount = 1
+	span.largeType = nil // Tell the GC not to look at this yet.
+	size = span.elemsize
+	x := unsafe.Pointer(span.base())
+
+	// Ensure that the store above that sets largeType to
+	// nil happens before the caller can make x observable
+	// to the garbage collector.
+	// ...
+	publicationBarrier()
+
+	if writeBarrier.enabled {
+		// Allocate black during GC.
+		// All slots hold nil so no scanning is needed.
+		// This may be racing with GC so do it atomically if there can be
+		// a race marking the bit.
+		gcmarknewobject(span, uintptr(x))
+	} else {
+		// ...
+		span.freeIndexForScan = span.freeindex
+	}
+
+	// Note cache c only valid while m acquired; see #47302
+	// ...
+	c.nextSample -= int64(size)
+	if c.nextSample < 0 || MemProfileRate != c.memProfRate {
+		profilealloc(mp, x, size)
+	}
+	mp.mallocing = 0
+	releasem(mp)
+
+	// Check to see if we need to trigger the GC.
+	if t := (gcTrigger{kind: gcTriggerHeap}); t.test() {
+		gcStart(t)
+	}
+
+	// Objects can be zeroed late in a context where preemption can occur.
+	//
+	// x will keep the memory alive.
+	if needzero && span.needzero != 0 {
+		// N.B. size == fullSize always in this case.
+		memclrNoHeapPointersChunked(size, x) // This is a possible preemption point: see #47302
+	}
+
+	// ...
+	mp = acquirem()
+	if typ != nil && typ.Pointers() {
+		// Finish storing the type information, now that we're certain the memory is zeroed.
+		getMCache(mp).scanAlloc += heapSetTypeLarge(uintptr(x), size, typ, span)
+	}
+	// Publish the object again, now with zeroed memory and initialized type information.
+	// ...
+	publicationBarrier()
+	releasem(mp)
+	return x, size
 }
 ```
 
-The question "which run of contiguous pages is free" is answered by the **page allocator** beneath the mheap. Its radix tree and bitmap lookup are the subject of [12.7](./pagealloc.md); here we treat it merely as an interface that "gives me n contiguous pages". When the page allocator too has no room, `grow` asks the operating system for a new arena, and this even colder road also belongs to [12.7](./pagealloc.md). This section stops at `h.pages.alloc(npages)` and stays focused on the large object segment.
+The process has three phases. The first is non-preemptible: `acquirem` and `mallocing` guarantee
+that the collector cannot interrupt an allocation halfway. `allocLarge` obtains an exclusive span
+(12.4.3) and marks its only slot as occupied; the address of the object is the start address of the
+span. `largeType` is the type pointer of a large object, stored in the `mspan`
+([12.1.4](./basic.md)). It is cleared here to tell the collector not to inspect the object yet, and
+the publication barrier that follows guarantees that this store is visible before other threads see
+the object's address. On a machine with a weak memory order, without the barrier the collector could
+follow a pointer to the new object and read a stale value of `largeType`. If the allocation happens
+during marking, the object is marked black directly and the collector does not scan it in this cycle
+([12.1.5](./basic.md)).
 
-## 12.4.3 The Cost of Bypassing the Cache
+This phase also does the memory profiling sampling, and a comment in the code mentions issue #47302.
+After Go 1.17 moved the zeroing of large objects to a preemptible point, the sampling code that came
+after the zeroing occasionally corrupted runtime data structures: a goroutine may be preempted
+during zeroing and resume on a different P, and the `mcache` it had obtained earlier no longer
+belongs to it. Chase's fix moved the sampling back into the section where the M is held
+[[Chase, 2021](#ref-chase-2021)].
 
-A large object saves the stocking overhead of the cache, but it also loses the fast path the cache brings. Let us go through what bypassing the cache costs, item by item.
+The second phase can be preempted. `allocLarge` has already counted the whole span into the live
+heap size, so the GC trigger condition is checked here before zeroing; the reasons for both are
+given in [12.1.5](./basic.md). Large objects check the trigger on every allocation, while small
+objects check it only when refilling a span. The zeroing function contains no safepoints, and a long
+zeroing would delay the GC phases that need to stop all goroutines, so zeroing is placed in this
+preemptible phase and done in chunks of 256 KiB [[Chase, 2020](#ref-chase-2020)]. When
+`span.needzero` is 0, the memory is known to be all zero and the zeroing is omitted entirely
+(12.4.3).
 
-**The synchronization cost is higher, but it is not "necessarily grabbing the global lock".** go1.26 leaves a buffer in `allocSpan`: when the page count is small (`npages < pageCachePages/4`, with `pageCachePages` being 64, so roughly fewer than 16 pages, corresponding to within about 128KB on platforms with 8KB pages), it first tries the per-P page cache `pcache`, and on a hit the whole path is lock-free. So large objects from 32KB to about 128KB often do not touch the heap lock at all. The real gap is not in the single word "lock", but in the fact that a large object **has no ready cached span to pick from**: the fast path for a small object is one bit scan to take a slot from a span already stocked in the mcache (`nextFreeFast`, see [12.5](./smallalloc.md)), whereas a large object must run the full `allocSpan` every time, pre-deducting sweep credit (`deductSweepCredit`), querying the page allocator for contiguous pages, and assembling and initializing a new span, with a fall to the heap lock when the page cache misses or the page count is too large. Even on a page cache hit, the constant factor of this road is far heavier than one bit scan.
-
-**Page-level internal fragmentation.** A large object is rounded up by the page, each object occupies a whole number of pages, and the part of the final page that falls short is wasted outright. An object of 32769 bytes (just one byte past 32KB) rounds up to 5 pages, that is 40960 bytes, wasting nearly 8KB. This fragmentation does not have the 12.5% ceiling of small-object size class fragmentation; it depends on the remainder of the object size relative to the page size, and in the worst case approaches a whole page. For large objects that are allocated frequently and whose size lands just past a page boundary, this waste is worth keeping in mind when designing data structures.
-
-**Strongly influences GC pacing.** A large object adds a large amount to the heap live size (heapLive) in one stroke. In `allocLarge`, `gcController.update` immediately counts these tens or hundreds of KB into heapLive, and GC is triggered precisely on the growth ratio of heapLive relative to the live size after the last marking (GOGC, see [13](../ch13gc)). So the end of `mallocgcLarge` tests the trigger condition once, and when necessary starts a round of GC right there:
-
-```go
-// at the tail of large object allocation: check whether GC should be triggered (mallocgcLarge)
-if t := (gcTrigger{kind: gcTriggerHeap}); t.test() {
-    gcStart(t)
-}
-```
-
-Small object allocation also advances heapLive, but each increment is small and thinned out by the mcache; a large object has a big single increment, and one allocation of a few MB may single-handedly push the heap past the trigger line, immediately setting off a round of GC. In other words, a large object is not only slow to allocate; it also passes the cost on to the whole program by way of GC pacing.
-
-**Reuse large buffers with `sync.Pool`.** Since large objects are expensive to allocate and strongly influence GC, for those large buffers that are short-lived and repeatedly requested and released (such as network read/write buffers or serialization buffers), the most economical approach is to keep them from passing through the allocator over and over, using the `sync.Pool` of [11.6](../../part3concurrency/ch11sync/pool.md) to store used large buffers for reuse. This is exactly the piece of caching that the application layer is left to supply itself after the allocator decides "not to build a cache for infrequent large objects": the runtime optimizes only the general small-object hot path, and leaves the specific large-object reuse pattern to be cached on demand by the user who understands it best.
-
-## 12.4.4 Contrast with the Small Object Path
-
-Placing the two roads side by side makes the design intent of large object allocation clear:
+The third phase becomes non-preemptible again. For an object containing pointers, `heapSetTypeLarge`
+stores `largeType` atomically and then executes another publication barrier. This order guarantees
+that whenever the collector sees a non-nil `largeType`, the memory it sees is already zeroed.
+Conversely, if the collector pauses this goroutine during zeroing, it sees only a nil `largeType`
+and so does not inspect the memory that is not yet zeroed
+[[Go Authors, 2026d](#ref-go-authors-2026d)]. Otherwise the collector could scan stale data left in
+unzeroed memory as pointers, and the program would crash. The relation among the three phases is as
+follows:
 
 ```mermaid
 flowchart TD
-    M["mallocgc: route by size"] --> Q{"size vs maxSmallSize"}
-    Q -->|"greater than 32KB"| L["mallocgcLarge"]
-    Q -->|"at most 32KB"| S["mallocgcSmall*"]
-    L --> AL["allocLarge: round byte count up to page count"]
-    AL --> H["mheap.alloc / allocSpan"]
-    H -->|"page count small"| PC["per-P page cache pcache (lock-free)"]
-    H -->|"page count large or cache miss"| LK["heap lock plus page allocator (12.7)"]
-    PC --> SP["dedicated span: size class 0, nelems is 1"]
-    LK --> SP
-    S --> MC["mcache: take the stocked span of the matching size class"]
-    MC -->|"has a free slot"| FF["nextFreeFast: one bit scan to take a slot (fastest)"]
-    MC -->|"span exhausted"| CENT["mcentral / mheap replenish (12.5)"]
+    subgraph P1["Non-preemptible"]
+      A1["allocLarge: obtain an exclusive span"] --> A2["clear largeType, publication barrier"]
+      A2 --> A3["allocate black during marking; profiling sample"]
+    end
+    subgraph P2["Preemptible"]
+      B1["check the GC trigger"] --> B2["zero in 256 KiB chunks (if needed)"]
+    end
+    subgraph P3["Non-preemptible"]
+      C1["store largeType"] --> C2["publication barrier again"]
+    end
+    P1 --> P2 --> P3
 ```
 
-All the delicacy on the small object side, the size classes, the per-P cached span, the bitmaps and bit scans, the `gcmarkBits` that lives alongside the sweep, exists to squeeze the high-frequency path to its limit. The large object side is nearly its opposite: one object one span, one allocation one run of contiguous pages, no cache to hit and no slot to pick. This is not that the large object path is less careful, but that its care lies elsewhere: it chooses simplicity, because on this cold path simplicity is itself the correct design.
+## 12.4.3 Requesting Whole Pages from the Page Heap
 
-Viewed within the lineage, this division of labor where "large objects bypass the thread cache and go straight to the page heap" is just like the prototype tcmalloc (see [12.1](./basic.md)): tcmalloc likewise bypasses the thread cache for large objects and requests pages directly from the page heap; jemalloc splits allocation into three tiers, small / large / huge, and the huge tier also goes straight to the chunk level without entering the tcache. What Go adds on top of this general skeleton is still the layer that serves precise GC: a large object span likewise carries `gcmarkBits` and type information (`largeType`), and likewise must pass a publication barrier before being published, so that GC can scan this large block of memory correctly (see [13](../ch13gc)). Large object allocation walks a simple road, but it never walks out of Go's main line of "allocation and reclamation living together".
+`mcache.allocLarge` converts the byte count to a page count and requests the pages from the page
+heap [[Go Authors, 2026b](#ref-go-authors-2026b)]:
+
+```go
+func (c *mcache) allocLarge(size uintptr, noscan bool) *mspan {
+	// ...
+	npages := size >> gc.PageShift
+	if size&pageMask != 0 {
+		npages++
+	}
+
+	// Deduct credit for this span allocation and sweep if
+	// necessary. mHeap_Alloc will also sweep npages, so this only
+	// pays the debt down to npage pages.
+	deductSweepCredit(npages*pageSize, npages)
+
+	spc := makeSpanClass(0, noscan)
+	s := mheap_.alloc(npages, spc)
+	if s == nil {
+		throw("out of memory")
+	}
+
+	// Count the alloc in consistent, external stats.
+	stats := memstats.heapStats.acquire()
+	atomic.Xadd64(&stats.largeAlloc, int64(npages*pageSize))
+	atomic.Xadd64(&stats.largeAllocCount, 1)
+	memstats.heapStats.release()
+	// ...
+	// Update heapLive.
+	gcController.update(int64(s.npages*pageSize), 0)
+
+	// Put the large span in the mcentral swept list so that it's
+	// visible to the background sweeper.
+	mheap_.central[spc].mcentral.fullSwept(mheap_.sweepgen).push(s)
+	// ...
+}
+```
+
+`deductSweepCredit` implements proportional sweep: before the allocation, it completes an amount of
+sweep work corresponding to the allocated bytes, so that sweeping finishes before the next GC cycle
+begins ([13.5](../ch13gc/sweep.md)). In the span class `makeSpanClass(0, noscan)`, size class 0 is
+reserved for large objects. `largeAllocCount` is the source of the last bucket of the histogram in
+12.4.1. After the allocation, the span is put into the swept `full` set of the central cache for
+size class 0, so that the sweeper can find it in later GC cycles ([12.2.6](./component.md)).
+
+`mheap.alloc` switches to the system stack, because it may acquire the heap lock, and a stack growth
+while holding the lock would itself need to allocate heap memory ([12.2.4](./component.md)). If the
+previous cycle's sweep has not finished, it first sweeps and reclaims at least as many pages, to
+restrain excessive heap growth, and then calls `allocSpan`. When fewer than 16 pages are needed,
+`allocSpan` first tries the page cache of the current P. The page cache is a free bitmap of 64
+pages; taking pages from it, as well as obtaining the `mspan` structure, needs no heap lock
+(refilling an empty page cache briefly takes the heap lock). Only when the page cache cannot satisfy
+the request does it take the heap lock, ask the page allocator for contiguous free pages, and grow
+the heap if necessary ([12.7](./pagealloc.md)). Large objects of up to 15 pages (120 KiB) therefore
+have a chance of avoiding the heap lock completely, while larger ones always take it.
+
+After the pages are obtained, `initSpan` initializes the span. A span of size class 0 has just one
+slot, and the size of the slot is the total number of bytes of the span:
+
+```go
+		if sizeclass := spanclass.sizeclass(); sizeclass == 0 {
+			s.elemsize = nbytes
+			s.nelems = 1
+			s.divMul = 0
+		}
+```
+
+Whether zeroing is needed is also decided here [[Go Authors, 2026c](#ref-go-authors-2026c)]:
+
+```go
+	// Always call allocNeedsZero to update the arena's zeroedBase watermark
+	// and determine if the memory is considered dirty.
+	needZero := h.allocNeedsZero(base, npages)
+	// If these pages were scavenged (returned to the OS), the kernel guarantees
+	// they will be zero-filled on next use (fault-in), so we can treat them as
+	// already zeroed and skip explicit clearing.
+	if (needZeroAfterSysUnused() || scav != npages*pageSize) && needZero {
+		s.needzero = 1
+	}
+```
+
+Two kinds of memory are known to be all zero: pages above the arena's `zeroedBase` that have never
+been used ([12.2.4](./component.md)), and, under the default settings on Linux, pages that have all
+been returned to the operating system, which the kernel guarantees to fill with zeros when they are
+accessed again; this check was added in Go 1.26 ([12.3.4](./init.md))
+[[Yang, 2025](#ref-yang-2025)]. Only in the remaining cases is `needzero` set to 1, and
+`mallocgcLarge` zeroes the memory in a preemptible state.
+
+## 12.4.4 Cost
+
+The large object path has no ready-made span, so every allocation goes through the full
+`allocLarge`, `mheap.alloc` and `allocSpan`: paying off sweep debt, finding contiguous free pages,
+initializing a new `mspan`, and taking the heap lock when the request needs 16 or more pages or the
+page cache cannot satisfy it. Compared with one bitmap lookup on the fast path for small objects,
+the fixed cost of this path is much higher; it is merely amortized over more bytes.
+
+The internal fragmentation caused by rounding up to pages is at most one page less one byte, that
+is, 8191 bytes, and its proportion to the object size shrinks as the object grows. An object of
+40961 bytes occupies 6 pages, or 49152 bytes, an excess of 8191 bytes, about 20% of the request; an
+object of 1000000 bytes occupies 123 pages, an excess of 7616 bytes, under 1%. The 33000-byte slice
+in [12.1.3](./basic.md) that gets a capacity of 40960 bytes through `append` is also a result of
+this rounding. A slice grown by `append` uses the whole rounded-up capacity, whereas a slice created
+directly with `make` does not.
+
+A large object does not trigger a GC more often than small objects of the same total bytes, because
+the pace of collection depends on the number of bytes allocated ([13.3](../ch13gc/pacing.md)). What
+differs is the granularity of accounting: each large object is counted into the live heap size in
+whole pages at the moment of allocation and the trigger condition is checked right away, so a single
+allocation of several MiB can by itself push the heap over the trigger point.
+
+The cost of zeroing is proportional to the object size. Pages being reused need to be zeroed in
+chunks; pages never used and pages that were all returned need no zeroing, but the first write
+requires the kernel to supply physical pages on demand, which shifts the cost to page faults
+([12.3.5](./init.md)).
+
+An application can reuse large buffers that are short-lived and requested repeatedly, for example
+with `sync.Pool`. The objects in a pool should be of roughly equal weight, though; otherwise a few
+large buffers may be taken out and put back again and again for later small requests, and keep
+occupying memory for a long time ([11.6](../../part3concurrency/ch11sync/pool.md)).
+
+## 12.4.5 Summary
+
+The large object boundary is inherited from the 32 KiB of TCMalloc, and became 32760 bytes after Go
+1.22 introduced allocation headers. Around this size, the size classes have degenerated to one
+object per span, and caching by size class gains nothing from sharing. Each large object occupies a
+size-class-0 span by itself, supplied by the page heap in whole pages, and the smaller large objects
+can also avoid the heap lock through the per-P page cache. `mallocgcLarge` places the allocation and
+the publication of the type in non-preemptible sections, and the zeroing, whose cost is proportional
+to the object size, in a preemptible section; two publication barriers guarantee that the collector
+never sees unzeroed memory. [12.5](./smallalloc.md) discusses the contrasting small object path.
 
 ## Further Reading
 
-1. The Go Authors. *runtime/malloc.go.* (`mallocgcLarge`, size routing, and GC triggering)
-   https://github.com/golang/go/blob/master/src/runtime/malloc.go
-2. The Go Authors. *runtime/mcache.go.* (`mcache.allocLarge`: rounding to pages, sweep credit, and statistics)
-   https://github.com/golang/go/blob/master/src/runtime/mcache.go
-3. The Go Authors. *runtime/mheap.go.* (`mheap.alloc`, `allocSpan`, page cache and heap lock paths)
-   https://github.com/golang/go/blob/master/src/runtime/mheap.go
-4. Sanjay Ghemawat, Paul Menage. *TCMalloc: Thread-Caching Malloc.*
-   https://google.github.io/tcmalloc/design.html (large objects bypass the thread cache and go straight to the page heap)
-5. This book, [12.5 Small Object Allocation](./smallalloc.md): the delicate small-object path for contrast.
-6. This book, [12.7 Page Allocator](./pagealloc.md): how `h.pages.alloc` finds contiguous free pages and how `grow` grows from the operating system.
-7. This book, [11.6 Pool](../../part3concurrency/ch11sync/pool.md) and [Chapter 13 Garbage Collector](../ch13gc): reusing large buffers, and how large objects influence GC pacing.
+- <a id="ref-chase-2020"></a>[Chase, 2020] David Chase. runtime: break up large calls to
+  memclrNoHeapPointers to allow preemption. Go commit 0bbfc5c31e, 2020. https://go.dev/cl/270943
+  Released with Go 1.17. Prompted by the multi-millisecond sweep termination pauses reported in Go
+  issue #42642.
+- <a id="ref-chase-2021"></a>[Chase, 2021] David Chase. runtime: move mem profile sampling into
+  m-acquired section. Go commit fdb45acd1f, 2021. https://go.dev/cl/336449 Released with Go 1.17;
+  fixes Go issue #47302.
+- <a id="ref-evans-2006"></a>[Evans, 2006] Jason Evans. "A Scalable Concurrent malloc(3)
+  Implementation for FreeBSD." *BSDCan 2006*, 2006.
+  https://people.freebsd.org/~jasone/jemalloc/bsdcan2006/jemalloc.pdf
+- <a id="ref-ghemawat-menage-2005"></a>[Ghemawat and Menage, 2005] Sanjay Ghemawat, Paul Menage.
+  *TCMalloc: Thread-Caching Malloc.* 2005. http://goog-perftools.sourceforge.net/doc/tcmalloc.html
+  The version now maintained by the gperftools project:
+  https://gperftools.github.io/gperftools/tcmalloc.html
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors.
+  src/runtime/malloc.go (`mallocgcLarge`, size dispatch and GC triggering). Go 1.26 source.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/malloc.go
+  Formerly at: https://github.com/golang/go/blob/master/src/runtime/malloc.go
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors. src/runtime/mcache.go
+  (`mcache.allocLarge`: rounding to pages, sweep credit and statistics). Go 1.26 source.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mcache.go Formerly at:
+  https://github.com/golang/go/blob/master/src/runtime/mcache.go
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/runtime/mheap.go
+  (`mheap.alloc`, `allocSpan`, `initSpan`, the page cache and heap lock paths). Go 1.26 source.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/runtime/mheap.go Formerly at:
+  https://github.com/golang/go/blob/master/src/runtime/mheap.go
+- <a id="ref-go-authors-2026d"></a>[Go Authors, 2026d] The Go Authors.
+  src/runtime/mbitmap.go (`heapSetTypeLarge`), src/runtime/metrics.go,
+  src/internal/runtime/gc/sizeclasses.go. Go 1.26 source.
+  https://github.com/golang/go/tree/release-branch.go1.26/src
+- <a id="ref-knyszek-2023"></a>[Knyszek, 2023] Michael Anthony Knyszek. runtime: implement
+  experiment to replace heap bitmap with alloc headers. Go commit 38ac7c41aa, 2023.
+  https://go.dev/cl/437955 Released with Go 1.22.
+- <a id="ref-knyszek-2024"></a>[Knyszek, 2024] Michael Anthony Knyszek. runtime: refactor mallocgc
+  into several independent codepaths. Go commit 8730fcf885, 2024. https://go.dev/cl/614257 Released
+  with Go 1.24.
+- <a id="ref-tcmalloc-authors-2026"></a>[TCMalloc Authors, 2026] The TCMalloc Authors.
+  *TCMalloc: Thread-Caching Malloc.* 2026. https://google.github.io/tcmalloc/design.html
+  Large objects bypass the thread cache and are allocated directly by the page heap.
+- <a id="ref-yang-2025"></a>[Yang, 2025] Lance Yang. runtime: avoid zeroing scavenged memory. Go
+  commit 27937289dc, 2025. https://go.dev/cl/715160 Released with Go 1.26.
+- This book: [11.6 Object Pool](../../part3concurrency/ch11sync/pool.md) (reusing large buffers),
+  [12.5 Small Object Allocation](./smallalloc.md) (the finely tuned small object path, for
+  contrast), [12.7 The Page Allocator](./pagealloc.md) (how `h.pages.alloc` finds contiguous free
+  pages and how `grow` grows from the operating system), [Chapter 13 Garbage Collector](../ch13gc)
+  (how large objects affect the GC pace).

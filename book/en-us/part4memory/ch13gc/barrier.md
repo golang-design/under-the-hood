@@ -5,166 +5,362 @@ title: "13.2 Write Barrier Techniques"
 
 # 13.2 Write Barrier Techniques
 
-[13.1](./basic.md) sketched the tricolor abstraction and the outline of concurrent collection: the collector recolors objects from white to grey and from grey to black, driving a "grey wavefront" that advances monotonically across the object graph, and wherever the wavefront has passed is confirmed live. If the mutator (the user-space code) were to halt while the wavefront advances, the abstraction would be self-consistent and would converge correctly. The trouble is precisely that the mutator does not halt. The fundamental difficulty of concurrent collection is this: the collector traces the object graph while the mutator rewrites it, and the two hold conflicting accounts of one and the same graph.
+[13.1.4](./basic.md) described the risk of concurrent marking: if the mutator writes a pointer to a
+white object into a black object and at the same time destroys every path from a grey object to it,
+the collector misses an object that is still reachable. The **write barrier** is the means of
+preventing this: the compiler inserts a small piece of code at pointer writes that may point into
+the heap, and the code tells the collector what it needs to know when the write happens. This
+section first introduces the two classic kinds of write barrier and the cost of each, then the
+hybrid write barrier used since Go 1.8, and finally its implementation in the compiler and the
+runtime.
 
-What this section sets out to answer is: why does a single pointer write by the mutator not cause the collector to miss marking a live object? The answer is the **write barrier**: a small piece of code that the compiler inserts at heap pointer writes, letting the mutator tell the collector "which edge I just changed." We first make clear why concurrent graph mutation can cause a missed mark ([13.2.1](#1321-why-concurrent-graph-mutation-causes-missed-marks)), from which the two tricolor invariants follow ([13.2.2](#1322-the-two-tricolor-invariants)); then we look at the two barrier families that plug the leak ([13.2.3](#1323-two-barrier-families-dijkstra-insertion-and-yuasa-deletion)); and finally we arrive at the hybrid write barrier that Go has used since 1.8 ([13.2.4](#1324-gos-hybrid-write-barrier)), understanding why it eliminates the costly stack rescan at mark termination in a single stroke.
+The write barrier here is a garbage-collection concept: a piece of software logic executed by the
+mutator. It is not the same thing as the memory barrier at the processor level, which constrains the
+order of memory accesses (see [11.9](../../part3concurrency/ch11sync/mem.md)). The two meet at one
+point in Go's implementation, mentioned in 13.2.4.
 
-We should first clear up a common confusion of names. The "write barrier" of this section is a mutator barrier in the garbage-collection sense, a piece of **software** logic, and it is a different thing from the memory barrier at the CPU level that prevents reordering of memory accesses (the memory barrier, see [11.9](../../part3concurrency/ch11sync/mem.md)). The two have exactly one point of contact: to guarantee its own correctness on multicore hardware, Go's write barrier implementation does rely on one memory-ordering constraint, a point we defer to [13.2.4](#1324-gos-hybrid-write-barrier).
+## 13.2.1 Two Kinds of Write Barrier
 
-## 13.2.1 Why Concurrent Graph Mutation Causes Missed Marks
+Missing an object requires two conditions to hold together: the mutator writes a pointer to a white
+object into a black object, and the original path from a grey object to that white object is
+destroyed before the collector can see it [[Wilson, 1992](#ref-wilson-1992)]. A pointer write
+`*slot = ptr` involves two pointers: the new value `ptr` being written and the old value `*slot`
+being overwritten. A write barrier can watch either one, which gives two kinds of barrier, each
+ruling out one condition.
 
-Consider an instant when the collector is halfway through scanning. Let a grey object $A$ point to a white object $B$, and suppose the mutator concurrently does two things: it makes an already-blackened object $C$ point to $B$, and it erases the reference from $A$ to $B$. Now $B$ hangs only beneath the black object $C$. The collector regards black objects as finished and never revisits them, and the grey entry leading to $B$ has been erased, so $B$ vanishes from the wavefront and is eventually reclaimed as garbage by mistake.
-
-```mermaid
-flowchart LR
-    subgraph before["Before mutation"]
-        A1["A grey"]:::grey -->|ref| B1["B white"]:::white
-        C1["C black"]:::black
-    end
-    subgraph after["After mutation: B is missed"]
-        A2["A grey"]:::grey -.->|delete ref| B2["B white"]:::white
-        C2["C black"]:::black -->|new ref| B2
-    end
-    before --> after
-    classDef white fill:#fff,stroke:#333,color:#000
-    classDef grey fill:#bbb,stroke:#333,color:#000
-    classDef black fill:#333,stroke:#000,color:#fff
-```
-
-Taking this instant apart, the missed mark holds only when two things happen **simultaneously**. [Wilson, 1992] makes this precise as two conditions:
-
-- Condition one: the mutator makes some black object reference a white object (in the example above, $C \to B$);
-- Condition two: a path leading to that white object, starting from a grey object and not yet traversed by the collector, is destroyed by the mutator (in the example above, $A \to B$ is deleted).
-
-Break either one and the missed mark cannot happen: if condition one fails to hold, then the white object always hangs only beneath grey objects, and the wavefront will eventually reach it; if condition two fails to hold, then even when the white object has been written into a black object, an untraversed path from a grey object still reaches it. The two barrier families ([13.2.3](#1323-two-barrier-families-dijkstra-insertion-and-yuasa-deletion)) are exactly what seal off these two paths, one each.
-
-There is also a role here that is often overlooked: the color of the mutator itself. Treating the collector as the object being affected and the mutator as the behavior exerting the influence, we can color the mutator too. A **black mutator** is one whose roots (chiefly the goroutine stack) have been scanned and will not be scanned again by the collector; a **grey mutator** is one whose stack has not been scanned, or has been scanned but still needs a rescan. The color of the mutator directly determines whether collection can wrap up: as long as a grey mutator still exists, the collector must rescan its roots before finishing, and during the rescan the mutator may again insert new non-black references into the roots, and so on, round after round. In the worst case the collector can obtain a clean root snapshot only by halting every mutator thread (that is, STW). This is exactly the price pre-1.8 Go paid, and it is the very thing this section ultimately sets out to eliminate.
-
-Related to the stack there is one more choice: what color to give a newly allocated object. Coloring it white avoids needlessly carrying new objects over into the next cycle; but a black mutator has finished scanning and will no longer be touched by the collector, so once it allocates a white object and tucks it away on its stack, a missed mark follows directly. To keep implementation complexity to a minimum, **coloring every newly allocated object black** is generally safe, and Go takes this approach. This choice will mesh exactly with the hybrid barrier discussed below.
-
-## 13.2.2 The Two Tricolor Invariants
-
-Translating the two conditions of the previous section into constraints on the object graph yields two invariants of differing strength.
-
-The **strong tricolor invariant**: there is no pointer from a black object to a white object. This directly forbids condition one. Everything behind the wavefront (the black region) is "untainted ground," and the collector may safely never look back.
-
-The **weak tricolor invariant**: a black object may point to a white object, but that white object must **simultaneously** have a reachable path that starts from some grey object and has not yet been traversed. This amounts to permitting condition one to occur, yet forbidding condition two by "keeping one grey entry."
-
-Strong invariant:
-
-$$
-\nexists\, b \in \text{black},\ w \in \text{white}:\ b \to w
-$$
-
-Weak invariant:
-
-$$
-\forall\, w \in \text{white referenced by some black}:\ \exists\ \text{an untraversed path reaching}\ w\ \text{from some grey}
-$$
-
-The strong invariant is the more demanding constraint, while the weak invariant gives the implementation more room to maneuver: **so long as an untraversed path to the white object remains, a black object is permitted to point to a white object.** The dividing line between the two barrier families is, at bottom, which of these invariants each one maintains.
-
-## 13.2.3 Two Barrier Families: Dijkstra Insertion and Yuasa Deletion
-
-Since the missed mark is composed of two things, "black points to white" and "the grey path is cut," the methods for plugging it likewise split into two families, corresponding exactly to two objects that can be watched within a single pointer write: the new pointer `ptr` being written, and the old value `*slot` being overwritten. [Pirinen, 1998] reduces the basic actions a barrier may perform to three: shade a white object grey to widen the wavefront, scan an object and blacken it to advance the wavefront, and revert a black object to grey to retreat the wavefront. Both barrier families use the first action (`shade`, which colors a still-white object grey and enqueues it for scanning); they differ only in which object they shade.
-
-The **Dijkstra insertion barrier**, also known as the incremental update barrier [Wilson, 1992], watches the new pointer being written, telling the collector about the "insertion" act, and maintains the strong tricolor invariant. Its core is this: whenever a pointer is written into an object, regardless of whether it will later be deleted, shade the pointee grey first [Dijkstra et al., 1978].
+An insertion barrier watches the new value, and is also called an incremental-update barrier. Before
+the write it shades the object that the new value points to, which ensures that after the write no
+black object points to a white object. This rules out the first condition and maintains the strong
+tricolor invariant. The idea comes from Dijkstra et al.
+[[Dijkstra et al., 1978](#ref-dijkstra-1978)], and what Go 1.7 used was a coarsened Dijkstra barrier
+that does not check the color of the object holding `slot` and always shades
+[[Clements and Hudson, 2016](#ref-clements-hudson-2016)]:
 
 ```go
-// Dijkstra insertion barrier: shade the newly written pointer
-func DijkstraWritePointer(slot *unsafe.Pointer, ptr unsafe.Pointer) {
-    shade(ptr)
-    *slot = ptr
+// Dijkstra insertion barrier (pseudocode)
+writePointer(slot, ptr):
+	shade(ptr)
+	*slot = ptr
+```
+
+A deletion barrier watches the old value, and is also called a snapshot-at-the-beginning barrier. It
+shades the old value before it is overwritten, so whenever a path to a white object is destroyed,
+the collector is given another path, and the second condition cannot arise; it maintains the weak
+tricolor invariant. Its best-known form is due to Yuasa [[Yuasa, 1990](#ref-yuasa-1990)]:
+
+```go
+// Yuasa deletion barrier (pseudocode)
+writePointer(slot, ptr):
+	shade(*slot)
+	*slot = ptr
+```
+
+The name snapshot-at-the-beginning describes its effect: objects reachable when marking starts are
+not reclaimed in this cycle, even if they become unreachable during marking. Objects retained this
+way, reclaimable only in the next cycle, are called floating garbage. Insertion barriers also
+produce floating garbage, because a newly shaded value may be overwritten right afterwards.
+
+Both kinds of barrier only shade white objects, so an object's color changes monotonically from
+white to grey to black, and the total marking work is bounded by the size of the heap. Steele's
+barrier does the opposite: it turns black objects back to grey, so the same object may be scanned
+repeatedly [[Clements and Hudson, 2016](#ref-clements-hudson-2016)]. Pirinen classified the various
+barriers systematically by the color of the mutator [[Pirinen, 1998](#ref-pirinen-1998)].
+
+The color of the mutator refers to the state, in the collector's eyes, of its roots, mainly
+goroutine stacks. A mutator whose stacks have been scanned and which the collector no longer needs
+to revisit is black; a mutator whose stacks have not been scanned, or which may again hold white
+pointers after scanning and need to be rescanned, is grey. A grey mutator means its stacks must be
+rescanned before marking ends.
+
+## 13.2.2 The Cost of the Two Barriers in Go
+
+For Go, the crux is the stack. Pointer writes on goroutine stacks are extremely frequent, and
+executing a write barrier on every stack write would be too expensive, so both kinds of barrier need
+special treatment of stacks, and each treatment comes with a stop-the-world.
+
+Go 1.5 through 1.7 used an insertion barrier [[Hudson, 2015](#ref-hudson-2015)] and set no barrier
+on stack writes. The cost is that stacks can only be in a "permagrey" state: a stack scanned at the
+start of collection stays black only until its goroutine runs again, after which it may hold
+pointers to white objects and must be treated as grey. Before marking ends, the collector has to
+rescan all grey stacks with the world stopped. The design document points out that in programs with
+many goroutines this rescan can take tens or even hundreds of milliseconds, and it was the last
+unbounded pause source in Go 1.7 that scaled with program size
+[[Clements and Hudson, 2016](#ref-clements-hudson-2016)].
+
+A deletion barrier can keep scanned stacks black, but stack writes again have no barrier, and the
+snapshot at the beginning must include all stacks, so it requires stopping the world at the start of
+marking to scan or copy all stacks at once. When Yuasa proposed the algorithm, it targeted a system
+with a single thread and small stacks; Go programs often have tens of thousands of stacks, and
+handling them with the world stopped is just as expensive. Requiring all stacks to be scanned before
+any heap object can be scanned would instead create a parallelism bottleneck between stack scanning
+and heap scanning. The design document also cites Pirinen's conclusion: for a black mutator, every
+barrier except the Yuasa barrier needs a read barrier, and pointer reads are more than an order of
+magnitude more frequent than writes, which is unacceptable for performance
+[[Clements and Hudson, 2016](#ref-clements-hudson-2016)].
+
+## 13.2.3 The Hybrid Write Barrier
+
+Go 1.8 combined the two kinds of barrier into the **hybrid write barrier**
+[[Clements and Hudson, 2016](#ref-clements-hudson-2016)]. The comment at the top of `mbarrier.go`
+first explains that it combines a Yuasa-style deletion barrier, which shades the overwritten object,
+with a Dijkstra-style insertion barrier, which shades the object being written, where the insertion
+part is needed only when the caller's stack is grey; it then gives pseudocode and explains how the
+two shades and the condition together prevent the mutator from hiding objects
+[[Go Authors, 2026a](#ref-go-authors-2026a)]:
+
+```go
+//     writePointer(slot, ptr):
+//         shade(*slot)
+//         if current stack is grey:
+//             shade(ptr)
+//         *slot = ptr
+//
+// ...
+//
+// The two shades and the condition work together to prevent a mutator
+// from hiding an object from the garbage collector:
+//
+// 1. shade(*slot) prevents a mutator from hiding an object by moving
+// the sole pointer to it from the heap to its stack. If it attempts
+// to unlink an object from the heap, this will shade it.
+//
+// 2. shade(ptr) prevents a mutator from hiding an object by moving
+// the sole pointer to it from its stack into a black object in the
+// heap. If it attempts to install the pointer into a black object,
+// this will shade it.
+//
+// 3. Once a goroutine's stack is black, the shade(ptr) becomes
+// unnecessary. shade(ptr) prevents hiding an object by moving it from
+// the stack to the heap, but this requires first having a pointer
+// hidden on the stack. Immediately after a stack is scanned, it only
+// points to shaded objects, so it's not hiding anything, and the
+// shade(*slot) prevents it from hiding any other pointers on its
+// stack.
+```
+
+A mutator can hide an object in only two ways: by moving the sole pointer to it from the heap to a
+stack, or from a stack into a black object in the heap. The deletion part `shade(*slot)` blocks the
+former, because unlinking a pointer from the heap means overwriting it, and the overwritten object
+is shaded at once; the insertion part `shade(ptr)` blocks the latter. The third point explains why
+the insertion part is needed only when the stack is grey: to move an object from a stack into the
+heap, it must first be hidden on the stack, and a freshly scanned stack points only to shaded
+objects, while the deletion part prevents it from hiding new pointers taken from the heap
+afterwards.
+
+This yields the most important property of the hybrid write barrier: once a stack has been scanned
+and turned black, it stays black and never needs to be rescanned. Each goroutine's stack can be
+scanned concurrently one at a time after marking starts, pausing only the goroutine being scanned,
+and mark termination no longer has to stop the world to rescan stacks. The hybrid barrier maintains
+the weak tricolor invariant: a scanned black stack may hold pointers to white objects, but such a
+white object is always protected by a grey object. The design document also notes that the barrier
+requires newly allocated objects to be black, which Go already did; it is equivalent to the "double
+write barrier" of the Metronome collector used in IBM's real-time Java, an incremental rather than
+concurrent collector that likewise has to keep stop-the-world time strictly within a small bound
+[[Clements and Hudson, 2016](#ref-clements-hudson-2016)]
+[[Auerbach et al., 2007](#ref-auerbach-2007)].
+
+The effect was dramatic. In the commit that disables stack rescanning, Clements reported that with
+GOMAXPROCS=12, not counting the time needed to stop the world itself, the worst-case mark
+termination stayed consistently under 100 microseconds; in a benchmark built to create a large
+number of dirty stacks, the 95th percentile stop-the-world time with 500,000 dirty stacks fell from
+150 milliseconds to 195 microseconds, nearly three orders of magnitude
+[[Clements, 2016b](#ref-clements-2016b)]. The Go 1.8 release notes state that GC pauses are
+typically under 100 microseconds and often as low as 10 microseconds
+[[Go Authors, 2017](#ref-go-authors-2017)].
+
+## 13.2.4 Go's Implementation: the Unconditional Hybrid Barrier
+
+The hybrid barrier Go actually implements drops the condition "the current stack is grey" and always
+shades both the old and the new value. Clements explained the reason in the commit that implemented
+it: channel operations copy data directly between the stacks of two goroutines, so the barrier would
+have to check the colors of both the source and destination stacks, and at the time there was no way
+to pass that information to the write barrier [[Clements, 2016a](#ref-clements-2016a)]. The design
+document also discusses this unconditional variant: its correctness is easier to argue, because the
+heap never contains a pointer from a black object to a white object; the price is an overhead about
+twice that of the conditional version for most of the mark phase
+[[Clements and Hudson, 2016](#ref-clements-hudson-2016)]. Through Go 1.26 the barrier is still
+unconditional, and a TODO remains in `wbBufFlush1` contemplating skipping the new value when the
+stack has already been scanned.
+
+`mbarrier.go` also contains a note about memory ordering, concerning another condition: both kinds
+of barrier could in principle run only when the object holding `slot` is black. Imagine the mutator
+first writes `slot` and then reads the mark bit of the object holding `slot`, while a collector
+thread first sets that mark bit and then reads `slot`. Without an expensive memory barrier between
+the write and the read on each thread, on most hardware including 386 and amd64, both can read the
+old value: the mutator thinks the object is still white and skips the barrier, and the collector
+does not see the newly written pointer. This is exactly the reordering that Peterson's and Dekker's
+mutual exclusion algorithms must avoid. Go prefers to shade unconditionally rather than pay for a
+memory barrier on every pointer write [[Go Authors, 2026a](#ref-go-authors-2026a)]. This is the
+meeting point of write barriers and memory barriers mentioned at the start of this section.
+
+### Barriers Inserted by the Compiler
+
+The write barrier is inserted by the compiler in the `writebarrier` pass of SSA. The comment of that
+pass describes the shape of the generated code [[Go Authors, 2026b](#ref-go-authors-2026b)]:
+
+```go
+// writebarrier pass inserts write barriers for store ops (Store, Move, Zero)
+// when necessary (the condition above). It rewrites store ops to branches
+// and runtime calls, like
+//
+//	if writeBarrier.enabled {
+//		buf := gcWriteBarrier2()	// Not a regular Go call
+//		buf[0] = val
+//		buf[1] = *ptr
+//	}
+//	*ptr = val
+```
+
+`writeBarrier.enabled` is true only during the mark and mark termination phases
+([13.1.4](./basic.md)); the rest of the time, the extra cost of a pointer write is one load and one
+conditional branch. When the barrier is on, `gcWriteBarrier2` reserves two slots in the current P's
+write barrier buffer and returns their address; the generated code stores the new and old values
+there in turn, and only then performs the actual write. The following function writes a pointer into
+a struct field:
+
+```go
+package wb
+
+type T struct{ p *int }
+
+func set(t *T, v *int) {
+	t.p = v
 }
 ```
 
-`shade(ptr)` conservatively assumes that the object containing `*slot` may already be black, so it shades `ptr` grey first, ensuring it cannot remain white after the write, sealing condition one directly. There are two costs. First, the conservatively shaded objects may include garbage that should have been reclaimed, which now has to wait until the next cycle to be cleared (floating garbage). Second, setting a barrier on every pointer write is costly, and writes to the stack are especially frequent. The pre-1.8 compromise in Go is to **set no barrier on stack writes**, instead marking a stack that has seen a write as "permanently grey" (permagrey). This is exactly what creates a grey mutator, and the price is that these stacks must be rescanned, under STW, during mark termination. This rescan is the principal source of pause time in pre-1.8 Go, and it is the very ailment the hybrid barrier removes.
+Use `-gcflags=-S` to look at the instructions generated for line 6 on amd64:
 
-The **Yuasa deletion barrier**, also known as the snapshot-at-the-beginning barrier, watches the old value being overwritten and maintains the weak tricolor invariant. Its idea is this: before the mutator deletes a pointer, shade the old target that is about to be lost [Yuasa, 1990], as if taking a snapshot of the object graph before the mutation; whatever was live in the snapshot is not reclaimed this cycle.
-
-```go
-// Yuasa deletion barrier: shade the overwritten old value
-func YuasaWritePointer(slot *unsafe.Pointer, ptr unsafe.Pointer) {
-    shade(*slot)
-    *slot = ptr
-}
+```shell
+$ GOARCH=amd64 go build -gcflags=-S . 2>&1 | grep 'wb.go:6)' | grep -v PCDATA | sed 's/.*)\t//'
+TESTB	AL, (AX)
+CMPL	runtime.writeBarrier(SB), $0
+JEQ	36
+MOVQ	(AX), CX
+CALL	runtime.gcWriteBarrier2(SB)
+MOVQ	BX, (R11)
+MOVQ	CX, 8(R11)
+MOVQ	BX, (AX)
 ```
 
-`shade(*slot)` shades the old target grey before overwriting it, so this write always leaves behind a "grey-to-grey" or "grey-to-white" path, and condition two has no way to hold. The merit of the Yuasa barrier is that, when collection ends, all white objects can be reclaimed precisely with no rescan; the cost is that it intercepts the write to make the wavefront retreat, which produces redundant scanning, and being based on a starting snapshot it means that objects which become unreachable during the cycle must wait until the next cycle to be reclaimed.
+`t` is in `AX` and `v` in `BX`. The first instruction probes whether `t` is a nil pointer with a
+read. When `writeBarrier` is zero, control jumps straight to the last instruction, which performs
+the write; otherwise the old value `t.p` is first loaded into `CX`, `gcWriteBarrier2` is called to
+obtain the buffer address `R11`, the new and old values are stored into the buffer, and then the
+write is done. This is exactly the shape described in the comment above.
 
-## 13.2.4 Go's Hybrid Write Barrier
+The compiler inserts a barrier only when necessary. A write whose target is an address in the
+current stack frame needs no barrier; if the target is known to be freshly allocated, still-zero
+memory, the old value need not be recorded; if the value written is nil or the address of a global,
+it cannot point into the heap, and the new value need not be recorded. The barrier is elided
+entirely only when neither the new nor the old value needs recording
+[[Go Authors, 2026b](#ref-go-authors-2026b)]. But if a pointer to the stack is passed to a callee,
+writes through it still carry a barrier, because the compiler cannot be sure it does not point into
+the heap. Writes to globals also need a barrier: `mbarrier.go` explains that many collectors ignore
+writes to globals and instead rescan the global area at mark termination, but that increases the
+pause, so Go executes the barrier on global writes too, to avoid rescanning at mark termination
+[[Go Authors, 2026a](#ref-go-authors-2026a)]. When memory containing pointers is copied or zeroed in
+bulk, as in `typedmemmove` and `wbZero`, the runtime uses `bulkBarrierPreWrite` to handle all the
+pointer slots at once.
 
-Each barrier family can plug only one missed-mark path, so each has a spot where STW is unavoidable: if the Dijkstra barrier lets stack writes through, it incurs a stack rescan at mark termination; the Yuasa barrier requires a snapshot of all roots when collection begins, and at that moment the mutator must likewise halt. Go combined the two in 1.8, obtaining the **hybrid write barrier** [Clements & Hudson, 2016], which resolves this dilemma and has been used ever since. The comment at the top of `runtime/mbarrier.go` writes it as the following pseudo-code:
+### The Write Barrier Buffer
 
-```go
-// Hybrid write barrier (algorithmic form in mbarrier.go)
-func writePointer(slot *unsafe.Pointer, ptr unsafe.Pointer) {
-    shade(*slot)              // Yuasa deletion part: shade the overwritten old value
-    if current_stack_is_grey {
-        shade(ptr)            // Dijkstra insertion part: needed only when this goroutine's stack is still grey
-    }
-    *slot = ptr
-}
-```
+Shading is not done immediately on the barrier's fast path. Since Go 1.10, the barrier only stores
+pointers into a per-P private buffer `wbBuf`, which has 512 slots, and calls `wbBufFlush` to process
+them in bulk only when it fills up [[Go Authors, 2026c](#ref-go-authors-2026c)]. The fast path is
+written in assembly and does not clobber any general-purpose register, which avoids the
+register-saving overhead of an ordinary Go function call; the slow path saves all registers and does
+not allow any safe point that could observe this stack frame. In the commit that introduced the
+buffer, Clements reported that the average cost of the write barrier fell to about a quarter of its
+former level [[Clements, 2017](#ref-clements-2017)]. Before that, a group of writes to several
+pointer fields of the same type already shared one branch, but each pointer still called the barrier
+once; Go 1.21 changed this so that the barrier call returns space in the buffer and the generated
+code stores the pointers itself, with one call able to reserve space for up to 8 pointers
+[[Randall, 2022](#ref-randall-2022)]. The `gcWriteBarrier2` in the assembly above reserves space for
+two pointers.
 
-The two `shade` calls each seal off one path by which the mutator can "hide" an object, and the comment puts the matter very clearly:
-
-- `shade(*slot)` (the deletion part) prevents the mutator from moving "the only pointer to some object" off the heap onto its own stack to hide it: the moment it tries to pluck this pointer out of the heap, the old target is shaded grey first;
-- `shade(ptr)` (the insertion part) prevents the mutator from stuffing such a sole pointer from the stack into a black object in the heap to hide it: the moment it tries to load the pointer into a black object, the loaded object is shaded grey first.
-
-The key is that condition: `shade(ptr)` **is needed only when this goroutine's stack is still grey.** Because hiding an object from the stack into the heap presupposes that it is already hidden on the stack; and a stack that has just finished being scanned holds only objects already shaded grey, hides nothing further, and together with `shade(*slot)` it is also prevented from newly hiding a pointer on its own stack. This is the linchpin of the hybrid barrier: **once a stack has been scanned and blackened a single time, it stays black forever and never needs a rescan.** The collector scans and blackens each goroutine stack at the start of marking (this step can run concurrently with the mutator and needs no global STW), and thereafter the stacks face no risk of a rescan. The mark-termination stack rescan that dominated pause time in pre-1.8 and required STW is thereby removed entirely. Go 1.8's pause times consequently dropped into the sub-millisecond range, which is the most tangible reward of the hybrid barrier. It also meshes exactly with "color newly allocated objects black" ([13.2.1](#1321-why-concurrent-graph-mutation-causes-missed-marks)): black stacks and black new objects are what keep the black region self-consistent throughout.
-
-The cost is that the expense of the write barrier is "spread out": pre-1.8 concentrated the overhead into that one STW rescan at mark termination, whereas the hybrid barrier breaks it into a **constant** cost at each heap pointer write. This is a textbook trade of throughput for latency, exchanging one unpredictable long pause for predictable small outlays scattered across the whole run of the program.
+When the buffer is flushed, `wbBufFlush1` processes the pointers in it one by one: it skips values
+that obviously do not point into the heap, such as nil, finds the object each pointer belongs to,
+and sets its mark bit if it is not yet marked; an object that contains no pointers is black once
+marked, and any other object is put on the collector's work queue and becomes grey. Under the Green
+Tea collector, small objects suited to span-based scanning instead enqueue their span
+([13.11](./greentea.md)).
 
 ```mermaid
 flowchart TD
-    W["heap pointer write slot ← ptr"] --> EN{"writeBarrier.enabled?<br/>gcphase is _GCmark or _GCmarktermination"}
-    EN -->|no| DIRECT["write directly, no overhead"]
-    EN -->|yes| SHADE1["shade(*slot): shade old value<br/>Yuasa deletion, blocks heap→stack hiding"]
-    SHADE1 --> SHADE2["shade(ptr): shade new value<br/>Dijkstra insertion, blocks stack→black-heap hiding"]
-    SHADE2 --> STORE["*slot = ptr"]
-    DIRECT --> DONE["done"]
-    STORE --> DONE
+    W["Compiler-generated pointer write *slot = ptr"] --> EN{"writeBarrier.enabled?"}
+    EN -->|no| STORE["*slot = ptr"]
+    EN -->|yes, mark or mark termination| GET["gcWriteBarrier2:<br/>reserve two slots in this P's wbBuf"]
+    GET --> FULL{"buffer full?"}
+    FULL -->|no| PUT["buf[0] = ptr, buf[1] = *slot"]
+    FULL -->|yes| FLUSH["wbBufFlush:<br/>mark the objects in the buffer,<br/>enqueue those that contain pointers"]
+    FLUSH --> GET
+    PUT --> STORE
 ```
-
-Two gaps between the "pseudo-code" and the "real implementation" are worth pointing out; they are precisely the subtle parts of this mechanism.
-
-First, that `if current_stack_is_grey` condition in the comment is **dropped** in Go's actual assembly implementation `gcWriteBarrier`: whether the stack is black or grey, `ptr` is always shaded. The reason is memory ordering. For the barrier's read of "the color of the object containing slot" to be mutually visible with the mutator's write, a costly memory barrier would have to be inserted between the write and the read; on hardware such as 386/amd64 that allows "a read to pass an earlier write," omitting it would let both the mutator and the collector observe stale color bits. After weighing it, the Go team would rather shade `ptr` one extra time unconditionally than pay the cost of a memory barrier for this condition. This is a trade-off made to sidestep the hardware memory model, and it is the "sole point of contact between the software write barrier and the CPU memory barrier" mentioned at the start of this section.
-
-Second, the barrier takes effect only on **heap** pointer writes, and only while marking is open. The compiler omits the barrier on writes to the current stack frame on the stack (the "no barrier on stack writes" mentioned in [13.2.1](#1321-why-concurrent-graph-mutation-causes-missed-marks)); writes to global variables, however, do get the barrier, so that the global region need not be rescanned at mark termination. The switch is controlled by `writeBarrier.enabled`, which is set when `gcphase` enters `_GCmark` or `_GCmarktermination` and cleared as soon as collection ends, so pointer writes outside the marking period carry zero overhead. The barrier code itself is not hand-written by the mutator but inserted automatically by the compiler before every heap pointer write ([3.2](../../part1overview/ch03life/compile.md)).
-
-Unconditional double shading also brings one direct consequence: the coloring cost doubles, the compiler has more code to insert, and the binary grows. For this Go 1.10 and 1.11 introduced a **batched write barrier buffer** (see `runtime/mwbbuf.go`): the barrier fast path does not color immediately but only pushes the pointers to be shaded into a per-P private buffer (`wbBuf`, capacity 512), flushing them in one go to the collector's work queue when the buffer fills or a GC state transition occurs. The fast path is written in assembly and leaves the general-purpose registers untouched, sparing the overhead of a regular function call and pressing the constant cost of each write down another notch.
-
-Placed in its lineage, the hybrid barrier is not a Go original. The comment notes that it is equivalent to the double write barrier used by IBM's real-time Java Metronome; there the collector is incremental rather than concurrent, but it faces the same problem of safely mutating the graph within strict time bounds. This line of thought connects with the concurrent marking described in [13.1](./basic.md) and the mark termination of [13.6](./termination.md): the weak tricolor invariant the write barrier guarantees is exactly the precondition for marking to run concurrently with the mutator without missing marks.
 
 ## 13.2.5 Summary
 
-The write barrier of concurrent collection comes down, in the end, to a piece of logic inserted at pointer writes to maintain the tricolor invariant. Early Go took the more easily implemented Dijkstra insertion barrier, and to preserve the strong invariant it had no choice but to leave stacks for an STW rescan at mark termination, a rescan that dominated the pause of the day. From 1.8 on it switched to the hybrid barrier composed of Dijkstra insertion and Yuasa deletion, weakening the strong invariant into the weak invariant in exchange for the property "scan the stack once, black ever after, never rescanned," thereby erasing that concentrated STW and pressing the pause into the sub-millisecond range. The cost is a constant overhead at each heap pointer write, in turn thinned out by the batched buffer. A gain in performance never comes for free; this time it comes from re-situating one unpredictable long pause as predictable small outlays scattered throughout the run.
+The write barrier maintains the tricolor invariants when the mutator modifies pointers. The
+insertion barrier maintains the strong invariant and the deletion barrier the weak one; in Go the
+former requires stopping the world at mark termination to rescan stacks, and the latter requires
+stopping the world at the start of marking to scan all stacks. The hybrid write barrier of Go 1.8
+combines the two so that scanned stacks stay black forever, eliminating stack rescanning, the
+largest source of pauses. The actual implementation shades both the new and the old value
+unconditionally, which simplifies cross-stack writes such as channel operations; its overhead is
+kept down by the compiler's on-demand insertion, the global switch that is on only during marking,
+and the per-P write barrier buffer.
 
 ## Further Reading
 
-1. Austin Clements, Rick Hudson. *Eliminate STW stack re-scanning (Hybrid write barrier).*
-   Go proposal, golang/go#17503, 2016.
-   https://github.com/golang/proposal/blob/master/design/17503-eliminate-rescan.md
-   (The design and correctness proof of the hybrid barrier, the primary source for the main thread of this section.)
-2. Taiichi Yuasa. *Real-time garbage collection on general-purpose machines.*
-   Journal of Systems and Software, 11(3):181-198, 1990.
-   DOI: [10.1016/0164-1212(90)90084-Y](https://doi.org/10.1016/0164-1212(90)90084-Y)
-   (The original paper on the deletion barrier / snapshot-at-the-beginning.)
-3. Edsger W. Dijkstra, Leslie Lamport, A. J. Martin, C. S. Scholten, E. F. M. Steffens.
-   *On-the-Fly Garbage Collection: An Exercise in Cooperation.*
-   Communications of the ACM, 21(11):966-975, 1978.
-   DOI: [10.1145/359642.359655](https://doi.org/10.1145/359642.359655)
-   (The foundational work on the insertion barrier and tricolor marking.)
-4. Paul R. Wilson. *Uniprocessor Garbage Collection Techniques.*
-   Proc. International Workshop on Memory Management (IWMM), LNCS 637, 1992.
-   (The survey of the two missed-mark conditions, the strong / weak tricolor invariants, incremental update, and snapshot-at-the-beginning.)
-5. Pekka P. Pirinen. *Barrier Techniques for Incremental Tracing.*
-   Proc. International Symposium on Memory Management (ISMM), 1998.
-   DOI: [10.1145/286860.286863](https://doi.org/10.1145/286860.286863)
-   (The classification framework of basic barrier actions.)
-6. The Go Authors. *runtime/mbarrier.go, runtime/mwbbuf.go, runtime/mgc.go.*
-   https://github.com/golang/go/tree/master/src/runtime
-   (The hybrid barrier implementation, the batched buffer, and the `writeBarrier.enabled` / `gcphase` gating.)
-7. This book: [13.1 The Basic Idea of Garbage Collection](./basic.md), [13.6 The Mark Termination Phase](./termination.md),
-   [11.9 The Memory Consistency Model](../../part3concurrency/ch11sync/mem.md).
+- <a id="ref-auerbach-2007"></a>[Auerbach et al., 2007] Joshua Auerbach, David F. Bacon, Bob
+  Blainey, Perry Cheng, Michael Dawson, Mike Fulton, David Grove, Darren Hart, Mark
+  Stoodley. "Design and Implementation of a Comprehensive Real-Time Java Virtual
+  Machine." *EMSOFT '07*, 2007, 249-258. https://doi.org/10.1145/1289927.1289967
+- <a id="ref-clements-2016a"></a>[Clements, 2016a] Austin Clements. runtime: implement unconditional
+  hybrid barrier. Go commit 5380b22991, 2016. https://go.dev/cl/31765
+  Shipped with Go 1.8.
+- <a id="ref-clements-2016b"></a>[Clements, 2016b] Austin Clements. runtime: disable stack
+  rescanning by default. Go commit bd640c882a, 2016. https://go.dev/cl/31766 Shipped with Go 1.8.
+- <a id="ref-clements-2017"></a>[Clements, 2017] Austin Clements. runtime: buffered write barrier
+  implementation. Go commit e9079a69f3, 2017. https://go.dev/cl/73711
+  Shipped with Go 1.10.
+- <a id="ref-clements-hudson-2016"></a>[Clements and Hudson, 2016] Austin Clements, Rick Hudson.
+  *Proposal: Eliminate STW stack re-scanning.* Go design document, golang/go#17503, 2016.
+  https://github.com/golang/proposal/blob/master/design/17503-eliminate-rescan.md The design and
+  correctness proof of the hybrid barrier, the primary source for this section's main line.
+- <a id="ref-dijkstra-1978"></a>[Dijkstra et al., 1978] Edsger W. Dijkstra, Leslie Lamport, A. J.
+  Martin, C. S. Scholten, E. F. M. Steffens. "On-the-Fly Garbage Collection: An Exercise in
+  Cooperation." *Communications of the ACM*, 21(11), 1978, 966-975.
+  https://doi.org/10.1145/359642.359655 The foundation of the insertion barrier and tricolor
+  marking.
+- <a id="ref-go-authors-2017"></a>[Go Authors, 2017] The Go Authors. *Go 1.8 Release Notes.* 2017.
+  https://go.dev/doc/go1.8
+- <a id="ref-go-authors-2026a"></a>[Go Authors, 2026a] The Go Authors. src/runtime/mbarrier.go,
+  src/runtime/mwbbuf.go, src/runtime/mgc.go (the hybrid barrier implementation, batching in the
+  buffer, and the `writeBarrier.enabled` / `gcphase` gate). Go 1.26 source.
+  https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
+- <a id="ref-go-authors-2026b"></a>[Go Authors, 2026b] The Go Authors.
+  src/cmd/compile/internal/ssa/writebarrier.go. Go 1.26 source.
+  https://github.com/golang/go/blob/release-branch.go1.26/src/cmd/compile/internal/ssa/writebarrier.go
+- <a id="ref-go-authors-2026c"></a>[Go Authors, 2026c] The Go Authors. src/runtime/mwbbuf.go,
+  src/runtime/asm_amd64.s (`wbBuf`, `gcWriteBarrier`). Go 1.26 source.
+  https://github.com/golang/go/tree/release-branch.go1.26/src/runtime
+- <a id="ref-hudson-2015"></a>[Hudson, 2015] Richard Hudson. "Go GC: Prioritizing low latency and
+  simplicity." *The Go Blog*, 2015. https://go.dev/blog/go15gc
+  The Go 1.5 collector uses a Dijkstra-style insertion barrier.
+- <a id="ref-pirinen-1998"></a>[Pirinen, 1998] Pekka P. Pirinen. "Barrier Techniques for Incremental
+  Tracing." *Proceedings of the International Symposium on Memory Management (ISMM)*, 1998, 20-25.
+  https://doi.org/10.1145/286860.286863
+  A classification framework for the basic actions of barriers.
+- <a id="ref-randall-2022"></a>[Randall, 2022] Keith Randall. cmd/compile: batch write barrier
+  calls. Go commit 21d82e6ac8, 2022. https://go.dev/cl/447781 Shipped with Go 1.21.
+- <a id="ref-wilson-1992"></a>[Wilson, 1992] Paul R. Wilson. "Uniprocessor Garbage Collection
+  Techniques." *International Workshop on Memory Management (IWMM)*, LNCS 637, 1992, 1-42.
+  https://doi.org/10.1007/BFb0017182 A survey of the two conditions for missing an object, tricolor
+  invariance, incremental update and snapshot-at-the-beginning.
+- <a id="ref-yuasa-1990"></a>[Yuasa, 1990] Taiichi Yuasa. "Real-Time Garbage Collection on
+  General-Purpose Machines." *Journal of Systems and Software*, 11(3), 1990, 181-198.
+  https://doi.org/10.1016/0164-1212(90)90084-Y The original paper on the deletion barrier /
+  snapshot-at-the-beginning.
+- This book: [13.1 The Basic Idea of Garbage Collection](./basic.md),
+  [13.6 Mark Termination Phase](./termination.md),
+  [11.9 Memory Consistency Models](../../part3concurrency/ch11sync/mem.md).
