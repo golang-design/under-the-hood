@@ -279,14 +279,14 @@ the spectrum. Its mark bit is exactly the one-bit sticky count of the paper, and
 extra traversal of tracing; Go takes the allocation bitmap of the next cycle directly from the mark
 bitmap of this cycle, which turns most of the work of this traversal into a swap of bitmaps
 ([13.5](./sweep.md)). As a pure tracing collector it can naturally reclaim cyclic garbage and needs
-no form of cycle detection. How Go came in 2014 to choose a tri-color concurrent, non-moving tracing
+no form of cycle detection. How Go came in 2014 to choose a tricolor concurrent, non-moving tracing
 collector is told in Hudson's retrospective [[Hudson, 2018](#ref-hudson-2018)] and in
 [13.12.2](./history.md).
 
 Go's collector also has a write barrier, but its role differs from the one the paper discusses. The
 paper's analysis explicitly leaves out concurrent collectors, and the write barriers in it maintain
 counts across the partitions of storage; the Go write barrier is enabled only during marking and
-serves to maintain the tri-color invariant while the mutator and the collector run concurrently, and
+serves to maintain the tricolor invariant while the mutator and the collector run concurrently, and
 it neither partitions storage nor maintains any counts between partitions ([13.2](./barrier.md)).
 Still, the formal similarity between the two is worth mentioning; this is an observation of this
 book, not a conclusion of the paper. `mbarrier.go` describes the Go hybrid write barrier in the

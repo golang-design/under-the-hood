@@ -379,7 +379,7 @@ used the hybrid write barrier to remove the need to rescan stacks at mark termin
 history is in [13.12](./history.md).
 
 The objective function behind these choices is latency. When Go 1.5 shipped, Hudson wrote that Go's
-collector is a tri-color concurrent mark-sweep collector, a deliberate departure from
+collector is a tricolor concurrent mark-sweep collector, a deliberate departure from
 most "enterprise" collectors of the day; it was designed to prioritize low latency, offers only one
 tuning knob, `GOGC`, and Go 1.5's GC pauses were already well under the 10 ms target set a year
 earlier [[Hudson, 2015](#ref-hudson-2015)]. In his 2018 talk Hudson explained why latency matters so

@@ -166,8 +166,8 @@ title: "附录 A：术语表"
 | 追踪 | [13.13](./part4memory/ch13gc/unifiedgc.md) | Tracing | |
 | 清扫 | [13.5](./part4memory/ch13gc/sweep.md) | Sweep | |
 | 清扫代 | [13.5](./part4memory/ch13gc/sweep.md) | Sweep Generation | sweepgen |
-| 三色抽象 | [13.1](./part4memory/ch13gc/basic.md) | Tricolour Abstraction | |
-| 三色不变式 | [13.1](./part4memory/ch13gc/basic.md) | Tricolour Invariant | |
+| 三色抽象 | [13.1](./part4memory/ch13gc/basic.md) | Tricolor Abstraction | |
+| 三色不变式 | [13.1](./part4memory/ch13gc/basic.md) | Tricolor Invariant | |
 | 弱指针 | [13.10](./part4memory/ch13gc/finalizer.md) | Weak Pointer | |
 | 写屏障 | [13.2](./part4memory/ch13gc/barrier.md) | Write Barrier | WB/wb |
 

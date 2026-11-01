@@ -19,7 +19,7 @@ trends [[Knyszek and Clements, 2025a](#ref-knyszek-clements-2025a)].
 Green Tea is a new marking algorithm aimed at this problem. It shipped in Go 1.25 as the experiment
 `GOEXPERIMENT=greenteagc`, has been enabled by default since Go 1.26, and can be turned off with
 `GOEXPERIMENT=nogreenteagc` [[Go Authors, 2025](#ref-go-authors-2025)]
-[[Go Authors, 2026a](#ref-go-authors-2026a)]. It changes neither the tri-color abstraction nor the
+[[Go Authors, 2026a](#ref-go-authors-2026a)]. It changes neither the tricolor abstraction nor the
 barriers. What changes is how the marker walks objects: instead of scanning objects one at a time,
 it accumulates the objects waiting to be scanned that fall in the same span and scans them together.
 This section covers, in turn, the locality problem it addresses, the core mechanism of accumulating
@@ -28,7 +28,7 @@ scanning a span, and finally its effects, limitations and evolution.
 
 ## 13.11.1 The Locality Problem of Marking
 
-Classic tri-color marking ([13.1](./basic.md)) starts from grey objects, scans the pointers in them,
+Classic tricolor marking ([13.1](./basic.md)) starts from grey objects, scans the pointers in them,
 colors the white objects they point to grey and puts them on a work queue, until the queue is empty.
 The design document calls this a **graph flood**: heap objects are the nodes of a graph, pointers
 are its edges, and the order of traversal pays no attention to where objects sit in memory. The

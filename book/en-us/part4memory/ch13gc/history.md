@@ -5,7 +5,7 @@ title: "13.12 Past, Present, and Future"
 
 # 13.12 Past, Present, and Future
 
-The previous eleven sections covered the components of the Go collector one by one: tri-color
+The previous eleven sections covered the components of the Go collector one by one: tricolor
 marking ([13.1](./basic.md)), the hybrid write barrier ([13.2](./barrier.md)), the pacer
 ([13.3](./pacing.md)), marking and sweeping ([13.4](./mark.md), [13.5](./sweep.md)), mark
 termination ([13.6](./termination.md)), the abandoned generational and ROC experiments
@@ -63,7 +63,7 @@ configured machine, collection latency below 10 milliseconds and at least 40 mil
 availability in every 50; hardware configured so that the heap may grow to twice the reachable
 memory, with 25% of CPU cycles, typically one of four hardware threads, available to the collector.
 The plan summarized the shape of the Go 1.5 collector in a string of terms: a non-generational,
-non-moving, concurrent, tri-color mark-sweep collector. It also admitted that low latency inevitably
+non-moving, concurrent, tricolor mark-sweep collector. It also admitted that low latency inevitably
 affects mutator throughput [[Hudson, 2014](#ref-hudson-2014)].
 
 This shape is the result of trade-offs. In his 2018 talk Hudson revealed that the original long-term
@@ -71,7 +71,7 @@ plan was a concurrent copying collector without read barriers, but the cost of r
 highly uncertain and the team wanted to avoid them. In 2014, more pressing was the rewrite of the
 runtime and compiler from C into Go and the need to ship a latency-focused collector quickly, whose
 performance loss must not exceed the speedup the compiler would deliver within a year. The team
-therefore gave up copying and chose a tri-color concurrent algorithm; the write barrier is enabled
+therefore gave up copying and chose a tricolor concurrent algorithm; the write barrier is enabled
 only during collection, and the rest of the time the compiled code merely checks a global variable,
 which has little effect on compiler optimization. There were also reasons not to move objects:
 size-segregated spans make it efficient to find the start of the object an interior pointer points
@@ -236,7 +236,7 @@ program opens a region belonging only to the current goroutine with `region.Do(f
 during the execution of `f` go into a dedicated part of the heap; only this goroutine, and only
 while the region is active, enables a new kind of write barrier that catches writes in which a
 pointer to region memory escapes the region and hands the object graph rooted at that pointer over
-to the regular tri-color collector, which the design document calls fading; when `f` returns, the
+to the regular tricolor collector, which the design document calls fading; when `f` returns, the
 spans of the region are swept immediately and the memory that did not escape is reused at once. Its
 primary goal is to reduce the resource cost of collection and its second is composability: it
 requires no API changes and can coexist with `sync.Pool`, `unique.Handle` and the stack allocation
@@ -272,7 +272,7 @@ timeline
     2013-05 Go 1.1 : More parallel marking : More precise heap scanning
     2014-06 Go 1.3 : Precise stack scanning : Concurrent sweep
     2014-12 Go 1.4 : Fully precise : Write barrier calls introduced
-    2015-08 Go 1.5 : Concurrent tri-color marking : Insertion write barrier and pacer
+    2015-08 Go 1.5 : Concurrent tricolor marking : Insertion write barrier and pacer
     2016 Go 1.6 and 1.7 : Decentralized phase transitions : Concurrent stack shrinking and bitmap allocation
     2017-02 Go 1.8 : Hybrid write barrier : Stack rescanning eliminated
 ```

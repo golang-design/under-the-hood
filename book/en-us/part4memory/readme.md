@@ -22,14 +22,14 @@ Go programmers request memory with `new`, `make` and composite literals, but nev
 explicitly. Where memory comes from and when it can be reused is decided entirely by the runtime,
 and these decisions directly affect a program's latency, throughput and memory footprint. The
 quotation above is the title of a 1978 paper by Dijkstra, Lamport and others. The paper introduced
-tri-color marking, which lets a collector run concurrently with a program that keeps modifying
+tricolor marking, which lets a collector run concurrently with a program that keeps modifying
 pointers, hence "on-the-fly" collection; Go's concurrent collector is built on this idea
 ([13.1](./ch13gc/basic.md)).
 
 This part has three chapters. Chapter 12 covers the memory allocator: it descends from TCMalloc,
 divides objects into size classes, serves the vast majority of allocations from a per-P private
 cache, and when that cache runs out requests memory from the central cache and then the page heap,
-level by level. Chapter 13 covers the garbage collector: tri-color marking and the write barrier,
+level by level. Chapter 13 covers the garbage collector: tricolor marking and the write barrier,
 pacing, the implementation of marking and sweeping, and recent developments such as finalizers and
 the Green Tea collector. Chapter 14 covers how a goroutine's execution stack is allocated, grown and
 shrunk. The allocator decides where objects are placed, the collector decides when they can be

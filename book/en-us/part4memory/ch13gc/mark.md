@@ -360,7 +360,7 @@ complementary pair:
 
 | Mechanism | What it guarantees | How |
 | --- | --- | --- |
-| Write barrier | Correctness: concurrent marking misses no live object | When the mutator modifies a pointer, it records the objects involved, preserving the tri-color invariant |
+| Write barrier | Correctness: concurrent marking misses no live object | When the mutator modifies a pointer, it records the objects involved, preserving the tricolor invariant |
 | Mark assist | Timeliness: marking completes before the heap grows to its goal | Allocating goroutines take on marking work in proportion to their allocation |
 
 When the gray objects are exhausted, marking enters the termination phase; how the collector
@@ -409,7 +409,7 @@ completes before the heap grows to its goal.
   µs. Go commit cf4f1d07a1, 2016. https://go.dev/cl/23540 Released with Go 1.8.
 - <a id="ref-dijkstra-1978"></a>[Dijkstra et al., 1978] E. W. Dijkstra, L. Lamport, A. J. Martin, et
   al. *On-the-Fly Garbage Collection: An Exercise in Cooperation.* CACM, 1978.
-  https://doi.org/10.1145/359642.359655 (The theoretical foundation of concurrent tri-color
+  https://doi.org/10.1145/359642.359655 (The theoretical foundation of concurrent tricolor
   marking.)
 - <a id="ref-go-authors-2022"></a>[Go Authors, 2022] The Go Authors. *Go 1.19 Release Notes.* 2022.
   https://go.dev/doc/go1.19

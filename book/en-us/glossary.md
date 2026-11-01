@@ -165,8 +165,8 @@ that readers can look it up quickly.
 | Sweep | [13.5](./part4memory/ch13gc/sweep.md) | 清扫 | |
 | Sweep Generation | [13.5](./part4memory/ch13gc/sweep.md) | 清扫代 | sweepgen |
 | Tracing | [13.13](./part4memory/ch13gc/unifiedgc.md) | 追踪 | |
-| Tricolour Abstraction | [13.1](./part4memory/ch13gc/basic.md) | 三色抽象 | |
-| Tricolour Invariant | [13.1](./part4memory/ch13gc/basic.md) | 三色不变式 | |
+| Tricolor Abstraction | [13.1](./part4memory/ch13gc/basic.md) | 三色抽象 | |
+| Tricolor Invariant | [13.1](./part4memory/ch13gc/basic.md) | 三色不变式 | |
 | Weak Pointer | [13.10](./part4memory/ch13gc/finalizer.md) | 弱指针 | |
 | Write Barrier | [13.2](./part4memory/ch13gc/barrier.md) | 写屏障 | WB/wb |
 
