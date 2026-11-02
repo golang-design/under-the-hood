@@ -211,6 +211,16 @@ oscillation is bounded by the frequency of collections. Only the used part is co
 ([14.4](./copy.md)), less than a quarter of the old stack, so it costs less than the copy during
 growth.
 
+The interactive figure below replays the growth and shrinking rules on one goroutine (linux/amd64,
+race detector off). On the left is the current stack with its guard line and shrink line: the stack
+doubles when a prologue check fails, and a GC scan halves it if SP is still above the shrink line.
+On the right are the stack size and the bytes in use after each step. Call with large frames to grow
+the stack, then return all and run several GCs to watch it halve at most once per cycle down to 2
+KiB; or call and return with small frames around the point of growth and run a GC to see that the
+stack does not shrink back.
+
+<div class="viz" data-viz="stack-resize"></div>
+
 Shrinking can be turned off. The documentation of the `runtime` package describes the `GODEBUG`
 option `gcshrinkstackoff` as follows [[Go Authors, 2026c](#ref-go-authors-2026c)]:
 
