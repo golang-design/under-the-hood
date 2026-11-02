@@ -226,6 +226,15 @@ alignment into one class, apply shaping recursively to the elements of composite
 struct field names and tags. Implementing part of this would first require tracking how type
 parameters are actually used in the function body.
 
+The interactive figure below applies the `shapify` rule to the type arguments of one generic
+function, `Last`. Check type arguments on the left and switch the constraint of the type parameter
+below the figure; on the right are the shape instances the compiler actually generates. Each type
+argument also has a dictionary of its own, whose contents are described next. The symbol names match
+what `go tool nm` lists for a Go 1.26 build. Compare how pointer arguments are shaped under `any`
+and under `comparable`, and whether `MyInt` shares code with `int`, or `int64` with `int`.
+
+<div class="viz" data-viz="gc-shape"></div>
+
 ### Dictionaries
 
 A single shape instance must serve many types, and the type information it lacks is supplied by a
