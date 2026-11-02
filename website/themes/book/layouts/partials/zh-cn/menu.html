@@ -1,13 +1,7 @@
 <nav>
-{{/* The brand wordmark now lives in the top bar (partial "zh-cn/topbar"). */}}
 {{ partial "zh-cn/search" . }}
 {{ partial "zh-cn/inject/menu-before" . }}
-
-{{ if .Site.Params.BookMenuBundle }}
-    {{ partial "zh-cn/menu-bundle" . }}
-{{ else }}
-    {{ partial "zh-cn/menu-filetree" . }}
-{{ end }}
+{{ partial "zh-cn/menu-filetree" . }}
 
 {{ partial "zh-cn/inject/menu-after" . }}
 </nav>

@@ -12,8 +12,7 @@
 
   // ---- shared helpers -------------------------------------------------------
   // The palette is derived from the book's live CSS tokens (see _reading.scss)
-  // so every canvas reads native to the warm-paper / Go-blue surface in both
-  // light and dark. We cache the resolved palette and rebuild it only when the
+  // so every canvas matches the page in both light and dark. We cache the resolved palette and rebuild it only when the
   // reader toggles the theme — mirroring how mermaid-init.js watches the <html>
   // class. `grey`/`black`/`white` stay (the tricolor-GC widget depends on them);
   // `run` (success-green) and `warn` (just-stolen orange) are semantic accents
@@ -29,20 +28,20 @@
   function buildPalette() {
     var dark = theme() === "dark";
     return {
-      bg: token("--bg", dark ? "#14130e" : "#ece8df"),
-      panel: token("--surface", dark ? "#1b1914" : "#f7f4ee"),
-      stroke: token("--border-strong", dark ? "rgba(255,255,255,0.16)" : "rgba(35,32,25,0.18)"),
-      text: token("--fg", dark ? "#e6e0d2" : "#232019"),
-      muted: token("--fg-muted", dark ? "#a7a08f" : "#6a6256"),
-      accent: token("--accent", dark ? "#29bee6" : "#007d9c"),
-      g: token("--accent", dark ? "#29bee6" : "#007d9c"),
-      // semantic accents tuned for warm paper / warm dark
+      bg: token("--bg", dark ? "#181818" : "#ffffff"),
+      panel: token("--surface", dark ? "#222222" : "#f6f6f6"),
+      stroke: token("--border-strong", dark ? "#474747" : "#c9c9c9"),
+      text: token("--fg", dark ? "#e3e3e3" : "#1f1f1f"),
+      muted: token("--fg-muted", dark ? "#ababab" : "#555555"),
+      accent: token("--accent", dark ? "#4fb8d6" : "#007d9c"),
+      g: token("--accent", dark ? "#4fb8d6" : "#007d9c"),
+      // semantic accents, tuned for the light and dark pages
       run: dark ? "#5bd6a0" : "#1f9d6b",
       warn: dark ? "#f0a35e" : "#c9742a",
       // tricolor-GC fills (kept for the GC widget)
-      grey: dark ? "#9b9385" : "#8a8170",
-      black: dark ? "#0c0d10" : "#33302a",
-      white: token("--surface", dark ? "#1b1914" : "#f7f4ee"),
+      grey: dark ? "#9a9a9a" : "#8a8a8a",
+      black: dark ? "#0c0d10" : "#333333",
+      white: token("--surface", dark ? "#222222" : "#f6f6f6"),
     };
   }
   var _palette = buildPalette();

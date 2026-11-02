@@ -1,10 +1,3 @@
-.book-cover img {
-  width: 290px;
-  float: right;
-  border-radius: 1px;
-  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.4);
-}
-
 html {
   font-size: $font-size-base;
   letter-spacing: 0.33px;
@@ -86,30 +79,9 @@ aside nav ul {
   display: none;
 }
 
-ul.pagination {
-  display: flex;
-  justify-content: center;
-  list-style-type: none;
-
-  .page-item a {
-    padding: $padding-16;
-  }
-}
-
 .container {
   max-width: $container-max-width-desktop;
   margin: 0 auto;
-}
-
-.book-brand {
-  margin-top: 0;
-
-  img {
-    height: 1.5em;
-    width: auto;
-    vertical-align: middle;
-    margin-right: $padding-8;
-  }
 }
 
 .book-menu {
@@ -173,8 +145,6 @@ ul.pagination {
   background: rgba($gray-700, 0.6);
 }
 
-// ---
-
 .book-section-flat {
   margin-bottom: $padding-16 * 2;
 
@@ -200,24 +170,6 @@ ul.pagination {
   // margin-top: $banner-height;
 }
 
-.book-header {
-  margin-bottom: $padding-16;
-  display: none;
-}
-// Header controls live inside the $menu-width sidebar. Stack them vertically so
-// the search box gets its own full-width row and the theme + language switches
-// sit on a row below, free to wrap, with NO horizontal overflow.
-.magic {
-  display: flex;
-  flex-direction: column;
-}
-.book-switch {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: $padding-8;
-  margin-bottom: $padding-16;
-}
 .book-search {
   width: 100%;
   position: relative;
@@ -283,192 +235,6 @@ ul.pagination {
   }
 }
 
-.book-footer {
-  display: flex;
-  padding-top: $padding-16;
-  font-size: $font-size-14;
-
-  img {
-    height: 1em;
-    margin-right: $padding-8;
-  }
-}
-
-
-.book-languages {
-  position: relative;
-  overflow: visible;
-
-  padding: $padding-16;
-  margin: -$padding-16;
-
-  &:hover .book-languages-list {
-    display: block;
-  }
-
-  .book-languages-list {
-    display: none;
-
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    padding: $padding-8 0;
-
-    background: $body-background;
-    box-shadow: 0 0 $padding-4 rgba(0, 0, 0, 0.1);
-
-    li {
-      padding: $padding-8 $padding-16;
-      white-space: nowrap;
-    }
-
-    img {
-      opacity: .1;
-    }
-
-    li.active img {
-      opacity: 1;
-    }
-
-    a {
-      color: inherit;
-    }
-  }
-
-  ul {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-}
-
-.book-posts {
-  min-width: $body-min-width;
-  max-width: $body-min-width * 2;
-  flex-grow: 1;
-  padding: $padding-16;
-
-  article {
-    padding-bottom: $padding-16;
-  }
-}
-
-.book-home {
-  padding: $padding-16;
-}
-
-// Responsive styles
-aside nav,
-.book-page,
-.book-posts,
-.markdown {
-  transition: 0.2s ease-in-out;
-  transition-property: transform, margin-left, opacity;
-  will-change: transform, margin-left;
-}
-
-@media screen and (max-width: $md-breakpoint) {
-  .book-toc {
-    display: none;
-  }
-}
-
-@media screen and (max-width: $sm-breakpoint) {
-  .book-menu {
-    margin-left: -$menu-width;
-    font-size: $font-size-base;
-  }
-
-  .book-header {
-    display: flex;
-  }
-
-  #menu-control:checked + main {
-    .book-menu nav,
-    .book-page,
-    .book-posts {
-      transform: translateX($menu-width);
-    }
-
-    .book-header label {
-      transform: rotate(90deg);
-    }
-
-    .markdown {
-      opacity: 0.25;
-    }
-  }
-}
-
-// Extra space for big screens
-@media screen and (min-width: $container-max-width-mobile) {
-  .book-page,
-  .book-posts,
-  .book-menu nav,
-  .book-toc nav {
-    padding: $padding-16 * 2 $padding-16;
-  }
-}
-
-// Theme switch: a 3-state segmented control (LIGHT / AUTO / DARK).
-.theme-switch {
-  display: inline-flex;
-  align-items: center;
-  margin: 0;
-  border: 1px solid $gray-300;
-  border-radius: $padding-4;
-  overflow: hidden;
-
-  .theme-option {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 30px;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: $body-font-color;
-    cursor: pointer;
-    transition: background-color 0.2s ease, color 0.2s ease;
-
-    & + .theme-option {
-      border-left: 1px solid $gray-300;
-    }
-
-    &:hover {
-      background: $gray-100;
-    }
-
-    &.active {
-      background: #2196f3;
-      color: #fff;
-    }
-
-    &:focus-visible {
-      outline: 2px solid #2196f3;
-      outline-offset: -2px;
-    }
-  }
-}
-
-// self customized
-
-.quote {
-  border-radius: $border-radius;
-  padding: $padding-16 $padding-16 * 1.25;
-  margin: $padding-16 * 1.5 0;
-  // A calm, booklike chapter-intro panel with a soft Go-blue accent rule.
-  border-left: $padding-4 solid rgba($color-link, 0.4);
-  background-color: rgba(#666, 0.08);
-  line-height: 1.8;
-}
-.quote-mark {
-  float: right;
-}
-.quote-right {
-  text-align: right;
-}
 
 // !WORKAROUND: 
 // overwrite hugo markdown table style
@@ -500,21 +266,19 @@ aside nav,
 .viz {
   margin: $padding-16 * 1.5 auto;
   max-width: 760px;
-  // Semantic slots for DOM/SVG widgets, validated (dataviz skill checks) on
-  // the light surface #f7f4ee and the dark surface #1b1914. Use them by
+  // Semantic slots for DOM/SVG widgets; each keeps at least 3:1 contrast on
+  // the light figure panel #f6f6f6 and the dark one #222222. Use them by
   // meaning and always pair them with a text label:
   //   c1 active/current · c2 blocked/attention · c3 done/ok · c4 secondary
   --viz-c1: #007d9c;
   --viz-c2: #c9742a;
   --viz-c3: #1f9d6b;
   --viz-c4: #7a5cab;
-  --viz-ink: var(--fg, #232019);
-  --viz-muted: var(--fg-muted, #6a6256);
-  --viz-line: var(--border-strong, rgba(35, 32, 25, 0.18));
-  --viz-fill: var(--surface, #f7f4ee);
+  --viz-ink: var(--fg, #1f1f1f);
+  --viz-muted: var(--fg-muted, #555555);
+  --viz-line: var(--border-strong, #c9c9c9);
+  --viz-fill: var(--surface, #f6f6f6);
 
-  // Token-driven so the panel sits on the warm paper in light mode and
-  // follows the reading theme in dark mode.
   .viz-wrap {
     border: 1px solid var(--border, #{$gray-200});
     border-radius: $border-radius;

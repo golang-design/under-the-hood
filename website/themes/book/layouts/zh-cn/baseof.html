@@ -4,11 +4,9 @@
 <head>
   {{ partial "zh-cn/lang-redirect" . }}
   {{ partial "zh-cn/html-head" . }}
-  {{ partial "zh-cn/inject/head" . }}
 </head>
 
 <body>
-  <input type="checkbox" class="hidden" id="menu-control" />
   {{ partial "zh-cn/topbar" . }}
   <main class="flex container">
     <aside class="book-menu fixed">
@@ -16,16 +14,12 @@
     </aside>
 
     <div class="book-page">
-      {{ partial "zh-cn/mobile-header" . }}
       {{ template "main" . }}
-      {{ partial "zh-cn/footer" . }}
       {{ partial "zh-cn/inject/footer" . }}
     </div>
 
     {{ template "toc" . }}
   </main>
-
-  {{ partial "zh-cn/inject/body" . }}
 </body>
 
 </html>

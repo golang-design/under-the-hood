@@ -62,8 +62,8 @@ colours can reference CSS variables so dark mode needs no repaint.
 | `--viz-ink`, `--viz-muted` | text |
 | `--viz-line`, `--viz-fill` | strokes and box fills |
 
-The four slots were checked with the dataviz palette validator on both the
-light (`#f7f4ee`) and dark (`#1b1914`) surfaces. Use them by meaning, never
+Each slot keeps at least 3:1 contrast on the light (`#f6f6f6`) and dark
+(`#222222`) figure panels. Use them by meaning, never
 cycle them as a rainbow, and always pair a colour with a text label. Text uses
 the ink variables, not a series colour. Tint large fills with `fill-opacity`
 (about 0.12 to 0.2) and keep the full colour for the stroke.

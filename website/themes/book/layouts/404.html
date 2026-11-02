@@ -3,16 +3,13 @@
 
 <head>
   {{ partial "zh-cn/html-head" . }}
-  {{ partial "zh-cn/inject/head" . }}
 </head>
 
 <body>
-  <main class="flex justify-center">
-    <h1>404 Not Found</h1>
+  <main class="markdown">
+    <h1>404</h1>
+    <p><a href="{{ .Site.Home.RelPermalink }}">{{ .Site.Title }}</a></p>
   </main>
-
-  {{ partial "zh-cn/inject/body" . }}
-  {{ template "_internal/google_analytics.html" . }}
 </body>
 
 </html>

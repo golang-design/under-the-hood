@@ -16,14 +16,9 @@
    Collapsible sidebar menu (interactive expand / collapse via a checkbox hack)
    --------------------------------------------------------------------------- */
 .book-menu {
-    /* With every section expanded by default the menu can be taller than the
-       viewport: make the fixed nav a full-height, independently scrollable
-       pane so the whole tree is reachable. (The `fixed` mixin already sets
-       top/bottom + overflow-y; pin the height explicitly so it holds even if
-       the mixin changes.) */
+    /* The tree can be taller than the viewport: scroll the nav on its own
+       (its height is set below the top bar in _reading.scss). */
     nav {
-        height: 100vh;
-        max-height: 100vh;
         overflow-y: auto;
         overscroll-behavior: contain;
     }

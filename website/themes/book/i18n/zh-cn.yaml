@@ -18,12 +18,6 @@
 - id: Language
   translation: 语言
 
-- id: Edit this page
-  translation: Edit this page
-
-- id: Last modified by
-  translation: Last modified by
-
 # Reading chrome (top bar, table of contents, page navigation, footer).
 - id: Wordmark
   translation: Go 语言原本

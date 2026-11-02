@@ -3,7 +3,7 @@
 # PLANNED locale. German content does not exist yet; this file only seeds the
 # UI strings so that enabling [languages.de] in config.toml later renders the
 # chrome (search box, theme switch, language switch) in German out of the box.
-# Translate the book content separately under content/de/.
+# Translate the book content separately, in its own content directory.
 - id: Search
   translation: Suche
 
@@ -23,12 +23,6 @@
 # Header language switcher.
 - id: Language
   translation: Sprache
-
-- id: Edit this page
-  translation: Diese Seite bearbeiten
-
-- id: Last modified by
-  translation: Zuletzt geändert von
 
 - id: bookSearchConfig
   translation: '{ cache: true }'

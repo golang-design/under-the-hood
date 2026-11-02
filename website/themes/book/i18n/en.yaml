@@ -18,12 +18,6 @@
 - id: Language
   translation: Language
 
-- id: Edit this page
-  translation: Edit this page
-
-- id: Last modified by
-  translation: Last modified by
-
 # Reading chrome (top bar, table of contents, page navigation, footer).
 - id: Wordmark
   translation: "Go: Under the Hood"

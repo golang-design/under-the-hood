@@ -43,12 +43,6 @@
     "WenQuanYi Micro Hei", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
-  // Older names still referenced by a few rules; both resolve to the sans.
-  --font-serif: var(--font-sans);
-  --font-display: var(--font-sans);
-
-  --reading-size: 17px;
-  --reading-scale: 1;
   --reading-measure: 50rem;
 }
 
@@ -198,9 +192,6 @@ body { padding-top: $topbar-h; }
     &:hover { color: var(--fg); text-decoration: underline; }
   }
 }
-
-// The base theme's mobile header is replaced by the top bar.
-.book-header { display: none !important; }
 
 // --- Left sidebar -------------------------------------------------------
 .book-menu nav {
@@ -397,7 +388,7 @@ html[data-toc="open"] .book-toc { display: block; }
   margin: 0 auto;
   padding: 36px 32px 96px;
   font-family: var(--font-sans);
-  font-size: calc(var(--reading-size) * var(--reading-scale));
+  font-size: 17px;
   line-height: 1.8;
   color: var(--fg);
 

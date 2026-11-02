@@ -2,7 +2,7 @@
 //
 // Diagrams are themed from the book's live CSS tokens (see _reading.scss) using
 // mermaid's `base` theme, so flowcharts, subgraphs, edge labels and arrows all
-// match the warm-paper / Go-blue surface instead of mermaid's stock palette.
+// match the page instead of mermaid's stock palette.
 // Because the tokens swap for light/dark, we re-render every diagram when the
 // reader toggles the theme (dark.js adds/removes `.dark` on <html>).
 (function () {
@@ -27,12 +27,12 @@
   // 是/否 labels and the notes keep mermaid's stock yellow/white and clash in
   // dark mode.
   function themeVariables() {
-    var surface = token("--surface", "#f7f4ee");
-    var bg = token("--bg", "#ece8df");
-    var fg = token("--fg", "#232019");
-    var muted = token("--fg-muted", "#6a6256");
+    var surface = token("--surface", "#f6f6f6");
+    var bg = token("--bg", "#ffffff");
+    var fg = token("--fg", "#1f1f1f");
+    var muted = token("--fg-muted", "#555555");
     var accent = token("--accent", "#007d9c");
-    var border = token("--border-strong", "rgba(35,32,25,0.18)");
+    var border = token("--border-strong", "#c9c9c9");
     return {
       darkMode: document.documentElement.classList.contains("dark"),
       background: surface,
@@ -78,10 +78,8 @@
     });
 
     // Serialize renders so a theme toggle mid-render can't overlap (mermaid.run
-    // is async). Each call enqueues exactly one re-render. The first waits for
-    // the web fonts, which load with font-display: swap; measuring with the
-    // fallback font would size the nodes for the wrong glyphs.
-    var chain = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
+    // is async). Each call enqueues exactly one re-render.
+    var chain = Promise.resolve();
     function render() {
       chain = chain
         .then(function () {
