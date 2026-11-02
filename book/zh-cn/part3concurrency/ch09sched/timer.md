@@ -303,6 +303,13 @@ func (ts *timers) check(now int64) (rnow, pollUntil int64, ran bool) {
 而不是逐个补上。随后 `run` 释放计时器与堆的锁，调用 `f(arg, seq, delay)`，返回后再重新锁住堆。`f`
 运行时既不持有锁，也不在普通的 goroutine 上，所以源码注释要求它「必须是一个行为良好的函数，不得阻塞」。
 
+下面的交互图模拟一个 P 的计时器堆，规则与本节介绍的 `maybeAdd`、`stop`、`modify`、`cleanHead`、`check`、
+`adjust` 和 `run` 一致，时间以毫秒计。上方是四叉堆，下方是存放它的数组，格中的数字是 `timerWhen` 中的副
+本。选中一个计时器后执行 Stop 或 Reset，堆中的元素并不移动，只是多了僵尸或已修改的标记；让时钟前进，则可以
+观察 `check` 何时直接返回，何时在堆顶清理这些标记，以及僵尸超过四分之一时怎样强制整理。
+
+<div class="viz" data-viz="timer-heap"></div>
+
 调度器与计时器的衔接点都在 `runtime/proc.go` 中 [[Go Authors, 2026b](#ref-go-authors-2026b)]，前两处调用
 `check`，后两处只读取 `wakeTime`：
 

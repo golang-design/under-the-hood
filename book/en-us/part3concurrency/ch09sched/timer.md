@@ -366,6 +366,16 @@ and the heap's lock, calls `f(arg, seq, delay)`, and relocks the heap on return.
 holds no lock and is not on an ordinary goroutine, so a source comment requires it to be "a
 well-behaved function and not block".
 
+The interactive figure below simulates one P's timer heap with the rules of `maybeAdd`, `stop`,
+`modify`, `cleanHead`, `check`, `adjust` and `run` described in this section, with times in
+milliseconds. At the top is the 4-ary heap and below it the array that stores it; the numbers in
+the cells are the copies kept in `timerWhen`. Select a timer and apply Stop or Reset: nothing in
+the heap moves, and the timer only gains a zombie or modified mark. Then advance the clock to see
+when `check` returns at once, when it clears marked timers off the head, and how it forces a
+cleanup once more than a quarter of the heap is zombies.
+
+<div class="viz" data-viz="timer-heap"></div>
+
 The points where the scheduler meets timers are all in `runtime/proc.go`
 [[Go Authors, 2026b](#ref-go-authors-2026b)]; the first two call `check`, and the last two only read
 `wakeTime`:

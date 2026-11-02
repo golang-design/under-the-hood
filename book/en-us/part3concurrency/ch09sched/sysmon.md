@@ -195,6 +195,15 @@ yields actually runs for 10 ms to 20 ms or more before being preempted (see the 
 [9.4.2](./schedule.md)). Conversely, a program that blocks frequently in system calls keeps sysmon
 at the 20 µs interval, and Ps can be retaken promptly.
 
+The interactive figure below applies this rule round by round: it marks each time sysmon wakes and
+how long it slept, and runs a goroutine G that never yields on a P that is always busy, showing
+when sysmon first records G's time slice and when it requests preemption. Drag the slider to change
+when G starts; the first slice lasts between 10 ms and 20 ms. In the scenario that retakes a P
+every 5 ms, `idle` keeps dropping to 0, sysmon keeps a short interval, and slices last just over
+10 ms.
+
+<div class="viz" data-viz="sysmon-backoff"></div>
+
 On top of the backoff there is a layer of deep sleep. If the world is being stopped (`gcwaiting`) or
 all Ps are idle, sysmon has nothing to watch, so it uses `notetsleep` to sleep until the earliest
 timer expires, but for at most half of `forcegcperiod`, that is, 1 minute. The cap and its

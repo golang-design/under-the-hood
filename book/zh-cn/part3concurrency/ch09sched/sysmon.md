@@ -160,6 +160,13 @@ func sysmon() {
 goroutine 实际要运行 10 ms 至 20 ms 以上才被抢占（见 [9.4.2](./schedule.md) 的测量）。反过来，频繁
 阻塞在系统调用中的程序使 sysmon 保持在 20 µs 的间隔上，P 能够被及时取回。
 
+下面的交互图按这一规则逐轮算出 sysmon 醒来的时刻与休眠时长，并在一个始终忙碌的 P 上放一个从不让出的
+goroutine G，标出 sysmon 第一次记下 G 的时间片与请求抢占的时刻。拖动滑块改变 G 开始运行的时刻，第一个时间
+片的长度在 10 ms 与 20 ms 之间变化；选择每 5 ms 取回一个 P 的场景，`idle` 一再归零，sysmon 保持较短的间
+隔，时间片便只比 10 ms 略长。
+
+<div class="viz" data-viz="sysmon-backoff"></div>
+
 退避之上还有一层深度睡眠。若正在停止一切（`gcwaiting`），或者所有 P 都空闲，sysmon 便没有需要监视的
 对象，于是用 `notetsleep` 睡到最早的计时器到期为止，但最长不超过 `forcegcperiod` 的一半，即 1 分钟。这个
 上限连同它的注释「让唤醒周期足够短，以保证采样正确」，都原样来自 Go 1.0 的 `MHeap_Scavenger`
