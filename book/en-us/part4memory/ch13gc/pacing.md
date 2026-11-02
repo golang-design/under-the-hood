@@ -284,6 +284,16 @@ flowchart LR
     MK -->|"grey objects exhausted"| MT
 ```
 
+The interactive figure below computes the heap goal and the trigger with the Go 1.26 formulas and
+draws the heap in a steady state: each cycle starts marking at the trigger and finishes as the heap
+reaches the goal, after which `heapLive` drops back to the live heap. It assumes 1 MiB of stacks and
+globals and 8 MiB of non-heap memory, counts the whole live heap as scan work, and takes the
+cons/mark ratio as a direct input. Lower `GOGC` or set a memory limit to see cycles become more
+frequent; raise the live heap close to the limit to see the goal pressed down to the live heap;
+change the cons/mark ratio to see the trigger clamped to its bounds.
+
+<div class="viz" data-viz="gc-pacer"></div>
+
 ## 13.3.5 Corrections During Marking
 
 The trigger point rests on a steady-state assumption: this cycle's allocation speed and scan work

@@ -147,6 +147,15 @@ heap, it must first be hidden on the stack, and a freshly scanned stack points o
 objects, while the deletion part prevents it from hiding new pointers taken from the heap
 afterwards.
 
+The interactive figure below acts out the two routes. In both scenarios stacks are scanned one at a
+time during marking and never rescanned, and stack writes have no barrier, as in Go since 1.8. Step
+through each scenario and compare no barrier with the three barriers: the insertion barrier and the
+deletion barrier each block only one route, and only the hybrid barrier loses nothing in both. The
+figure shades both values unconditionally, as Go does (13.2.4); the conditional version gives the
+same results in these two scenarios.
+
+<div class="viz" data-viz="gc-barrier"></div>
+
 This yields the most important property of the hybrid write barrier: once a stack has been scanned
 and turned black, it stays black and never needs to be rescanned. Each goroutine's stack can be
 scanned concurrently one at a time after marking starts, pausing only the goroutine being scanned,
