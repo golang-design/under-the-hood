@@ -162,6 +162,14 @@ flowchart TB
     naive -.compress.-> graphcap
 ```
 
+The interactive figure below draws the 20 kernels of one timestep on a shared time axis, using
+Gray's measurements, to compare the three ways of submitting them. The GPU lane is to scale: each
+kernel runs for 2.9 µs, and the rest of its average is idle time before it. The CPU lane only marks
+how many API calls are made and in what order, not how long each call takes. Play it or step through
+it, and compare how much of the time the GPU sits idle in each mode.
+
+<div class="viz" data-viz="gpu-launch-overlap"></div>
+
 The three approaches follow one principle: the variable the Go side can actually control is the
 number of crossings. How fast a kernel executes depends on the GPU; what Go can do is let each
 crossing carry as much work as possible.
