@@ -265,6 +265,15 @@ downgrades one module, and `@none` removes the requirement on a module and downg
 modules that depend on it accordingly [[Go Authors, n.d.a](#ref-go-authors-nda)]. An upgrade is
 therefore always an explicit operation; a build never upgrades any dependency.
 
+The interactive figure below runs these operations on the reference manual's graph, following the
+algorithms in `cmd/go/internal/mvs`. Each step reads the `go.mod` of one version, and the panel on
+the right tracks the highest version seen for each module; at the end the figure shows the build
+list and the requirements Algorithm R writes back to `go.mod`. Notice why C 1.4 still has to be
+written to `go.mod` after "Upgrade B to 1.3", and which versions a downgrade strikes out by
+following edges in reverse.
+
+<div class="viz" data-viz="mvs-select"></div>
+
 ## 17.3.4 Why Not SAT
 
 [17.1](./challenges.md) showed that version selection in general is NP-complete; the complexity of

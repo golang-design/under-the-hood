@@ -232,6 +232,12 @@ example.com/d v1.3.0 => ../d13
 并相应降级或移除依赖它的模块 [[Go Authors, n.d.a](#ref-go-authors-nda)]。升级因此总是一次显式的操作，
 构建本身从不升级任何依赖。
 
+下面的交互图在参考手册的依赖图上演示这几种操作，算法照录 `cmd/go/internal/mvs`。每一步读取一个版本的
+`go.mod`，右侧记录各模块目前见过的最高版本；遍历结束后，图中给出构建列表，以及算法 R 写回 `go.mod`
+的要求。可以留意「升级 B 到 1.3」之后 C 1.4 为何仍要写入 `go.mod`，以及降级时哪些版本沿反向的边被划去。
+
+<div class="viz" data-viz="mvs-select"></div>
+
 ## 17.3.4 为何不是 SAT
 
 [17.1](./challenges.md) 说明了一般的版本选择是 NP 完全问题，MVS 的复杂度则可以由 Schaefer 二分定理解释。
