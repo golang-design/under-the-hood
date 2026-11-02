@@ -304,7 +304,7 @@ declared in an inner loop, because a variable in the loop body is a different va
 iteration yet may reuse the same stack slot. A location in an outer function outlives a location in
 an inner closure.
 
-The following example touches the first three rules:
+The following example touches the first and third rules:
 
 ```go
 package demo
@@ -336,16 +336,18 @@ The location graph of `f` is shown below, with derefs on the edges:
 ```mermaid
 flowchart LR
     X["x"] -->|"&x: −1"| P["p"] -->|"0"| Q["q"] -->|"0"| HEAP(["heap"])
-    Y["y"] -->|"&y: −1"| R["r"] -->|"*r: +1"| Z["z"] -->|"0"| RES(["result ~r0"])
+    Y["y"] -->|"&y: −1"| R["r"] -.->|"z := *r: an int"| BL(["blankLoc (no edge)"])
     classDef esc fill:#f2dede,stroke:#a94442,stroke-width:2px;
     class X esc;
 ```
 
 With the heap as the root, the minimum derefs of `x` is −1: its address reaches the heap, so it
-escapes. With the result parameter as the root, the minimum derefs of `y` is −1 + 1 + 0 = 0: only
-the value of `y` reaches the result, so `y` stays on the stack. In `g` there is no heap and no
-returned pointer: `p` is declared outside the loop and `v` inside it, so `p` outlives `v`; the
-address of `v` is stored into `p`, and `v` therefore escapes. The compiler's derivation agrees:
+escapes. The address of `y` flows only into `r`; `z := *r` and `return z` move an `int`, which holds
+no pointers, so the compiler sends these assignments to the blank location `blankLoc` and records no
+edge [[Go Authors, 2026a](#ref-go-authors-2026a)]. `y` reaches no root and stays on the stack. In
+`g` there is no heap and no returned pointer: `p` is declared outside the loop and `v` inside it, so
+`p` outlives `v`; the address of `v` is stored into `p`, and `v` therefore escapes. The compiler's
+derivation agrees:
 
 ```shell
 $ go build -gcflags='-m=2 -l' flow.go
