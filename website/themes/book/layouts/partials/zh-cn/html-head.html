@@ -61,4 +61,6 @@ Made with Book Theme
 https://github.com/alex-shpak/hugo-book
 {{ "-->" | safeHTML }}
 
-<script async src="//changkun.de/urlstat/client.js"></script>
+{{- /* defer, not async: the client fills the view counts in the footer and
+       must run after it is parsed. */ -}}
+<script defer src="//changkun.de/urlstat/client.js"></script>

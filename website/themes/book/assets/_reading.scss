@@ -1216,3 +1216,9 @@ html[lang^="zh"] .markdown .quote .quote-mark + i { font-style: normal; }
     .home-cover { width: 160px; }
   }
 }
+
+// View counts filled in by urlstat's client.js.
+#footer .footer-stat {
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+}
