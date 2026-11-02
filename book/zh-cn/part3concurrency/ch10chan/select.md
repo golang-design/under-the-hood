@@ -277,6 +277,14 @@ func sellock(scases []scase, lockorder []uint16) {
 }
 ```
 
+下面的交互图把两套次序放在一起演示。每运行一次，先洗出 `pollorder`，再以 channel 的地址为键排出
+`lockorder`，第一趟按 `pollorder` 选中第一个就绪的 case。图中还标出了每个 case 在 `scases` 中的下标：编译
+器把接收 case 从数组末尾往前放，所以只有接收 case 时，下标与书写次序相反。可以切换各个 channel 是否就绪，
+也可以一次运行 4000 次，比较当前的随机排列与 2011 年以前「随机起点加互素步长」的做法；在三个 case 读 `c`、
+一个 case 读永不就绪的 `d` 的例子中，后者重现了 Sherry 报告的偏差。
+
+<div class="viz" data-viz="select-order"></div>
+
 ## 10.5.5 三趟扫描
 
 ```mermaid

@@ -318,6 +318,16 @@ func sellock(scases []scase, lockorder []uint16) {
 }
 ```
 
+The interactive figure below puts the two orders side by side. Each run shuffles `pollorder`, sorts
+`lockorder` by channel address, and lets the first pass take the first ready case in `pollorder`.
+Next to each case is its index in `scases`: the compiler fills receive cases in from the end of the
+array, so in a select with only receive cases the indexes run opposite to the source order. Toggle
+whether each channel is ready, or run the select 4000 times to compare today's random permutation
+with the scheme used before 2011, a random start plus a step coprime with the number of cases. With
+three cases on `c` and one on a never-ready `d`, the old scheme reproduces the bias Sherry reported.
+
+<div class="viz" data-viz="select-order"></div>
+
 ## 10.5.5 The Three Passes
 
 ```mermaid
