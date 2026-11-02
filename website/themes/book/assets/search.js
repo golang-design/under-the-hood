@@ -14,7 +14,7 @@
     input.removeEventListener('focus', init); // init once
     input.required = true;
 
-    loadScript('{{ "flexsearch.min.js" | relURL }}');
+    loadScript('{{ "flexsearch.min.js" | relURL }}?v={{ partialCached "zh-cn/static-version" "flexsearch.min.js" "flexsearch.min.js" }}');
     loadScript('{{ $searchData.RelPermalink }}', function() {
       input.required = false;
       search();
