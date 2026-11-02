@@ -479,6 +479,14 @@ word takes 128 bytes in total. A span can hold 16 objects of 512 bytes; if each 
 malloc header, the total is likewise 128 bytes. For smaller objects, the total overhead of headers
 would exceed that of the bitmap, so no header is used [[Go Authors, 2026f](#ref-go-authors-2026f)].
 
+The interactive figure below puts this dispatch together with the size classes of 12.1.3. Enter a
+request size and say whether the object contains pointers; the figure shows the path it takes, the
+size class found by the table lookup, the round-up waste in one slot, and how the whole span is
+divided. Compare 1020 bytes with and without pointers to see the malloc header push an object into a
+larger size class, or 32760 and 32761 bytes to see where small objects end and large ones begin.
+
+<div class="viz" data-viz="alloc-sizeclass"></div>
+
 This layout dates from Go 1.22. Before that, the whole heap shared one bitmap with one bit per word,
 and at allocation the pointer information had to be expanded from the type into the bitmap.
 Knyszek's commit [[Knyszek, 2023](#ref-knyszek-2023)] lists the benefits of switching to malloc

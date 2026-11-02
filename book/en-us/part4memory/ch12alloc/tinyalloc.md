@@ -128,6 +128,16 @@ of marking, and a comment in the code explains why the alternative was rejected:
 black on every allocation from it would slow down the tiny allocator
 [[Clements, 2016](#ref-clements-2016)] ([13.2](../ch13gc/barrier.md)).
 
+The interactive figure below applies these rules to one request at a time. Each row is a 16-byte
+block; the block marked `c.tiny` is the current one, and the vertical bar marks `tinyoffset`. In the
+initial example, the last 12-byte object does not fit into the full block 1, and the new block 2,
+with more room left, becomes current. Choose "12 bytes × 3" for the case discussed in 12.6.2: the
+new block has no more room than the old one, so the old block stays current and each object takes a
+block of its own. "End of GC cycle" mimics `releaseAll` clearing the current block at mark
+termination.
+
+<div class="viz" data-viz="alloc-tiny"></div>
+
 ## 12.6.2 The Effect of Combining
 
 The following program allocates 2²⁰ pointer-free objects each of 3, 4, 12 and 16 bytes, keeps all of
