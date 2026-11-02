@@ -37,6 +37,17 @@ and programmable stages to execute the commands encoded in a command buffer
 which pixels a triangle covers and generates one fragment for each covered pixel. Chapters 2 and 3
 of [[Akenine-Möller et al., 2018](#ref-akenine-moller-2018)] discuss each stage in detail.
 
+The interactive figure below shows two of the fixed-function stages, rasterization and the depth
+test. In the WebGPU specification, rasterization samples at pixel centers: a pixel whose center lies
+inside the triangle produces a fragment. The fragment's depth is the sum of the vertex depths
+weighted by its barycentric coordinates, and it is compared with the value already in the depth
+buffer; only a fragment that passes writes its color and depth [[W3C, n.d.](#ref-w3c-webgpu)]. The
+two triangles in the figure pass through each other. Step pixel by pixel, click a pixel to see its
+barycentric coordinates and depth, or change the compare function or the drawing order and see which
+results change.
+
+<div class="viz" data-viz="raster-depth"></div>
+
 The pipeline suits the GPU because its units of work are independent. The same shader runs over
 thousands of vertices or fragments with no dependencies among them, which is exactly the workload
 that the SIMT execution model discussed in [18.4](../ch18gpu/model.md) handles well.
