@@ -415,6 +415,14 @@ func asType[E error](err error, ppe **E) (_ E, _ bool) {
 文档因此建议多数情况下使用 `AsType`；`As` 仍然保留，它的目标可以是任意接口类型，不要求实现
 `error`。
 
+下面的交互图在 7.2.1 的错误树上逐个节点地演示 `Is`、`As` 与 `AsType` 的遍历。默认情况下，`*fs.PathError`
+包装的是 `syscall.ENOENT`，即 `os.Open` 在 Unix 上打开不存在的文件时实际得到的错误；也可以换回 7.2.1 中的
+`fs.ErrNotExist`。右侧按源码的次序列出每个节点上的检查，以及当前的递归调用。可以对比 `errors.Is` 如何借助
+`Errno.Is` 方法匹配一个类型不同的错误，只有一个子节点的包装为何在同一次调用中循环而不递归，以及 `AsType`
+为何在整个遍历中都不必分配。
+
+<div class="viz" data-viz="error-tree-walk"></div>
+
 ## 7.2.5 设计的由来
 
 这套机制并非一次成型。2018 年 8 月，Jonathan Amsterdam 与 Damien Neil 随 Go 2 草案发布了错误检查（error

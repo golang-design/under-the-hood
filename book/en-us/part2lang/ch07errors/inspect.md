@@ -438,6 +438,16 @@ this allocation, and is about 7 times faster in this example. The documentation 
 recommends `AsType` in most cases; `As` remains because its target may be any interface type, which
 need not implement `error`.
 
+The interactive figure below walks the error tree of 7.2.1 node by node with `Is`, `As` and
+`AsType`. By default the `*fs.PathError` wraps `syscall.ENOENT`, the error `os.Open` actually
+returns on Unix for a missing file; it can be switched back to the `fs.ErrNotExist` of 7.2.1. On the
+right are the checks made at each node, in source order, and the calls currently on the stack.
+Compare how `errors.Is` matches an error of a different type through the `Errno.Is` method, why a
+wrapper with a single child loops within the same call instead of recursing, and why `AsType`
+allocates nothing during the walk.
+
+<div class="viz" data-viz="error-tree-walk"></div>
+
 ## 7.2.5 How the Design Came About
 
 This mechanism did not take shape in one step. In August 2018, with the Go 2 drafts, Jonathan
