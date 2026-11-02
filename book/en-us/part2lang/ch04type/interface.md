@@ -75,6 +75,18 @@ allocates once; the pointer is stored in `data` directly and also allocates noth
 representation is the basis for what follows: dynamic dispatch, type assertions and the nil problem
 below can all be derived from it.
 
+These three cases are only part of a longer series of checks. When a value is converted to an
+interface, the compiler first handles the cases that its type and use show need no allocation, and
+leaves the rest to the runtime's `convT` family of functions. The interactive figure below lists
+these checks in Go 1.26's actual order and shows where each of the two words of the interface value
+points. Pick a value to see where the second word (the data word) points and whether the conversion
+allocates; toggle escaping to see how a value that does not escape uses a temporary on the stack
+instead. Both are 8 bytes, yet the `int` 7 does not allocate and the `float64` 7.0 does; the figure
+shows why. For a non-empty interface the first word points to an `itab` rather than a type
+descriptor, and the rules for the data word are the same.
+
+<div class="viz" data-viz="iface-data"></div>
+
 ## 4.2.2 The Typed nil
 
 An interface value equals `nil` if and only if both of its words are `nil`. As soon as the word
