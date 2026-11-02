@@ -606,11 +606,13 @@ aside nav,
   --viz-line: var(--border-strong, rgba(35, 32, 25, 0.18));
   --viz-fill: var(--surface, #f7f4ee);
 
+  // Token-driven so the panel sits on the warm paper in light mode and
+  // follows the reading theme in dark mode.
   .viz-wrap {
-    border: 1px solid $gray-200;
+    border: 1px solid var(--border, #{$gray-200});
     border-radius: $border-radius;
     padding: $padding-16;
-    background: $gray-100;
+    background: var(--code-bg, #{$gray-100});
   }
   .viz-title {
     // 14px. Not `$font-size-12 + 1`: Sass adds a unitless 1 to 0.75rem and
@@ -631,22 +633,24 @@ aside nav,
   }
   .viz-btn {
     font: inherit;
+    font-family: var(--font-sans, system-ui, sans-serif);
     font-size: $font-size-12;
     padding: 4px 12px;
-    border: 1px solid $gray-300;
+    border: 1px solid var(--border-strong, #{$gray-300});
     border-radius: $padding-4;
-    background: $body-background;
-    color: $body-font-color;
+    background: var(--surface, #{$body-background});
+    color: var(--fg, #{$body-font-color});
     cursor: pointer;
-    &:hover { background: $gray-200; }
+    &:hover { background: var(--accent-soft, #{$gray-200}); }
     &:active { transform: translateY(1px); }
   }
   .viz-slider {
+    font-family: var(--font-sans, system-ui, sans-serif);
     display: inline-flex;
     align-items: center;
     gap: 6px;
     font-size: $font-size-12;
-    color: $body-font-color;
+    color: var(--fg-muted, #{$body-font-color});
     input { width: 90px; }
   }
   .viz-fallback {
@@ -664,12 +668,13 @@ aside nav,
   }
   .viz-select {
     font: inherit;
+    font-family: var(--font-sans, system-ui, sans-serif);
     font-size: $font-size-12;
     padding: 2px 6px;
-    border: 1px solid $gray-300;
+    border: 1px solid var(--border-strong, #{$gray-300});
     border-radius: $padding-4;
-    background: $body-background;
-    color: $body-font-color;
+    background: var(--surface, #{$body-background});
+    color: var(--fg, #{$body-font-color});
   }
   .viz-btn[disabled] { opacity: 0.45; cursor: default; }
   .viz-btn.is-on { border-color: var(--viz-c1); color: var(--viz-c1); }
@@ -687,8 +692,4 @@ html.dark .viz {
   --viz-c2: #cc7a33;
   --viz-c3: #35ad78;
   --viz-c4: #9b74d6;
-  .viz-select { background: var(--surface); border-color: var(--border); color: var(--fg); }
-  .viz-wrap { background: var(--code-bg); border-color: var(--border); }
-  .viz-btn { background: var(--surface); border-color: var(--border); color: var(--fg);
-    &:hover { background: var(--accent-soft); } }
 }
