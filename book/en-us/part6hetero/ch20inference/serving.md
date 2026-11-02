@@ -101,6 +101,18 @@ into the same computation, schedules the prefill chunks that have not yet produc
 first, to shorten TTFT, and then schedules one row for each decoding sequence; a sequence that does
 not fit waits for the next step rather than being evicted.
 
+The interactive figure below puts these mechanisms together: four slots share one paged KV cache
+pool, seven requests arrive one after another, each step is one forward pass, and admission and step
+composition follow Forma's rules. To keep the picture legible, the constants are scaled down: 4
+positions per block, prefill chunks of 8 tokens and at most 12 rows per step, where Forma uses 32
+positions per block and chunks of 512 tokens. The three scenarios are request-level batching,
+continuous batching that reserves cache for the answer at admission, and continuous batching that
+only checks for a free slot. Step through them, compare each request's time to first token and time
+to return in the table (both counted in steps from arrival), and watch the pool run out in the third
+scenario.
+
+<div class="viz" data-viz="continuous-batching"></div>
+
 Expressing such a scheduling loop in Go is not hard. The following sketch is again schematic:
 
 ```go
