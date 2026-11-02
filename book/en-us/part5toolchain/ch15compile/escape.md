@@ -368,6 +368,14 @@ $ go build -gcflags='-m=2 -l' flow.go
 ./flow.go:18:3: moved to heap: v
 ```
 
+The interactive figure below runs `walkAll` and `walkOne` step by step: each step takes one location
+from the work queue and records its minimal derefs to the root. The three programs show positive and
+negative weights adding up along a path, the loop depth rule, and an escape that propagates from an
+already escaped location. In the third program the address of `a` flows only into `c`, so the escape
+is found only in the walk rooted at `c`, and the flow printed by `-m=2` ends at `c`, not the heap.
+
+<div class="viz" data-viz="escape-flow"></div>
+
 The core decision above also mentions three other attributes. `attrPersists` means that the address
 of a location is still used after the statement ends; closures, method values and slice literals
 without this attribute are marked as temporary, and their storage can be reused immediately.
