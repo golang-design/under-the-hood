@@ -64,8 +64,8 @@ context for the same reason.
 Size classes are looked up in two tables. Requests of at most 1016 bytes are rounded in steps of 8
 bytes and index the 129-entry `SizeToSizeClass8`. Larger requests have 1024 subtracted and are
 rounded in steps of 128 bytes, indexing the 249-entry `SizeToSizeClass128`; a request of 1017 to
-1024 bytes wraps around in unsigned arithmetic after the subtraction, and rounding up gives exactly
-entry 0, the 1024-byte class. `mksizeclasses.go` fills both tables by finding the size class of the
+1023 bytes wraps around in unsigned arithmetic after the subtraction, and rounding up lands on entry
+0, the same entry as a 1024-byte request. `mksizeclasses.go` fills both tables by finding the size class of the
 upper bound of each step [[Go Authors, 2026d](#ref-go-authors-2026d)]. Size classes below 1024 bytes
 are multiples of 8 and those above are multiples of 128, so all requests within one step land in the
 same size class and the lookup is exact; using two step widths keeps both tables within a few
