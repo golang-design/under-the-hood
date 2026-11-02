@@ -513,6 +513,13 @@ flowchart TD
     D -- 已到栈底 --> F["preprintpanics 与 fatalpanic：<br/>打印 panic 与调用栈，exit(2)"]
 ```
 
+下面的交互图以一个具体的程序逐步演示这一过程。程序的各个栈帧涵盖了 `nextFrame` 需要区分的几种情形：`main`
+与 `serve` 使用开放编码式延迟，`handle` 中位于循环里的 `defer` 在堆上分配记录，`parse` 没有延迟调用。图的
+右侧是 goroutine 的调用栈、各栈帧的延迟位图与程序的输出；执行到 `recover` 时，左下方给出 `gorecover`
+的判定过程。可以切换延迟函数调用 `recover` 的方式，比较截获成功与截获失败的两条路径。
+
+<div class="viz" data-viz="panic-unwind"></div>
+
 需要再次强调的是，这一过程终止的是整个进程。一个后台 goroutine 中未被截获的 panic，会使与它毫不相关的其他
 goroutine 一同终止；并且 `recover` 只能截获本 goroutine 的 panic，一个 goroutine 无法截获另一个 goroutine
 中发生的 panic。

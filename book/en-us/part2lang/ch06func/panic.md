@@ -572,6 +572,15 @@ flowchart TD
     D -- bottom of stack reached --> F["preprintpanics and fatalpanic:<br/>print the panic and call stack, exit(2)"]
 ```
 
+The interactive figure below steps through this process for a concrete program. Its frames cover
+the cases that `nextFrame` must tell apart: `main` and `serve` use open-coded defers, the `defer`
+inside the loop in `handle` allocates its records on the heap, and `parse` has no deferred calls. On
+the right are the goroutine's stack, the defer bitmap of each frame and the program's output; when
+the program reaches `recover`, the box at the lower left shows how `gorecover` decides. Switch how
+the deferred function calls `recover` to compare a successful recover with a failed one.
+
+<div class="viz" data-viz="panic-unwind"></div>
+
 It bears repeating that this process terminates the whole process. An unintercepted panic in a
 background goroutine terminates every other goroutine, however unrelated; and `recover` can
 intercept only panics in its own goroutine, so one goroutine cannot intercept a panic occurring in
