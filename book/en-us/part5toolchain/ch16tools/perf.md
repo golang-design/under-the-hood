@@ -183,6 +183,15 @@ func (b *B) Loop() bool {
 }
 ```
 
+The interactive figure below applies the rules of `predictN`, `launch` and `B.Loop` to compute each
+round's iteration count in both forms, and draws the wall time each form spends on one time axis,
+assuming every iteration costs the same. Drag the slider to see which rule sets the count of each
+round. At 316 ms per iteration, for example, both forms run 1, 3 and 4 iterations, but the `b.N`
+form reruns every round from scratch and takes about twice the wall time of the `B.Loop` form. Setup
+before the loop widens the gap, since the `b.N` form redoes it in every round.
+
+<div class="viz" data-viz="bench-ramp"></div>
+
 The dead-code problem is solved by a compiler transformation that recognizes only loops written
 literally as `for b.Loop() { ... }`. Go 1.24 and 1.25 disabled inlining inside such loop bodies.
 That does preserve the code under test, but it introduces another distortion. Go issue #73137 gives

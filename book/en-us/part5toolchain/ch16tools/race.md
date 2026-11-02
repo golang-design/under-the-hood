@@ -173,6 +173,16 @@ vector is needed only when a read is shared concurrently by several threads
 [[Flanagan and Freund, 2009](#ref-flanagan-and-freund-2009)]. As shown below, ThreadSanitizer's
 shadow memory records exactly such epochs.
 
+The interactive figure below applies these rules step by step to the two programs of 16.2.1 and to
+versions that use a mutex or an unbuffered channel instead. Each row on the left is one operation,
+and each arrow runs from a release to the acquire paired with it; on the right are each goroutine's
+vector clock, the clocks on synchronization objects, and the variable's access record. The counter
+program runs in the order of the `GOMAXPROCS=1` run in 16.2.1, where the goroutine created last runs
+first. The two increments are clearly apart in time, yet following program order and the arrows,
+there is no way from the first write to the second read, and that is what the report rests on.
+
+<div class="viz" data-viz="race-vclock"></div>
+
 ## 16.2.3 Division of Labor between the Compiler and the Runtime
 
 Constructing the happens-before relation needs two kinds of events: memory accesses and

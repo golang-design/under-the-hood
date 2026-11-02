@@ -159,6 +159,13 @@ sequenceDiagram
 [[Flanagan and Freund, 2009](#ref-flanagan-and-freund-2009)]。下文会看到，ThreadSanitizer
 的影子内存记录的正是这样的纪元。
 
+下面的交互图按上述规则，逐步执行 16.2.1 的两个程序，以及分别改用互斥锁和无缓冲通道的版本。左侧每一行是
+一次操作，箭头从 release 指向与之配对的 acquire；右侧是各 goroutine 的向量时钟、同步对象上的时钟，以及
+变量的访问记录。计数器程序按 16.2.1 中 `GOMAXPROCS=1` 那次运行的次序执行，后创建的 goroutine 先运行。
+两次自增在时间上前后分明，但沿程序次序与箭头，从第一次写走不到第二次读，这正是报告的依据。
+
+<div class="viz" data-viz="race-vclock"></div>
+
 ## 16.2.3 编译器与运行时的分工
 
 构造先行发生关系需要两类事件：内存访问，以及同步。前者由编译器插桩产生，后者由运行时与标准库报告。
