@@ -375,6 +375,16 @@ directly to it. The longest wait is therefore about 1 ms plus the length of one 
 sections. What Cox measured in 2015 was more than 100 seconds; in Vyukov's commit message the same
 program waits about 1.2 ms.
 
+The interactive figure below simulates this program with the rules of `lockSlow` and `unlockSlow`,
+with G1 standing for the goroutine that holds the lock almost all the time and main for the main
+goroutine, and shows how the fields of `state` change in each round. Two timings in it are
+assumptions: a woken goroutine starts running about 5 µs later, while G1 locks again within 1 µs of
+unlocking. Step through it to watch main wake up and go back to the head of the queue again and
+again until, having waited 1 ms, it switches the lock to starvation mode. Switch to Go 1.8 to see
+main's wait keep growing when there is no starvation mode.
+
+<div class="viz" data-viz="mutex-starvation"></div>
+
 ## 11.2.5 The Spectrum of Fairness
 
 Other systems have made different choices on this question.
