@@ -116,8 +116,9 @@ Gray 的实验量化了这一差别 [[Gray, 2019](#ref-gray-2019)]。在 Tesla V
 深度学习框架中的算子融合（operator fusion）即属此类，例如把矩阵乘、加偏置与激活函数三步合并为一个 kernel，
 三次启动减为一次。融合通常由 Go 之外的计算图编译器完成，但它直接决定了 Go 一侧需要跨界多少次。
 
-**图捕获（CUDA Graphs）。** 许多负载在每次迭代中提交的命令序列结构相同，变化的只是数据。CUDA 10.1 引入的
-CUDA Graphs 允许把这样一段命令序列捕获（`cudaStreamBeginCapture` 与 `cudaStreamEndCapture`）为一张图，
+**图捕获（CUDA Graphs）。** 许多负载在每次迭代中提交的命令序列结构相同，变化的只是数据。CUDA 10.0 引入的
+CUDA Graphs [[NVIDIA, 2018](#ref-nvidia-2018)] 允许把这样一段命令序列捕获（`cudaStreamBeginCapture` 与
+`cudaStreamEndCapture`）为一张图，
 实例化（`cudaGraphInstantiate`）之后，每次迭代只需一次 `cudaGraphLaunch` 即可提交整张图。用 Gray 的话说，
 它提供了「通过单个 CPU 操作启动多个 GPU 操作」的机制。在同一实验中，改用图之后每个 kernel 的平均耗时从
 3.8 µs 进一步降到 3.4 µs；创建并实例化图约需 400 µs，但只发生一次，摊到每个 kernel 上约 0.02 µs。
@@ -257,6 +258,9 @@ GPU 使 15.6「减少跨界」的建议成为设计的主线：GPU 的工作负�
 - <a id="ref-ncruces-2026"></a>[ncruces, 2026] ncruces. *go-sqlite3 v0.32.0.* GitHub release, 2026.
   https://github.com/ncruces/go-sqlite3/releases/tag/v0.32.0
   发布说明称这很可能是最后一个依赖 wazero 的版本，此后改用 wasm2go。
+- <a id="ref-nvidia-2018"></a>[NVIDIA, 2018] NVIDIA. *CUDA Toolkit 10.0 Release Notes.* 2018.
+  https://docs.nvidia.com/cuda/archive/10.0/cuda-toolkit-release-notes/index.html
+  「CUDA 10.0 adds support for new programming constructs called CUDA Graphs」：CUDA Graphs 首次出现的版本。
 - <a id="ref-nvidia-nda"></a>[NVIDIA, n.d.a] NVIDIA. *CUDA C++ Programming Guide.*
   https://docs.nvidia.com/cuda/cuda-c-programming-guide/
   异步并发执行、流、`cudaMemcpyAsync` 与同步语义的权威定义。

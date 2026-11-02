@@ -138,16 +138,17 @@ merged into one kernel, and three launches become one. Fusion is usually done by
 outside Go, but it directly determines how many times the Go side must cross the boundary.
 
 **Graph capture (CUDA Graphs).** Many workloads submit a command sequence of the same structure in
-every iteration, with only the data changing. CUDA Graphs, introduced in CUDA 10.1, let such a
-sequence be captured as a graph (`cudaStreamBeginCapture` and `cudaStreamEndCapture`); after
-instantiation (`cudaGraphInstantiate`), each iteration submits the whole graph with a single
-`cudaGraphLaunch`. In Gray's words, it provides a mechanism for "launching multiple GPU operations
-through a single CPU operation". In the same experiment, switching to a graph reduced the average
-time per kernel further from 3.8 µs to 3.4 µs; creating and instantiating the graph takes about 400
-µs, but only once, which amortizes to about 0.02 µs per kernel. These numbers also show where the
-gain comes from: the main improvement (from 9.6 µs to 3.8 µs) comes from removing per-command
-synchronization, and graph capture cuts the remaining per-submission overhead on top of that; the
-more complex the graph and the more often it is reused, the larger the gain.
+every iteration, with only the data changing. CUDA Graphs, introduced in CUDA 10.0
+[[NVIDIA, 2018](#ref-nvidia-2018)], let such a sequence be captured as a graph
+(`cudaStreamBeginCapture` and `cudaStreamEndCapture`); after instantiation (`cudaGraphInstantiate`),
+each iteration submits the whole graph with a single `cudaGraphLaunch`. In Gray's words, it provides
+a mechanism for "launching multiple GPU operations through a single CPU operation". In the same
+experiment, switching to a graph reduced the average time per kernel further from 3.8 µs to 3.4 µs;
+creating and instantiating the graph takes about 400 µs, but only once, which amortizes to about
+0.02 µs per kernel. These numbers also show where the gain comes from: the main improvement (from
+9.6 µs to 3.8 µs) comes from removing per-command synchronization, and graph capture cuts the
+remaining per-submission overhead on top of that; the more complex the graph and the more often it
+is reused, the larger the gain.
 
 ```mermaid
 flowchart TB
@@ -319,6 +320,10 @@ the device, and how the garbage collector treats them, is the subject of [18.3](
 - <a id="ref-ncruces-2026"></a>[ncruces, 2026] ncruces. *go-sqlite3 v0.32.0.* GitHub release, 2026.
   https://github.com/ncruces/go-sqlite3/releases/tag/v0.32.0 The release notes say this is most
   likely the last version that depends on wazero; later versions use wasm2go.
+- <a id="ref-nvidia-2018"></a>[NVIDIA, 2018] NVIDIA. *CUDA Toolkit 10.0 Release Notes.* 2018.
+  https://docs.nvidia.com/cuda/archive/10.0/cuda-toolkit-release-notes/index.html "CUDA 10.0 adds
+  support for new programming constructs called CUDA Graphs": the release that introduced CUDA
+  Graphs.
 - <a id="ref-nvidia-nda"></a>[NVIDIA, n.d.a] NVIDIA. *CUDA C++ Programming Guide.*
   https://docs.nvidia.com/cuda/cuda-c-programming-guide/ The authoritative definition of
   asynchronous concurrent execution, streams, `cudaMemcpyAsync` and synchronization semantics. Since
