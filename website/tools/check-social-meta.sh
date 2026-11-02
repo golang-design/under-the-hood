@@ -19,7 +19,7 @@ check() { # <description> <test-expr-already-evaluated:0/1>
   if [ "$2" -eq 1 ]; then printf '  ok   %s\n' "$1"; else printf '  FAIL %s\n' "$1"; fail=1; fi
 }
 
-for page in "$out/index.html" "$out/zh-cn/preface/index.html"; do
+for page in "$out/index.html" "$out/zh-cn/preface/index.html" "$out/en/index.html" "$out/en/preface/index.html"; do
   [ -f "$page" ] || { echo "missing built page: $page"; exit 1; }
   echo "== $page =="
   html="$(cat "$page")"
@@ -48,11 +48,20 @@ for page in "$out/index.html" "$out/zh-cn/preface/index.html"; do
   # og:image target actually exists in the build
   img=$(grep -oE 'property="og:image" content="[^"]*"' "$page" | grep -oE '[^/"]*\.png' | head -1)
   check "share image $img exists in build" "$([ -f "$out/$img" ] && echo 1 || echo 0)"
+
+  # English pages carry the English card, Chinese pages the Chinese one
+  case "$page" in
+    "$out/en/"*) want=og-cover-en.png ;;
+    *) want=og-cover.png ;;
+  esac
+  check "share image is $want (got $img)" "$([ "$img" = "$want" ] && echo 1 || echo 0)"
 done
 
-# the card is exactly 1200x630
-read -r w h < <(hugo_=1; sips -g pixelWidth -g pixelHeight "$out/og-cover.png" 2>/dev/null \
-  | awk '/pixelWidth/{w=$2} /pixelHeight/{h=$2} END{print w, h}')
-check "card is 1200x630 (got ${w}x${h})" "$([ "${w:-0}" = 1200 ] && [ "${h:-0}" = 630 ] && echo 1 || echo 0)"
+# the cards are exactly 1200x630
+for card in og-cover.png og-cover-en.png; do
+  read -r w h < <(sips -g pixelWidth -g pixelHeight "$out/$card" 2>/dev/null \
+    | awk '/pixelWidth/{w=$2} /pixelHeight/{h=$2} END{print w, h}')
+  check "$card is 1200x630 (got ${w}x${h})" "$([ "${w:-0}" = 1200 ] && [ "${h:-0}" = 630 ] && echo 1 || echo 0)"
+done
 
 [ "$fail" -eq 0 ] && echo "PASS: social meta OK" || { echo "FAIL: social meta has issues"; exit 1; }

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- English share card (1200x630). Build with ./build.sh, which supplies
+     cover.png (book/assets/cover-en-v3.png) next to this file.
+     The cover sits left of centre so a square centre crop (WeChat
+     thumbnails, x 285-915) still shows the gopher. -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#ffffff"/>
+  <image x="170" y="70" width="374" height="490" xlink:href="cover.png" preserveAspectRatio="xMidYMid meet"/>
+
+  <g font-family="'Helvetica Neue', Helvetica, Arial, sans-serif">
+    <text x="600" y="214" font-size="56" font-weight="bold" fill="#1f1f1f">Go: Under the Hood</text>
+    <text x="602" y="276" font-size="28" fill="#444444">A Not-So-Brief Study of the Source Code</text>
+    <text x="602" y="344" font-size="28" fill="#555555">Changkun Ou · Based on Go 1.26</text>
+    <text x="602" y="548" font-size="28" fill="#007d9c">golang.design/under-the-hood</text>
+  </g>
+</svg>

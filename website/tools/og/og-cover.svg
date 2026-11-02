@@ -1,34 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Source for the social share card (1200x630). Regenerate the PNG with:
-     rsvg-convert -w 1200 -h 630 og-cover.svg \
-       -o ../../themes/book/static/og-cover.png
-     Colors track the site reading theme: paper #ece8df, ink #232019,
-     muted #6b6453, Go blue #00add8. Title is kept centered so WeChat's
-     square center-crop still shows it. -->
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-  <rect width="1200" height="630" fill="#ece8df"/>
-  <!-- thin inked frame -->
-  <rect x="24" y="24" width="1152" height="582" fill="none" stroke="#232019" stroke-opacity="0.14" stroke-width="2"/>
-  <!-- Go-blue accent rule, centered -->
-  <rect x="560" y="372" width="80" height="6" rx="3" fill="#00add8"/>
+<!-- Chinese share card (1200x630). Build with ./build.sh, which supplies
+     cover.png (book/assets/cover-cn-v3.png) next to this file.
+     The cover sits left of centre so a square centre crop (WeChat
+     thumbnails, x 285-915) still shows the gopher. -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#ffffff"/>
+  <image x="170" y="70" width="374" height="490" xlink:href="cover.png" preserveAspectRatio="xMidYMid meet"/>
 
-  <g text-anchor="middle" font-family="Georgia, 'Times New Roman', serif">
-    <!-- kicker -->
-    <text x="600" y="176" font-size="30" letter-spacing="8" fill="#6b6453"
-          font-weight="600">GO : UNDER THE HOOD</text>
+  <g font-family="'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', sans-serif">
+    <text x="600" y="222" font-size="84" font-weight="600" fill="#1f1f1f">Go 语言原本</text>
+    <text x="602" y="292" font-size="38" fill="#444444">一份不太简短的源码研究</text>
+    <text x="602" y="356" font-size="30" fill="#555555">欧长坤 著 · 基于 Go 1.26</text>
   </g>
-
-  <g text-anchor="middle" font-family="'Songti SC', 'Noto Serif SC', serif">
-    <!-- main title -->
-    <text x="600" y="320" font-size="112" font-weight="700" fill="#232019">Go 语言原本</text>
-    <!-- subtitle -->
-    <text x="600" y="426" font-size="40" fill="#3f3a2e">一份不太简短的源码研究</text>
-    <!-- author -->
-    <text x="600" y="492" font-size="30" fill="#6b6453">欧长坤 · Changkun Ou</text>
-  </g>
-
-  <!-- footer URL -->
-  <g text-anchor="middle" font-family="Georgia, 'Times New Roman', serif">
-    <text x="600" y="566" font-size="28" letter-spacing="2" fill="#6b6453">golang.design/under-the-hood</text>
-  </g>
+  <text x="602" y="548" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="28" fill="#007d9c">golang.design/under-the-hood</text>
 </svg>
