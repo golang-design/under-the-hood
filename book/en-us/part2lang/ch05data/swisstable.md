@@ -291,6 +291,18 @@ still has an empty slot can the slot be marked empty directly. Insertion reuses 
 Since cleaning tombstones in place would complicate iteration, tombstones are in principle cleared
 completely only when the table grows.
 
+The interactive figure below is a table of 32 slots (4 groups) in which you can look up, insert and
+delete keys. So that the layout is reproducible, the hashes come from FNV-1a rather than the
+runtime's seeded hash function; every other rule is Go 1.26's. Try these in order: look up `duck`,
+whose starting group is full, so the probe moves on to the next group; look up `puma`, which is not
+in the table but shares its H2 with `hen`, so only a key comparison rules it out; delete `hen`, and
+since group 2 has no empty slot, the slot becomes a tombstone, yet a second lookup of `duck` still
+probes past it; finally insert `puma`, which reuses that tombstone. By contrast, deleting `cat`
+marks its slot empty, because group 0 still has empty slots. Keep inserting new keys until
+`growthLeft` reaches 0 to watch the table grow to 64 slots and the tombstones disappear.
+
+<div class="viz" data-viz="swiss-probe"></div>
+
 For workloads that insert and delete repeatedly, tombstones can keep accumulating and make a table
 grow frequently even though it holds few elements [[thepudds, 2024](#ref-thepudds-2024)]. Go 1.25
 therefore added `pruneTombstones`: before growing, if tombstones reach 10% of the capacity, it first

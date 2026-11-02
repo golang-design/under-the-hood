@@ -204,6 +204,19 @@ so the compiler reserves a 32-byte buffer for it on the stack, exactly enough fo
 `-gcflags=-d=variablemakethreshold=0` the optimization is turned off and the sequence begins
 `1 2 4 8`.
 
+The interactive figure below walks through this computation one reallocation at a time. The height
+of each bar is the growth factor of one reallocation: the lower part comes from the `nextslicecap`
+formula, and the small cap on top is capacity gained by rounding up to a size class. Press Step or
+click a bar to see every step from the old capacity to the new one. The slice in the figure lives on
+the heap (a package-level variable, say) and never uses the stack buffer, so its sequence starts at
+1 rather than 4. Switching the element type shows that the same formula yields a different sequence
+for each element size; for elements that hold pointers, such as `*T` and `string`, an object larger
+than 512 bytes also carries an 8-byte malloc header, which changes the rounding. Appending 5 or 100
+elements at a time exercises the branch of the formula where the required length exceeds twice the
+old capacity.
+
+<div class="viz" data-viz="slice-growth"></div>
+
 ## 5.1.4 Backing Arrays on the Stack
 
 Under the strategy of 5.1.3, a slice that starts empty and is appended to one element at a time in a
