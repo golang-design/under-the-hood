@@ -18,9 +18,6 @@
 - id: Language
   translation: 语言
 
-- id: ComingSoon
-  translation: 即将推出
-
 - id: Edit this page
   translation: Edit this page
 
@@ -32,16 +29,6 @@
   translation: Go 语言原本
 - id: WordmarkShort
   translation: Go 语言原本
-- id: HomeEyebrow
-  translation: 基于 Go 1.26
-- id: HomeTagline
-  translation: 一本讨论 Go 语言源码工程中的技术原理及其演进历程的书。
-- id: StartReading
-  translation: 开始阅读
-- id: HomeContents
-  translation: 目录
-- id: HomeCount
-  translation: "{{ .Parts }} 个部分 · {{ .Chapters }} 章"
 - id: PrevSection
   translation: 上一节
 - id: NextSection
@@ -50,12 +37,6 @@
   translation: 本节目录
 - id: CollapseSidebar
   translation: 折叠侧栏
-- id: FontSize
-  translation: 字号
-- id: FontSmaller
-  translation: 减小字号
-- id: FontBigger
-  translation: 增大字号
 - id: SearchPlaceholder
   translation: 搜索全书…
 - id: AuthorHome

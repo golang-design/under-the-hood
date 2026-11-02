@@ -1,17 +1,14 @@
-// Reading experience enhancements for 《Go 语言原本》.
+// Sidebar and "on this page" toggles, and scroll-spy for the latter.
 //
-// Progressive enhancement only: every feature degrades gracefully when JS is
-// off (the page already reads fine; CSS carries the static look). This file is
-// loaded `defer` so the DOM is parsed before it runs.
+// Progressive enhancement only: without JS the page still reads fine. Loaded
+// `defer` so the DOM is parsed before it runs.
 (function () {
   "use strict";
 
-  var article = document.querySelector("article.markdown");
   var html = document.documentElement;
   var SM = 1280; // matches $sm-breakpoint (80rem); below this the sidebar overlays
 
-  // A single rAF-throttled scroll dispatcher shared by the scroll-driven
-  // features (scroll-spy, progress bar, back-to-top).
+  // A single rAF-throttled scroll dispatcher.
   var scrollFns = [];
   function onScroll(fn) { scrollFns.push(fn); }
   (function () {
@@ -31,7 +28,7 @@
     );
   })();
 
-  // --- Foldable sidebar + floating TOC ----------------------------------
+  // --- Foldable sidebar + "on this page" panel ---------------------------
   function sidebarOpen() {
     var a = html.getAttribute("data-sidebar");
     if (a === "open") return true;
@@ -103,206 +100,9 @@
     update();
   }
 
-  // --- Code blocks: header bar (language + copy button) ------------------
-  // Hugo emits `div.highlight > div.chroma > table.lntable` with a line-number
-  // gutter column and a code column. We wrap each block in a card and prepend a
-  // bar; copy pulls the code column's text only (never the line numbers).
-  function enhanceCodeBlocks() {
-    if (!article) return;
-    var blocks = article.querySelectorAll("div.highlight");
-    Array.prototype.forEach.call(blocks, function (hl) {
-      if (hl.parentNode && hl.parentNode.classList.contains("reading-code")) return;
-
-      var wrap = document.createElement("div");
-      wrap.className = "reading-code";
-      hl.parentNode.insertBefore(wrap, hl);
-      wrap.appendChild(hl);
-
-      var bar = document.createElement("div");
-      bar.className = "reading-codebar";
-
-      var code = hl.querySelector("code[data-lang]");
-      var lang = code ? code.getAttribute("data-lang") : "";
-      var label = document.createElement("span");
-      label.className = "reading-codelang";
-      label.textContent = lang || "";
-      bar.appendChild(label);
-
-      var btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "reading-copy";
-      btn.setAttribute("aria-label", "复制代码");
-      btn.innerHTML =
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>' +
-        "<span>复制</span>";
-      bar.appendChild(btn);
-
-      wrap.insertBefore(bar, hl);
-
-      btn.addEventListener("click", function () {
-        var cells = hl.querySelectorAll("table.lntable td");
-        var src = cells.length ? cells[cells.length - 1] : hl.querySelector("pre");
-        var text = src ? src.innerText : "";
-        var done = function () {
-          btn.classList.add("is-copied");
-          var span = btn.querySelector("span");
-          if (span) span.textContent = "已复制";
-          setTimeout(function () {
-            btn.classList.remove("is-copied");
-            if (span) span.textContent = "复制";
-          }, 1200);
-        };
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(text).then(done, function () {});
-        } else {
-          try {
-            var ta = document.createElement("textarea");
-            ta.value = text;
-            document.body.appendChild(ta);
-            ta.select();
-            document.execCommand("copy");
-            document.body.removeChild(ta);
-            done();
-          } catch (e) {}
-        }
-      });
-    });
-  }
-
-  // --- Reading progress bar ---------------------------------------------
-  function setupProgress() {
-    var bar = document.getElementById("reading-progress-bar");
-    if (!bar) return;
-    var tocFill = document.getElementById("toc-progress-fill");
-    var tocPct = document.getElementById("toc-progress-pct");
-    function update() {
-      var doc = document.documentElement;
-      var max = doc.scrollHeight - window.innerHeight;
-      var p = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
-      bar.style.width = p * 100 + "%";
-      if (tocFill) tocFill.style.width = p * 100 + "%";
-      if (tocPct) tocPct.textContent = Math.round(p * 100) + "%";
-    }
-    onScroll(update);
-    update();
-  }
-
-  // --- Font scaling (A- / A+), persisted --------------------------------
-  function setupFontScale() {
-    var KEY = "reading.fontScale";
-    function clamp(v) { return Math.max(0.85, Math.min(1.32, v)); }
-    var scale = 1;
-    try {
-      var stored = parseFloat(localStorage.getItem(KEY));
-      if (!isNaN(stored)) scale = clamp(stored);
-    } catch (e) {}
-    function apply() { html.style.setProperty("--reading-scale", String(scale)); }
-    apply();
-    function bump(d) {
-      scale = clamp(Math.round((scale + d) * 100) / 100);
-      apply();
-      try { localStorage.setItem(KEY, String(scale)); } catch (e) {}
-    }
-    var dec = document.getElementById("font-smaller");
-    var inc = document.getElementById("font-bigger");
-    if (dec) dec.addEventListener("click", function () { bump(-0.08); });
-    if (inc) inc.addEventListener("click", function () { bump(0.08); });
-  }
-
-  // --- Chapter meta: reading time + 字数 --------------------------------
-  function setupMeta() {
-    if (!article || article.classList.contains("reading-home")) return;
-    var h1 = article.querySelector("h1");
-    if (!h1 || article.querySelector(".reading-meta")) return;
-    var m = h1.textContent.match(/^(\d+(?:\.\d+)*)\s+([\s\S]+)$/);
-    if (m) {
-      h1.innerHTML = '<span class="h1-num"></span><span class="h1-text"></span>';
-      h1.querySelector(".h1-num").textContent = m[1];
-      h1.querySelector(".h1-text").textContent = m[2];
-    }
-    var text = article.innerText || "";
-    var isEn = (html.lang || "").toLowerCase().indexOf("en") === 0;
-    // CJK reading is paced by characters (~430/min); Latin scripts by words
-    // (~220 wpm). Count and label each accordingly so the meta reads naturally
-    // in the page's language.
-    var count, mins, timeLabel, countLabel, basis;
-    if (isEn) {
-      var words = text.trim() ? text.trim().split(/\s+/).length : 0;
-      if (!words) return;
-      count = words;
-      mins = Math.max(1, Math.round(words / 220));
-      timeLabel = "about " + mins + (mins === 1 ? " min" : " mins") + " read";
-      countLabel = count.toLocaleString() + (count === 1 ? " word" : " words");
-      basis = "based on go1.26";
-    } else {
-      var chars = text.replace(/\s+/g, "").length;
-      if (!chars) return;
-      count = chars;
-      mins = Math.max(1, Math.round(chars / 430));
-      timeLabel = "约 " + mins + " 分钟";
-      countLabel = count.toLocaleString() + " 字";
-      basis = "基于 go1.26";
-    }
-    var el = document.createElement("div");
-    el.className = "reading-meta";
-    el.innerHTML =
-      '<span class="rm-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>' +
-      timeLabel +
-      "</span>" +
-      '<span class="rm-item">' +
-      countLabel +
-      "</span>" +
-      '<span class="rm-item">' +
-      basis +
-      "</span>";
-    h1.parentNode.insertBefore(el, h1.nextSibling);
-  }
-
-  // --- Back-to-top FAB --------------------------------------------------
-  // --- Section numbers: "11.2.1 Title" -> accent numeral + title --------
-  // Only the heading's leading text node is touched, so links and code inside
-  // the heading survive.
-  function setupHeadingNums() {
-    if (!article) return;
-    article.querySelectorAll("h2, h3").forEach(function (h) {
-      var t = h.firstChild;
-      if (!t || t.nodeType !== 3) return;
-      var m = t.nodeValue.match(/^(\d+(?:\.\d+)+)\s+/);
-      if (!m) return;
-      var num = document.createElement("span");
-      num.className = "h-num";
-      num.textContent = m[1];
-      t.nodeValue = t.nodeValue.slice(m[0].length);
-      h.insertBefore(num, t);
-    });
-  }
-
-  function setupFab() {
-    var fab = document.createElement("button");
-    fab.type = "button";
-    fab.className = "reading-fab";
-    fab.setAttribute("aria-label", "返回顶部");
-    fab.title = "返回顶部";
-    fab.innerHTML =
-      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
-    fab.addEventListener("click", function () {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    });
-    document.body.appendChild(fab);
-    function update() { fab.classList.toggle("is-visible", window.scrollY > 80); }
-    onScroll(update);
-    update();
-  }
-
   function init() {
-    setupMeta(); // before code enhancement so copy labels aren't counted
-    setupHeadingNums();
-    enhanceCodeBlocks();
     setupFolds();
     setupScrollSpy();
-    setupProgress();
-    setupFontScale();
-    setupFab();
   }
 
   if (document.readyState === "loading") {

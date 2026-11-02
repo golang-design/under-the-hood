@@ -11,20 +11,14 @@
 <!-- Base background painted from the same synchronous decision, so the very
      first frame (before book.scss loads) is already dark and there is no
      white flash on navigation. -->
-<style>html{background:#ece8df}html body{background:#ece8df;color:#232019}html.dark{background:#14130e}html.dark body{background:#14130e;color:#e6e0d2}</style>
+<style>html,html body{background:#fff;color:#1f1f1f}html.dark,html.dark body{background:#181818;color:#e3e3e3}</style>
 {{- partial "zh-cn/social-meta.html" . -}}
 
 <title>{{ partial "zh-cn/title" . }} | {{ .Site.Title -}}</title>
 <link rel="icon" href="{{ "favicon.png" | relURL }}" type="image/x-icon">
 
-<!-- fonts: serif Chinese reading body (Noto Serif SC), Inter for UI chrome,
-     JetBrains Mono for code, Instrument Serif for italic display accents. -->
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&family=Noto+Serif+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.13.0/css/all.css" integrity="sha384-Bfad6CLCknfcloXFOyFnlgtENryhrpZCe29RTifKEixXQZ38WheV+i/6YWSzkz3V" crossorigin="anonymous">
-
-
+<!-- No web fonts or icon fonts: the stylesheet uses system font stacks and the
+     icons are inline SVG. -->
 
 <!-- Theme stylesheet, you can customize scss by creating `assets/custom.scss` in your website -->
 {{- $styles := resources.Get "book.scss" | resources.ExecuteAsTemplate "book.scss" . | css.Sass | resources.Minify | resources.Fingerprint }}
@@ -46,7 +40,7 @@
 <!-- Interactive visualizations (mounts on <div class="viz" data-viz="..."></div>) -->
 <script defer src="{{ "viz/viz.js" | relURL }}"></script>
 
-<!-- Reading experience: code copy buttons, progress, scroll-spy, font scaling. -->
+<!-- Sidebar and "on this page" toggles, scroll-spy. -->
 <script defer src="{{ "reading.js" | relURL }}"></script>
 
 {{- template "_internal/google_analytics.html" . -}}

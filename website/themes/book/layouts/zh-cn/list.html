@@ -1,20 +1,8 @@
 {{ define "main" }}
-{{- if .IsHome -}}
-<article class="markdown reading-home">
-  {{- partial "zh-cn/home" . -}}
-  <div class="home-readme">{{ .Content }}</div>
-</article>
-{{- else -}}
-<article class="markdown reading-index">
+<article class="markdown{{ if .IsHome }} reading-home{{ end }}">
   {{- .Content -}}
-  {{- if or .Params.prevSec .Params.nextSec -}}
-  <nav class="reading-pagenav">
-    {{- with .Params.prevSec }}<a class="pagenav-card" href="{{ . }}"><span class="pagenav-eyebrow">← {{ i18n "PrevSection" }}</span><span class="pagenav-title">{{ $.Params.prevSecTitle }}</span></a>{{ end -}}
-    {{- with .Params.nextSec }}<a class="pagenav-card" href="{{ . }}"><span class="pagenav-eyebrow">{{ i18n "NextSection" }} →</span><span class="pagenav-title">{{ $.Params.nextSecTitle }}</span></a>{{ end -}}
-  </nav>
-  {{- end -}}
+  {{- partial "zh-cn/pagenav" . -}}
 </article>
-{{- end -}}
 {{ end }}
 
 {{ define "toc" }}

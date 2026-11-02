@@ -4,7 +4,6 @@
 @import "normalize";
 @import "utils";
 @import "main";
-@import "fonts";
 @import "print";
 
 @import "markdown";
@@ -13,6 +12,5 @@
 // Custom defined styles
 @import "custom";
 
-// Reading redesign — ink-on-paper design system (imported last so its
-// token-driven rules win over the theme's hard-coded palette).
+// Site design layer, imported last so it wins over the base theme.
 @import "reading";

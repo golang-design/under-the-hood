@@ -1,0 +1,8 @@
+{{- /* Previous / next links; targets come from front matter written by
+       make-cn.go (prevSec/nextSec and their titles). */ -}}
+{{- if or .Params.prevSec .Params.nextSec -}}
+<nav class="reading-pagenav">
+  {{- with .Params.prevSec }}<a class="pagenav-prev" href="{{ . }}" rel="prev"><span class="pagenav-label">← {{ i18n "PrevSection" }}</span><span class="pagenav-title">{{ $.Params.prevSecTitle }}</span></a>{{ end -}}
+  {{- with .Params.nextSec }}<a class="pagenav-next" href="{{ . }}" rel="next"><span class="pagenav-label">{{ i18n "NextSection" }} →</span><span class="pagenav-title">{{ $.Params.nextSecTitle }}</span></a>{{ end -}}
+</nav>
+{{- end -}}

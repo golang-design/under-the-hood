@@ -12,19 +12,6 @@
     display: block;
 }
 
-/* Footer copyright inset: .book-page padding is zeroed in _reading.scss
-   (contract H), so the in-flow copyright block would otherwise hug the flush
-   sheet borders. Mirror the .markdown horizontal padding so the footer text
-   aligns with the reading column. */
-#footer {
-    padding: 24px clamp(22px, 6vw, 72px) 48px;
-    max-width: var(--reading-measure);
-    margin: 0 auto;
-    color: var(--fg-faint);
-    font-family: var(--font-sans);
-    font-size: 12.5px;
-}
-
 /* ---------------------------------------------------------------------------
    Collapsible sidebar menu (interactive expand / collapse via a checkbox hack)
    --------------------------------------------------------------------------- */
@@ -69,105 +56,18 @@
 }
 
 /* ---------------------------------------------------------------------------
-   Dark mode (CSS based; replaces the dynamic DarkReader inversion)
-   Toggled by adding `.dark` to <html>; see static/dark.js.
+   Dark mode
+   Toggled by adding `.dark` to <html> (see static/dark.js). Colours are
+   custom properties that swap under html.dark in _reading.scss, so only the
+   base theme's leftovers that do not read the tokens are handled here.
    --------------------------------------------------------------------------- */
 html.dark {
-    /* Warm-dark palette is token-driven (see _reading.scss); these rules just
-       point the theme's older hard-coded greys at the same tokens so dark mode
-       stays uniformly warm. */
-    background: var(--bg);
-
-    body { background: var(--bg); color: var(--fg); }
-
-    a { color: var(--accent); }
-    a:visited { color: var(--accent); }
-
-    h1, h2, h3, h4, h5, h6 { color: var(--fg); }
-
-    .book-menu {
-        nav { color: var(--fg-muted); }
-        a { color: inherit; }
-        a.active { color: #fff; }
-    }
-    .book-toc, aside, nav { color: var(--fg-muted); }
-
-    /* Code colours (surface + warm Go syntax palette) are now token-driven in
-       _reading.scss and apply to BOTH themes via CSS custom properties that
-       swap under html.dark, so the cool-grey dark code rules that used to live
-       here are intentionally gone. Do not reintroduce hard-coded code colours
-       here or they will fight the token palette in dark mode. */
-
-    blockquote {
-        border-left-color: var(--accent);
-        background: var(--accent-soft);
-        color: var(--fg-muted);
-    }
-
-    hr { border-color: var(--border); background: var(--border); }
-
-    /* Search box must match the dark header rather than staying white. */
-    .book-search input {
-        background: var(--surface);
-        color: var(--fg);
-        border: 1px solid var(--border);
-
-        &::placeholder { color: var(--fg-faint); }
-    }
-    .book-search { border-bottom-color: transparent; }
-    .book-search-spinner { border-top-color: var(--fg-muted); }
-
-    /* Reference / data tables: dark surface with readable zebra striping.
-       The markdown rules apply `background:$gray-100` to even rows and a light
-       border; override both here. */
-    table { color: var(--fg); }
-    table, th, td { border-color: var(--border); }
-    thead { background: var(--bg); }
-    .markdown table tr:nth-child(2n),
-    tbody tr:nth-child(even) { background: var(--bg); }
-    tbody tr:nth-child(odd) { background: transparent; }
-    th, td { color: var(--fg); }
-
-    /* The .bib bibliography tables hard-code white even-rows in light mode;
-       neutralise that in dark mode. */
+    /* The .bib bibliography tables hard-code white even rows. */
     .bib tr:nth-child(even) { background-color: transparent !important; }
 
-    /* 3-state theme switch on the dark header. */
-    .theme-switch {
-        border-color: var(--border);
+    .book-search-spinner { border-top-color: var(--fg-muted); }
 
-        .theme-option {
-            color: var(--fg-muted);
-            & + .theme-option { border-left-color: var(--border); }
-            &:hover { background: var(--accent-soft); }
-            &.active { background: var(--accent); color: #fff; }
-        }
-    }
-
-    /* Language switcher on the dark header. */
-    .book-langswitch {
-        .book-langswitch-toggle {
-            color: var(--fg-muted);
-            border-color: var(--border);
-            &:hover { background: var(--accent-soft); }
-        }
-
-        .book-langswitch-list {
-            background: var(--surface);
-            border-color: var(--border);
-            box-shadow: var(--shadow-panel);
-        }
-
-        .book-langswitch-item {
-            color: var(--fg-muted);
-            &:hover { background: var(--accent-soft); }
-            &.disabled { color: var(--fg-faint); &:hover { background: transparent; } }
-        }
-    }
-
-    .quote { color: var(--fg-muted); }
-
-    /* Thin, subtle scrollbars in dark mode (see _main.scss for light). */
+    /* Thin, subtle scrollbars (see _main.scss for light). */
     .book-menu nav,
     .markdown pre,
     .markdown .highlight,
@@ -179,10 +79,4 @@ html.dark {
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); border-radius: 4px; }
     ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.30); }
-
-    /* Mermaid diagrams are themed from the book tokens in mermaid-init.js, so
-       they follow dark mode natively; the card styling lives in _reading.scss
-       (token-driven, imported last). KaTeX inherits currentColor. */
 }
-
-/* Mermaid card styling moved to _reading.scss (token-driven, imported last). */

@@ -1,76 +1,19 @@
 {{/*
-  Header language switcher.
-
-  Design goals:
-    * Works TODAY with a single language (zh-cn). The trigger shows the current
-      language and the dropdown lists whatever languages exist.
-    * Requires NO further template edits when English/German content is added:
-      real translations come from Hugo's site languages / page translations, so
-      they light up automatically. Until a planned language has content it is
-      shown as a disabled "coming soon" entry purely for discoverability.
-
-  How the entries are decided:
-    1. $real   - every language Hugo actually knows about. We union the site's
-                 configured languages (.Site.Languages, so the home page always
-                 has an entry) with the current page's translations (.Translations
-                 + .AllTranslations) so per-page links are correct when present.
-    2. $planned - the roadmap languages (en, de). Any planned language that is
-                 already "real" is dropped so we never show a duplicate or a
-                 dead link once it ships.
+  Language link in the top bar: one plain link per other language. It points
+  at this page's translation when there is one and at that language's home
+  page otherwise. ?lang= records the explicit choice so the browser-language
+  redirect (partial lang-redirect) never overrides it.
 */}}
-
-{{/* --- collect real languages, keyed by lang code, value is best link target --- */}}
-{{ $real := dict }}
-{{ range .Site.Languages }}
-  {{ $real = merge $real (dict .Lang (dict "name" .LanguageName "lang" .Lang "url" "" )) }}
-{{ end }}
-{{ range .AllTranslations }}
-  {{ $real = merge $real (dict .Language.Lang (dict "name" .Language.LanguageName "lang" .Language.Lang "url" .Permalink )) }}
+{{ $links := dict }}
+{{ range .Site.Home.AllTranslations }}
+  {{ $links = merge $links (dict .Language.Lang (dict "name" .Language.LanguageName "url" .RelPermalink)) }}
 {{ end }}
 {{ range .Translations }}
-  {{ $real = merge $real (dict .Language.Lang (dict "name" .Language.LanguageName "lang" .Language.Lang "url" .Permalink )) }}
+  {{ $links = merge $links (dict .Language.Lang (dict "name" .Language.LanguageName "url" .RelPermalink)) }}
 {{ end }}
-
-{{/* --- planned roadmap languages; pruned of anything already real --- */}}
-{{ $planned := slice (dict "lang" "en" "name" "English") }}
-
-{{ $curLang := .Site.Language.Lang }}
-{{ $curName := .Site.Language.LanguageName }}
-
-<div class="book-langswitch" aria-label="{{ i18n "Language" | default "Language" }}">
-  <button type="button" class="book-langswitch-toggle" aria-haspopup="true" aria-expanded="false" aria-label="{{ i18n "Language" | default "Language" }}" title="{{ i18n "Language" | default "Language" }}">
-    <i class="fas fa-globe" aria-hidden="true"></i>
-    <span class="book-langswitch-current">{{ $curName }}</span>
-  </button>
-
-  <ul class="book-langswitch-list" role="menu">
-    {{/* real languages first, sorted by code for a stable order */}}
-    {{ range $code, $l := $real }}
-    <li role="none">
-      {{ if eq $code $curLang }}
-      <span class="book-langswitch-item active" role="menuitem" aria-current="true">{{ $l.name }}</span>
-      {{ else if $l.url }}
-      {{/* ?lang persists the explicit choice (see partial lang-redirect) so
-           auto-detection never overrides a manual pick. */}}
-      <a class="book-langswitch-item" role="menuitem" href="{{ $l.url }}?lang={{ $code }}">{{ $l.name }}</a>
-      {{ else }}
-      {{/* Known language but no translation link for this page: send the
-           reader to that language's home page instead of a dead URL. */}}
-      <a class="book-langswitch-item" role="menuitem" href="{{ (site.GetPage "/").RelPermalink }}?lang={{ $code }}">{{ $l.name }}</a>
-      {{ end }}
-    </li>
-    {{ end }}
-
-    {{/* planned languages that do not yet exist: shown disabled */}}
-    {{ range $planned }}
-    {{ if not (isset $real .lang) }}
-    <li role="none">
-      <span class="book-langswitch-item disabled" role="menuitem" aria-disabled="true" title="{{ i18n "ComingSoon" | default "Coming soon" }}">
-        {{ .name }}
-        <small class="book-langswitch-soon">{{ i18n "ComingSoon" | default "Coming soon" }}</small>
-      </span>
-    </li>
-    {{ end }}
-    {{ end }}
-  </ul>
+{{ $cur := .Site.Language.Lang }}
+<div class="reading-lang" aria-label="{{ i18n "Language" | default "Language" }}">
+  {{ range $code, $l := $links }}
+  {{ if ne $code $cur }}<a href="{{ $l.url }}?lang={{ $code }}" hreflang="{{ $code }}" lang="{{ $code }}">{{ $l.name }}</a>{{ end }}
+  {{ end }}
 </div>

@@ -18,9 +18,6 @@
 - id: Language
   translation: Language
 
-- id: ComingSoon
-  translation: Coming soon
-
 - id: Edit this page
   translation: Edit this page
 
@@ -31,17 +28,7 @@
 - id: Wordmark
   translation: "Go: Under the Hood"
 - id: WordmarkShort
-  translation: Go
-- id: HomeEyebrow
-  translation: Based on Go 1.26
-- id: HomeTagline
-  translation: A study of Go's design and implementation, and of how it evolved.
-- id: StartReading
-  translation: Start reading
-- id: HomeContents
-  translation: Contents
-- id: HomeCount
-  translation: "{{ .Parts }} parts · {{ .Chapters }} chapters"
+  translation: Under the Hood
 - id: PrevSection
   translation: Previous
 - id: NextSection
@@ -50,12 +37,6 @@
   translation: On this page
 - id: CollapseSidebar
   translation: Collapse sidebar
-- id: FontSize
-  translation: Font size
-- id: FontSmaller
-  translation: Decrease font size
-- id: FontBigger
-  translation: Increase font size
 - id: SearchPlaceholder
   translation: Search the book…
 - id: AuthorHome
