@@ -1,0 +1,18 @@
+{{- /*
+  Short content hash of a file under themes/book/static, for cache busting:
+  callers append it as ?v=<hash>, so a browser (or a share-card scraper)
+  fetches the file again exactly when its bytes change. Call through
+  partialCached with the path as the key, so each file is hashed once per
+  build.
+
+  viz/viz.js also covers viz/widgets/*.js: viz.js loads the widgets itself and
+  passes its own ?v= on to them.
+*/ -}}
+{{- $dir := "themes/book/static/" -}}
+{{- $data := readFile (printf "%s%s" $dir .) -}}
+{{- if eq . "viz/viz.js" -}}
+  {{- range os.ReadDir (printf "%sviz/widgets" $dir) -}}
+    {{- $data = printf "%s%s" $data (readFile (printf "%sviz/widgets/%s" $dir .Name)) -}}
+  {{- end -}}
+{{- end -}}
+{{- return substr (md5 $data) 0 10 -}}

@@ -34,7 +34,12 @@
 {{- with .Params.image -}}{{- $img = . -}}{{- end -}}
 {{- $imgURL := $img -}}
 {{- if not (or (hasPrefix $img "http://") (hasPrefix $img "https://")) -}}
+  {{- /* ?v= changes with the image bytes, so scrapers that cache by URL
+         (X, WeChat, Slack) pick up a redrawn card. */ -}}
   {{- $imgURL = $img | absURL -}}
+  {{- if fileExists (printf "themes/book/static/%s" $img) -}}
+    {{- $imgURL = printf "%s?v=%s" $imgURL (partialCached "zh-cn/static-version" $img $img) -}}
+  {{- end -}}
 {{- end -}}
 
 <meta name="description" content="{{ $desc }}">

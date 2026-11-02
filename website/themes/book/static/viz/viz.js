@@ -609,14 +609,18 @@
     "gc-tricolor": gcTricolor,
     "channel": channel,
   };
-  var BASE = (function () {
+  var SRC = (function () {
     var s = document.currentScript;
     if (!s || !s.src) {
       var all = document.getElementsByTagName ? document.getElementsByTagName("script") : [];
       for (var i = 0; i < all.length; i++) if (/viz\/viz\.js(\?|$)/.test(all[i].src)) { s = all[i]; break; }
     }
-    return s && s.src ? s.src.replace(/viz\.js(\?.*)?$/, "") : "";
+    return s && s.src ? s.src : "";
   })();
+  var BASE = SRC.replace(/viz\.js(\?.*)?$/, "");
+  // The page loads viz.js?v=<hash of viz.js and every widget>; reuse that
+  // query on the widget URLs so an edited widget is never served from cache.
+  var QUERY = (SRC.match(/\?.*$/) || [""])[0];
   var loading = {};
   function fail(h, msg) { h.innerHTML = '<div class="viz-fallback">' + msg + "</div>"; }
   function mountOne(h) {
@@ -633,7 +637,7 @@
     if (loading[name]) return;
     loading[name] = true;
     var sc = document.createElement("script");
-    sc.src = BASE + "widgets/" + name + ".js";
+    sc.src = BASE + "widgets/" + name + ".js" + QUERY;
     sc.onerror = function () {
       document.querySelectorAll('.viz[data-viz="' + name + '"]:not(.viz-mounted)').forEach(function (x) {
         fail(x, L("未知可视化：", "Unknown visualization: ") + name);

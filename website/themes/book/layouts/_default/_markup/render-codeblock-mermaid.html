@@ -5,8 +5,8 @@
   render the same source. mermaid.min.js is loaded once per page.
 */ -}}
 {{ if not (.Page.Scratch.Get "mermaid") }}
-<script src="{{ "mermaid.min.js" | relURL }}"></script>
-<script src="{{ "mermaid-init.js" | relURL }}"></script>
+<script src="{{ "mermaid.min.js" | relURL }}?v={{ partialCached "zh-cn/static-version" "mermaid.min.js" "mermaid.min.js" }}"></script>
+<script src="{{ "mermaid-init.js" | relURL }}?v={{ partialCached "zh-cn/static-version" "mermaid-init.js" "mermaid-init.js" }}"></script>
 {{ .Page.Scratch.Set "mermaid" true }}
 {{ end }}
 <pre class="mermaid">

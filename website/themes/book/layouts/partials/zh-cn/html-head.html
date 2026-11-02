@@ -28,7 +28,7 @@
      render-passthrough.html). Only the stylesheet is needed client-side; the
      previous client-side auto-render pass was removed because walking the whole
      live DOM could hang the renderer on some math-heavy pages. -->
-<link rel="stylesheet" href="{{ "katex/katex.min.css" | relURL }}">
+<link rel="stylesheet" href="{{ "katex/katex.min.css" | relURL }}?v={{ partialCached "zh-cn/static-version" "katex/katex.min.css" "katex/katex.min.css" }}">
 
 {{ if default true .Site.Params.BookSearch }}
 {{- .Scratch.Set "bookSearchConfig" (i18n "bookSearchConfig") -}} <!-- Remove after https://github.com/gohugoio/hugo/issues/6331 -->
@@ -38,10 +38,10 @@
 {{ end }}
 
 <!-- Interactive visualizations (mounts on <div class="viz" data-viz="..."></div>) -->
-<script defer src="{{ "viz/viz.js" | relURL }}"></script>
+<script defer src="{{ "viz/viz.js" | relURL }}?v={{ partialCached "zh-cn/static-version" "viz/viz.js" "viz/viz.js" }}"></script>
 
 <!-- Sidebar and "on this page" toggles, scroll-spy. -->
-<script defer src="{{ "reading.js" | relURL }}"></script>
+<script defer src="{{ "reading.js" | relURL }}?v={{ partialCached "zh-cn/static-version" "reading.js" "reading.js" }}"></script>
 
 {{- template "_internal/google_analytics.html" . -}}
 
