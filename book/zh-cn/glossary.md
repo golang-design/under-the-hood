@@ -111,14 +111,12 @@ title: "附录 A：术语表"
 | 自由表 | [12.2](./part4memory/ch12alloc/component.md) | Free List | |
 | 堆 | [12](./part4memory/ch12alloc/readme.md) | Heap | |
 | 堆剖面 | [12.8](./part4memory/ch12alloc/mstats.md) | Heap Profile | |
-
 | 内部碎片 | [12.1](./part4memory/ch12alloc/basic.md) | Internal Fragmentation | |
 | 大对象 | [12.4](./part4memory/ch12alloc/largealloc.md) | Large Object | |
 | 分配头 | [12.1](./part4memory/ch12alloc/basic.md) | Malloc Header | |
 | 页 | [12.7](./part4memory/ch12alloc/pagealloc.md) | Page | |
 | 页分配器 | [12.7](./part4memory/ch12alloc/pagealloc.md) | Page Allocator | |
 | 泊松过程 | [12.8](./part4memory/ch12alloc/mstats.md) | Poisson Process | |
-
 | 基数树 | [12.7](./part4memory/ch12alloc/pagealloc.md) | Radix Tree | |
 | 预留 | [12.3](./part4memory/ch12alloc/init.md) | Reserve | |
 | 归还 | [12.7](./part4memory/ch12alloc/pagealloc.md) | Scavenging | |
