@@ -409,6 +409,14 @@ every child must also be waited on until it exits, which is the concern of struc
 channels, `select`, context and errgroup, was covered earlier in this book. The agent is a new kind
 of load that requires no new mechanism at the runtime level.
 
+The interactive figure below puts this section's cancellation paths into one tree. After the client
+disconnects, step through it to see when each goroutine notices the cancellation and how it exits,
+how the cancellation crosses process boundaries to reach the inference server and the MCP tool
+server, and when the whole tree has really wound down. Switch tool C between "blocked in a cgo call"
+and "runs in a subprocess" and compare when errgroup's `Wait` returns.
+
+<div class="viz" data-viz="agent-cancel"></div>
+
 ## Summary
 
 The difficulty of a production-grade agent is not the loop skeleton but the streaming, backpressure

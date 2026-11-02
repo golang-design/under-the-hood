@@ -361,6 +361,12 @@ flowchart TD
 树中的每个部件，goroutine、通道、`select`、context
 与 errgroup，本书前面都已讨论过。Agent 是一类新的负载，在运行时层面却没有要求新的机制。
 
+下面的交互图把本节的几处取消放进同一棵树：客户端断开连接后，逐步观察每个 goroutine 何时察觉取消、以何种方
+式退出，取消如何越过进程边界到达推理服务与 MCP 工具服务器，以及整棵树何时真正收拢。可以把工具 C 在「阻塞在
+cgo 调用中」与「在子进程中运行」之间切换，比较两种情形下 errgroup 的 `Wait` 何时返回。
+
+<div class="viz" data-viz="agent-cancel"></div>
+
 ## 小结
 
 生产级 Agent 的难处不在循环骨架，而在贯穿全链的流式、背压与取消。流式是常态：Agent 消费下层的词元流，
